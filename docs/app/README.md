@@ -39,7 +39,7 @@ npm run typecheck  # tsc --noEmit
 
 ## 4. Seed the event + prompts
 
-`scripts/seed.mjs` uses the Firebase Admin SDK (bypasses security rules). This account's org **blocks service-account key creation**, so seed with Application Default Credentials instead of a downloaded `serviceAccountKey.json`:
+`scripts/seed.mjs` uses the Firebase Admin SDK (bypasses security rules). Authenticate it with your Application Default Credentials (or the project's deployer SA key from 1Password — the same credential deploys use); no `serviceAccountKey.json` is committed to the repo:
 
 ```bash
 npm i -D firebase-admin
@@ -51,7 +51,7 @@ This creates `events/med-2026` (claim mode, default theme, your admin uid) and t
 
 ## 5. Deploy
 
-Deploys use `op-firebase-deploy` (1Password-backed, keyless impersonation) — see the root `DEPLOYMENT.md`.
+Deploys use `op-firebase-deploy` (1Password-backed — it resolves the project's Firebase-vault SA key) — see the root `DEPLOYMENT.md`.
 
 ```bash
 # rules + indexes + storage
