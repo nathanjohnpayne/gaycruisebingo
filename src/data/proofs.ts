@@ -1,8 +1,8 @@
-import { collection, deleteDoc, doc, increment, updateDoc, writeBatch } from 'firebase/firestore';
+import { collection, doc, increment, runTransaction, updateDoc } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
 import { uploadProofMedia, deleteStoragePath } from './storage';
 import { completedLines, countMarked, isBlackout } from '../game/logic';
-import type { Cell, ClaimMode, ProofType } from '../types';
+import type { Cell, ClaimMode, ProofDoc, ProofType } from '../types';
 
 const rawProofs = () => collection(db, 'events', EVENT_ID, 'proofs');
 const rawProof = (id: string) => doc(db, 'events', EVENT_ID, 'proofs', id);
@@ -42,49 +42,55 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
   }
 
   const pending = claimMode === 'verified';
-  const next: Cell[] = cells.map((c) =>
-    c.index === cellIndex
-      ? { ...c, marked: true, markedAt: now, proofId, status: pending ? 'pending' : 'confirmed' }
-      : c,
-  );
 
-  const bingoCount = completedLines(next).length;
-  const squares = countMarked(next);
-  const blackout = isBlackout(next);
-  const firstBingoAt = currentFirstBingoAt ?? (bingoCount > 0 ? now : null);
+  // Recompute cells from the live board inside a transaction so a concurrent
+  // mark from another tab/device isn't clobbered by this caller's stale snapshot.
+  await runTransaction(db, async (tx) => {
+    const boardRef = rawBoard(uid);
+    const boardSnap = await tx.get(boardRef);
+    const liveCells = (boardSnap.data()?.cells as Cell[] | undefined) ?? cells;
+    const next: Cell[] = liveCells.map((c) =>
+      c.index === cellIndex
+        ? { ...c, marked: true, markedAt: now, proofId, status: pending ? 'pending' : 'confirmed' }
+        : c,
+    );
 
-  const batch = writeBatch(db);
-  batch.set(pRef, {
-    uid,
-    displayName,
-    photoURL,
-    type: proof.type,
-    cellIndex,
-    itemText,
-    storagePath,
-    mediaURL,
-    thumbURL: null,
-    text: proof.text ?? null,
-    createdAt: now,
-    reportCount: 0,
-    status: 'active',
-    visionFlag: null,
-  });
-  batch.set(rawBoard(uid), { cells: next }, { merge: true });
-  batch.set(rawPlayer(uid), { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
-  if (pending) {
-    batch.set(doc(rawClaims()), {
+    const bingoCount = completedLines(next).length;
+    const squares = countMarked(next);
+    const blackout = isBlackout(next);
+    const firstBingoAt = currentFirstBingoAt ?? (bingoCount > 0 ? now : null);
+
+    tx.set(pRef, {
       uid,
       displayName,
+      photoURL,
+      type: proof.type,
       cellIndex,
       itemText,
-      proofId,
-      status: 'pending',
+      storagePath,
+      mediaURL,
+      thumbURL: null,
+      text: proof.text ?? null,
       createdAt: now,
-      resolvedBy: null,
+      reportCount: 0,
+      status: 'active',
+      visionFlag: null,
     });
-  }
-  await batch.commit();
+    tx.set(boardRef, { cells: next }, { merge: true });
+    tx.set(rawPlayer(uid), { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
+    if (pending) {
+      tx.set(doc(rawClaims()), {
+        uid,
+        displayName,
+        cellIndex,
+        itemText,
+        proofId,
+        status: 'pending',
+        createdAt: now,
+        resolvedBy: null,
+      });
+    }
+  });
 }
 
 export async function reportProof(id: string): Promise<void> {
@@ -92,6 +98,40 @@ export async function reportProof(id: string): Promise<void> {
 }
 
 export async function deleteProof(id: string, storagePath?: string | null): Promise<void> {
+  // Storage first (ordering preserved): if the blob delete throws we keep the
+  // doc so the media isn't orphaned.
   if (storagePath) await deleteStoragePath(storagePath);
-  await deleteDoc(rawProof(id));
+
+  await runTransaction(db, async (tx) => {
+    const proofRef = rawProof(id);
+    const proofSnap = await tx.get(proofRef);
+    const proof = proofSnap.data() as ProofDoc | undefined;
+
+    if (proof) {
+      // A deleted proof must not leave its square marked-but-uncredited (in
+      // proof_required mode a marked cell is backed by this proof). Unmark the
+      // backing cell and recompute the owner's derived stats in the same txn.
+      const boardRef = rawBoard(proof.uid);
+      const playerRef = rawPlayer(proof.uid);
+      const boardSnap = await tx.get(boardRef);
+      const cells = boardSnap.data()?.cells as Cell[] | undefined;
+      if (cells?.some((c) => c.proofId === id)) {
+        const playerSnap = await tx.get(playerRef);
+        const existingFirst = (playerSnap.data()?.firstBingoAt as number | null | undefined) ?? null;
+        const next: Cell[] = cells.map((c) =>
+          c.proofId === id
+            ? { ...c, marked: false, markedAt: null, proofId: null, status: 'confirmed' }
+            : c,
+        );
+        const bingoCount = completedLines(next).length;
+        const squares = countMarked(next);
+        const blackout = isBlackout(next);
+        const firstBingoAt = bingoCount > 0 ? existingFirst : null;
+        tx.set(boardRef, { cells: next }, { merge: true });
+        tx.set(playerRef, { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
+      }
+    }
+
+    tx.delete(proofRef);
+  });
 }

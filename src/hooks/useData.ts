@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { onSnapshot, type DocumentReference, type Query } from 'firebase/firestore';
+import { onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
 import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol } from '../data/paths';
 import { sortPlayers } from '../game/logic';
 import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc } from '../types';
@@ -76,11 +76,13 @@ export function useLeaderboard() {
 }
 
 export function useProofFeed(max = 60) {
-  const { data, loading } = useColSub<ProofDoc>(proofsCol(), 'proofs');
-  const proofs = data
-    .filter((p) => p.status !== 'hidden')
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, max);
+  // Only 'active' proofs are readable by non-admins (see firestore.rules);
+  // hidden/flagged proofs stay admin-only rather than being filtered client-side.
+  const { data, loading } = useColSub<ProofDoc>(
+    query(proofsCol(), where('status', '==', 'active')),
+    'proofs',
+  );
+  const proofs = data.sort((a, b) => b.createdAt - a.createdAt).slice(0, max);
   return { proofs, loading };
 }
 

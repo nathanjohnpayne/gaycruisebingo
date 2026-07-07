@@ -82,6 +82,15 @@ export const recomputeStats = onDocumentWritten('events/{eventId}/boards/{uid}',
   await playerRef.set({ bingoCount, squaresMarked: squares, blackout, firstBingoAt }, { merge: true });
 });
 
+/** Escape user-supplied text before interpolating it into the HTML response. */
+const escapeHtml = (s: string): string =>
+  s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 /**
  * Crawler-facing share page. Firebase Hosting rewrites /s/** here so link unfurls
  * get real OG meta (SPAs can't, since crawlers don't run JS). Humans are redirected
@@ -92,8 +101,9 @@ export const share = onRequest({ cors: true }, (req, res) => {
   const kind = String(req.query.kind || 'win');
   const name = String(req.query.name || '');
   const theme = String(req.query.theme || 'neon-playground');
-  const title = kind === 'leaderboard' ? 'The Leaderboard' : name ? `${name} got BINGO` : 'I got BINGO';
-  const img = `${og}/og.png?kind=${encodeURIComponent(kind)}&title=${encodeURIComponent(title)}&theme=${encodeURIComponent(theme)}`;
+  const rawTitle = kind === 'leaderboard' ? 'The Leaderboard' : name ? `${name} got BINGO` : 'I got BINGO';
+  const title = escapeHtml(rawTitle);
+  const img = `${og}/og.png?kind=${encodeURIComponent(kind)}&title=${encodeURIComponent(rawTitle)}&theme=${encodeURIComponent(theme)}`;
   res.set('Cache-Control', 'public, max-age=3600');
   res.status(200).send(
     `<!doctype html><html lang="en"><head><meta charset="utf-8">` +

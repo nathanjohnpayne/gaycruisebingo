@@ -32,11 +32,11 @@ export default function ProofFeed() {
               </div>
               <div className="sub">{ago(p.createdAt)}</div>
             </div>
-            <button className="iconbtn" title="Report" onClick={() => { reportProof(p.id); track('report_item'); }}>
+            <button className="iconbtn" title="Report" onClick={() => { reportProof(p.id).catch(console.error); track('report_item'); }}>
               ⚑
             </button>
             {user?.uid === p.uid && (
-              <button className="iconbtn" title="Delete" onClick={() => deleteProof(p.id, p.storagePath)}>
+              <button className="iconbtn" title="Delete" onClick={() => deleteProof(p.id, p.storagePath).catch(console.error)}>
                 🗑
               </button>
             )}

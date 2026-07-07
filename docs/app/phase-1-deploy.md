@@ -62,6 +62,8 @@ match /players/{uid} {
 }
 ```
 
+**Apply the stat-write removal first.** This rule lets the player doc carry only profile fields (`displayName`, `photoURL`, `theme`, `joinedAt`, `uid`), so it rejects any write that still includes the stat fields `bingoCount`, `squaresMarked`, `firstBingoAt`, or `blackout`. The client still batch-writes those stats in `joinAndDeal` and `setMark` (`src/data/api.ts`) and in `attachProof` (`src/data/proofs.ts`) — so applying the tightened rule as-is makes joins and marks **fail** with a permission error. Remove the client stat writes from those three functions first (once `recomputeStats` is live the server owns them), or ship a rule that still permits those fields, and only then apply the hardening.
+
 ## 5. What each Phase 1 piece gives you
 
 - **Proof capture** (`ProofSheet`) — photo (camera), audio (MediaRecorder), or a text callout; images are downscaled client-side before upload.

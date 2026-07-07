@@ -1,21 +1,26 @@
 // Seed the event + prompt pool using the Firebase Admin SDK (bypasses security rules).
 //
-// One-time setup:
-//   1. Firebase console > Project settings > Service accounts > Generate new private key.
-//      Save it as serviceAccountKey.json in the project root (already gitignored — do NOT commit).
-//   2. npm i -D firebase-admin
+// One-time setup (Application Default Credentials — no committed key file):
+//   1. npm i -D firebase-admin
+//   2. gcloud auth application-default login
 //   3. Find your Google UID: sign into the app once, then Firebase console > Authentication > Users.
-//   4. ADMIN_UID=<your-uid> node scripts/seed.mjs
+//   4. ADMIN_UID=<your-uid> GOOGLE_CLOUD_PROJECT=gaycruisebingo node scripts/seed.mjs
 //
-import { readFileSync } from 'node:fs';
-import { initializeApp, cert } from 'firebase-admin/app';
+// Falls back to a serviceAccountKey.json in the project root if one exists
+// (gitignored — do NOT commit).
+//
+import { readFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { initializeApp, cert, applicationDefault } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 
 const EVENT_ID = process.env.VITE_EVENT_ID || 'med-2026';
 const ADMIN_UID = process.env.ADMIN_UID || '';
 
-const key = JSON.parse(readFileSync(new URL('../serviceAccountKey.json', import.meta.url)));
-initializeApp({ credential: cert(key) });
+const keyUrl = new URL('../serviceAccountKey.json', import.meta.url);
+initializeApp(
+  existsSync(keyUrl) ? { credential: cert(JSON.parse(readFileSync(keyUrl))) } : { credential: applicationDefault() },
+);
 const db = getFirestore();
 
 const ITEMS = [
@@ -72,14 +77,22 @@ const col = eventRef.collection('items');
 const now = Date.now();
 const batch = db.batch();
 for (const text of ITEMS) {
-  batch.set(col.doc(), {
-    text,
-    createdBy: 'seed',
-    createdAt: now,
-    isFreeSpace: false,
-    status: 'active',
-    reportCount: 0,
-  });
+  // Deterministic doc id (content hash) so re-running the seed upserts the same
+  // prompt docs instead of creating duplicates (boards sample distinct ids, so
+  // dupes would surface the same prompt on multiple squares).
+  const id = `seed-${createHash('sha1').update(text).digest('hex').slice(0, 20)}`;
+  batch.set(
+    col.doc(id),
+    {
+      text,
+      createdBy: 'seed',
+      createdAt: now,
+      isFreeSpace: false,
+      status: 'active',
+      reportCount: 0,
+    },
+    { merge: true },
+  );
 }
 await batch.commit();
 

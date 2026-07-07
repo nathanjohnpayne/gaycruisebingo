@@ -55,13 +55,45 @@ service cloud.firestore {
 
       // Proofs (Phase 1). Owner-created; reportable; admin-moderated.
       match /proofs/{proofId} {
-        allow read: if signedIn();
-        allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+        // Non-admins can read only visible ('active') proofs; hidden/flagged
+        // proofs are moderation-only and readable by admins.
+        allow read: if isAdmin(eventId) || resource.data.status == 'active';
+        // Constrain the payload like /items: the uploader owns the doc, only the
+        // known fields are allowed, the proof starts visible + unreported, and
+        // moderation fields (visionFlag, thumbURL) must be server-set, not client.
+        allow create: if signedIn()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.keys().hasOnly([
+               'uid', 'displayName', 'photoURL', 'type', 'cellIndex', 'itemText',
+               'storagePath', 'mediaURL', 'thumbURL', 'text', 'createdAt',
+               'reportCount', 'status', 'visionFlag'
+             ])
+          && request.resource.data.type in ['photo', 'audio', 'text']
+          && request.resource.data.itemText is string
+          && request.resource.data.itemText.size() <= 200
+          && request.resource.data.cellIndex is number
+          && request.resource.data.cellIndex >= 0
+          && request.resource.data.cellIndex <= 24
+          && request.resource.data.status == 'active'
+          && request.resource.data.reportCount == 0
+          && request.resource.data.visionFlag == null
+          && request.resource.data.thumbURL == null
+          // Tie stored media to the uploader's own Storage path (see storage.rules).
+          && (request.resource.data.storagePath == null
+              || request.resource.data.storagePath.matches('^proofs/' + eventId + '/' + request.auth.uid + '/.*$'));
         allow update: if isAdmin(eventId)
           || (signedIn()
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reportCount'])
               && request.resource.data.reportCount == resource.data.reportCount + 1);
         allow delete: if isOwner(resource.data.uid) || isAdmin(eventId);
+      }
+
+      // Verified-mode claims: a player creates a claim for their own square;
+      // admins read the queue and resolve (confirm/reject) them.
+      match /claims/{claimId} {
+        allow read: if isAdmin(eventId) || isOwner(resource.data.uid);
+        allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+        allow update, delete: if isAdmin(eventId);
       }
     }
   }

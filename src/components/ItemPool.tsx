@@ -11,9 +11,13 @@ export default function ItemPool() {
 
   const add = async () => {
     if (!user || !text.trim()) return;
-    await addItem(user.uid, text);
-    track('add_item');
-    setText('');
+    try {
+      await addItem(user.uid, text);
+      track('add_item');
+      setText('');
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   return (
@@ -51,7 +55,7 @@ export default function ItemPool() {
                 className="iconbtn"
                 title="Report"
                 onClick={() => {
-                  reportItem(it.id);
+                  reportItem(it.id).catch(console.error);
                   track('report_item');
                 }}
               >

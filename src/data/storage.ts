@@ -49,7 +49,9 @@ export async function uploadAvatar(uid: string, blob: Blob): Promise<string> {
 export async function deleteStoragePath(path: string): Promise<void> {
   try {
     await deleteObject(ref(storage, path));
-  } catch {
-    /* already gone */
+  } catch (err) {
+    // Only swallow "already gone"; surface real failures (permission, network)
+    // so callers don't delete the referencing doc and orphan the media.
+    if ((err as { code?: string })?.code !== 'storage/object-not-found') throw err;
   }
 }
