@@ -50,6 +50,7 @@ test-results/
 
 # Firebase
 .firebase/
+firebase-adminsdk*.json
 
 # Misc
 tmp/

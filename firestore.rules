@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// gaycruisebingo — Cloud Firestore security rules.
+//
+// Locked down by default: nothing is readable or writable until you
+// open specific paths as you build the game (rooms, boards, players,
+// called numbers). Never ship `allow read, write: if true;`.
+// Guide: https://firebase.google.com/docs/firestore/security/get-started
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
