@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# check_merge_clearance_gate
+#
+# CI wrapper for scripts/merge-clearance-gate.sh — the HEAD-pinned
+# merge-clearance gate (nathanjohnpayne/mergepath#427 + #428).
+#
+# Two concerns:
+#   1. The script and its workflow must exist on disk and be executable
+#      (consistent with check_codex_p1_gate for the P1 gate).
+#   2. The script's class-dispatch + clearance logic must work against
+#      fixture payloads. Delegated to tests/test_merge_clearance_gate.sh,
+#      which PATH-shims `gh` and stubs the codex-review-check.sh delegate.
+#
+# Invoked by .github/workflows/repo_lint.yml alongside the other
+# scripts/ci/check_* scripts.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_ROOT"
+
+SCRIPT="scripts/merge-clearance-gate.sh"
+# WORKFLOW path is overridable so the test suite can point the workflow-shape
+# assertions (in particular the job-name contract below) at a fixture without
+# touching the canonical workflow on disk. Defaults to the real workflow.
+WORKFLOW="${MERGE_CLEARANCE_WORKFLOW:-.github/workflows/merge-clearance-gate.yml}"
+TEST="tests/test_merge_clearance_gate.sh"
+
+FAILED=0
+
+# Existence + executability checks.
+for rel in "$SCRIPT" "$TEST"; do
+  if [ ! -f "$rel" ]; then
+    echo "FAIL: Missing required file: $rel"
+    FAILED=1
+    continue
+  fi
+  if [ ! -x "$rel" ]; then
+    echo "FAIL: File is not executable: $rel"
+    echo "      Fix with: chmod +x $rel"
+    FAILED=1
+  fi
+done
+
+# Workflow file exists (not executable; YAML is not a shell script).
+if [ ! -f "$WORKFLOW" ]; then
+  echo "FAIL: Missing required workflow: $WORKFLOW"
+  FAILED=1
+fi
+
+# Workflow trigger shape — same posture as check_codex_p1_gate. GitHub
+# Actions does NOT document pull_request_review_thread as a workflow
+# trigger, so the gate combines event-driven triggers with a scheduled
+# sweep that re-posts a check_run per open PR head SHA (the only backstop
+# for the no-event transitions that produced #428: 👍 reaction, UI label
+# resolve, GITHUB_TOKEN-authored relabel).
+if [ -f "$WORKFLOW" ]; then
+  for trigger in pull_request pull_request_review pull_request_review_comment schedule; do
+    if ! grep -qE "^[[:space:]]*${trigger}:" "$WORKFLOW"; then
+      echo "FAIL: $WORKFLOW missing required trigger: $trigger"
+      echo "      The gate must fire on push, review submission, inline-comment, AND on a periodic schedule (no-event safety net)."
+      FAILED=1
+    fi
+  done
+
+  # Forbid the misleading pull_request_review_thread trigger.
+  if grep -qE "^[[:space:]]*pull_request_review_thread:" "$WORKFLOW"; then
+    echo "FAIL: $WORKFLOW lists pull_request_review_thread as a workflow trigger."
+    echo "      That event is a webhook payload for GitHub Apps, NOT a documented Actions workflow trigger."
+    echo "      Use schedule (cron) for the no-event safety net instead. See codex-p1-gate.yml / PR #257."
+    FAILED=1
+  fi
+
+  # Schedule cron must be present in the on: block.
+  if ! awk '
+    /^on:/ {in_on=1; next}
+    in_on && /^[^[:space:]#]/ {in_on=0}
+    in_on && /^[[:space:]]+schedule:/ {in_sched=1; next}
+    in_sched && /^[[:space:]]+- cron:/ {found=1; exit}
+    in_sched && /^[[:space:]]+[a-z]/ {in_sched=0}
+    END {exit (found ? 0 : 1)}
+  ' "$WORKFLOW"; then
+    echo "FAIL: $WORKFLOW schedule: block missing a 'cron:' entry."
+    echo "      The schedule trigger needs a cron expression (e.g. '*/15 * * * *')."
+    FAILED=1
+  fi
+
+  # #658: the propagation lane's head-pinned verified-head marker is posted as
+  # a GITHUB_TOKEN github-actions[bot] ISSUE comment, and GITHUB_TOKEN-authored
+  # events create no workflow runs — so an issue_comment trigger could never
+  # re-run the gate for it. Instead pr-review-policy.yml's lane sends a
+  # `merge-clearance-recheck` repository_dispatch right after posting the
+  # marker. Require that trigger AND the dispatch-recheck wiring (the dispatch
+  # type + resolving the PR from github.event.client_payload.pr), so a verified
+  # sync PR clears promptly instead of riding a fail-closed spurious-red until
+  # the */15 sweep. No payload trust is added: the dispatch only schedules a
+  # re-run; the gate re-derives clearance from the head-pinned
+  # github-actions[bot] marker in scripts/merge-clearance-gate.sh
+  # lane_verified(). Keep the `merge-clearance-recheck` type in sync with the
+  # lane. Label events are never a trigger here (#429 round-3 P1).
+  if ! grep -qE "^[[:space:]]*repository_dispatch:" "$WORKFLOW"; then
+    echo "FAIL: $WORKFLOW missing the repository_dispatch trigger."
+    echo "      The propagation-lane verified-head marker is a GITHUB_TOKEN issue comment (creates no workflow run); without the merge-clearance-recheck repository_dispatch a verified sync PR rides a fail-closed spurious-red gate until the scheduled sweep (#658)."
+    FAILED=1
+  fi
+  dispatch_wiring_missing=0
+  grep -qF "merge-clearance-recheck" "$WORKFLOW" || dispatch_wiring_missing=1
+  grep -qF "github.event.client_payload.pr" "$WORKFLOW" || dispatch_wiring_missing=1
+  if [ "$dispatch_wiring_missing" -ne 0 ]; then
+    echo "FAIL: $WORKFLOW repository_dispatch path is not wired for the marker re-trigger."
+    echo "      It must accept the 'merge-clearance-recheck' dispatch type AND resolve the PR from github.event.client_payload.pr in a check_run-posting job (#658)."
+    FAILED=1
+  fi
+
+  # The required-check display name (job name) must match the name the
+  # scheduled-sweep posts AND the entry in audit-branch-protection.sh's
+  # CANONICAL_REQUIRED_CHECKS. Branch protection keys on the job name, so
+  # a drift here would silently de-wire the gate.
+  #
+  # Scope the assertion to the jobs: block and require the match to be a
+  # JOB name (a `name:` key at the job-content indent, directly under a job
+  # key) — NOT just any indented `name:`. A plain grep for an indented
+  # `name:` also matched a step-level `name: Merge clearance gate` (a
+  # non-first step key, deeper-indented, no leading dash). That let a
+  # coincidentally-named *step* satisfy the required-check contract even if
+  # the *job* name had drifted. The awk state machine below tracks the
+  # jobs: block, records each job key's content indent, and only matches a
+  # `name: Merge clearance gate` at that exact indent.
+  if ! awk '
+    /^jobs:[[:space:]]*$/ { in_jobs=1; next }
+    in_jobs && /^[^[:space:]#]/ { in_jobs=0 }
+    !in_jobs { next }
+    {
+      n=0
+      while (substr($0, n+1, 1) == " ") n++
+    }
+    # A job key is indented exactly two spaces under jobs: and is a bare
+    # "<name>:" block opener (nothing after the colon). Record the indent
+    # of its content (job-name / runs-on / steps live one level deeper).
+    in_jobs && n==2 && $0 ~ /^  [A-Za-z0-9_-]+:[[:space:]]*$/ {
+      job_content_indent = n + 2
+      next
+    }
+    # A job name sits at the job-content indent. Only this counts.
+    in_jobs && job_content_indent>0 && n==job_content_indent &&
+      $0 ~ /name:[[:space:]]*Merge clearance gate[[:space:]]*$/ {
+      found=1; exit
+    }
+    END { exit (found ? 0 : 1) }
+  ' "$WORKFLOW"; then
+    echo "FAIL: $WORKFLOW must define a JOB named exactly 'Merge clearance gate'"
+    echo "      (the required-check context; must match the sweep CHECK_NAME and audit-branch-protection.sh)."
+    echo "      A step-level name: does NOT satisfy this — branch protection keys on the job name."
+    FAILED=1
+  fi
+fi
+
+if [ "$FAILED" -ne 0 ]; then
+  echo "check_merge_clearance_gate: FAIL (pre-flight)"
+  exit 1
+fi
+
+# Run the fixture-driven test suite.
+if ! bash "$TEST"; then
+  echo "check_merge_clearance_gate: FAIL (test suite)"
+  exit 1
+fi
+
+echo "check_merge_clearance_gate: PASS"
+exit 0

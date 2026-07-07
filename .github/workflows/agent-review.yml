@@ -1,0 +1,2060 @@
+# Note: CodeRabbit (Phase 2.5) is handled by the CodeRabbit GitHub App
+# and does not require a CI workflow step. It runs automatically when
+# installed on the repo. See .github/review-policy.yml for enablement.
+name: Agent Review Pipeline
+
+on:
+  pull_request:
+    # `synchronize` (every push on an open PR) is in the list so
+    # `load-config` re-parses `.github/review-policy.yml` on every
+    # commit, not just on `opened` / `ready_for_review`. Without it,
+    # a shell-parser regression can land on main and only surface
+    # weeks later when the next PR happens to be opened. See #59.
+    # `reopened` is included so the auto-merge re-arm path (#495) actually
+    # fires: the job `if:` matches `synchronize || reopened`, but a reopened
+    # event only reaches this workflow if it is subscribed here.
+    # `unlabeled` is the #620 re-arm: on an over-threshold PR with a
+    # carried-over approval, update-branch makes triage re-apply
+    # needs-external-review, the label re-verify inside auto-merge sees it
+    # and hard-fails (correctly), and auto-clear removes the label moments
+    # later once the clearance gate passes — with no trigger on the removal,
+    # the PR sat CLEAN-but-unmerged until a human reran the failed job.
+    types: [opened, ready_for_review, labeled, synchronize, reopened, unlabeled]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  # ──────────────────────────────────────────────
+  # Job 1: Read review-policy.yml configuration
+  # ──────────────────────────────────────────────
+  load-config:
+    # Runs on opened, ready_for_review, synchronize, and reopened so the
+    # parser exercises every commit pushed to an open PR, not just
+    # initial open. `reopened` is included for the #495 re-arm path: a PR
+    # changed while closed and then reopened must have its policy
+    # re-parsed here BEFORE the auto-merge re-arm evaluates, so the
+    # threshold/paths feeding triage reflect the changed diff rather than
+    # a stale snapshot. Explicitly excludes `labeled`: the `assign` job
+    # allows `labeled` as a trigger, and it depends on this job's
+    # outputs — letting load-config run on labeled would cause
+    # assign to re-fire on every label edit and re-request
+    # reviewers who have already reviewed. Downstream jobs keep
+    # their own action-specific guards; triage intentionally runs on
+    # synchronize/reopened for the auto-merge re-arm path while assign
+    # stays scoped to opened/ready/labeled. See #59 for the
+    # SKIPPED-as-SUCCESS miss this
+    # closes and Codex's P2 on PR #131 for why labeled is excluded.
+    # #557: ALSO run on approved pull_request_review events. The
+    # auto-merge-on-approval registered-reviewer gate (require_approval)
+    # reads needs.load-config.outputs.reviewers on the direct-approval
+    # path; if load-config is skipped on review events that list is empty,
+    # the gate defaults REVIEWERS_JSON to [], rejects every approver as
+    # "not a registered reviewer", and never arms auto-merge (the merge
+    # still backstops via merge-clearance-gate, but the convenience #544
+    # added — and the one-shot-arming gap #495 closed — regress). This job
+    # only reads the static review-policy.yml, so it is event-shape-agnostic.
+    if: >
+      (github.event_name == 'pull_request' &&
+       (github.event.action == 'opened' ||
+        github.event.action == 'ready_for_review' ||
+        github.event.action == 'synchronize' ||
+        github.event.action == 'reopened' ||
+        github.event.action == 'unlabeled')) ||
+      (github.event_name == 'pull_request_review' &&
+       github.event.review.state == 'approved')
+    runs-on: ubuntu-latest
+    outputs:
+      threshold: ${{ steps.config.outputs.threshold }}
+      paths: ${{ steps.config.outputs.paths }}
+      reviewers: ${{ steps.config.outputs.reviewers }}
+      author_identity: ${{ steps.config.outputs.author_identity }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Explicit-token gh / github-script only, no authenticated git, so
+          # don't leave the checkout token in .git/config (#548 / Codex #550).
+          persist-credentials: false
+
+      - name: Parse review-policy.yml
+        id: config
+        run: |
+          CONFIG=".github/review-policy.yml"
+          if [ ! -f "$CONFIG" ]; then
+            echo "ERROR: $CONFIG not found"
+            exit 1
+          fi
+
+          THRESHOLD=$(grep 'external_review_threshold:' "$CONFIG" | awk '{print $2}')
+          echo "threshold=$THRESHOLD" >> "$GITHUB_OUTPUT"
+
+          # Extract external_review_paths as a JSON array. Delegates to
+          # scripts/workflow/parse_policy_list.sh (unit-tested by
+          # scripts/ci/check_workflow_parsers — see #57). History: the
+          # earlier inline `awk '/^key:/,/^[^ ]/'` range parser silently
+          # dropped all list entries because the range-start pattern
+          # also matched the range-end condition; see #54.
+          #
+          # `jq -c` (compact) is required here: multi-line JSON cannot
+          # be written via the `key=value` GITHUB_OUTPUT format. Before
+          # #54 fixed the awk extractor, PATHS was always `[]` (single-
+          # line) so this latent bug was hidden; PR #58 / #30 tripped it.
+          PATHS=$(bash scripts/workflow/parse_policy_list.sh "$CONFIG" external_review_paths \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "paths=$PATHS" >> "$GITHUB_OUTPUT"
+
+          # Extract available_reviewers as a JSON array via the same
+          # extracted parser. Before #54 this was always `[]`, which
+          # silently broke the assign step's reviewer lookup.
+          REVIEWERS=$(bash scripts/workflow/parse_policy_list.sh "$CONFIG" available_reviewers \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          echo "reviewers=$REVIEWERS" >> "$GITHUB_OUTPUT"
+
+          AUTHOR=$(grep 'author_identity:' "$CONFIG" | awk '{print $2}')
+          echo "author_identity=${AUTHOR:-nathanjohnpayne}" >> "$GITHUB_OUTPUT"
+
+  # ──────────────────────────────────────────────
+  # Job 2: Auto-label PRs that need external review
+  # ──────────────────────────────────────────────
+  triage:
+    needs: [load-config]
+    # `synchronize` / `reopened` are included alongside
+    # opened/ready_for_review so any push-triggered auto-merge re-arm gets
+    # threshold and protected-path labels (`needs-external-review`)
+    # REFRESHED against the changed diff before it evaluates. Without this,
+    # an originally-under-threshold PR whose later push or closed-state
+    # change crossed the threshold (or touched a protected path) could
+    # re-arm on a stale/missing label snapshot. Mirrors load-config, which
+    # also handles synchronize/reopened so this job's threshold/paths inputs
+    # are freshly parsed.
+    if: >
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      (github.event.action == 'opened' ||
+       github.event.action == 'ready_for_review' ||
+       github.event.action == 'synchronize' ||
+       github.event.action == 'reopened')
+    runs-on: ubuntu-latest
+    outputs:
+      needs_external: ${{ steps.check.outputs.needs_external }}
+    steps:
+      - name: Checkout trusted workflow helpers
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # This job shells out only to trusted default-branch helpers; never
+          # run helper code from the PR head under the label-writing PAT.
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Evaluate PR against review-policy.yml
+        id: check
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          THRESHOLD: ${{ needs.load-config.outputs.threshold }}
+          PROTECTED_PATHS: ${{ needs.load-config.outputs.paths }}
+          GH_TOKEN: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+        with:
+          github-token: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          script: |
+            const childProcess = require('child_process');
+            const fs = require('fs');
+            const os = require('os');
+            const path = require('path');
+            const pr = context.payload.pull_request;
+            const threshold = parseInt(process.env.THRESHOLD, 10);
+            const protectedPaths = JSON.parse(process.env.PROTECTED_PATHS);
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+              }
+            );
+
+            // Exclude lockfiles, minified, and generated files from line count
+            // to match REVIEW_POLICY.md threshold definition
+            const excludePatterns = [
+              /\.lock$/, /lock\.json$/, /\.min\.js$/, /\.min\.css$/,
+              /\.generated\./, /\.g\.dart$/, /\.freezed\.dart$/,
+            ];
+            const countedFiles = files.filter(
+              f => !excludePatterns.some(p => p.test(f.filename))
+            );
+            const totalChanges = countedFiles.reduce(
+              (sum, f) => sum + f.additions + f.deletions, 0
+            );
+
+            // Convert glob patterns to regex for matching
+            function globToRegex(pattern) {
+              let re = pattern
+                .replace(/\./g, '\\.')
+                .replace(/\*\*/g, '___GLOBSTAR___')
+                .replace(/\*/g, '[^/]*')
+                .replace(/___GLOBSTAR___/g, '.*');
+              return new RegExp('^' + re + '$');
+            }
+
+            const touchesProtected = files.some(f =>
+              protectedPaths.some(p => globToRegex(p).test(f.filename))
+            );
+
+            // Use >= to match REVIEW_POLICY.md definition
+            let needsExternal = totalChanges >= threshold || touchesProtected;
+            let externalReviewFingerprint = '';
+            let filesPath = '';
+            const repo = `${context.repo.owner}/${context.repo.repo}`;
+            try {
+              filesPath = path.join(os.tmpdir(), `mergepath-pr-${pr.number}-files.json`);
+              fs.writeFileSync(filesPath, JSON.stringify(files));
+              const fingerprintRaw = childProcess.execFileSync(
+                'bash',
+                [
+                  'scripts/workflow/external_review_fingerprint.sh',
+                  '--repo', repo,
+                  '--pr', String(pr.number),
+                  '--ref', pr.head.sha,
+                  '--config', '.github/review-policy.yml',
+                  '--files-json', filesPath,
+                ],
+                {encoding: 'utf8', env: process.env}
+              );
+              const fingerprint = JSON.parse(fingerprintRaw);
+              needsExternal = Boolean(fingerprint.requires_review);
+              externalReviewFingerprint = fingerprint.fingerprint || '';
+            } catch (e) {
+              core.warning(
+                `External-review fingerprint calculation failed; ` +
+                `labeling fail-closed (${e.message}).`
+              );
+              needsExternal = true;
+              externalReviewFingerprint = '';
+            }
+
+            // PROPAGATION-LANE-DEFER (#656): this job and pr-review-policy.yml's
+            // External Review Check both decide needs-external-review, but only
+            // the latter BYTE-VERIFIES a mergepath-sync/ PR against
+            // mergepath@<sha> and exempts a faithful mirror (removing the
+            // label + posting a github-actions[bot] comment with the
+            // HEAD-PINNED marker `mergepath-propagation-lane
+            // verified-head=<sha>`). Pre-#656, this job re-added the label on
+            // any later event because it never consulted that verdict —
+            // stranding approved, byte-verified sync PRs on Label Gate
+            // (tadlockpsychiatry#93: lane-cleared 14:55, triage re-added
+            // 15:46, stuck).
+            //
+            // Fix: SKIP the label add ONLY when the lane has already verified
+            // THIS exact head — i.e. a github-actions[bot]-authored comment
+            // carries the marker pinned to pr.head.sha. Everything else stays
+            // FAIL-CLOSED: an unverified sync head (fresh push, diverged
+            // hand-edit, reopened-with-new-head) is labeled here exactly as
+            // before, and the lane later removes the label if and only if the
+            // byte-compare passes. This preserves the PAT-driven label
+            // add/remove events that re-arm the downstream gates, and it
+            // grants no exemption this job derives itself — the lane's
+            // byte-verify remains the sole teeth. (The naive alternative —
+            // skipping by branch name — was rejected as fail-OPEN in the
+            // closed first attempt: Codex P1 on the #657 PR.)
+            //
+            // Marker contract + trust model are shared with
+            // scripts/merge-clearance-gate.sh lane_verified() (#620): only
+            // repo workflows author github-actions[bot] comments, and only
+            // pr-review-policy.yml posts this marker, only after
+            // verify-propagation-pr.sh byte-confirms the head. Keep the
+            // marker string in lockstep across the three files
+            // (scripts/ci/check_agent_review_triage_defers asserts it).
+            // The branch-prefix pre-filter must match SYNC_BRANCH_PREFIX in
+            // scripts/sync-to-downstream.sh; it only bounds the extra API
+            // read to sync branches — the marker, not the branch name, is
+            // what authorizes the skip.
+            let laneVerifiedHead = false;
+            if (needsExternal &&
+                ((pr.head && pr.head.ref) || '').startsWith('mergepath-sync/')) {
+              try {
+                const comments = await github.paginate(
+                  github.rest.issues.listComments,
+                  {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: pr.number,
+                    per_page: 100,
+                  }
+                );
+                const marker = `mergepath-propagation-lane verified-head=${pr.head.sha}`;
+                laneVerifiedHead = comments.some(
+                  c => c.user && c.user.login === 'github-actions[bot]' &&
+                       (c.body || '').includes(marker)
+                );
+              } catch (e) {
+                // Indeterminate marker read must not skip labeling — mirror
+                // lane_verified()'s fail-safe direction (external review can
+                // only be ADDED by an uncertain read, never removed).
+                core.warning(`Propagation-lane marker read failed (${e.message}); labeling fail-closed.`);
+                laneVerifiedHead = false;
+              }
+            }
+
+            if (needsExternal && laneVerifiedHead) {
+              console.log(
+                `Propagation lane already byte-verified head ${pr.head.sha} ` +
+                `(github-actions[bot] verified-head marker present) — skipping ` +
+                `needs-external-review add; the lane owns this PR's labeling.`
+              );
+            } else if (needsExternal) {
+              let carried = false;
+              try {
+                if (needsExternal && externalReviewFingerprint && filesPath) {
+                  const carryRaw = childProcess.execFileSync(
+                    'bash',
+                    [
+                      'scripts/workflow/external_review_carryforward.sh',
+                      '--repo', repo,
+                      '--pr', String(pr.number),
+                      '--head', pr.head.sha,
+                      '--current-fingerprint', externalReviewFingerprint,
+                      '--config', '.github/review-policy.yml',
+                      '--files-json', filesPath,
+                    ],
+                    {encoding: 'utf8', env: process.env}
+                  );
+                  const carry = JSON.parse(carryRaw);
+                  carried = Boolean(carry.carried);
+                  if (carried) {
+                    needsExternal = false;
+                    console.log(
+                      `Codex already cleared the same external-review fingerprint ` +
+                      `on ${carry.source_commit} at ${carry.source_time}; skipping ` +
+                      `needs-external-review on base-only sync (#705).`
+                    );
+                  }
+                }
+              } catch (e) {
+                core.warning(
+                  `External-review fingerprint carry-forward check failed; ` +
+                  `labeling fail-closed using threshold/protected-path result (${e.message}).`
+                );
+              }
+
+              if (!carried && needsExternal) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  labels: ['needs-external-review'],
+                });
+              }
+            }
+
+            core.setOutput('needs_external', needsExternal.toString());
+
+  # ──────────────────────────────────────────────
+  # Job 3: Assign reviewer (internal self-peer review)
+  # ──────────────────────────────────────────────
+  assign:
+    needs: [load-config, triage]
+    if: >
+      always() &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      (github.event.action == 'opened' || github.event.action == 'ready_for_review' || github.event.action == 'labeled')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assign reviewer identity based on Authoring-Agent
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          AUTHOR_IDENTITY: ${{ needs.load-config.outputs.author_identity }}
+          REVIEWERS_JSON: ${{ needs.load-config.outputs.reviewers }}
+        with:
+          github-token: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          script: |
+            const pr = context.payload.pull_request;
+            const author = pr.user.login;
+            const authorIdentity = process.env.AUTHOR_IDENTITY || 'nathanjohnpayne';
+            const reviewers = JSON.parse(process.env.REVIEWERS_JSON || '[]');
+
+            // Under the new policy, all PRs are authored by the author identity.
+            if (author !== authorIdentity) {
+              console.log(`Author ${author} is not ${authorIdentity}; skipping auto-assignment.`);
+              return;
+            }
+
+            if (reviewers.length === 0) {
+              console.log('No reviewers configured in review-policy.yml');
+              return;
+            }
+
+            // Read the Authoring-Agent line from the PR body to determine which
+            // agent wrote the code. Per REVIEW_POLICY.md, the same agent reviews
+            // under its own reviewer identity (e.g., claude → nathanpayne-claude).
+            const body = pr.body || '';
+            const agentMatch = body.match(/^Authoring-Agent:\s*(\w+)/mi);
+            let reviewer;
+
+            if (agentMatch) {
+              const agentName = agentMatch[1].toLowerCase();
+              const matchingReviewer = reviewers.find(
+                r => r.endsWith(`-${agentName}`)
+              );
+              if (matchingReviewer) {
+                reviewer = matchingReviewer;
+                console.log(`Authoring-Agent: ${agentName} → assigning ${reviewer}`);
+              } else {
+                console.log(`Authoring-Agent: ${agentName} has no matching reviewer identity, using first available.`);
+                reviewer = reviewers[0];
+              }
+            } else {
+              console.log('No Authoring-Agent line found in PR body; assigning first available reviewer.');
+              reviewer = reviewers[0];
+            }
+
+            const { data: existingReviewers } = await github.rest.pulls.listRequestedReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+            });
+            const alreadyRequested = existingReviewers.users.map(u => u.login);
+
+            if (!alreadyRequested.includes(reviewer)) {
+              await github.rest.pulls.requestReviewers({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                reviewers: [reviewer],
+              });
+              console.log(`Assigned ${reviewer} for internal self-peer review.`);
+            }
+
+  # Note: no CI-side invoke-reviewer job exists. Phase 2 internal
+  # self-peer review is performed by the authoring agent in its own
+  # session — the agent switches its identity to its reviewer account
+  # (e.g., nathanpayne-claude) via a PAT from 1Password and posts the
+  # review with that PAT. See REVIEW_POLICY.md § Phase 2 and CLAUDE.md
+  # "After opening the PR" steps 4–7. A headless Claude/Codex CLI
+  # invocation in CI is intentionally NOT used: it (a) bypasses the
+  # in-session tool context the agent already has, (b) adds a stale
+  # API-key failure surface unrelated to the PR, and (c) duplicates
+  # work the agent is already doing as part of the PR loop.
+
+  # ──────────────────────────────────────────────
+  # Job 4: Detect agent disagreement → escalate
+  # ──────────────────────────────────────────────
+  detect-disagreement:
+    if: github.event_name == 'pull_request_review'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Explicit-token gh / github-script only, no authenticated git, so
+          # don't leave the checkout token in .git/config (#548 / Codex #550).
+          persist-credentials: false
+
+      - name: Install js-yaml
+        run: npm install --no-save --ignore-scripts --legacy-peer-deps js-yaml
+
+      - name: Check for conflicting reviews
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const yaml = require('js-yaml');
+
+            // Decision logic lives in scripts/disagreement-detector.cjs
+            // so the workflow and the fixture-driven test
+            // (scripts/ci/check_disagreement_detector) exercise the
+            // exact same code. See #259 for the regression this
+            // factoring closes.
+            const { decide } = require(
+              path.resolve(process.env.GITHUB_WORKSPACE, 'scripts/disagreement-detector.cjs')
+            );
+
+            let reviewerAccounts;
+            try {
+              const config = yaml.load(fs.readFileSync('.github/review-policy.yml', 'utf8'));
+              reviewerAccounts = config.available_reviewers || [];
+            } catch (e) {
+              reviewerAccounts = ['nathanpayne-claude', 'nathanpayne-codex', 'nathanpayne-cursor'];
+            }
+
+            // Paginate reviews — long histories (>30) otherwise truncate and
+            // mask the latest-on-HEAD signal. Mirrors the pagination
+            // fix in pr-audit.yml (PR #255 P2).
+            const reviews = await github.paginate(
+              github.rest.pulls.listReviews,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                per_page: 100,
+              }
+            );
+
+            // Check if the label is currently applied
+            const labels = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+            });
+            const hasLabel = labels.data.some(l => l.name === 'needs-human-review');
+
+            const decision = decide({
+              reviews,
+              reviewerAccounts,
+              headSha: context.payload.pull_request.head.sha,
+              hasLabel,
+            });
+
+            if (decision === 'apply') {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: ['needs-human-review'],
+              });
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: '**Agent disagreement detected.** One reviewer approved and another requested changes on the current HEAD. Escalating to @nathanjohnpayne for human tiebreaker per REVIEW_POLICY.md.',
+              });
+            } else if (decision === 'remove') {
+              // No live disagreement on the current HEAD — remove the
+              // label. Covers the #259 case: a stale CHANGES_REQUESTED
+              // on an older SHA is superseded by an APPROVED on HEAD.
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  name: 'needs-human-review',
+                });
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: '**Agent disagreement resolved.** No live conflict on the current HEAD (latest review per reviewer, non-DISMISSED, commit_id == HEAD). Removing `needs-human-review` label.',
+                });
+              } catch (e) {
+                // Label may already be removed — ignore 404
+                if (e.status !== 404) throw e;
+              }
+            }
+            // decision === 'noop' — nothing to do.
+
+  # ──────────────────────────────────────────────
+  # Job 5: Block self-approval
+  # ──────────────────────────────────────────────
+  block-self-approval:
+    if: >
+      github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'approved'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dismiss self-approval from reviewer bot accounts
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Explicit-token github-script only, no authenticated git, so don't
+          # leave the checkout token in .git/config (#548 / Codex #550).
+          persist-credentials: false
+
+      - name: Install js-yaml
+        run: npm install --no-save --ignore-scripts --legacy-peer-deps js-yaml
+
+      - name: Check and dismiss
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const yaml = require('js-yaml');
+
+            const prAuthor = context.payload.pull_request.user.login;
+            const reviewer = context.payload.review.user.login;
+
+            // Only block self-approval from reviewer bot accounts.
+            // The human (nathanjohnpayne) IS the PR author under the shared
+            // identity model, but must be allowed to approve for tiebreaker
+            // and human-escalated reviews per REVIEW_POLICY.md.
+            let reviewerAccounts;
+            try {
+              const config = yaml.load(fs.readFileSync('.github/review-policy.yml', 'utf8'));
+              reviewerAccounts = config.available_reviewers || [];
+            } catch (e) {
+              reviewerAccounts = ['nathanpayne-claude', 'nathanpayne-codex', 'nathanpayne-cursor'];
+            }
+
+            // A reviewer bot account cannot approve a PR it authored.
+            // Since all PRs are authored by nathanjohnpayne, this only fires
+            // if a bot account somehow ends up as the PR author (shouldn't
+            // happen under the policy, but guard against it).
+            const isReviewerBot = reviewerAccounts.includes(reviewer);
+            if (prAuthor === reviewer && isReviewerBot) {
+              await github.rest.pulls.dismissReview({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.payload.pull_request.number,
+                review_id: context.payload.review.id,
+                message: 'Self-approval is not permitted. This review has been dismissed automatically.',
+              });
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                labels: ['policy-violation'],
+              });
+
+              core.setFailed('Self-approval detected and dismissed.');
+            }
+
+  # ──────────────────────────────────────────────
+  # Job 6: Auto-merge on approval (if no external review required)
+  # ──────────────────────────────────────────────
+  # Must `needs:` on detect-disagreement, block-self-approval, and triage to
+  # force those sibling jobs to COMPLETE before this one starts. All three
+  # can apply blocking labels as a side effect (`needs-human-review` from
+  # detect-disagreement, `policy-violation` from block-self-approval, and
+  # `needs-external-review` from triage), and without the ordering
+  # constraint they run in parallel with auto-merge. A sibling applying a
+  # label 200ms after the runtime re-verify step below fetches labels but
+  # 100ms before `gh pr merge` dispatches would still slip through.
+  # `triage` matters specifically on the #495 synchronize/reopened re-arm
+  # path: a PR changed after an approval, or while closed and then
+  # reopened, must have `needs-external-review` re-applied by triage BEFORE
+  # the re-verify step reads labels, or the re-arm would arm on a stale
+  # snapshot. `always()` is still needed because event-mismatched sibling
+  # jobs are expected to skip (`detect-disagreement` / `block-self-approval`
+  # on pull_request events; `triage` on pull_request_review events). The
+  # pull_request re-arm path additionally requires `needs.triage.result ==
+  # 'success'`: ordering alone is not enough, because a failed/skipped triage
+  # could otherwise leave the old no-label snapshot in place and still let
+  # auto-merge arm. See #61 for the cross-event race and this PR for the
+  # same-workflow races nathanpayne-codex caught during review.
+  #
+  # Three triggers arm auto-merge (#495, #620):
+  #
+  #   1. `pull_request_review` + `approved` — the original path. The
+  #      approval event IS the signal, so no API approval re-check is
+  #      needed.
+  #   2. `pull_request` + `synchronize` / `reopened` — the RE-ARM path.
+  #      Arming was one-shot on the approval event, so a fix-commit
+  #      pushed AFTER an approval (the common case when Codex's 15–40+
+  #      min review lands a finding at or after the author's approval —
+  #      see #494) never re-attempted `gh pr merge --auto`, and the PR
+  #      sat CLEAN-but-unmerged unless the author re-approved. This path
+  #      re-runs the arming logic on every push, BUT only proceeds when
+  #      the `Gate: require existing non-author approval` step below
+  #      confirms a valid non-author latest-state APPROVED review already
+  #      exists on the PR (`dismiss_stale_reviews` is OFF, so the
+  #      approval carries across the fix-push — see the BEHIND-PR
+  #      carryover behavior). A push with NO existing approval does NOT
+  #      arm. Every other gate (coderabbit-wait, AUTHOR_MERGE_TOKEN
+  #      identity, blocking-label re-verify) re-applies on the NEW HEAD,
+  #      and `gh pr merge --auto` is idempotent when --auto is already
+  #      enabled.
+  #   3. `pull_request` + `unlabeled` for a BLOCKING label (#620) — the
+  #      settle path. On an over-threshold PR with a carried-over
+  #      approval, update-branch makes triage re-apply
+  #      needs-external-review; the re-verify inside a concurrent arming
+  #      run reads that transient state and hard-fails (correct in
+  #      isolation — anti-#61); auto-clear then removes the label once
+  #      the clearance gate passes on the new head — and nothing
+  #      re-armed. The label REMOVAL is the state-settled signal, so it
+  #      re-runs the same fully-gated arming logic: the approval gate
+  #      re-confirms a registered non-author APPROVED via the API (same
+  #      as path 2), and every downstream guard re-applies unchanged.
+  #      The job `if:` additionally requires the REMOVED label to be one
+  #      of the four blocking names (the full Label Gate blocking set,
+  #      including policy-violation - Codex P2 on the #620 PR), so unrelated label churn does not spend
+  #      runner minutes. triage deliberately does NOT run on `unlabeled`
+  #      (its action filter excludes it — re-applying labels here would
+  #      flap against auto-clear), so the triage-success requirement
+  #      accepts `skipped` on this path: no sibling job can apply a
+  #      label in an unlabeled run, and the two in-job label re-verifies
+  #      still read the live API state fail-closed before any merge.
+  #
+  # The job body references only `github.event.pull_request.*` (number,
+  # html_url, labels) — all trigger shapes carry that object — so the
+  # steps are event-shape-agnostic. Only the `if:` and the approval-gate
+  # step branch on event name.
+  auto-merge-on-approval:
+    needs: [load-config, detect-disagreement, block-self-approval, triage]
+    if: >
+      always() &&
+      ((github.event_name == 'pull_request_review' &&
+        github.event.review.state == 'approved') ||
+       (github.event_name == 'pull_request' &&
+        (github.event.action == 'synchronize' ||
+         github.event.action == 'reopened' ||
+         (github.event.action == 'unlabeled' &&
+          contains(fromJSON('["needs-external-review","needs-human-review","policy-violation","human-hold"]'), github.event.label.name))))) &&
+      (github.event_name != 'pull_request' ||
+       needs.triage.result == 'success' ||
+       (github.event.action == 'unlabeled' &&
+        needs.triage.result == 'skipped')) &&
+      !contains(github.event.pull_request.labels.*.name, 'needs-external-review') &&
+      !contains(github.event.pull_request.labels.*.name, 'needs-human-review') &&
+      !contains(github.event.pull_request.labels.*.name, 'human-hold')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # Explicit-token gh merge path only, no authenticated git, so don't
+          # leave the checkout token in .git/config (#548 / Codex #550).
+          persist-credentials: false
+
+      # Re-arm gate (#495). On the `synchronize` / `reopened` re-trigger
+      # the approval is NOT in the event payload, so confirm via the API
+      # that a valid non-author latest-state APPROVED review already
+      # exists before arming. On the `pull_request_review` approved path
+      # the approval IS the trigger, so this step is skipped and `proceed`
+      # defaults to true for the downstream guard.
+      #
+      # Approval semantics mirror scripts/codex-review-check.sh gate (b)
+      # and scripts/disagreement-detector.cjs: collapse to each reviewer's
+      # LATEST opinionated review (APPROVED / CHANGES_REQUESTED /
+      # DISMISSED; COMMENTED is informational), exclude the PR author
+      # (GitHub blocks reviewer == author for native approval anyway), and
+      # require that latest state to be APPROVED. A later
+      # CHANGES_REQUESTED or DISMISSED from the same reviewer supersedes an
+      # earlier APPROVED, so a withdrawn approval does NOT re-arm.
+      - name: Gate require existing non-author approval
+        id: require_approval
+        if: >
+          github.event_name == 'pull_request' ||
+          github.event_name == 'pull_request_review'
+        env:
+          GH_TOKEN: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          REPO: ${{ github.repository }}
+          # #529 / #544: restrict the approval that arms auto-merge to a
+          # REGISTERED agent reviewer identity (available_reviewers), matching
+          # scripts/codex-review-check.sh gate (b) and the required
+          # merge-clearance-gate. An APPROVED from an account that is NOT a
+          # mapped reviewer identity must not arm auto-merge on EITHER path:
+          # the synchronize re-arm (existing-review API check below) OR the
+          # direct pull_request_review approved event. #544 review: the gate
+          # previously ran only on pull_request, so a direct approval from an
+          # unregistered non-author skipped it (the merge-clearance-gate still
+          # backstopped the actual merge, but the arming gate should be
+          # consistent on both paths).
+          EVENT_REVIEWER: ${{ github.event.review.user.login }}
+          REVIEWERS_JSON: ${{ needs.load-config.outputs.reviewers }}
+        run: |
+          REVIEWERS_JSON="${REVIEWERS_JSON:-[]}"
+          # Direct approval event: the approval IS the trigger, so verify the
+          # event reviewer is a registered, non-author reviewer here (#544).
+          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request_review" ]; then
+            if [ -z "$EVENT_REVIEWER" ] || [ "$EVENT_REVIEWER" = "$PR_AUTHOR" ]; then
+              echo "::notice::Approval reviewer '$EVENT_REVIEWER' is empty or the PR author; not arming auto-merge."
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if ! printf '%s' "$REVIEWERS_JSON" | jq -e --arg r "$EVENT_REVIEWER" 'index($r) != null' >/dev/null 2>&1; then
+              echo "::notice::Approval reviewer '$EVENT_REVIEWER' is not a registered reviewer (available_reviewers); not arming auto-merge (#544)."
+              echo "proceed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Direct approval from registered reviewer $EVENT_REVIEWER; proceeding."
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # --- synchronize / reopened re-arm path (existing API check) ---
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::REVIEWER_ASSIGNMENT_TOKEN is not configured; cannot confirm an existing approval for the synchronize re-arm. Skipping auto-merge arming."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Fetch raw pages then flatten with `jq -s 'add // []'` BEFORE
+          # aggregating. `gh api --paginate --jq` applies the filter per
+          # page, so a `group_by` over a >30-review history (default page
+          # size) would collapse each page in isolation and miss a later
+          # CHANGES_REQUESTED on a subsequent page. Flatten first, then run
+          # the latest-state-per-reviewer collapse over the full array.
+          # Mirrors fetch_api_array() in scripts/codex-review-check.sh.
+          if ! RAW=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/reviews" 2>&1); then
+            echo "::error::Could not read reviews to confirm an existing approval ($RAW). Failing closed — not arming auto-merge."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Latest opinionated review per non-author REGISTERED reviewer;
+          # pass only when at least one such reviewer's latest state is
+          # APPROVED. `-s` (slurp) merges the per-page arrays into one
+          # list-of-arrays; `add // []` then flattens to the full review
+          # array. #529: the `IN($reviewers[])` filter restricts to
+          # available_reviewers identities — an approval from a non-reviewer
+          # account does NOT count. Default to [] so an empty/failed
+          # load-config fails CLOSED (no reviewer matches → no re-arm).
+          REVIEWERS_JSON="${REVIEWERS_JSON:-[]}"
+          if ! APPROVER=$(printf '%s' "$RAW" | jq -r -s \
+            --arg author "$PR_AUTHOR" \
+            --argjson reviewers "$REVIEWERS_JSON" '
+              [ (add // []) | .[]
+                | select(.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED")
+                | select(.user.login != $author)
+                | select(.user.login | IN($reviewers[]))
+              ]
+              | group_by(.user.login)
+              | map(max_by(.submitted_at))
+              | map(select(.state == "APPROVED"))
+              | first
+              | if . == null then "" else .user.login end' 2>/dev/null); then
+            echo "::error::Could not parse review list to confirm an existing approval. Failing closed — not arming auto-merge."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -z "$APPROVER" ]; then
+            echo "::notice::No valid non-author APPROVED review from a registered reviewer (available_reviewers) on PR #$PR_NUMBER; a push does not arm auto-merge without one (#495/#529)."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Existing non-author approval found ($APPROVER); proceeding with the synchronize re-arm."
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check author merge token
+        id: author_merge_token
+        # Skip the entire merge path when the require_approval gate set
+        # proceed=false — either the synchronize re-arm found no existing
+        # registered-reviewer approval, or (since #544) the direct
+        # pull_request_review approver was not a registered reviewer. The
+        # `!= 'false'` test still lets a genuine registered-reviewer approval
+        # (proceed=true) and any other event shape (empty) through.
+        if: steps.require_approval.outputs.proceed != 'false'
+        env:
+          GH_TOKEN: ${{ secrets.AUTHOR_MERGE_TOKEN }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::notice::AUTHOR_MERGE_TOKEN is not configured; automatic PR merge is disabled. Merge manually as the author identity."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          expected_author=$(awk '
+            /^[^[:space:]]/ && $1 == "author_identity:" {
+              sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "", $0)
+              gsub(/^"/, "", $0)
+              gsub(/^\047/, "", $0)
+              gsub(/"[[:space:]]*(#.*)?$/, "", $0)
+              gsub(/\047[[:space:]]*(#.*)?$/, "", $0)
+              gsub(/[[:space:]]*#.*$/, "", $0)
+              sub(/[[:space:]]+$/, "", $0)
+              print
+              exit
+            }
+          ' .github/review-policy.yml)
+          expected_author="${expected_author:-nathanjohnpayne}"
+
+          if ! actual_author=$(gh api user --jq .login); then
+            echo "::error::AUTHOR_MERGE_TOKEN could not authenticate to GitHub. Refusing automatic merge."
+            exit 1
+          fi
+          if [ "$actual_author" != "$expected_author" ]; then
+            echo "::error::AUTHOR_MERGE_TOKEN resolves to '$actual_author', expected '$expected_author'. Refusing automatic merge."
+            exit 1
+          fi
+
+          echo "Automatic merge token verified for author identity: $actual_author"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Check if CodeRabbit is enabled
+        if: steps.author_merge_token.outputs.enabled == 'true'
+        id: cr
+        run: |
+          CONFIG=".github/review-policy.yml"
+          # Parse only the `coderabbit:` block — stop at the next top-level key.
+          # The previous `sed -n '/^coderabbit:/,$ p'` was scope-unsafe: it
+          # captured everything from `coderabbit:` to EOF, so a later top-level
+          # block with `enabled: true` (e.g., the `codex:` block added in #31)
+          # produced a false positive and triggered the CodeRabbit wait loop.
+          #
+          # The end-of-block test is "a new line whose first character is
+          # neither whitespace nor `#`" — which catches the next top-level YAML
+          # key while still permitting column-0 comments (`# ...`) and blank
+          # lines inside the block. The earlier `^[^[:space:]]` regex was
+          # too strict: a YAML-valid column-0 comment prematurely exited the
+          # block and produced a false negative. Fix surfaced by nathanpayne-codex
+          # external review on PR #53.
+          if awk '
+            /^coderabbit:/ {in_block=1; next}
+            in_block && /^[^[:space:]#]/ {in_block=0}
+            in_block && /^[[:space:]]*enabled:[[:space:]]*true([[:space:]]*#.*)?$/ {found=1}
+            END {exit found ? 0 : 1}
+          ' "$CONFIG"; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for CodeRabbit review
+        if: steps.author_merge_token.outputs.enabled == 'true' && steps.cr.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          # #489: author token for the rate-limit→Codex failover. coderabbit-wait.sh
+          # runs as the reviewer (GH_TOKEN above) for its own retry comments, but its
+          # failover posts the author-attributed `@codex review` via
+          # codex-review-request.sh → gh-as-author.sh, which resolves the author token
+          # from OP_PREFLIGHT_AUTHOR_PAT and verifies it as author_identity. This step
+          # only runs when author_merge_token is enabled, so the secret is present;
+          # preflight_require_token is a no-op here (GH_TOKEN is set), so this value is
+          # not clobbered, and coderabbit-wait.sh itself reads only the reviewer PAT.
+          OP_PREFLIGHT_AUTHOR_PAT: ${{ secrets.AUTHOR_MERGE_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Delegate to scripts/coderabbit-wait.sh so auto-merge honors the
+          # same semantics the agent-driven flow uses: HEAD-anchored
+          # freshness (#136 — do not merge on a stale review from a prior
+          # HEAD), rate-limit retry (#138 — CodeRabbit does not auto-retry
+          # after its published window elapses), and the coderabbit.*
+          # knobs in .github/review-policy.yml. Exit-code translation:
+          #   0 — cleared on current HEAD, no high-severity markers.
+          #   2 — cleared but findings present (Potential issue / ⚠️).
+          #       Blocks auto-merge per REVIEW_POLICY.md § Phase 2.5,
+          #       which requires every Potential issue / ⚠️ finding to
+          #       be explicitly addressed (fixed or dismissed with
+          #       reasoning) before moving on. The agent-driven flow
+          #       does that in-session; the auto-merge workflow has
+          #       no way to address a finding, so it stops here and
+          #       lets the author push a fix (or post a dismissal
+          #       reply). A new approving review after the fix
+          #       re-triggers this job.
+          #   3 — API / infra error. Block and surface.
+          #   4 — max_wait_seconds grace window elapsed without a review.
+          #       CodeRabbit is advisory; log a warning and proceed.
+          #   5 — rate-limit retry budget exhausted. Non-blocking IFF the #489
+          #       Codex failover engaged (codex_failover_requested:true in the
+          #       JSON) — Codex was requested, so the PR advances via the Codex
+          #       gates; otherwise block and let the human intervene.
+          # #727 post-clearance fast path. If the current HEAD already carries an
+          # ACTUAL Codex/Phase-4b clearance AND a reviewer-identity APPROVED, the
+          # real blocking bot-review signal is already in and CodeRabbit is
+          # advisory on top of it — so cap coderabbit-wait.sh's poll budget to
+          # coderabbit.post_clearance_max_wait_seconds instead of the full
+          # max_wait_seconds. Read-only probe; fail SAFE — any non-zero rc leaves
+          # the fast path DISARMED so the full budget is used.
+          #
+          # CODEX_REVIEW_CHECK_ALLOW_PHASE_4B_SUBSTITUTE=false is load-bearing
+          # (#727, Codex P2 on #729): WITHOUT it, gate (c) accepts the same
+          # reviewer APPROVED that clears gate (b) as a Phase-4b substitute, so an
+          # ordinary under-threshold approval with NO Codex review would arm the
+          # cap and reopen the pre-review merge race. With it, gate (c) requires
+          # an actual Codex bot signal (👍 / affirmative verdict / clean review).
+          # SKIP_CI keeps the probe independent of CI; REQUIRE_APPROVAL_ON_HEAD
+          # HEAD-pins gate (b).
+          #
+          # PROBE_HEAD pins the clearance to the head we evaluated (#727, Codex P2
+          # on #729): a push landing between here and coderabbit-wait.sh's own
+          # head fetch would otherwise let the shortened budget apply to a head
+          # that was never cleared. coderabbit-wait.sh disarms if its live head
+          # differs from this SHA.
+          PROBE_HEAD=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .head.sha 2>/dev/null || echo "")
+          CODEX_CLEARED=false
+          set +e
+          CODEX_REVIEW_CHECK_SKIP_CI=1 CODEX_REVIEW_CHECK_REQUIRE_APPROVAL_ON_HEAD=1 \
+            CODEX_REVIEW_CHECK_ALLOW_PHASE_4B_SUBSTITUTE=false \
+            bash scripts/codex-review-check.sh "$PR_NUMBER" "$REPO" >&2
+          crc=$?
+          set -e
+          case "$crc" in
+            0)
+              CODEX_CLEARED=true
+              echo "::notice::Post-clearance fast path armed (#727): HEAD $PROBE_HEAD has an actual Codex/Phase-4b clearance + reviewer APPROVED — CodeRabbit wait capped to coderabbit.post_clearance_max_wait_seconds."
+              ;;
+            1)
+              echo "::notice::Post-clearance fast path not armed: no actual Codex/Phase-4b clearance (or no reviewer APPROVED) on HEAD — using the full CodeRabbit budget."
+              ;;
+            *)
+              echo "::warning::codex-review-check.sh returned rc=$crc while deriving post-clearance state; failing safe to the full CodeRabbit budget."
+              ;;
+          esac
+
+          # Fail closed if the head could not be resolved (Codex P2 r-comment on
+          # #729): without a non-empty PROBE_HEAD there is nothing to pin the
+          # clearance to, so a push landing before coderabbit-wait.sh resolves
+          # its own head could get the shortened budget on an un-reviewed head.
+          # coderabbit-wait.sh also fails closed on an empty pin, but disarm here
+          # too so the intent is explicit and logged.
+          if [ "$CODEX_CLEARED" = "true" ] && [ -n "$PROBE_HEAD" ]; then
+            POST_CLEARANCE_FLAG=1
+          else
+            POST_CLEARANCE_FLAG=0
+            if [ "$CODEX_CLEARED" = "true" ] && [ -z "$PROBE_HEAD" ]; then
+              echo "::warning::Post-clearance clearance derived but the head SHA could not be resolved for the pin — failing closed to the full CodeRabbit budget (#727)."
+            fi
+          fi
+
+          set +e
+          # Capture the helper's JSON (stdout) so the rc=5 branch can read the
+          # #489 codex_failover_requested flag. Its human-readable diagnostics —
+          # and the failover child's own JSON — go to stderr and stream to the log.
+          WAIT_JSON=$(CODERABBIT_WAIT_POST_CLEARANCE="$POST_CLEARANCE_FLAG" CODERABBIT_WAIT_POST_CLEARANCE_SHA="$PROBE_HEAD" bash scripts/coderabbit-wait.sh "$PR_NUMBER" "$REPO")
+          rc=$?
+          set -e
+          printf '%s\n' "$WAIT_JSON"
+          case "$rc" in
+            0)
+              echo "CodeRabbit cleared on current HEAD — proceeding to merge."
+              ;;
+            2)
+              echo "::error::CodeRabbit flagged Potential issue / ⚠️ findings on the current HEAD. Per REVIEW_POLICY.md § Phase 2.5, each must be explicitly addressed (fixed or dismissed with reasoning) before merge. Blocking auto-merge; address the findings and request a new approval to re-trigger."
+              exit 1
+              ;;
+            4)
+              echo "::warning::CodeRabbit grace window elapsed without a review. CodeRabbit is advisory — proceeding to merge. Check coderabbit-wait.sh JSON above for status_probe details, if present."
+              ;;
+            5)
+              # #489/#713: a rate_limit_stalled is non-blocking ONLY when
+              # the Codex failover engaged AND this head is protected from
+              # bot-unreviewed auto-merge. Protection means either
+              # merge-clearance-gate.sh's external arm applies
+              # NON-vacuously, or the PR is intrinsically external-review
+              # and current-head Codex/Phase-4b clearance is already
+              # satisfied. For PRs where both are false, --trigger-only
+              # does not wait for Codex, so proceeding would let a
+              # rate-limited PR merge with neither bot having reviewed it —
+              # those keep BLOCKING (Codex P2 on #512 r3). The disposition
+              # lives in the unit-tested, fail-closed
+              # scripts/coderabbit-automerge-rate-limit-gate.sh.
+              #
+              # #713: ask merge-clearance-gate.sh itself for the rc=5
+              # protection predicate. It uses the same intrinsic threshold
+              # + protected-paths computation as the required check, with
+              # the label as a force-on signal and the propagation lane's
+              # HEAD-pinned verified marker as the exemption, all evaluated
+              # on the LIVE head. When the required-check gate is disabled,
+              # it additionally requires codex-review-check.sh to confirm
+              # current-head Codex/Phase-4b clearance before returning
+              # true. Label-event proxies (current-label reads,
+              # unlabeled-removal overrides) remain rejected: a label event
+              # is not head-pinned proof of a downstream gate or clearance.
+              # Fail closed: any nonzero exit or unexpected output from the
+              # query reads as false (block). stderr streams to the step log
+              # for diagnosability; only stdout (exactly `true` or `false`)
+              # is consumed.
+              ext_protected=false
+              if req=$(bash scripts/merge-clearance-gate.sh --derive-rate-limit-protection "$PR_NUMBER" "$REPO"); then
+                case "$req" in
+                  true|false) ext_protected=$req ;;
+                esac
+              fi
+              # #727: the post-clearance derivation above (CODEX_CLEARED) is the
+              # threshold-INDEPENDENT counterpart of --derive-rate-limit-protection,
+              # which only asserts protection when external review APPLIES (it
+              # returns false for an under-threshold PR even when Codex has
+              # cleared HEAD). A verified Codex/Phase-4b clearance + reviewer
+              # APPROVED on HEAD is exactly the "a real bot reviewed this head"
+              # signal the rate-limit gate protects against merging without — so
+              # fold it in. This lets a rate-limit stall inside the shortened
+              # post-clearance window resolve as advisory (proceed) rather than
+              # blocking an already-cleared PR, matching the #489/#713 intent
+              # that only bot-UNREVIEWED heads stay blocked.
+              if [ "$CODEX_CLEARED" = "true" ]; then
+                ext_protected=true
+                echo "::notice::rc=5 protection folds in the #727 post-clearance signal: HEAD has verified Codex/Phase-4b clearance + reviewer APPROVED — the CodeRabbit rate-limit stall is advisory here."
+              fi
+              if bash scripts/coderabbit-automerge-rate-limit-gate.sh "$WAIT_JSON" "$ext_protected"; then
+                echo "::notice::CodeRabbit rate-limited, but the #489 Codex failover engaged and this head has active or already-satisfied external-review protection — proceeding."
+                # Record the downgrade for the final re-verify step: the
+                # protection derivation is re-run there against the live
+                # merge head, so state that changes during the waits (for
+                # example, a push or propagation-lane verification landing)
+                # aborts the merge.
+                echo "CR_RATE_LIMIT_DOWNGRADED=true" >> "$GITHUB_ENV"
+              else
+                echo "::error::CodeRabbit rate-limit retry budget exhausted — blocking auto-merge. Either the failover did not engage, or this head has neither an active merge-clearance external gate nor already-satisfied Codex/Phase-4b clearance. Human must re-trigger or merge manually."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::coderabbit-wait.sh failed with exit code $rc. Blocking auto-merge."
+              exit 1
+              ;;
+          esac
+
+      - name: Re-verify blocking labels before test wait
+        if: steps.author_merge_token.outputs.enabled == 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.AUTHOR_MERGE_TOKEN }}
+        run: |
+          # Guard against the TOCTOU race between the trigger-time label
+          # snapshot and the actual merge. The job's top-level `if:` expression
+          # evaluates labels from the `pull_request_review` event payload at
+          # the moment GitHub Actions dispatched the event. Two things can
+          # make that snapshot stale by the time we reach the merge step:
+          #
+          #   1. Eventual consistency. If a label is applied milliseconds
+          #      before the review event fires, the event payload can still
+          #      be generated without the label attached. Observed on PR #60
+          #      (2026-04-14), where the `needs-external-review` label was
+          #      applied 2 seconds before the review event but the job's
+          #      `if:` check evaluated to true anyway, merging the PR before
+          #      any external review could happen. See #61.
+          #
+          #   2. The "Wait for CodeRabbit review" step above can sleep for
+          #      up to 5 minutes on a coderabbit-enabled repo. During that
+          #      window, an agent can legitimately apply a blocking label
+          #      (e.g., a human spotting something after approval) and the
+          #      job would still merge because the `if:` already evaluated.
+          #
+          # Re-fetch the authoritative label state from the GitHub API before
+          # entering the test wait. The same check repeats after the wait,
+          # immediately before merge. Abort if any blocking label is now
+          # present. Also check `policy-violation`, which is applied by the
+          # block-self-approval job earlier in this same workflow run (and
+          # again, the `if:` at job start wouldn't have seen it).
+          LABELS=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels --jq '.labels[].name')
+          printf 'Labels at merge time:\n%s\n' "$LABELS"
+          for blocking_label in needs-external-review needs-human-review policy-violation human-hold; do
+            if printf '%s\n' "$LABELS" | grep -Fxq "$blocking_label"; then
+              echo "::error::Blocking label present at merge time: $blocking_label. Aborting auto-merge."
+              exit 1
+            fi
+          done
+          echo "No blocking labels present — proceeding to merge."
+
+
+      - name: Require current-head check success
+        if: steps.author_merge_token.outputs.enabled == 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.AUTHOR_MERGE_TOKEN }}
+          REPO: ${{ github.repository }}
+          REQUIRED_HEAD_CHECK_NAME: lint
+          TEST_CHECK_WAIT_SECONDS: 1200
+          TEST_CHECK_POLL_SECONDS: 15
+        run: |
+          required_check_name=${REQUIRED_HEAD_CHECK_NAME:-lint}
+          wait_seconds=${TEST_CHECK_WAIT_SECONDS:-1200}
+          poll_seconds=${TEST_CHECK_POLL_SECONDS:-15}
+          deadline=$((SECONDS + wait_seconds))
+          pr_view_json=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid,isCrossRepository,baseRefName,headRefName)
+          sha=$(echo "$pr_view_json" | jq -r .headRefOid)
+          # #655 Codex P2 round 9 ("wait for valid push-only annex
+          # workflows"): a push-only annex trigger only fires IN THIS REPO
+          # for a same-repo PR (a fork PRs push lands in the fork, never
+          # registering a push event here) -- isCrossRepository is gh pr
+          # view's own field for this, no extra API call needed.
+          annex_same_repo_pr=$(echo "$pr_view_json" | jq -r 'if .isCrossRepository then "false" else "true" end')
+          # #655 Codex P2 round 11 ("evaluate base-branch filters before
+          # passing"): a pull_request branches/branches-ignore filter is
+          # matched against the PRs BASE ref; a push branches/branches-ignore
+          # filter is matched against the ref actually being pushed, which
+          # for a same-repo PRs synchronize event is the PRs own HEAD ref
+          # (the feature branch), not base. Both already on this same
+          # pr_view_json call, no extra API call needed.
+          annex_base_branch=$(echo "$pr_view_json" | jq -r '.baseRefName // ""')
+          annex_head_branch=$(echo "$pr_view_json" | jq -r '.headRefName // ""')
+          # #655 Codex P2 round 16 ("wait for path-matched annex
+          # workflows", narrowed in round 17 -- "use the event diff when
+          # emulating path filters", found on the codex-review-check.sh
+          # copy and mirrored here): paginated the same way as the reviews
+          # fetch above (flatten with jq -s BEFORE deriving filenames).
+          # #655 Codex P2 round 17 ("fail closed when the changed-file
+          # lookup fails", Codex; "don't silently treat changed-files API
+          # failures as filtered out", CodeRabbit): the round-16 version
+          # piped stderr into stdout (2>&1) with no failure check, so a
+          # failed gh api call fed an error message into jq, which failed
+          # too, silently collapsing annex_changed_files_json to empty --
+          # indistinguishable from "genuinely fetched, zero files" on the
+          # ruby side, wrongly treated as "paths definitely does not
+          # match". Explicit success/failure branching keeps a failed
+          # fetch as an EXPLICITLY empty string (never touched by jq),
+          # which the ruby probe treats as "unknown", not "no files".
+          if annex_changed_files_raw=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" 2>&1); then
+            annex_changed_files_json=$(printf '%s' "$annex_changed_files_raw" | jq -s 'add // []' | jq -c '[.[].filename]')
+          else
+            annex_changed_files_json=""
+            echo "::warning::Could not fetch PR changed files ($annex_changed_files_raw) -- paths/paths-ignore annex filters will be treated as unresolvable (conservative default, #655 round 17)."
+          fi
+
+          # #655: a consumer's optional, never-propagated repo_lint_local.yml
+          # annex (#601) produces a check run that branch protection does not
+          # require, and this step — before this fix — did not observe either,
+          # so native auto-merge could arm with a red or missing annex check.
+          # Probe the PR HEAD commit for the annex file via the Contents API
+          # (not this job's own checkout — its ref is not guaranteed to be the
+          # PR head on every trigger shape this workflow handles) and require
+          # its check run(s) too when present. Absent (the common case,
+          # including mergepath itself) is a no-op: only `lint` is required,
+          # unchanged from before.
+          #
+          # required_checks_json stays scoped to ONLY the canonical
+          # `required_check_name` entry -- it is a hard requirement this
+          # loop waits for, up to the shared deadline, and fails closed on
+          # timeout. The repo_lint_local.yml annex must NOT be enforced the
+          # same way (#655 Codex P2 round 6, "avoid forcing path-filtered
+          # annex jobs to start"): a consumer annex scoped by workflow-level
+          # `paths`/`paths-ignore` legitimately produces NO check run at all
+          # for a PR outside those paths, and earlier rounds forcing its
+          # derived name(s) into this hard-required list made this loop
+          # wait out the full deadline and refuse auto-merge on every such
+          # PR, forever. Annex enforcement instead runs as a separate
+          # workflow-wide scan below (annex_workflow), each poll iteration,
+          # mirroring codex-review-check.sh gate (a): match by
+          # .workflowName rather than by a specific name, block immediately
+          # on any REPORTED bad conclusion, keep polling (bounded by this
+          # same shared deadline) while anything for that workflow is still
+          # in flight, and treat "nothing reported for this workflow at all"
+          # as non-blocking -- the same trade-off gate (a) already made and
+          # validated across #655 rounds 2-5.
+          required_checks_json=$(jq -n --arg name "$required_check_name" '[{name: $name, workflow: ""}]')
+          annex_workflow=""
+          annex_unfiltered="false"
+          annex_probe_err=$(mktemp)
+          if annex_content=$(gh api "repos/$REPO/contents/.github/workflows/repo_lint_local.yml?ref=$sha" --jq .content 2>"$annex_probe_err"); then
+            # The annex contract (scripts/ci/check_ci_scripts_wired) only requires
+            # a real push/pull_request-triggered workflow that wires local
+            # checks — it does NOT require the job (and therefore check-run)
+            # name to be `repo-lint-local` (Codex P2 on #655), nor does it ban
+            # path filters. Derive the annex's own top-level workflow name the
+            # same way check_ci_scripts_wired parses its `on:` trigger
+            # (safe_load + rescue), rather than assuming the filename
+            # convention or that the workflow is unconditionally triggered.
+            #
+            # Matrix-strategy jobs are skipped during NAME derivation (#655
+            # Codex P2 round 3): GitHub expands a matrix job into one check
+            # run per combination with a name this static YAML read cannot
+            # reproduce. They are NOT invisible to enforcement, though (#655
+            # Codex P1 round 6, "observe matrix annex jobs before
+            # auto-merge") -- annex_workflow is captured regardless of
+            # whether any job names were derived, so the workflow-wide scan
+            # below still catches a reported matrix-leg failure by workflow
+            # identity, without needing to know its expanded name in advance.
+            # ruby's stderr is NOT redirected here (unlike the base64
+            # decode) so the skip notice surfaces in the workflow log.
+            annex_probe_raw=$(printf '%s' "$annex_content" | base64 -d 2>/dev/null | ANNEX_SAME_REPO_PR="$annex_same_repo_pr" ANNEX_BASE_BRANCH="$annex_base_branch" ANNEX_HEAD_BRANCH="$annex_head_branch" ANNEX_CHANGED_FILES_JSON="$annex_changed_files_json" ruby -ryaml -rjson -e '
+              raw = STDIN.read
+              # #655 Codex P1 round 7 ("parse valid annex workflows that use
+              # YAML aliases"): GitHub Actions supports anchors/aliases in
+              # workflow files, but Psych safe_load defaults to
+              # aliases:false specifically to block the "billion laughs"
+              # DoS (a small file whose nested aliases expand
+              # exponentially at parse time). This parses a PRs OWN branch
+              # content, so any repo accepting external contributions is
+              # exposed to a crafted repo_lint_local.yml exhausting CI
+              # runner memory/CPU. Allow aliases, but bound the attack
+              # surface first: a byte-size cap (legitimate CI configs are a
+              # few KB) plus a raw anchor/alias token count cap (the
+              # exploit needs many alias references to achieve exponential
+              # blowup; a legitimate DRY job template reuses one or two) --
+              # counted on the RAW text before parsing, since the danger is
+              # in the expansion itself, not the input size.
+              if raw.bytesize > 100_000
+                STDERR.puts "repo_lint_local.yml exceeds 100000 bytes -- refusing to parse (defensive cap, not a realistic legitimate size, #655)"
+                exit
+              end
+              # #655 Codex P2 round 8 ("avoid treating path globs as YAML
+              # aliases"): a naive `[&*]word` scan over-counts, since an
+              # ordinary glob like `**/*.ts` in a paths:/paths-ignore: list
+              # starts with `*` too -- inflating the count on a perfectly
+              # legitimate annex with a longer filter list past the cap. A
+              # real YAML anchor/alias can ONLY appear immediately after a
+              # structural position: start of text; a block-sequence dash
+              # (which requires being the first non-whitespace character
+              # on its line, with a MANDATORY space before the value --
+              # narrowed in round 9, see below); or `:`, `,`, `[`, `{`
+              # anywhere, optionally followed by whitespace. A glob string
+              # value is never in that position unquoted (a bare scalar
+              # starting with `*` is itself a YAML syntax error, confirmed
+              # empirically), and a QUOTED glob has a leading quote
+              # character that breaks the match.
+              #
+              # #655 Codex P2 round 9 ("do not count glob hyphens as YAML
+              # aliases"): the round 8 version accepted a bare `-` ANYWHERE
+              # in the text (with optional trailing whitespace) as a
+              # structural position, which also matched an internal hyphen
+              # inside a glob directly before a `*` (e.g.
+              # "src/component-*.ts") with no space between them --
+              # inflating the count on a filter list using hyphenated
+              # names. A real block-sequence dash is anchored to the start
+              # of its line (only preceded by indentation) and REQUIRES at
+              # least one space before its value, unlike a mid-string
+              # hyphen.
+              if raw.scan(/(?:\A|^[ \t]*-\s+|[:,\[{]\s*)[&*][A-Za-z0-9_.-]+/).length > 40
+                STDERR.puts "repo_lint_local.yml has an unusually high anchor/alias token count -- refusing to parse (defensive cap against a YAML alias-expansion DoS, #655)"
+                exit
+              end
+              begin
+                doc = YAML.safe_load(raw, aliases: true)
+              rescue Psych::Exception
+                exit
+              end
+              exit unless doc.is_a?(Hash) && doc["jobs"].is_a?(Hash)
+              # #655 Codex P2 round 6: when the annex omits a top-level
+              # `name:`, GitHub displays (and reports into
+              # statusCheckRollup .workflowName as) the workflow FILE PATH,
+              # not an empty string -- an empty workflow_name would disable
+              # the workflow-wide scan below, even for a valid annex with
+              # reported job failures.
+              workflow_name = doc["name"] ? doc["name"].to_s : ".github/workflows/repo_lint_local.yml"
+              jobs = []
+              doc["jobs"].each do |id, job|
+                if job.is_a?(Hash) && job["strategy"].is_a?(Hash) && job["strategy"]["matrix"]
+                  STDERR.puts "skipping matrix-strategy job #{id} -- its expanded check-run name(s) cannot be derived from the static job definition (#655)"
+                  next
+                end
+                name = (job.is_a?(Hash) && job["name"]) ? job["name"] : id
+                jobs << { "name" => name.to_s, "workflow" => workflow_name }
+              end
+              # #655 Codex P1 round 7 ("wait for unfiltered annex workflow
+              # to appear before merging"): distinguish an annex trigger
+              # with NO restricting filter (which is GUARANTEED to
+              # eventually produce a check run for this PR -- it just may
+              # not have been scheduled yet) from one that IS filtered
+              # (which may legitimately never run for this diff). YAML 1.1
+              # coerces the bareword `on:` key to the boolean true
+              # (yes/no/on/off/y/n are all boolean literals -- the "Norway
+              # problem"), so doc["on"] is nil for the overwhelmingly
+              # common unquoted `on:`; only a quoted "on": key would ever
+              # land as the string "on".
+              #
+              # #655 Codex P2 round 9 ("honor non-path pull_request
+              # filters before waiting"): round 8 checked only
+              # paths/paths-ignore on the pull_request config. GitHub
+              # Actions pull_request triggers also support branches,
+              # branches-ignore, and types -- a types list that excludes
+              # synchronize (e.g. types: [opened] only) means this
+              # workflow will NEVER run for a resynchronized PRs current
+              # HEAD, so treating that as unfiltered would wait forever:
+              # the exact permanent-deadlock class rounds 2-5 already
+              # fought to eliminate for the paths case.
+              #
+              # #655 Codex P1 round 10 ("treat synchronize-enabled types
+              # as runnable", found on the codex-review-check.sh copy of
+              # this same logic and mirrored here): round 9 disqualified
+              # "unfiltered" on the MERE presence of a types key, but
+              # types is not a narrowing filter the way paths/branches
+              # are -- it selects WHICH pull_request activities trigger
+              # this workflow at all, and the GitHub default (when types
+              # is omitted) is [opened, synchronize, reopened]. An
+              # explicit types list that STILL includes synchronize (the
+              # activity that fires for a resynchronized PRs current
+              # HEAD) is therefore just as unfiltered as omitting types
+              # entirely -- the common explicit form
+              # `types: [opened, synchronize, reopened]` was being
+              # wrongly disqualified. Only a types list that EXCLUDES
+              # synchronize actually means this workflow never runs for
+              # that HEAD, so types gets its own check below rather than
+              # joining the generic filter-key list.
+              #
+              # #655 Codex P2 round 9 ("wait for valid push-only annex
+              # workflows"): check_ci_scripts_wired accepts push OR
+              # pull_request as valid wiring, but a push-only annex was
+              # never classified as unfiltered at all (no pull_request
+              # trigger present), so this wait never waited for it. A push
+              # trigger only fires IN THIS REPO for a same-repo PR (a fork
+              # PRs push lands in the fork, never here), so
+              # annex_same_repo_pr (computed above from gh pr views own
+              # isCrossRepository field) gates whether an unfiltered push
+              # trigger counts.
+              #
+              # #655 Codex P2 round 11 ("evaluate base-branch filters
+              # before passing", found on the codex-review-check.sh copy
+              # of this same logic and mirrored here): rounds 9-10
+              # blanket-disqualified "unfiltered" on the MERE PRESENCE of
+              # branches/branches-ignore, but GitHub schedules the
+              # workflow whenever the actual ref matches -- e.g.
+              # `pull_request: {branches: [main]}` still runs for every PR
+              # targeting main. Evaluated against the real ref instead:
+              # pull_request compares the PRs BASE ref (annex_base_branch,
+              # computed above); push compares the ref actually being
+              # pushed, which for a same-repo PRs synchronize is the PRs
+              # own HEAD ref (annex_head_branch), not base. Matching uses
+              # Matching translates each pattern into an equivalent Ruby
+              # Regexp rather than using File.fnmatch, refined per #655
+              # round 13 ("use an Actions-compatible branch glob matcher",
+              # found on the codex-review-check.sh copy and mirrored here)
+              # to correct a gap in the round-12 fnmatch version: GitHub
+              # documented branch patterns support a `+` repetition
+              # quantifier on a preceding character/class (e.g.
+              # `v[12].[0-9]+.[0-9]+`, matching semver branches) -- a real
+              # regex feature fnmatch has no equivalent for (it always
+              # treats `+` as a literal character and returns false).
+              # Regexp natively supports quantifiers AND character classes,
+              # so translating once and matching via Regexp#match? handles
+              # the full documented syntax (*, **, ?, [...], +) with one
+              # mechanism instead of patching fnmatch further. `**` crosses
+              # `/` (translated to `.*`); a lone `*` does not (translated to
+              # `[^/]*`); `[...]` and a following `+` are copied through
+              # verbatim, since Ruby regex character-class and quantifier
+              # syntax already matches the GitHub semantics. A backslash
+              # escapes the next special character into a literal match, as
+              # GitHub documents for branch/tag names that contain glob
+              # metacharacters. Everything else is regex-escaped. Patterns
+              # are evaluated IN ORDER with an optional `!` prefix negating a
+              # prior match (a later pattern overrides an earlier one for the
+              # same ref), which a plain `any?` check ignored entirely. An
+              # unknown/unresolvable branch still conservatively disqualifies
+              # rather than guessing.
+              #
+              # #655 Codex P2 round 11 ("treat tag-only push annexes as
+              # filtered", narrowed in round 13 -- "do not treat tag
+              # filters as excluding branch pushes", found on the
+              # codex-review-check.sh copy and mirrored here): a push
+              # trigger scoped ONLY by tags/tags-ignore (no branches/
+              # branches-ignore at all) only fires for TAG ref pushes,
+              # never an ordinary branch push. But GitHub documents
+              # branches and tags as combinable on the SAME push trigger
+              # (runs for a matching branch push OR a matching tag push),
+              # so a trigger with BOTH keys must still be evaluated by its
+              # branches filter -- the round-11 version disqualified on
+              # tags presence alone, before branches ever got a chance to
+              # match, which wrongly filtered an annex GitHub would
+              # actually run for a matching branch push (the exact same
+              # push a same-repo PRs synchronize always is). Tags now only
+              # disqualifies when there is no branches/branches-ignore key
+              # at all to independently evaluate.
+              on = doc.key?("on") ? doc["on"] : doc[true]
+              def branch_pattern_to_regex(pattern)
+                # #655 Codex P2 round 16 ("honor ? as an optional-character
+                # filter", found on the codex-review-check.sh copy and
+                # mirrored here): GitHub documents `?` as matching zero or
+                # one of the PRECEDING character (e.g. `release?` matches
+                # base branch `release` itself), not "exactly one arbitrary
+                # character" the way POSIX glob/fnmatch define it. Building
+                # a TOKEN LIST (one entry per translated glob unit) instead
+                # of one flat string lets `?` wrap the LAST token in
+                # `(?:...)?` -- correctly quantifying whatever unit came
+                # before it (a literal char, an escaped char, or a whole
+                # `[...]` class), not just a single output character. A
+                # leading `?` (no preceding token) is a no-op. `tokens.
+                # join` reconstructs the exact same concatenation the old
+                # flat-string version produced for every other case,
+                # including `+` (still a bare postfix quantifier on
+                # whatever token precedes it).
+                tokens = []
+                chars = pattern.chars
+                i = 0
+                while i < chars.length
+                  c = chars[i]
+                  if c == "\\" && chars[i + 1]
+                    tokens << Regexp.escape(chars[i + 1])
+                    i += 2
+                  elsif c == "*" && chars[i + 1] == "*"
+                    tokens << ".*"
+                    i += 2
+                  elsif c == "*"
+                    tokens << "[^/]*"
+                    i += 1
+                  elsif c == "?"
+                    tokens[-1] = "(?:#{tokens[-1]})?" if tokens.any?
+                    i += 1
+                  elsif c == "["
+                    j = i + 1
+                    j += 1 while j < chars.length && chars[j] != "]"
+                    tokens << chars[i..j].join
+                    i = j + 1
+                  elsif c == "+"
+                    tokens << "+"
+                    i += 1
+                  else
+                    tokens << Regexp.escape(c)
+                    i += 1
+                  end
+                end
+                Regexp.new("\\A#{tokens.join}\\z")
+              end
+              def branch_matches?(pattern, branch)
+                return false unless pattern.is_a?(String) && branch.is_a?(String)
+                branch_pattern_to_regex(pattern).match?(branch)
+              rescue RegexpError, ArgumentError
+                false
+              end
+              def push_tag_only_excludes?(cfg)
+                (cfg.key?("tags") || cfg.key?("tags-ignore")) && !(cfg.key?("branches") || cfg.key?("branches-ignore"))
+              end
+              def branch_matches_list?(patterns, branch)
+                return false unless patterns.is_a?(Array)
+                included = false
+                patterns.each do |raw|
+                  next unless raw.is_a?(String)
+                  if raw.start_with?("!")
+                    included = false if branch_matches?(raw[1..], branch)
+                  else
+                    included = true if branch_matches?(raw, branch)
+                  end
+                end
+                included
+              end
+              def branch_filter_excludes?(cfg, branch)
+                return true if (cfg.key?("branches") || cfg.key?("branches-ignore")) && !(branch.is_a?(String) && !branch.empty?)
+                if cfg.key?("branches")
+                  return true unless branch_matches_list?(cfg["branches"], branch)
+                end
+                if cfg.key?("branches-ignore")
+                  return true if branch_matches_list?(cfg["branches-ignore"], branch)
+                end
+                false
+              end
+              # #655 Codex P2 round 16 ("wait for path-matched annex
+              # workflows", narrowed in round 17 -- "use the event diff
+              # when emulating path filters", found on the
+              # codex-review-check.sh copy and mirrored here): a paths/
+              # paths-ignore key was previously treated as unconditionally
+              # filtered on mere presence, even when the PRs actual
+              # changed files match the filter. Path glob syntax
+              # documents the SAME tokens as branch/tag patterns, so
+              # branch_matches_list? is reused. `paths` requires at least
+              # one changed file to match; `paths-ignore` excludes only
+              # when EVERY changed file matches the ignore patterns.
+              # GitHub evaluates a PUSH triggers path filter against the
+              # two-dot diff of JUST that push, not the whole-PR
+              # three-dot diff this fetch provides -- an earlier commit
+              # already in the PR could have touched a matching path
+              # while the CURRENT push does not, wrongly keeping this
+              # "unfiltered" and blocking auto-merge forever waiting for a
+              # check that will never report. The three-dot PR-wide diff
+              # genuinely matches what GitHub documents for the
+              # pull_request event, so only that event gets the real
+              # evaluation; push keeps the round-16-era always-filtered
+              # default. GitHub also only considers the first 300 changed
+              # files for path-filter evaluation, so the list is capped
+              # the same way before matching.
+              def paths_filter_excludes?(event, cfg, changed_files, changed_files_known)
+                return false unless cfg.key?("paths") || cfg.key?("paths-ignore")
+                return true if event == "push"
+                return false unless changed_files_known
+                capped_files = changed_files.first(300)
+                if cfg.key?("paths")
+                  return true unless capped_files.any? { |f| branch_matches_list?(cfg["paths"], f) }
+                end
+                if cfg.key?("paths-ignore")
+                  return true if capped_files.all? { |f| branch_matches_list?(cfg["paths-ignore"], f) }
+                end
+                false
+              end
+              # #655 Codex P2 round 17 (do not silently treat changed-files
+              # API failures as filtered out, CodeRabbit; "fail closed
+              # when the changed-file lookup fails", Codex): the bash
+              # layer above now leaves annex_changed_files_json as an
+              # EXPLICITLY empty string on a fetch failure (never touched
+              # by jq), which changed_files_known distinguishes from a
+              # genuinely-fetched, genuinely-empty array -- unknown data
+              # must not silently read as "paths definitely do not match".
+              changed_files_known = !(ENV["ANNEX_CHANGED_FILES_JSON"] || "").empty?
+              changed_files = begin
+                changed_files_known ? JSON.parse(ENV["ANNEX_CHANGED_FILES_JSON"]) : []
+              rescue JSON::ParserError
+                []
+              end
+              trigger_unfiltered = lambda do |event, relevant_branch|
+                case on
+                when String then on == event
+                when Array then on.include?(event)
+                when Hash
+                  next false unless on.key?(event)
+                  cfg = on[event]
+                  next true unless cfg.is_a?(Hash)
+                  next false if paths_filter_excludes?(event, cfg, changed_files, changed_files_known)
+                  next false if event == "push" && push_tag_only_excludes?(cfg)
+                  next false if branch_filter_excludes?(cfg, relevant_branch)
+                  # #655 Codex P2 round 16 (do not skip opened-only annex
+                  # runs), REVERTED in round 17 ("do not infer
+                  # opened-only runs from committer date", found on the
+                  # codex-review-check.sh copy and mirrored here): round
+                  # 16 tried to distinguish "still on the PRs opening
+                  # commit" from "synchronized since" by comparing the
+                  # HEAD committer date against the PRs created_at.
+                  # Confirmed live: a genuinely-new synchronize push whose
+                  # commit preserves an OLDER committer date (a
+                  # rebase/cherry-pick of a stale commit) still satisfies
+                  # that comparison, so the heuristic can say "unfiltered"
+                  # for a trigger that will NEVER report again on this
+                  # HEAD -- injecting a permanent PENDING/wait state. No
+                  # reliable, non-spoofable signal is available from the
+                  # data already on hand, and a permanent deadlock is
+                  # strictly worse than the narrower gap being reopened.
+                  # Reverted to the simple, safe round-10 rule: only a
+                  # types list that explicitly includes synchronize
+                  # counts as unfiltered.
+                  next (cfg["types"].is_a?(Array) && cfg["types"].include?("synchronize")) if cfg.key?("types")
+                  true
+                else
+                  false
+                end
+              end
+              pr_unfiltered = trigger_unfiltered.call("pull_request", ENV["ANNEX_BASE_BRANCH"])
+              push_unfiltered = trigger_unfiltered.call("push", ENV["ANNEX_HEAD_BRANCH"])
+              same_repo_pr = ENV["ANNEX_SAME_REPO_PR"] == "true"
+              unfiltered = pr_unfiltered || (push_unfiltered && same_repo_pr)
+              puts JSON.generate({ "workflow" => workflow_name, "jobs" => jobs, "unfiltered" => unfiltered })
+            ' || true)
+            if [ -z "$annex_probe_raw" ]; then
+              # ruby never reached its `puts` line: the YAML itself did not
+              # parse or had no `jobs:` hash -- genuinely unparseable, not
+              # just empty. The workflow name is unknown too (parsing never
+              # got that far), so there is nothing to scope a workflow-wide
+              # scan to either. Unlike pre-round-6 behavior, do NOT fall back
+              # to forcing the conventional name into required_checks_json:
+              # that name might not be the real one, risking the exact
+              # deadlock this redesign removes. codex-review-check.sh's gate
+              # (a) still independently enforces this annex on its own
+              # schedule (it is safe from this deadlock: an unreported
+              # required name there is a no-op, never an injected failure).
+              echo "::warning::repo_lint_local.yml annex present at $sha but could not be parsed as a workflow (invalid YAML or no jobs) — cannot determine its check name(s) or workflow identity, so this run cannot enforce it (gate (a) / codex-review-check.sh still will) (#655)."
+            else
+              annex_workflow=$(echo "$annex_probe_raw" | jq -r '.workflow')
+              annex_unfiltered=$(echo "$annex_probe_raw" | jq -r '.unfiltered')
+              annex_jobs=$(echo "$annex_probe_raw" | jq -c '.jobs')
+              if [ "$(echo "$annex_jobs" | jq 'length')" -eq 0 ]; then
+                echo "::warning::repo_lint_local.yml annex present at $sha but every job is matrix-strategy (skipped) — its expanded check-run name(s) cannot be derived; its workflow ($annex_workflow, unfiltered=$annex_unfiltered) is still scanned below for any reported failure (#655)."
+              else
+                echo "::notice::repo_lint_local.yml annex present at $sha — its workflow ($annex_workflow, unfiltered=$annex_unfiltered) will be scanned for any reported failure (#655): $(echo "$annex_jobs" | jq -r '[.[].name] | join(" ")')."
+              fi
+            fi
+          elif grep -q 'HTTP 404' "$annex_probe_err"; then
+            : # genuinely absent (confirmed 404) — no annex, no-op, unchanged from before.
+          elif grep -q 'HTTP 403' "$annex_probe_err"; then
+            # #655 Codex P2 round 4: a 403 (token lacks Contents: read) is
+            # USUALLY persistent, not transient -- forcing enforcement here
+            # would permanently affect native auto-merge on EVERY future PR
+            # too (the same 403 recurs every time), not just ones with an
+            # actual annex. Do not enforce; warn loudly so the token's scope
+            # gets fixed instead.
+            echo "::warning::repo_lint_local.yml probe at $sha got HTTP 403 (AUTHOR_MERGE_TOKEN likely lacks Contents: read) — NOT failing closed, since a persistent 403 would otherwise force an unresolvable synthetic check on every future PR too. Grant the token Contents: read to restore annex enforcement (#655)."
+          else
+            # An indeterminate but plausibly-transient read failure (rate
+            # limit, 5xx, network) must not be treated the same as a
+            # confirmed absence -- but unlike pre-round-6 behavior, this run
+            # cannot fail closed by forcing a guessed name into
+            # required_checks_json without risking the same deadlock #655
+            # round 6 removed. codex-review-check.sh's gate (a) is a safer
+            # place for this fallback (an unreported required name there is
+            # inert, never an injected failure) and re-evaluates on its own
+            # schedule, so this narrower run simply logs and moves on.
+            echo "::warning::Could not determine whether repo_lint_local.yml exists at $sha (API error, not a confirmed 404) — this run cannot enforce it (gate (a) / codex-review-check.sh still will) (#655): $(cat "$annex_probe_err")"
+          fi
+          rm -f "$annex_probe_err"
+
+          # #655 Codex P2 round 11 ("restrict the lint wait to the required
+          # workflow"): gh pr view --json statusCheckRollup has no field for
+          # "is this specific entry actually required by branch protection",
+          # so the workflow=="" (name-only) canonical-check match below could
+          # not distinguish the REAL required "lint" from an unrelated,
+          # non-required check that coincidentally shares its bare name in a
+          # different workflow (e.g. an experimental local job) -- requiring
+          # that unrelated check to ALSO be green, per the round-5 "every
+          # group must be green" rule. Both GraphQL CheckRun and
+          # StatusContext expose isRequired(pullRequestNumber:), the
+          # ground-truth answer, but only when queried directly (the fixed
+          # --json shape from gh pr view omits it,
+          # and querying it through commits.nodes.commit loses the implicit
+          # PR context, erroring "A pull request ID or pull request number is
+          # required" -- confirmed empirically), so this switches from
+          # `gh pr view --json` to a raw graphql call and reshapes the result
+          # into the same {statusCheckRollup: [...]} shape the rest of this
+          # loop already expects, adding isRequired as an extra field.
+          repo_owner="${REPO%%/*}"
+          repo_name="${REPO#*/}"
+          while :; do
+            all_done=1
+            check_count=$(echo "$required_checks_json" | jq 'length')
+            # #655 Codex P1 round 12 ("paginate the status check rollup"):
+            # a PR with more than 100 statusCheckRollup contexts (this PR
+            # itself already has 160+, confirmed live while working on
+            # this fix) silently hid every entry past the first page from
+            # both the required-check and annex workflow-wide scans below
+            # -- auto-merge could arm while an unobserved check past page
+            # 1 was still red. Page through with the Relay cursor
+            # (pageInfo.hasNextPage/endCursor) rather than raising the
+            # page size, since the rollup can grow without bound as more
+            # checks/review rounds accumulate on a long-lived PR. Pass a null
+            # cursor for the first page and the returned Relay cursor for each
+            # later page.
+            rollup_contexts="[]"
+            cursor=""
+            while :; do
+              cursor_args=(-F cursor=null)
+              if [ -n "$cursor" ]; then
+                cursor_args=(-f cursor="$cursor")
+              fi
+              page_json=$(gh api graphql -f query='
+                query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+                  repository(owner: $owner, name: $name) {
+                    pullRequest(number: $number) {
+                      commits(last: 1) {
+                        nodes {
+                          commit {
+                            statusCheckRollup {
+                              contexts(first: 100, after: $cursor) {
+                                pageInfo { hasNextPage endCursor }
+                                nodes {
+                                  __typename
+                                  ... on CheckRun {
+                                    name
+                                    status
+                                    conclusion
+                                    startedAt
+                                    completedAt
+                                    isRequired(pullRequestNumber: $number)
+                                    checkSuite { workflowRun { workflow { name resourcePath } } }
+                                  }
+                                  ... on StatusContext {
+                                    context
+                                    state
+                                    createdAt
+                                    isRequired(pullRequestNumber: $number)
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }' -f owner="$repo_owner" -f name="$repo_name" -F number="$PR_NUMBER" "${cursor_args[@]}")
+              page_nodes=$(echo "$page_json" | jq -c '(.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.nodes // [])')
+              rollup_contexts=$(jq -c -n --argjson a "$rollup_contexts" --argjson b "$page_nodes" '$a + $b')
+              has_next=$(echo "$page_json" | jq -r '(.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.pageInfo.hasNextPage // false)')
+              cursor=$(echo "$page_json" | jq -r '(.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.pageInfo.endCursor // "")')
+              [ "$has_next" = "true" ] || break
+            done
+            # workflowPath (#655 round 13, "disambiguate annex workflows
+            # beyond display name", found on the codex-review-check.sh copy
+            # and mirrored here): derived from the workflow FILE's
+            # GraphQL-reported resourcePath rather than its freely-editable
+            # display name, since the annex contract does not guarantee a
+            # unique .name across a consumer's workflows.
+            rollup_json=$(echo "$rollup_contexts" | jq '{
+              statusCheckRollup: (map({
+                  name: .name,
+                  context: .context,
+                  workflowName: (.checkSuite.workflowRun.workflow.name // null),
+                  workflowPath: (((.checkSuite.workflowRun.workflow.resourcePath // "") | split("/") | last) // ""),
+                  status: .status,
+                  conclusion: .conclusion,
+                  state: .state,
+                  startedAt: .startedAt,
+                  completedAt: .completedAt,
+                  isRequired: .isRequired
+                }))
+            }')
+            for ((i = 0; i < check_count; i++)); do
+              check_name=$(echo "$required_checks_json" | jq -r ".[$i].name")
+              check_workflow=$(echo "$required_checks_json" | jq -r ".[$i].workflow")
+              # #655 (Codex P2 round 5): group matching entries by workflow
+              # identity, not just by name, before deciding "is this check
+              # done". Two failure modes this closes:
+              #   - Stale-vs-pending (a same-name/same-workflow rerun): a
+              #     completed success from an earlier trigger (e.g. push)
+              #     alongside a still-QUEUED rerun from a later trigger
+              #     (e.g. pull_request synchronize) has NEITHER startedAt
+              #     nor completedAt on the queued entry, so a naive
+              #     sort_by(...) | last ranked the queued entry BEFORE the
+              #     completed one (empty string sorts first) and this loop
+              #     could wrongly report the stale success. Any
+              #     non-completed entry in a workflow's group is now
+              #     treated as "still pending" regardless of timestamps.
+              #   - Same-name collision (a consumer's local job also called
+              #     "lint", allowed by the annex contract): for the
+              #     workflow=="" (name-only) canonical `lint` requirement,
+              #     the name-only select matches EITHER workflow's "lint"
+              #     runs. Without grouping, picking one "winner" by
+              #     timestamp could let a newer successful annex "lint"
+              #     mask an older FAILED canonical "lint", arming auto-merge
+              #     without canonical lint actually being green. Grouping by
+              #     workflow and requiring EVERY group's winner to be green
+              #     means a same-named annex job can never stand in for the
+              #     canonical check.
+              # #655 Codex P2 round 6 ("treat successful status contexts as
+              # complete"): a StatusContext entry has no .status field at
+              # all (only CheckRun does), so `.status != "COMPLETED"` was
+              # true for EVERY status context regardless of .state,
+              # including state=="SUCCESS" -- pending forever. A
+              # StatusContext is non-terminal only when .state is literally
+              # "PENDING"; every other .state (SUCCESS/FAILURE/ERROR/
+              # EXPECTED) is terminal. A CheckRun is non-terminal whenever
+              # .status is present and not "COMPLETED", unchanged.
+              #
+              # #655 Codex P2 round 11 ("restrict the lint wait to the
+              # required workflow"): the round-5 "group by workflow, require
+              # every group green" rule closed the mask-the-canonical-check
+              # risk, but left the OPPOSITE risk open for the workflow==""
+              # (canonical) match specifically -- a coincidentally same-
+              # named but NON-required check from an unrelated workflow
+              # would ALSO become a mandatory group, wrongly blocking on
+              # ITS failure even though branch protection never required
+              # it. isRequired (ground truth from the graphql query above,
+              # scoped to this PR) now additionally filters the workflow==""
+              # case to required entries when any same-name entry reports
+              # required=true. If none do, keep the configured-check wait
+              # behavior instead of treating branch-protection metadata as a
+              # hard prerequisite for this workflow to wait on its configured
+              # check name. A name-scoped annex match ($workflow != "") is
+              # unaffected, since annex checks are not expected to be
+              # required at all.
+              #
+              # Self-caught while porting this winner-selection pattern into
+              # codex-review-check.sh for #655 round 13 ("ignore stale annex
+              # runs after a green rerun"): `["PENDING","EXPECTED"] |
+              # index(.state // "")` rebinds `.` to the piped-in array
+              # literal for the REST of that expression, so `.state` tries
+              # to index an array with a string and jq hard-errors --
+              # exactly the same "sub-pipeline rebinds dot" hazard the
+              # required-name filter in codex-review-check.sh already
+              # documents and guards against for `$label_name`. Latent since
+              # round 6/11 (never triggered here because every entry seen so
+              # far has been a CheckRun with a non-null .status, so the
+              # buggy StatusContext-only `else` branch never actually ran),
+              # but a classic Statuses-API context reaching this branch
+              # would fail the whole jq call regardless of its .state value.
+              # Fixed by binding .state to $ann_state BEFORE the array-literal
+              # pipe, verified against both CheckRun- and StatusContext-shaped
+              # entries (PENDING/EXPECTED/SUCCESS/absent .state) directly.
+              winners=$(echo "$rollup_json" | jq -c --arg name "$check_name" --arg workflow "$check_workflow" '
+                [.statusCheckRollup[]
+                  | select((.name // .context // "") == $name)
+                  | select($workflow == "" or (.workflowName // "") == $workflow)
+                ] as $name_matches
+                | ([$name_matches[] | select(.isRequired == true)]) as $required_matches
+                | (if $workflow == "" and ($required_matches | length) > 0
+                   then $required_matches
+                   else $name_matches
+                   end) as $matches
+                | ($matches | group_by(.workflowName // "")) as $groups
+                | [
+                    $groups[]
+                    | (map(select(if (.status != null) then (.status != "COMPLETED") else ((.state // "") as $ann_state | ["PENDING","EXPECTED"] | index($ann_state)) end))) as $pending
+                    | if ($pending | length) > 0
+                      then $pending[0]
+                      else (sort_by(.completedAt // .startedAt // "") | last)
+                      end
+                  ]')
+              winner_count=$(echo "$winners" | jq 'length')
+              if [ "$winner_count" -eq 0 ]; then
+                echo "::notice::Required check run '$check_name' is absent on current HEAD $sha; waiting for it to start."
+                all_done=0
+                continue
+              fi
+              pending_count=$(echo "$winners" | jq '[.[] | select(if (.status != null) then (.status != "COMPLETED") else ((.state // "") as $ann_state | ["PENDING","EXPECTED"] | index($ann_state)) end)] | length')
+              if [ "$pending_count" -gt 0 ]; then
+                pending_status=$(echo "$winners" | jq -r '[.[] | select(if (.status != null) then (.status != "COMPLETED") else ((.state // "") as $ann_state | ["PENDING","EXPECTED"] | index($ann_state)) end)][0].status // .state // ""')
+                echo "::notice::Required check run '$check_name' is $pending_status on current HEAD $sha; waiting for completion."
+                all_done=0
+                continue
+              fi
+              # success/skipped/neutral are all non-blocking conclusions
+              # (#655 Codex P2 round 2): a conditional annex job GitHub
+              # completes as skipped is not a failure, and neutral is a
+              # passing conclusion for required checks too. Mirrors the
+              # same acceptance set codex-review-check.sh's BAD_CHECKS
+              # filter already uses. Every group's winner must be green
+              # (#655 round 5) -- see the comment above the query.
+              bad=$(echo "$winners" | jq -c '[.[] | select((.conclusion // .state // "") as $r | ($r != "SUCCESS" and $r != "SKIPPED" and $r != "NEUTRAL"))]')
+              bad_count=$(echo "$bad" | jq 'length')
+              if [ "$bad_count" -gt 0 ]; then
+                bad_summary=$(echo "$bad" | jq -r '[.[] | (.conclusion // .state // "none")] | join(", ")')
+                echo "::error::Required check run '$check_name' failed on current HEAD $sha (conclusion=$bad_summary); refusing auto-merge."
+                exit 1
+              fi
+              conclusion_summary=$(echo "$winners" | jq -r '[.[] | (.conclusion // .state // "none")] | join(", ")')
+              echo "Required check run '$check_name' is $conclusion_summary on current HEAD $sha."
+            done
+
+            if [ -n "$annex_workflow" ]; then
+              # #655 Codex round 6 (P1 "wait for annex checks before
+              # clearing the label", P1 "observe matrix annex jobs before
+              # auto-merge", P2 "avoid forcing path-filtered annex jobs to
+              # start"): scan the annex's own workflow for any REPORTED
+              # entry rather than requiring a specific derived name, same
+              # design as codex-review-check.sh gate (a)'s
+              # ANNEX_WORKFLOW_BAD scan. A still-in-progress entry is
+              # deliberately treated as pending (not bad) here -- unlike
+              # gate (a) (a repeatedly re-evaluated snapshot, where
+              # in-progress correctly counts as "not yet clean"), this loop
+              # can just keep polling for it, bounded by the same shared
+              # deadline as every other required check. Zero reported
+              # entries for this workflow is non-blocking: forcing a wait
+              # for one that may legitimately never exist (a path-filtered
+              # annex outside this PR's diff) would time out and refuse
+              # auto-merge on every such PR, forever.
+              #
+              # #655 Codex P2 round 13 ("disambiguate annex workflows beyond
+              # display name", found on the codex-review-check.sh copy and
+              # mirrored here): matching on .workflowName risked either
+              # masking the real annex behind an unrelated same-named
+              # workflow (false clean, auto-merge arms early) or blocking on
+              # an unrelated same-named workflow's failure (false red,
+              # refuses auto-merge forever). .workflowPath is derived from
+              # the GraphQL-reported resourcePath of the workflow FILE
+              # itself, not its freely-editable display name, so match on
+              # the known, fixed annex filename instead. A StatusContext
+              # (no checkSuite at all) safely resolves workflowPath to ""
+              # and can never collide with this literal.
+              annex_matches=$(echo "$rollup_json" | jq -c '
+                [.statusCheckRollup[] | select((.workflowPath // "") == "repo_lint_local.yml")]')
+              annex_match_count=$(echo "$annex_matches" | jq 'length')
+              if [ "$annex_match_count" -eq 0 ] && [ "$annex_unfiltered" = "true" ]; then
+                # #655 Codex P1 round 7 ("wait for unfiltered annex workflow
+                # to appear before merging"): an annex with NO workflow-level
+                # paths/paths-ignore filter is GUARANTEED to eventually
+                # produce a check run for this PR -- zero entries right now
+                # means Actions has not scheduled it yet, not that it never
+                # will (unlike a path-filtered annex, where zero entries is
+                # genuinely ambiguous between "not yet" and "never for this
+                # diff"). Keep polling instead of treating this the same as
+                # the path-filtered case; bounded by the same shared
+                # deadline as every other required check, so this cannot
+                # deadlock forever if something is actually wrong.
+                echo "::notice::repo_lint_local.yml annex workflow '$annex_workflow' has not reported yet (unfiltered trigger, so it is expected to); waiting for it to start on current HEAD $sha (#655)."
+                all_done=0
+              else
+                annex_pending=$(echo "$annex_matches" | jq -c '[.[] | select(if (.status != null) then (.status != "COMPLETED") else ((.state // "") as $ann_state | ["PENDING","EXPECTED"] | index($ann_state)) end)]')
+                annex_pending_count=$(echo "$annex_pending" | jq 'length')
+                if [ "$annex_pending_count" -gt 0 ]; then
+                  echo "::notice::repo_lint_local.yml annex workflow '$annex_workflow' has $annex_pending_count check-run(s) still in progress on current HEAD $sha; waiting for completion (#655)."
+                  all_done=0
+                else
+                  # #655 Codex P2 round 13 ("ignore stale annex runs after a
+                  # green rerun", found on the codex-review-check.sh copy
+                  # and mirrored here): every entry reaching this branch is
+                  # already terminal (annex_pending above is zero), but the
+                  # annex's own workflow can legitimately report more than
+                  # one TERMINAL entry per job name for the current SHA -- a
+                  # failed push-triggered run followed by a successful
+                  # pull_request run, or a failed job manually rerun to a
+                  # later success. Without grouping, an old superseded
+                  # FAILURE never leaves the rollup and would refuse
+                  # auto-merge forever even after the same-named job went
+                  # green. Group by check name and keep only the
+                  # latest-completed entry per name (mirrors the required-
+                  # check winners query above, minus the pending branch
+                  # already handled by annex_pending) before judging
+                  # bad-ness.
+                  annex_bad=$(echo "$annex_matches" | jq -c '
+                    group_by(.name // .context // "?")
+                    | [.[] | (sort_by(.completedAt // .startedAt // "") | last)]
+                    | [.[] | select((.conclusion // .state // "") as $r | ($r != "SUCCESS" and $r != "SKIPPED" and $r != "NEUTRAL"))]')
+                  annex_bad_count=$(echo "$annex_bad" | jq 'length')
+                  if [ "$annex_bad_count" -gt 0 ]; then
+                    annex_bad_summary=$(echo "$annex_bad" | jq -r '[.[] | (.conclusion // .state // "none")] | join(", ")')
+                    echo "::error::repo_lint_local.yml annex workflow '$annex_workflow' has $annex_bad_count non-passing reported check-run(s) after winner-selection on current HEAD $sha (conclusion=$annex_bad_summary); refusing auto-merge (#655)."
+                    exit 1
+                  fi
+                fi
+              fi
+            fi
+            if [ "$all_done" -eq 1 ]; then
+              echo "CURRENT_HEAD_SHA=$sha" >> "$GITHUB_ENV"
+              echo "All required check run(s) are successful on current HEAD $sha."
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Required check run(s) did not all complete successfully within ${wait_seconds}s on current HEAD $sha; refusing auto-merge."
+              exit 1
+            fi
+            sleep "$poll_seconds"
+          done
+          echo "::error::Required check run wait loop ended unexpectedly; refusing auto-merge."
+          exit 1
+
+      - name: Re-verify blocking labels after test wait
+        if: steps.author_merge_token.outputs.enabled == 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.AUTHOR_MERGE_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          LABELS=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels --jq '.labels[].name')
+          printf 'Labels after test wait:\n%s\n' "$LABELS"
+          for blocking_label in needs-external-review needs-human-review policy-violation human-hold; do
+            if printf '%s\n' "$LABELS" | grep -Fxq "$blocking_label"; then
+              echo "::error::Blocking label present after test wait: $blocking_label. Aborting auto-merge."
+              exit 1
+            fi
+          done
+          # #620 (automated 4b P1, rounds 1+2): if this run downgraded a
+          # CodeRabbit rate-limit stall (rc=5), re-validate the downgrade's
+          # premise at the last verify point. The rc=5-time derivation ran
+          # minutes earlier; state can change during the waits (a push, a
+          # propagation-lane verification landing), and merge-clearance
+          # passing vacuously for the head being merged would mean neither
+          # bot reviewed it.
+          #
+          # Two fail-closed checks, scoped to downgraded runs only:
+          # 1. Head drift: the downgrade anchored the event head, and the
+          #    merge pins CURRENT_HEAD_SHA (the live head the required-check
+          #    wait exported) via --match-head-commit — if they differ, the
+          #    CodeRabbit disposition is stale for the merge head. Abort.
+          # 2. Re-run merge-clearance-gate.sh --derive-rate-limit-protection
+          #    against the (now-pinned) live head and require `true`: the
+          #    same active-or-already-satisfied external-review protection
+          #    predicate used at rc=5 time. Any error or non-true output
+          #    aborts.
+          if [ "${CR_RATE_LIMIT_DOWNGRADED:-false}" = "true" ]; then
+            if [ -z "${CURRENT_HEAD_SHA:-}" ] || [ "$CURRENT_HEAD_SHA" != "$HEAD_SHA" ]; then
+              echo "::error::Head drifted after the rc=5 rate-limit downgrade (event=$HEAD_SHA live=${CURRENT_HEAD_SHA:-unset}) — the CodeRabbit disposition is stale for the merge head. Aborting auto-merge."
+              exit 1
+            fi
+            re_protected=false
+            if req=$(bash scripts/merge-clearance-gate.sh --derive-rate-limit-protection "$PR_NUMBER" "$REPO"); then
+              case "$req" in
+                true) re_protected=true ;;
+              esac
+            fi
+            # #727 (Codex P2 on #729): the rc=5 downgrade can be granted via the
+            # post-clearance signal (CODEX_CLEARED folded into ext_protected),
+            # but --derive-rate-limit-protection returns false for an
+            # under-threshold PR even when Codex cleared HEAD — so re-deriving
+            # only that predicate here would abort a VALID under-threshold
+            # post-clearance downgrade at the last step. Re-evaluate the SAME
+            # post-clearance predicate on the (now head-pinned) live head:
+            # codex-review-check.sh gate (b)+(c), SKIP_CI + REQUIRE_APPROVAL_ON_HEAD,
+            # and ALLOW_PHASE_4B_SUBSTITUTE=false (require an actual Codex bot
+            # signal, not the arming approval — same as the fast-path probe,
+            # Codex P2 on #729). Re-run (not a persisted flag) so state that
+            # changed during the waits is caught, matching this block's
+            # fail-closed intent. Either predicate holding upholds the downgrade.
+            if [ "$re_protected" != "true" ]; then
+              set +e
+              CODEX_REVIEW_CHECK_SKIP_CI=1 CODEX_REVIEW_CHECK_REQUIRE_APPROVAL_ON_HEAD=1 \
+                CODEX_REVIEW_CHECK_ALLOW_PHASE_4B_SUBSTITUTE=false \
+                bash scripts/codex-review-check.sh "$PR_NUMBER" "$REPO" >&2
+              crc=$?
+              set -e
+              if [ "$crc" = "0" ]; then
+                re_protected=true
+                echo "::notice::rc=5 re-verify: post-clearance predicate still holds on $CURRENT_HEAD_SHA (verified Codex/Phase-4b clearance + reviewer APPROVED) — downgrade upheld (#727)."
+              elif [ "$crc" != "1" ]; then
+                echo "::warning::codex-review-check.sh returned rc=$crc re-deriving the post-clearance predicate at final re-verify; treating as not-protected (fail closed)."
+              fi
+            fi
+            if [ "$re_protected" != "true" ]; then
+              echo "::error::external-review protection is no longer true (or underivable) for $CURRENT_HEAD_SHA after an rc=5 rate-limit downgrade — this head has neither an active external gate nor already-satisfied Codex/Phase-4b clearance. Aborting auto-merge."
+              exit 1
+            fi
+          fi
+          echo "No blocking labels present after test wait — proceeding to merge."
+
+      - name: Enable auto-merge
+        if: steps.author_merge_token.outputs.enabled == 'true'
+        run: |
+          # Do NOT fall back to an unconditional "gh pr merge --squash" when
+          # --auto is unavailable (#465): an immediate merge bypasses the
+          # status-check and label guards re-verified above. A sibling job
+          # could apply a blocking label between that re-verify and this step,
+          # and the unconditional fallback would merge it anyway. Fail closed:
+          # if auto-merge cannot be enabled, surface the error and let a human
+          # or a re-run handle it.
+          if ! gh pr merge --squash --auto --match-head-commit "$CURRENT_HEAD_SHA" "$PR_URL"; then
+            echo "::error::Could not enable auto-merge for $PR_URL; refusing to merge unconditionally (#465)."
+            exit 1
+          fi
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.AUTHOR_MERGE_TOKEN }}

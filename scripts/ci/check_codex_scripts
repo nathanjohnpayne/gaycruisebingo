@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# check_codex_scripts
+#
+# Verifies that the Phase 4a Codex helper scripts are present and
+# executable. All are required for `CLAUDE.md` step 8 Phase 4a to
+# be able to run, and the review-request/check pair is referenced by
+# the gh-pr-guard.sh hook and REVIEW_POLICY.md § Phase 4a. Missing a
+# script breaks the automated external-review flow and silently drops
+# callers to the Phase 4b manual CLI fallback.
+#
+# codex-record-feedback.sh (#487) is the Phase 4a feedback-loop helper
+# that records the validated 👍/👎 reaction Codex solicits on each
+# finding; it is required here so the bidirectional loop travels intact
+# to every consumer.
+#
+# Enforces the `rules/repo_rules.md` § CI Enforcement entry for
+# these scripts. See issue #38 and Project #2 for the broader
+# context.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+REQUIRED_SCRIPTS=(
+  "scripts/codex-review-request.sh"
+  "scripts/codex-review-check.sh"
+  "scripts/codex-record-feedback.sh"
+)
+
+FAILED=0
+
+for rel in "${REQUIRED_SCRIPTS[@]}"; do
+  full="$REPO_ROOT/$rel"
+  if [[ ! -f "$full" ]]; then
+    echo "FAIL: Missing required Codex helper script: $rel"
+    FAILED=1
+    continue
+  fi
+  if [[ ! -x "$full" ]]; then
+    echo "FAIL: Codex helper script is not executable: $rel"
+    echo "      Fix with: chmod +x $rel"
+    FAILED=1
+  fi
+done
+
+if [[ $FAILED -eq 1 ]]; then
+  echo "check_codex_scripts: FAIL"
+  exit 1
+fi
+
+echo "check_codex_scripts: running codex-review-request ack tests"
+"$REPO_ROOT/tests/test_codex_review_request_ack.sh"
+
+echo "check_codex_scripts: running codex-review-request --trigger-only tests (#489)"
+"$REPO_ROOT/tests/test_codex_review_request_trigger_only.sh"
+
+echo "check_codex_scripts: running codex-review-request Phase 4a entry-decision tests"
+"$REPO_ROOT/tests/test_codex_review_request_entry.sh"
+
+echo "check_codex_scripts: running codex-review-request verdict-comment clearance tests (#609)"
+"$REPO_ROOT/tests/test_codex_review_request_verdict.sh"
+
+echo "check_codex_scripts: running codex-review-check gate (c) resolution tests"
+"$REPO_ROOT/tests/test_codex_review_check_resolution.sh"
+
+echo "check_codex_scripts: running codex-review-check verdict-comment clearance tests (#600)"
+"$REPO_ROOT/tests/test_codex_review_check_verdict.sh"
+
+echo "check_codex_scripts: running codex-review-check gate (a) required-check scoping tests (#655)"
+"$REPO_ROOT/tests/test_codex_review_check_required_checks.sh"
+
+echo "check_codex_scripts: running #465 fail-closed structural guards"
+"$REPO_ROOT/tests/test_465_fail_closed.sh"
+
+echo "check_codex_scripts: running #655 repo-lint-local observation structural guards"
+"$REPO_ROOT/tests/test_655_repo_lint_local_observed.sh"
+
+echo "check_codex_scripts: running codex-record-feedback tests"
+"$REPO_ROOT/tests/test_codex_record_feedback.sh"
+
+echo "check_codex_scripts: running Codex usage-limit / not-connected marker detection tests (#722)"
+"$REPO_ROOT/tests/test_codex_usage_limit_marker.sh"
+
+echo "check_codex_scripts: PASS"
+exit 0

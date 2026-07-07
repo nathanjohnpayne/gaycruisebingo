@@ -1,0 +1,426 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Non-interactive Firebase deploy via service account impersonation.
+#
+# Resolves a source credential from GOOGLE_APPLICATION_CREDENTIALS, a 1Password
+# ADC item, or the local ADC file; generates a temporary
+# impersonated_service_account credential from it; sets
+# GOOGLE_APPLICATION_CREDENTIALS; and runs firebase deploy.
+#
+# First-time setup for a new project:
+#   op-firebase-setup [project-id]
+#
+# Usage:
+#   op-firebase-deploy              # auto-detect project from .firebaserc
+#   op-firebase-deploy my-project   # explicit project ID
+#   op-firebase-deploy --only hosting
+#   op-firebase-deploy my-project --only functions
+
+SA_NAME="${FIREBASE_DEPLOY_SA_NAME:-firebase-deployer}"
+DEFAULT_ADC_FILE="${HOME}/.config/gcloud/application_default_credentials.json"
+DEFAULT_ADC_OP_URI="${FIREBASE_SOURCE_CREDENTIAL_OP_URI:-${GCP_ADC_OP_URI:-op://Private/GCP ADC/credential}}"
+SOURCE_CRED_FILE=""
+SOURCE_CRED_TMPFILE=""
+FIREBASE_CONFIG_TMPDIR=""
+
+PROJECT=""
+EXTRA_ARGS=()
+EXPECT_VALUE=false
+
+for arg in "$@"; do
+  if $EXPECT_VALUE; then
+    EXTRA_ARGS+=("$arg")
+    EXPECT_VALUE=false
+  elif [[ "$arg" == --only || "$arg" == --except || "$arg" == --message ]]; then
+    EXTRA_ARGS+=("$arg")
+    EXPECT_VALUE=true
+  elif [[ "$arg" == --* ]]; then
+    EXTRA_ARGS+=("$arg")
+  elif [[ -z "$PROJECT" ]]; then
+    PROJECT="$arg"
+  else
+    EXTRA_ARGS+=("$arg")
+  fi
+done
+
+if [[ -z "$PROJECT" ]]; then
+  if [[ -f .firebaserc ]]; then
+    PROJECT="$(python3 -c "import json; print(json.load(open('.firebaserc'))['projects']['default'])")"
+  else
+    echo "Error: No project specified and no .firebaserc found." >&2
+    echo "Usage: op-firebase-deploy [project-id] [--only hosting|functions|...]" >&2
+    exit 1
+  fi
+fi
+
+cleanup_source_cred() {
+  if [[ -n "${SOURCE_CRED_TMPFILE}" && -f "${SOURCE_CRED_TMPFILE}" ]]; then
+    rm -f "${SOURCE_CRED_TMPFILE}"
+  fi
+}
+
+cleanup_firebase_config() {
+  if [[ -n "${FIREBASE_CONFIG_TMPDIR}" && -d "${FIREBASE_CONFIG_TMPDIR}" ]]; then
+    rm -rf "${FIREBASE_CONFIG_TMPDIR}"
+  fi
+}
+
+materialize_op_source_cred() {
+  local op_uri="${1:-}"
+  local tmpfile=""
+
+  if [[ -z "$op_uri" ]] || ! command -v op >/dev/null 2>&1; then
+    return 1
+  fi
+
+  umask 077
+  tmpfile="$(mktemp "${TMPDIR:-/tmp}/gcp-adc-XXXXXX")"
+
+  # Timeout after 5s — op read hangs if biometric auth (Touch ID) can't prompt
+  op read "$op_uri" >"$tmpfile" 2>/dev/null &
+  local op_pid=$!
+  local op_ok=false
+  local i=0
+  while [[ $i -lt 50 ]]; do
+    if ! kill -0 "$op_pid" 2>/dev/null; then
+      wait "$op_pid" && op_ok=true
+      break
+    fi
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if ! $op_ok; then
+    kill "$op_pid" 2>/dev/null
+    sleep 0.2
+    kill -9 "$op_pid" 2>/dev/null
+    wait "$op_pid" 2>/dev/null || true
+  fi
+
+  if $op_ok && [[ -s "$tmpfile" ]]; then
+    SOURCE_CRED_TMPFILE="$tmpfile"
+    printf '%s\n' "$tmpfile"
+    return 0
+  fi
+
+  rm -f "$tmpfile"
+  return 1
+}
+
+materialize_firebase_vault_sa_key() {
+  # Try to pull the project-specific SA key from the 1Password Firebase vault.
+  # Falls back silently if op is unavailable, vault doesn't exist, or item is
+  # not found (returns 1 so the caller continues down the chain).
+  #
+  # Unlike materialize_op_source_cred (which backgrounds op read), this runs
+  # op document get in the foreground so biometric/session auth can prompt.
+  local project="${1:-}"
+  local tmpfile=""
+
+  if [[ -z "$project" ]] || ! command -v op >/dev/null 2>&1; then
+    return 1
+  fi
+
+  umask 077
+  tmpfile="$(mktemp "${TMPDIR:-/tmp}/firebase-sa-XXXXXX")"
+
+  if op document get "${project} — Firebase Deployer SA Key" \
+       --vault Firebase --out-file "$tmpfile" --force >/dev/null 2>&1 \
+     && [[ -s "$tmpfile" ]]; then
+    SOURCE_CRED_TMPFILE="$tmpfile"
+    printf '%s\n' "$tmpfile"
+    return 0
+  fi
+
+  rm -f "$tmpfile"
+  return 1
+}
+
+resolve_source_cred_file() {
+  # Precedence (#154 — codified policy decision):
+  #
+  #   1. Genuinely user-supplied GOOGLE_APPLICATION_CREDENTIALS
+  #   2. Project-specific SA key from 1Password Firebase vault,
+  #      including op-preflight.sh's cached Firebase SA tempfile
+  #   3. Preflight-injected GOOGLE_APPLICATION_CREDENTIALS
+  #      (op-preflight.sh's shared ADC tempfile)
+  #   4. Shared ADC from 1Password Private vault
+  #   5. Local ADC file on disk
+  #
+  # Step 1 differs from steps 3-5 by deliberately ranking the
+  # genuinely-explicit override above the project SA key — if a human
+  # set GOOGLE_APPLICATION_CREDENTIALS in the shell themselves
+  # (debugging, one-off flow, alternate project), they meant it.
+  #
+  # Step 3 is a behavior change from the original implementation:
+  # when GOOGLE_APPLICATION_CREDENTIALS came from op-preflight.sh's
+  # --mode deploy, the ADC is the shared 1Password ADC item (which
+  # suffers from refresh-token RAPT expiry — see mergepath#137).
+  # Falling through to the project SA key first means routine deploys
+  # use the more-stable credential without the daily-reauth churn.
+  #
+  # The markers that distinguish (1) from preflight-managed files:
+  # OP_PREFLIGHT_FIREBASE_SA_TMPFILE and OP_PREFLIGHT_ADC_TMPFILE.
+  # Preflight sets one of those to the same path as
+  # GOOGLE_APPLICATION_CREDENTIALS when it injects deploy credentials;
+  # if they match, the GOOGLE_APPLICATION_CREDENTIALS is preflight-
+  # managed, not user-set.
+  local explicit_file="${GOOGLE_APPLICATION_CREDENTIALS:-}"
+  local preflight_tmpfile="${OP_PREFLIGHT_ADC_TMPFILE:-}"
+  local preflight_firebase_sa_tmpfile="${OP_PREFLIGHT_FIREBASE_SA_TMPFILE:-}"
+  local preflight_firebase_project="${OP_PREFLIGHT_FIREBASE_PROJECT:-}"
+  local resolved=""
+  local is_preflight_injected=0
+  local is_preflight_firebase_sa=0
+  if [[ -n "$explicit_file" && -n "$preflight_tmpfile" && "$explicit_file" == "$preflight_tmpfile" ]]; then
+    is_preflight_injected=1
+  fi
+  if [[ -n "$explicit_file" && -n "$preflight_firebase_sa_tmpfile" && "$explicit_file" == "$preflight_firebase_sa_tmpfile" ]]; then
+    if [[ "$preflight_firebase_project" == "$PROJECT" ]]; then
+      is_preflight_firebase_sa=1
+    else
+      echo "[op-firebase-deploy] ignoring preflight-cached Firebase SA for project ${preflight_firebase_project:-unknown}; target project is $PROJECT" >&2
+    fi
+  fi
+
+  # 1. Genuinely user-supplied GOOGLE_APPLICATION_CREDENTIALS
+  if [[ -n "$explicit_file" && "$is_preflight_injected" -eq 0 && "$is_preflight_firebase_sa" -eq 0 && "$explicit_file" != "$preflight_firebase_sa_tmpfile" ]]; then
+    if [[ ! -f "$explicit_file" ]]; then
+      # User explicitly set GOOGLE_APPLICATION_CREDENTIALS to a path
+      # that doesn't exist. Fail fast — silently falling through to
+      # other sources would deploy with a different identity/project
+      # than the caller asked for. Codex r1 Phase 4b on PR #181.
+      echo "Error: GOOGLE_APPLICATION_CREDENTIALS points to a missing file: $explicit_file" >&2
+      echo "Either fix the path or unset GOOGLE_APPLICATION_CREDENTIALS to fall through to the project SA key / preflight ADC / shared ADC chain." >&2
+      exit 1
+    fi
+    SOURCE_CRED_FILE="$explicit_file"
+    SOURCE_CRED_DESCRIPTION="explicit GOOGLE_APPLICATION_CREDENTIALS ($explicit_file)"
+    return 0
+  fi
+
+  # 2. Project-specific SA key from 1Password Firebase vault
+  if [[ "$is_preflight_firebase_sa" -eq 1 && -f "$explicit_file" ]]; then
+    SOURCE_CRED_FILE="$explicit_file"
+    SOURCE_CRED_DESCRIPTION="preflight-cached project Firebase-vault SA key ($PROJECT — Firebase Deployer SA Key)"
+    return 0
+  fi
+
+  resolved="$(materialize_firebase_vault_sa_key "$PROJECT" || true)"
+  if [[ -n "$resolved" ]]; then
+    SOURCE_CRED_FILE="$resolved"
+    SOURCE_CRED_TMPFILE="$resolved"
+    SOURCE_CRED_DESCRIPTION="project Firebase-vault SA key ($PROJECT — Firebase Deployer SA Key)"
+    return 0
+  fi
+
+  # 3. Preflight-injected GOOGLE_APPLICATION_CREDENTIALS — used when
+  #    no project SA key exists. The shared ADC's RAPT-expiry surface
+  #    (#137) is the cost of this fallback; consumers wanting stable
+  #    deploys should provision the project SA key per DEPLOYMENT.md.
+  if [[ -n "$explicit_file" && -f "$explicit_file" && "$is_preflight_injected" -eq 1 ]]; then
+    SOURCE_CRED_FILE="$explicit_file"
+    SOURCE_CRED_DESCRIPTION="preflight-injected ADC (shared 1Password ADC; subject to RAPT expiry — see #137)"
+    return 0
+  fi
+
+  # 4. Shared ADC from 1Password Private vault (no preflight, but the
+  #    item is reachable directly).
+  resolved="$(materialize_op_source_cred "$DEFAULT_ADC_OP_URI" || true)"
+  if [[ -n "$resolved" ]]; then
+    SOURCE_CRED_FILE="$resolved"
+    SOURCE_CRED_TMPFILE="$resolved"
+    SOURCE_CRED_DESCRIPTION="shared 1Password ADC ($DEFAULT_ADC_OP_URI)"
+    return 0
+  fi
+
+  # 5. Local ADC file on disk
+  if [[ -f "$DEFAULT_ADC_FILE" ]]; then
+    SOURCE_CRED_FILE="$DEFAULT_ADC_FILE"
+    SOURCE_CRED_DESCRIPTION="local ADC file ($DEFAULT_ADC_FILE; subject to RAPT expiry — see #137)"
+    return 0
+  fi
+
+  return 1
+}
+
+source_cred_is_usable() {
+  local source_file="${1:-}"
+
+  if [[ -z "$source_file" || ! -f "$source_file" ]]; then
+    return 1
+  fi
+
+  # Test the credential by calling the OAuth2 token endpoint directly.
+  # Avoids gcloud, which can hang when the user account's RAPT is expired
+  # or when any interactive re-auth prompt would be triggered.
+  python3 - "$source_file" <<'PY'
+import json, pathlib, sys, urllib.request, urllib.parse
+
+cred = json.loads(pathlib.Path(sys.argv[1]).read_text())
+
+# Unwrap impersonated_service_account to get the underlying authorized_user
+while cred.get("type") == "impersonated_service_account" and "source_credentials" in cred:
+    cred = cred["source_credentials"]
+
+if cred.get("type") == "service_account":
+    # Service account JSON keys are self-contained; assume usable if present
+    sys.exit(0)
+
+refresh_token = cred.get("refresh_token", "")
+client_id = cred.get("client_id", "")
+client_secret = cred.get("client_secret", "")
+
+if not all([refresh_token, client_id, client_secret]):
+    sys.exit(1)
+
+data = urllib.parse.urlencode({
+    "client_id": client_id,
+    "client_secret": client_secret,
+    "refresh_token": refresh_token,
+    "grant_type": "refresh_token",
+}).encode()
+try:
+    req = urllib.request.Request("https://oauth2.googleapis.com/token", data=data)
+    urllib.request.urlopen(req, timeout=10)
+except Exception:
+    sys.exit(1)
+PY
+}
+
+umask 077
+ADC_TMPFILE="$(mktemp "${TMPDIR:-/tmp}/gcp-impersonated-XXXXXX")"
+FIREBASE_CONFIG_TMPDIR="$(mktemp -d "${TMPDIR:-/tmp}/firebase-configstore-XXXXXX")"
+trap 'cleanup_source_cred; rm -f "$ADC_TMPFILE"; cleanup_firebase_config' EXIT
+
+SA_EMAIL="${FIREBASE_DEPLOY_SA_EMAIL:-${SA_NAME}@${PROJECT}.iam.gserviceaccount.com}"
+
+if ! resolve_source_cred_file; then
+  echo "Error: No GCP source credential found." >&2
+  echo "Set GOOGLE_APPLICATION_CREDENTIALS, unlock 1Password item $DEFAULT_ADC_OP_URI, or create $DEFAULT_ADC_FILE." >&2
+  exit 1
+fi
+
+# Note: the source-credential log line fires AFTER the usability check
+# below settles, so a credential that gets rejected and falls through
+# to ranks 4/5 doesn't get its name in the log. CodeRabbit r1 on
+# PR #181 caught the prior position of this log (right after
+# resolve_source_cred_file) being misleading when the initial
+# candidate failed the usability check.
+
+if ! source_cred_is_usable "$SOURCE_CRED_FILE"; then
+  # Distinguish a GENUINELY user-supplied GOOGLE_APPLICATION_CREDENTIALS
+  # (exit immediately — the human meant it) from a preflight-injected
+  # one (fall through to lower ranks). Codex P2 on PR #181 caught that
+  # the prior unconditional equality check exited 1 even when the env
+  # var was preflight's, masking ranks 4-5 fallbacks (shared op ADC,
+  # local ADC) that were specifically designated for this case. The
+  # same rule now applies to preflight's cached Firebase SA key: it is
+  # managed by preflight, not a human override.
+  if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" && "$SOURCE_CRED_FILE" == "${GOOGLE_APPLICATION_CREDENTIALS}" ]]; then
+    if [[ -n "${OP_PREFLIGHT_ADC_TMPFILE:-}" && "$SOURCE_CRED_FILE" == "${OP_PREFLIGHT_ADC_TMPFILE}" ]]; then
+      # Preflight-injected and unusable — log and continue down the
+      # fallback chain. Don't treat as explicit override.
+      echo "[op-firebase-deploy] preflight-injected ADC ($SOURCE_CRED_FILE) is unusable; falling through to shared op ADC + local ADC" >&2
+    elif [[ -n "${OP_PREFLIGHT_FIREBASE_SA_TMPFILE:-}" && "$SOURCE_CRED_FILE" == "${OP_PREFLIGHT_FIREBASE_SA_TMPFILE}" ]]; then
+      echo "[op-firebase-deploy] preflight-cached Firebase SA key ($SOURCE_CRED_FILE) is unusable; re-reading project SA key before lower fallbacks" >&2
+    else
+      echo "Error: GOOGLE_APPLICATION_CREDENTIALS points to an unusable credential file: $SOURCE_CRED_FILE" >&2
+      exit 1
+    fi
+  fi
+
+  cleanup_source_cred
+  SOURCE_CRED_FILE=""
+  SOURCE_CRED_TMPFILE=""
+
+  # Rank 2 retry: if the preflight-cached Firebase SA tempfile was
+  # stale/corrupt, re-read the project item before dropping to the
+  # RAPT-prone shared ADC fallbacks.
+  resolved="$(materialize_firebase_vault_sa_key "$PROJECT" || true)"
+  if [[ -n "$resolved" ]] && source_cred_is_usable "$resolved"; then
+    SOURCE_CRED_FILE="$resolved"
+    SOURCE_CRED_TMPFILE="$resolved"
+    SOURCE_CRED_DESCRIPTION="project Firebase-vault SA key ($PROJECT — Firebase Deployer SA Key; fallback after cached SA unusable)"
+  fi
+
+  # Rank 4 fallback: shared op ADC (in case the preflight tempfile is
+  # stale but a fresh op read of the same item works).
+  if ! source_cred_is_usable "$SOURCE_CRED_FILE"; then
+    cleanup_source_cred
+    SOURCE_CRED_FILE=""
+    SOURCE_CRED_TMPFILE=""
+    resolved="$(materialize_op_source_cred "$DEFAULT_ADC_OP_URI" || true)"
+    if [[ -n "$resolved" ]]; then
+      SOURCE_CRED_FILE="$resolved"
+      SOURCE_CRED_TMPFILE="$resolved"
+      SOURCE_CRED_DESCRIPTION="shared 1Password ADC ($DEFAULT_ADC_OP_URI; rank 4 fallback after preflight credential unusable)"
+    fi
+  fi
+
+  # Rank 5 fallback: local ADC file on disk.
+  if ! source_cred_is_usable "$SOURCE_CRED_FILE" && [[ -f "$DEFAULT_ADC_FILE" ]]; then
+    SOURCE_CRED_FILE="$DEFAULT_ADC_FILE"
+    SOURCE_CRED_DESCRIPTION="local ADC file ($DEFAULT_ADC_FILE; rank 5 fallback)"
+  fi
+
+  if ! source_cred_is_usable "$SOURCE_CRED_FILE"; then
+    echo "Error: No usable GCP source credential found." >&2
+    echo "Provision the project Firebase-vault SA key (preferred — see DEPLOYMENT.md § Secrets Management), refresh the shared 1Password GCP ADC item, or provide a working GOOGLE_APPLICATION_CREDENTIALS file." >&2
+    exit 1
+  fi
+fi
+
+# Source-credential log AFTER the usability check + any fallback walk
+# settles. This guarantees the logged name matches the credential the
+# subsequent firebase deploy actually uses, not a candidate that got
+# rejected mid-flow.
+echo "[op-firebase-deploy] source credential: ${SOURCE_CRED_DESCRIPTION:-unknown}" >&2
+
+python3 - <<'PY' "$SOURCE_CRED_FILE" "$ADC_TMPFILE" "$SA_EMAIL" "$PROJECT"
+import json
+import pathlib
+import sys
+
+source_path = pathlib.Path(sys.argv[1])
+out_path = pathlib.Path(sys.argv[2])
+service_account = sys.argv[3]
+project = sys.argv[4]
+
+source = json.loads(source_path.read_text())
+while source.get("type") == "impersonated_service_account" and "source_credentials" in source:
+    source = source["source_credentials"]
+
+source["quota_project_id"] = project
+
+# If the source credential IS the target service account, use it directly —
+# no impersonation wrapper needed (avoids requiring serviceAccountTokenCreator
+# on itself and is faster).
+if source.get("type") == "service_account" and source.get("client_email") == service_account:
+    out_path.write_text(json.dumps(source))
+else:
+    config = {
+        "type": "impersonated_service_account",
+        "service_account_impersonation_url": (
+            "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
+            f"{service_account}:generateAccessToken"
+        ),
+        "source_credentials": source,
+    }
+    out_path.write_text(json.dumps(config))
+PY
+
+export GOOGLE_APPLICATION_CREDENTIALS="$ADC_TMPFILE"
+export GOOGLE_CLOUD_PROJECT="$PROJECT"
+export GCLOUD_PROJECT="$PROJECT"
+export CLOUDSDK_BILLING_QUOTA_PROJECT="$PROJECT"
+
+# Disable telemetry/update checks that can hang in non-interactive sessions
+export CLOUDSDK_CORE_DISABLE_USAGE_REPORTING=true
+export CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK=true
+
+# Firebase CLI checks its configstore user token before Application Default
+# Credentials. Run with an isolated configstore so stale `firebase login`
+# state cannot override the service account key we just materialized.
+XDG_CONFIG_HOME="$FIREBASE_CONFIG_TMPDIR" \
+  firebase deploy --project "$PROJECT" --non-interactive ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}

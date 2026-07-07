@@ -1,0 +1,484 @@
+name: PR Review Policy
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, labeled, unlabeled]
+
+permissions:
+  pull-requests: write
+  contents: read
+  issues: read
+
+jobs:
+  self-review-check:
+    name: Self-Review Required
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for Self-Review section
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if echo "$PR_BODY" | grep -qE '^## Self-Review'; then
+            echo "Self-Review section found."
+          else
+            echo "PR description must contain a '## Self-Review' section."
+            echo "Required items: correctness, regression risk, style/conventions, test coverage, security/dependency hygiene."
+            exit 1
+          fi
+
+  label-gate:
+    name: Label Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Block merge if blocking labels present
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const blockingLabels = [
+              'needs-external-review',
+              'needs-human-review',
+              'policy-violation',
+              'human-hold',
+            ];
+            const prLabels = context.payload.pull_request.labels.map(l => l.name);
+            const blockers = prLabels.filter(l => blockingLabels.includes(l));
+
+            if (blockers.length > 0) {
+              core.setFailed(
+                `Merge blocked by label(s): ${blockers.join(', ')}. ` +
+                `Per REVIEW_POLICY.md, the human is the tiebreaker and resolves blocking labels.`
+              );
+            }
+
+  external-review-labeling:
+    name: External Review Check
+    if: github.event.action != 'labeled' && github.event.action != 'unlabeled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          # The external-review check only reads local history (git diff / show
+          # / worktree) and clones PUBLIC mergepath unauthenticated; it never
+          # pushes or uses the workspace remote, so don't leave the checkout
+          # token in .git/config (#548 defense-in-depth).
+          persist-credentials: false
+
+      - name: Check for external review triggers from review-policy.yml
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          NEEDS_REVIEW=false
+          REASONS=""
+
+          BASE_SHA=${{ github.event.pull_request.base.sha }}
+          HEAD_SHA=${{ github.event.pull_request.head.sha }}
+
+          if ! git cat-file -e "$BASE_SHA:.github/review-policy.yml" 2>/dev/null; then
+            echo "WARNING: base commit has no .github/review-policy.yml, skipping external review check"
+            echo "needs_review=false" >> "$GITHUB_OUTPUT"
+            echo "propagation_lane=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CHANGED_FILES=$(git diff --name-only "$BASE_SHA"..."$HEAD_SHA")
+
+          # --- Propagation PR review lane (mergepath#264 / #268) ---------
+          # A PR opened by scripts/sync-to-downstream.sh is a verbatim
+          # mirror of canonical/kit content ALREADY reviewed in its
+          # upstream mergepath PR. It is huge by design and always
+          # touches .github/** — so the line-count threshold and the
+          # external_review_paths check below would flag every sync PR
+          # for a redundant Phase 4 review of non-novel content.
+          #
+          # The lane exempts such a PR from external-review labeling —
+          # but ONLY when it is PROVABLY a faithful mirror. Codex P1 on
+          # #268 caught that a path-confinement-only check is a hole:
+          # `.github/workflows/*` IS a manifest path, so a sync-branch
+          # PR could hand-edit a workflow and skip review. The teeth is
+          # therefore a byte-level comparison against mergepath itself.
+          #
+          # Recognition + verification, all sourced from TRUSTED inputs
+          # (never the PR's own checkout, which the PR could tamper):
+          #   1. config (enabled / branch_prefix / author_identity) is
+          #      read from the BASE commit's review-policy.yml — a PR
+          #      cannot self-qualify by editing policy in the PR.
+          #      The lane defaults ON when the propagation_prs block is
+          #      absent (mergepath#434): the enable flag lived only in
+          #      consumer review-policy.yml, which is intentionally NOT
+          #      synced, so no consumer ever had the block and the lane
+          #      was dormant fleet-wide. An explicit `enabled: false`
+          #      remains the opt-out. The default adds no new trust —
+          #      recognition is still gated on the byte-level verify in
+          #      step 3, and a PR cannot grant itself the default
+          #      because it cannot edit its own BASE commit.
+          #   2. branch name must start with propagation_prs.branch_prefix
+          #      and PR author must be author_identity.
+          #   3. the <sha> in the branch name (mergepath-sync/[sync-all-]
+          #      <sha>) is checked out from PUBLIC nathanjohnpayne/
+          #      mergepath, and mergepath@<sha>'s OWN
+          #      verify-propagation-pr.sh byte-compares every changed
+          #      file against mergepath@<sha>'s content + manifest. A
+          #      hand-edit of any file — manifest path or not — fails
+          #      the byte-compare and the PR falls through to normal
+          #      Phase 3/4 review.
+          # See REVIEW_POLICY.md § Propagation PR review lane.
+          PROPAGATION_LANE=false
+          # Read a 2-space-indented scalar from a named YAML block in a
+          # given file, anchored to the block header and stopping at the
+          # next column-0 key (comment lines between header and field
+          # don't matter). Quote- and inline-comment-stripped.
+          prop_field() {  # <file> <block> <key>
+            awk -v blk="$2" -v key="$3" '
+              $0 ~ "^" blk ":" { in_blk = 1; next }
+              in_blk && /^[^[:space:]#]/ { in_blk = 0 }
+              in_blk && $1 == key":" {
+                sub(/^[[:space:]]*[^:]+:[[:space:]]*/, "", $0)
+                sub(/[[:space:]]*#.*$/, "", $0)
+                gsub(/^"|"$/, "", $0)
+                print
+                exit
+              }
+            ' "$1"
+          }
+          # Read a TOP-LEVEL scalar (author_identity), stripping BOTH YAML
+          # quote styles + a trailing comment + whitespace (#452). Mirrors
+          # audit-propagation-lane.sh's policy_top_scalar so the live lane and
+          # its weekly audit normalize author_identity identically — a
+          # quoted-but-correct `author_identity: "nathanjohnpayne"` passes the
+          # PR-author fingerprint below instead of failing on retained quotes.
+          top_field() {  # <file> <key>
+            awk -v key="$2" '
+              /^[^[:space:]#]/ && $1 == key":" {
+                sub(/^[^:]+:[[:space:]]*/, "", $0)
+                gsub(/^["\x27]/, "", $0)
+                gsub(/["\x27][[:space:]]*(#.*)?$/, "", $0)
+                gsub(/[[:space:]]*#.*$/, "", $0)
+                sub(/[[:space:]]+$/, "", $0)
+                print
+                exit
+              }
+            ' "$1"
+          }
+          # Lane config + author identity from the BASE commit, not the
+          # PR. `git show` the base blobs into tempfiles.
+          BASE_POLICY=$(mktemp)
+          if ! git show "$BASE_SHA:.github/review-policy.yml" > "$BASE_POLICY" 2>/dev/null; then
+            : > "$BASE_POLICY"   # absent on base → lane simply won't match
+          fi
+          PROP_ENABLED=$(prop_field "$BASE_POLICY" propagation_prs enabled)
+          # Default ON when the key/block is absent (mergepath#434);
+          # explicit `enabled: false` opts out.
+          PROP_ENABLED=${PROP_ENABLED:-true}
+          PROP_PREFIX=$(prop_field "$BASE_POLICY" propagation_prs branch_prefix)
+          # Must match SYNC_BRANCH_PREFIX in scripts/sync-to-downstream.sh.
+          PROP_PREFIX=${PROP_PREFIX:-mergepath-sync/}
+          AUTHOR_ID=$(top_field "$BASE_POLICY" author_identity)
+          HEAD_REF="${{ github.event.pull_request.head.ref }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          rm -f "$BASE_POLICY"
+
+          if [ "$PROP_ENABLED" = "true" ] && [ -n "$PROP_PREFIX" ] \
+             && [ "${HEAD_REF#"$PROP_PREFIX"}" != "$HEAD_REF" ] \
+             && [ "$PR_AUTHOR" = "$AUTHOR_ID" ]; then
+            # Branch + author fingerprint matched. Now the teeth:
+            # extract the source <sha> from the branch name, check out
+            # PUBLIC mergepath at that sha, and run mergepath@<sha>'s
+            # OWN verifier against this PR. Anything off → no lane.
+            SYNC_SHA="${HEAD_REF#"$PROP_PREFIX"}"     # strip "mergepath-sync/"
+            SYNC_SHA="${SYNC_SHA#sync-all-}"          # strip optional "sync-all-"
+            if printf '%s' "$SYNC_SHA" | grep -qE '^[0-9a-fA-F]{7,40}$'; then
+              MP_DIR=$(mktemp -d)
+              # mergepath is public — no token needed. blob:none keeps
+              # it cheap; the checkout fetches only the blobs it needs.
+              if git clone --quiet --filter=blob:none \
+                   https://github.com/nathanjohnpayne/mergepath "$MP_DIR" \
+                 && git -C "$MP_DIR" checkout --quiet "$SYNC_SHA" 2>/dev/null; then
+                # #531: run the TRUSTED in-repo verifier from the PR's
+                # BASE commit (propagated + reviewed; the PR cannot edit
+                # its own base), NOT the verifier shipped inside the
+                # runtime-cloned mergepath@<sha>. The clone ($MP_DIR) is
+                # passed only as a DATA source (manifest + canonical
+                # content); no shell is executed out of it. This removes
+                # the RCE surface of running runtime-fetched code under a
+                # `pull-requests: write` workflow. The base verifier
+                # sources its helpers from its own dir, so they are the
+                # base commit's trusted copies too. fetch-depth:0 above
+                # guarantees BASE_SHA is present for the worktree add.
+                BASE_TREE=$(mktemp -d)
+                if git worktree add --quiet --detach "$BASE_TREE" "$BASE_SHA" 2>/dev/null; then
+                  VERIFIER="$BASE_TREE/scripts/workflow/verify-propagation-pr.sh"
+                  if [ ! -f "$VERIFIER" ]; then
+                    echo "Propagation lane: base commit has no scripts/workflow/verify-propagation-pr.sh (consumer not yet on the vendored verifier) — not lane-eligible; falls through to normal review."
+                  elif ! grep -q 'mergepath-verifier-contract: self-sourced-helpers-v1' "$VERIFIER"; then
+                    # #545 (4a P1): a base verifier predating the #531
+                    # self-sourcing hardening would source its helpers from
+                    # the runtime-cloned mergepath ($MP_DIR) — fetched shell
+                    # under a pull-requests: write job (RCE). Fail closed: do
+                    # NOT run it; fall through to normal review. The lane turns
+                    # on once the hardened verifier itself has propagated into
+                    # the consumer base.
+                    echo "Propagation lane: base verifier predates the #531 self-sourcing contract (no self-sourced-helpers-v1 tag) — not lane-eligible; falls through to normal review."
+                  elif bash "$VERIFIER" "$MP_DIR" "$PWD" "$BASE_SHA" "$HEAD_SHA"; then
+                    PROPAGATION_LANE=true
+                  fi
+                  git worktree remove --force "$BASE_TREE" 2>/dev/null || rm -rf "$BASE_TREE"
+                else
+                  echo "Propagation lane: could not materialize the base-commit verifier (worktree add failed) — not lane-eligible."
+                  rm -rf "$BASE_TREE"
+                fi
+              else
+                echo "Propagation lane: could not check out mergepath@$SYNC_SHA — not lane-eligible."
+              fi
+              rm -rf "$MP_DIR"
+            else
+              echo "Propagation lane: branch '$HEAD_REF' has no resolvable mergepath SHA — not lane-eligible."
+            fi
+          fi
+          if [ "$PROPAGATION_LANE" = "true" ]; then
+            echo "Propagation PR review lane: VERIFIED faithful mirror of mergepath@$SYNC_SHA (branch=$HEAD_REF, author=$PR_AUTHOR)."
+            echo "needs_review=false" >> "$GITHUB_OUTPUT"
+            echo "propagation_lane=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "propagation_lane=false" >> "$GITHUB_OUTPUT"
+
+          # Compute the external-review trigger and same-content fingerprint
+          # from GitHub's PR file list. The helper itself must come from the
+          # trusted base tree, not the PR checkout: this job can write labels
+          # and comments, and same-repo PRs can edit scripts/workflow/**.
+          FILES_JSON=$(mktemp)
+          set +e
+          FILES_RAW=$(gh api --paginate "repos/${{ github.repository }}/pulls/$PR_NUMBER/files")
+          files_rc=$?
+          set -e
+          if [ "$files_rc" -ne 0 ] || ! printf '%s\n' "$FILES_RAW" | jq -s 'add // []' > "$FILES_JSON"; then
+            echo "External-review fail-closed: could not fetch PR files; requiring review."
+            echo "needs_review=true" >> "$GITHUB_OUTPUT"
+            echo "reasons=- Could not fetch PR files for external-review fingerprint; requiring review fail-closed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TRUSTED_BASE_TREE=$(mktemp -d)
+          cleanup_trusted_base_tree() {
+            git worktree remove --force "$TRUSTED_BASE_TREE" >/dev/null 2>&1 || rm -rf "$TRUSTED_BASE_TREE"
+          }
+          trap cleanup_trusted_base_tree EXIT
+          if ! git worktree add --quiet --detach "$TRUSTED_BASE_TREE" "$BASE_SHA" 2>/dev/null; then
+            echo "External-review fail-closed: could not materialize trusted base helpers; requiring review."
+            echo "needs_review=true" >> "$GITHUB_OUTPUT"
+            echo "reasons=- Could not materialize trusted base helpers; requiring review fail-closed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          TRUSTED_HELPER_DIR="$TRUSTED_BASE_TREE/scripts/workflow"
+          TRUSTED_CONFIG="$TRUSTED_BASE_TREE/.github/review-policy.yml"
+          FINGERPRINT_HELPER="$TRUSTED_HELPER_DIR/external_review_fingerprint.sh"
+          CARRY_HELPER="$TRUSTED_HELPER_DIR/external_review_carryforward.sh"
+          if [ ! -x "$FINGERPRINT_HELPER" ]; then
+            echo "External-review fail-closed: trusted base helper is unavailable; requiring review."
+            echo "needs_review=true" >> "$GITHUB_OUTPUT"
+            echo "reasons=- Trusted external-review fingerprint helper is unavailable on the base tree; requiring review fail-closed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          set +e
+          FINGERPRINT_JSON=$(bash "$FINGERPRINT_HELPER" \
+            --repo "${{ github.repository }}" \
+            --pr "$PR_NUMBER" \
+            --ref "$HEAD_SHA" \
+            --config "$TRUSTED_CONFIG" \
+            --files-json "$FILES_JSON")
+          fingerprint_rc=$?
+          set -e
+          if [ "$fingerprint_rc" -ne 0 ]; then
+            echo "External-review fail-closed: fingerprint helper failed (rc=$fingerprint_rc); requiring review."
+            echo "needs_review=true" >> "$GITHUB_OUTPUT"
+            echo "reasons=- External-review fingerprint helper failed; requiring review fail-closed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          NEEDS_REVIEW=$(echo "$FINGERPRINT_JSON" | jq -r '.requires_review')
+          FINGERPRINT=$(echo "$FINGERPRINT_JSON" | jq -r '.fingerprint // ""')
+          REASONS=$(echo "$FINGERPRINT_JSON" | jq -r '.reasons | map("- " + .) | join("%0A")')
+
+          if [ "$NEEDS_REVIEW" = "true" ] && [ -n "$FINGERPRINT" ] && [ -x "$CARRY_HELPER" ]; then
+            set +e
+            CARRY_JSON=$(bash "$CARRY_HELPER" \
+              --repo "${{ github.repository }}" \
+              --pr "$PR_NUMBER" \
+              --head "$HEAD_SHA" \
+              --current-fingerprint "$FINGERPRINT" \
+              --config "$TRUSTED_CONFIG" \
+              --files-json "$FILES_JSON")
+            carry_rc=$?
+            set -e
+            if [ "$carry_rc" -eq 0 ] && [ "$(echo "$CARRY_JSON" | jq -r '.carried')" = "true" ]; then
+              SOURCE_COMMIT=$(echo "$CARRY_JSON" | jq -r '.source_commit')
+              SOURCE_TIME=$(echo "$CARRY_JSON" | jq -r '.source_time')
+              echo "External-review carry-forward: Codex already cleared the same external-review fingerprint on $SOURCE_COMMIT at $SOURCE_TIME; skipping needs-external-review on base-only sync (#705)."
+              echo "needs_review=false" >> "$GITHUB_OUTPUT"
+              echo "reasons=" >> "$GITHUB_OUTPUT"
+              exit 0
+            elif [ "$carry_rc" -ne 0 ]; then
+              echo "External-review carry-forward failed (rc=$carry_rc); requiring current-head review fail-closed."
+            fi
+          fi
+
+          echo "needs_review=$NEEDS_REVIEW" >> "$GITHUB_OUTPUT"
+          echo "reasons=$REASONS" >> "$GITHUB_OUTPUT"
+
+      - name: Apply label and comment
+        if: steps.check.outputs.needs_review == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REASONS: ${{ steps.check.outputs.reasons }}
+        run: |
+          # Check if label already applied to avoid duplicate comments
+          EXISTING=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels --jq '.labels[].name' | grep '^needs-external-review$' || true)
+          if [ -n "$EXISTING" ]; then
+            echo "Label already applied, skipping."
+            exit 0
+          fi
+
+          gh pr edit "$PR_NUMBER" --add-label "needs-external-review" \
+            --repo "${{ github.repository }}"
+
+          FORMATTED_REASONS=$(echo "$REASONS" | sed 's/%0A/\n/g')
+
+          gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body "$(cat <<EOF
+          **External Review Required**
+
+          This PR has been labeled \`needs-external-review\` based on .github/review-policy.yml:
+
+          $FORMATTED_REASONS
+
+          Per REVIEW_POLICY.md, the authoring agent must post a handoff message and alert the human. The human will coordinate external review by a different agent.
+
+          > Automated check per .github/review-policy.yml
+          EOF
+          )"
+
+      - name: Propagation PR review lane
+        if: steps.check.outputs.propagation_lane == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # #620 (Codex r6): the needs-external-review removal below must fire
+          # agent-review.yml's `unlabeled` settle re-arm, and GITHUB_TOKEN-driven
+          # events create no workflow runs (the #315/#324 auto-clear lesson) —
+          # a GITHUB_TOKEN removal here leaves an approved, settled PR
+          # CLEAN-but-unmerged. The PAT is scoped to the two commands that must
+          # create workflow runs GITHUB_TOKEN cannot: the label removal below,
+          # and the #658 merge-clearance-recheck repository_dispatch. The
+          # lane-marker comment itself deliberately stays on GITHUB_TOKEN so it
+          # remains github-actions-authored for its #429 consumers — but that is
+          # exactly why it fires no run, hence the PAT dispatch that nudges
+          # merge-clearance-gate. Every other command keeps the restricted
+          # default token.
+          LABEL_REMOVAL_TOKEN: ${{ secrets.REVIEWER_ASSIGNMENT_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # Embedded in the lane marker so the signal is HEAD-PINNED — a
+          # consumer (merge-clearance-gate.sh's propagation exemption, #429)
+          # can confirm THIS head was verified, not merely that the PR was
+          # once a faithful mirror at an earlier head.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Recognized propagation PR (see REVIEW_POLICY.md § Propagation
+          # PR review lane): the check step VERIFIED it is a byte-for-byte
+          # faithful mirror of mergepath@<sha> — every changed file
+          # byte-matches mergepath's content under a manifest path, as
+          # confirmed by mergepath@<sha>'s own verify-propagation-pr.sh.
+          # It is exempt from the Phase 4 external-review requirement —
+          # but still subject to CI green, CodeRabbit advisory review,
+          # and an internal reviewer-identity APPROVED (the standard
+          # under-threshold path).
+          #
+          # Post a HEAD-PINNED, machine-readable lane marker. The marker
+          # embeds the verified head SHA, so a consumer of this signal
+          # (scripts/merge-clearance-gate.sh's propagation exemption, #429)
+          # exempts a head ONLY if the lane verified THAT head — not merely
+          # that the PR was once a faithful mirror at some earlier head.
+          # Posted only by this workflow (github-actions[bot]); a PR author
+          # cannot forge that identity. One marker per distinct verified
+          # head: grep includes the head SHA, so re-runs on the same head
+          # don't re-comment; a faithful re-push to a NEW head posts a fresh
+          # marker; a DIVERGED push never reaches this step (propagation_lane
+          # is false), so no marker is ever posted for an unverified head.
+          # Marker contract is shared with merge-clearance-gate.sh
+          # (lane_verified(), also consumed indirectly by agent-review.yml's
+          # rc=5 branch via --derive-external-requiredness, #620) AND with
+          # agent-review.yml's triage job (#656: triage skips its
+          # needs-external-review add only for a head this marker pins) —
+          # keep the `mergepath-propagation-lane verified-head=<sha>` form
+          # in sync across the three files
+          # (scripts/ci/check_agent_review_triage_defers asserts the
+          # lockstep).
+          #
+          # ORDER MATTERS (#620 Codex r9): the marker MUST be posted before
+          # the label removal below. The removal fires agent-review.yml's
+          # unlabeled re-arm, whose rc=5 branch derives external
+          # requiredness via merge-clearance-gate.sh — whose lane_verified()
+          # reads this marker to tell exemption apart from clearance.
+          # Marker-after-removal would open a window where that derivation
+          # treats the exemption as an ordinary above-threshold arm.
+          # Marker-then-removal is safe in the failure direction: if the
+          # marker posts and the removal then fails, the still-present label
+          # keeps merge-clearance-gate blocking (a present label is never
+          # subject to the propagation exemption).
+          MARKER="<!-- mergepath-propagation-lane verified-head=$HEAD_SHA -->"
+          ALREADY=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json comments --jq '.comments[].body' | grep -F "$MARKER" || true)
+          if [ -z "$ALREADY" ]; then
+            gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body "$(cat <<EOF
+          $MARKER
+          **Propagation PR review lane** — verified faithful mirror ✅ (head \`$HEAD_SHA\`)
+
+          This PR was checked out against \`mergepath\` at the source commit named in its branch and **verified byte-for-byte at this head**: every changed file is under a \`.mergepath-sync.yml\` path AND matches \`mergepath@<sha>\`'s content (\`scripts/workflow/verify-propagation-pr.sh\`). Its content was already reviewed in the upstream mergepath PR(s). Per REVIEW_POLICY.md § Propagation PR review lane it is **exempt from the Phase 4 external-review requirement**.
+
+          It is still subject to: CI green, CodeRabbit advisory review, and an internal reviewer-identity \`APPROVED\` — the standard under-threshold path. Merge as the author once those clear.
+
+          > Automated check per .github/review-policy.yml
+          EOF
+          )"
+            # #658: the marker just posted is a GITHUB_TOKEN github-actions[bot]
+            # issue comment, and GITHUB_TOKEN-authored events create no workflow
+            # runs — so merge-clearance-gate.yml cannot re-run via issue_comment
+            # for this freshly verified head. Nudge it directly with a
+            # repository_dispatch (its `merge-clearance-recheck` trigger) so a
+            # verified sync PR clears the Merge clearance gate promptly instead
+            # of waiting up to 15 min for the scheduled sweep. PAT-driven: the
+            # workflow token is contents:read (cannot POST /dispatches), and
+            # keeping the dispatch on the PAT avoids widening the GITHUB_TOKEN
+            # scope. Best-effort — the gate re-derives clearance from THIS marker
+            # (lane_verified, head-pinned) and never trusts the dispatch payload,
+            # so on any failure the */15 sweep still recovers the gate; a failed
+            # dispatch must never fail the lane. Keep the event type in sync with
+            # merge-clearance-gate.yml's repository_dispatch trigger.
+            GH_TOKEN="$LABEL_REMOVAL_TOKEN" gh api -X POST \
+              "repos/${{ github.repository }}/dispatches" \
+              -f event_type=merge-clearance-recheck \
+              -F "client_payload[pr]=$PR_NUMBER" \
+              || echo "note: merge-clearance-recheck dispatch failed (#658); the */15 scheduled sweep will recover the Merge clearance gate."
+          fi
+
+          # If a prior run (or a stale label-prefixed edit) applied
+          # needs-external-review before this PR qualified, remove it so
+          # the Label Gate stops blocking. The workflow REMOVING a label
+          # it is responsible for applying is not an agent override — the
+          # human-action-label prohibition (REVIEW_POLICY.md § Agent
+          # prohibitions) is about agents clearing labels, not about the
+          # policy automation reconciling its own decision. This lane is
+          # a sanctioned automation alongside auto-clear-blocking-labels.yml.
+          # Runs AFTER the marker post above — see ORDER MATTERS.
+          EXISTING=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json labels --jq '.labels[].name' | grep '^needs-external-review$' || true)
+          if [ -n "$EXISTING" ]; then
+            # PAT-driven so the removal fires the #620 unlabeled settle
+            # re-arm (see LABEL_REMOVAL_TOKEN above).
+            GH_TOKEN="$LABEL_REMOVAL_TOKEN" gh pr edit "$PR_NUMBER" --remove-label "needs-external-review" \
+              --repo "${{ github.repository }}"
+            echo "Removed needs-external-review — PR qualifies for the propagation review lane."
+          fi

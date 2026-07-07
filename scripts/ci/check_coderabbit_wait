@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# CI wrapper for scripts/coderabbit-wait.sh timeout/status-probe behavior (#417).
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+TESTS=(
+  "$REPO_ROOT/tests/test_coderabbit_wait_status_probe.sh"
+  "$REPO_ROOT/tests/test_coderabbit_wait_identity_derivation.sh"
+  "$REPO_ROOT/tests/test_coderabbit_wait_paused.sh"
+  "$REPO_ROOT/tests/test_coderabbit_wait_codex_failover.sh"
+  "$REPO_ROOT/tests/test_coderabbit_automerge_rate_limit_gate.sh"
+  "$REPO_ROOT/tests/test_coderabbit_wait_statuscontext_ratelimit.sh"
+  "$REPO_ROOT/tests/test_coderabbit_wait_ratelimit_window.sh"
+  "$REPO_ROOT/tests/test_coderabbit_wait_post_clearance.sh"
+)
+
+if [ ! -x "$REPO_ROOT/scripts/coderabbit-wait.sh" ]; then
+  echo "check_coderabbit_wait: ERROR scripts/coderabbit-wait.sh missing or not executable" >&2
+  exit 1
+fi
+
+for TEST in "${TESTS[@]}"; do
+  if [ ! -x "$TEST" ]; then
+    echo "check_coderabbit_wait: ERROR $TEST missing or not executable" >&2
+    exit 1
+  fi
+done
+
+echo "check_coderabbit_wait: running coderabbit-wait status-probe tests"
+"${TESTS[0]}"
+echo "check_coderabbit_wait: running coderabbit-wait identity-derivation tests (#438)"
+"${TESTS[1]}"
+echo "check_coderabbit_wait: running coderabbit-wait paused/skip tests (#490)"
+"${TESTS[2]}"
+echo "check_coderabbit_wait: running coderabbit-wait codex rate-limit failover tests (#489)"
+"${TESTS[3]}"
+echo "check_coderabbit_wait: running auto-merge rate-limit gate tests (#489)"
+"${TESTS[4]}"
+echo "check_coderabbit_wait: running StatusContext rate-limit false-clear tests (#596)"
+"${TESTS[5]}"
+echo "check_coderabbit_wait: running rate-limit remaining-window sleep tests (#727)"
+"${TESTS[6]}"
+echo "check_coderabbit_wait: running post-clearance fast-path cap tests (#727)"
+"${TESTS[7]}"
+echo "check_coderabbit_wait: PASS"
