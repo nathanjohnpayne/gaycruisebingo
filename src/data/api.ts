@@ -6,6 +6,7 @@ import {
   getDocs,
   increment,
   query,
+  runTransaction,
   setDoc,
   updateDoc,
   where,
@@ -100,28 +101,42 @@ export async function setMark(params: {
   const { uid, cells, index, nextMarked, claimMode, currentFirstBingoAt } = params;
   const now = Date.now();
 
-  const next: Cell[] = cells.map((c) =>
-    c.index === index
-      ? {
-          ...c,
-          marked: nextMarked,
-          markedAt: nextMarked ? now : null,
-          status: claimMode === 'verified' && nextMarked ? 'pending' : 'confirmed',
-        }
-      : c,
-  );
+  // Recompute cells from the live board inside a transaction so a concurrent
+  // mark from another tab/device isn't clobbered by this caller's stale snapshot
+  // (mirrors attachProof).
+  return runTransaction(db, async (tx) => {
+    const boardRef = rawBoard(uid);
+    const playerRef = rawPlayer(uid);
+    const boardSnap = await tx.get(boardRef);
+    const liveCells = (boardSnap.data()?.cells as Cell[] | undefined) ?? cells;
+    const next: Cell[] = liveCells.map((c) =>
+      c.index === index
+        ? {
+            ...c,
+            marked: nextMarked,
+            markedAt: nextMarked ? now : null,
+            status: claimMode === 'verified' && nextMarked ? 'pending' : 'confirmed',
+          }
+        : c,
+    );
 
-  const bingoCount = completedLines(next).length;
-  const squares = countMarked(next);
-  const blackout = isBlackout(next);
-  const firstBingoAt = currentFirstBingoAt ?? (bingoCount > 0 ? now : null);
+    const bingoCount = completedLines(next).length;
+    const squares = countMarked(next);
+    const blackout = isBlackout(next);
+    // Keep the first-bingo timestamp while a bingo still stands; clear it when
+    // unmarking removes the last bingo, so the leaderboard stops crediting a
+    // non-winner (mirrors deleteProof). Read the live player row so a concurrent
+    // update isn't lost.
+    const playerSnap = await tx.get(playerRef);
+    const existingFirst =
+      (playerSnap.data()?.firstBingoAt as number | null | undefined) ?? currentFirstBingoAt ?? null;
+    const firstBingoAt = bingoCount > 0 ? (existingFirst ?? now) : null;
 
-  const batch = writeBatch(db);
-  batch.set(rawBoard(uid), { cells: next }, { merge: true });
-  batch.set(rawPlayer(uid), { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
-  await batch.commit();
+    tx.set(boardRef, { cells: next }, { merge: true });
+    tx.set(playerRef, { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
 
-  return { cells: next, bingo: bingoCount > 0, blackout };
+    return { cells: next, bingo: bingoCount > 0, blackout };
+  });
 }
 
 /** Add a prompt to the community pool. */

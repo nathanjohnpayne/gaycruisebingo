@@ -42,10 +42,19 @@ async function resolve(
   await batch.commit();
 }
 
+/**
+ * The board cell a claim resolves. Match on the claim's own proofId when it has
+ * one, so resolving one of several pending claims for the same square acts on
+ * that claim's proof — not whichever proof currently sits at the index (which may
+ * be a newer submission). Fall back to cellIndex for legacy claims with no proofId.
+ */
+const isClaimCell = (x: Cell, c: ClaimDoc): boolean =>
+  c.proofId != null ? x.proofId === c.proofId : x.index === c.cellIndex;
+
 export function confirmClaim(c: ClaimDoc, adminUid: string): Promise<void> {
   return resolve(
     c,
-    (cells) => cells.map((x) => (x.index === c.cellIndex ? { ...x, status: 'confirmed' as const } : x)),
+    (cells) => cells.map((x) => (isClaimCell(x, c) ? { ...x, status: 'confirmed' as const } : x)),
     adminUid,
     'confirmed',
   );
@@ -56,7 +65,7 @@ export function rejectClaim(c: ClaimDoc, adminUid: string): Promise<void> {
     c,
     (cells) =>
       cells.map((x) =>
-        x.index === c.cellIndex
+        isClaimCell(x, c)
           ? { ...x, marked: false, status: 'confirmed' as const, proofId: null, markedAt: null }
           : x,
       ),

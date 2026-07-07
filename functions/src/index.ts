@@ -103,7 +103,12 @@ export const share = onRequest({ cors: true }, (req, res) => {
   const theme = String(req.query.theme || 'neon-playground');
   const rawTitle = kind === 'leaderboard' ? 'The Leaderboard' : name ? `${name} got BINGO` : 'I got BINGO';
   const title = escapeHtml(rawTitle);
-  const img = `${og}/og.png?kind=${encodeURIComponent(kind)}&title=${encodeURIComponent(rawTitle)}&theme=${encodeURIComponent(theme)}`;
+  // With a renderer configured, use the dynamic OG image; otherwise fall back to
+  // the absolute static default. Social crawlers require an absolute image URL —
+  // a bare '/og.png' would resolve relative to the crawler, not this site.
+  const img = og
+    ? `${og}/og.png?kind=${encodeURIComponent(kind)}&title=${encodeURIComponent(rawTitle)}&theme=${encodeURIComponent(theme)}`
+    : 'https://gaycruisebingo.com/og-default.png';
   res.set('Cache-Control', 'public, max-age=3600');
   res.status(200).send(
     `<!doctype html><html lang="en"><head><meta charset="utf-8">` +

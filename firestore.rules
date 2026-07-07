@@ -57,7 +57,7 @@ service cloud.firestore {
       match /proofs/{proofId} {
         // Non-admins can read only visible ('active') proofs; hidden/flagged
         // proofs are moderation-only and readable by admins.
-        allow read: if isAdmin(eventId) || resource.data.status == 'active';
+        allow read: if signedIn() && (isAdmin(eventId) || resource.data.status == 'active');
         // Constrain the payload like /items: the uploader owns the doc, only the
         // known fields are allowed, the proof starts visible + unreported, and
         // moderation fields (visionFlag, thumbURL) must be server-set, not client.
@@ -78,9 +78,26 @@ service cloud.firestore {
           && request.resource.data.reportCount == 0
           && request.resource.data.visionFlag == null
           && request.resource.data.thumbURL == null
-          // Tie stored media to the uploader's own Storage path (see storage.rules).
-          && (request.resource.data.storagePath == null
-              || request.resource.data.storagePath.matches('^proofs/' + eventId + '/' + request.auth.uid + '/.*$'));
+          // Proof media must live under the uploader's OWN Storage path, and the
+          // client-supplied mediaURL must be a Firebase Storage download URL for
+          // that same path. Otherwise a client could set an arbitrary mediaURL and
+          // have the feed render it while bypassing the Storage size/content-type
+          // rules and the moderateProof Vision scan. Text proofs carry no media.
+          // Residual gap (not expressible here): rules can't confirm the object
+          // actually exists or that the URL token is valid, and this pins the
+          // standard getDownloadURL host (firebasestorage.googleapis.com); the
+          // Storage rules + moderation trigger cover the object side.
+          && (
+               (request.resource.data.type == 'text'
+                 && request.resource.data.storagePath == null
+                 && request.resource.data.mediaURL == null)
+               ||
+               (request.resource.data.type in ['photo', 'audio']
+                 && request.resource.data.storagePath is string
+                 && request.resource.data.storagePath.matches('^proofs/' + eventId + '/' + request.auth.uid + '/.*$')
+                 && request.resource.data.mediaURL is string
+                 && request.resource.data.mediaURL.matches('^https://firebasestorage.googleapis.com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F.*'))
+             );
         allow update: if isAdmin(eventId)
           || (signedIn()
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reportCount'])

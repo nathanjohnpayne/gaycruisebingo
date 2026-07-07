@@ -8,6 +8,9 @@ function useDocSub<T>(ref: DocumentReference<T> | null, key: string) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
+    // Drop the previous ref's document so stale data from another subscription
+    // (e.g. a different signed-in uid) can't render under the new key.
+    setData(null);
     if (!ref) {
       setLoading(false);
       return;
@@ -31,6 +34,9 @@ function useColSub<T>(q: Query<T> | null, key: string) {
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
+    // Drop the previous query's rows when the key changes so stale results can't
+    // render against the new subscription.
+    setData([]);
     if (!q) {
       setLoading(false);
       return;
@@ -50,8 +56,12 @@ function useColSub<T>(q: Query<T> | null, key: string) {
   return { data, loading };
 }
 
-export function useEventDoc() {
-  return useDocSub<EventDoc>(eventRef(), 'event');
+export function useEventDoc(enabled = true) {
+  // `enabled` lets a pre-auth caller (main.tsx) skip the subscription: events
+  // require sign-in, so subscribing while signed out only yields a
+  // permission-denied error. Toggle the key (not just the ref) so the effect
+  // re-runs and subscribes once auth arrives — useDocSub is keyed on `key`.
+  return useDocSub<EventDoc>(enabled ? eventRef() : null, enabled ? 'event' : 'event:disabled');
 }
 
 export function useItems() {
