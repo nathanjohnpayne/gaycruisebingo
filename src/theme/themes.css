@@ -1,0 +1,107 @@
+/* Theme token sets. Every color in the app reads from these variables, so
+   switching [data-theme] on <html> reskins the entire UI. */
+
+:root,
+[data-theme='neon-playground'] {
+  --bg: #07060d;
+  --panel: #0e0a1a;
+  --ink: #f6ecff;
+  --dim: #b9a9d6;
+  --primary: #ff2d95;
+  --secondary: #00e6ff;
+  --accent: #ffd23f;
+  --cell: #120c22;
+  --border: rgba(0, 230, 255, 0.35);
+  --shadow: rgba(255, 45, 149, 0.45);
+}
+
+[data-theme='get-sporty'] {
+  --bg: #0a0f0b;
+  --panel: #0f1712;
+  --ink: #f2fff4;
+  --dim: #a9c8b3;
+  --primary: #39ff88;
+  --secondary: #eaffef;
+  --accent: #ffe600;
+  --cell: #0f1712;
+  --border: rgba(57, 255, 136, 0.35);
+  --shadow: rgba(57, 255, 136, 0.4);
+}
+
+[data-theme='duty-free'] {
+  --bg: #0a0e1a;
+  --panel: #101827;
+  --ink: #eef3ff;
+  --dim: #a9b6d6;
+  --primary: #ff4d5e;
+  --secondary: #3aa0ff;
+  --accent: #ffd23f;
+  --cell: #101827;
+  --border: rgba(58, 160, 255, 0.35);
+  --shadow: rgba(58, 160, 255, 0.4);
+}
+
+[data-theme='glamiators'] {
+  --bg: #0c0a08;
+  --panel: #16120c;
+  --ink: #fff7e8;
+  --dim: #cbb489;
+  --primary: #e8c86a;
+  --secondary: #c9a24a;
+  --accent: #fffefb;
+  --cell: #16120c;
+  --border: rgba(232, 200, 106, 0.35);
+  --shadow: rgba(232, 200, 106, 0.4);
+}
+
+[data-theme='summer-white'] {
+  --bg: #f6f1e7;
+  --panel: #fffdf8;
+  --ink: #20170f;
+  --dim: #7a6a58;
+  --primary: #d9a441;
+  --secondary: #c48a2c;
+  --accent: #20170f;
+  --cell: #fffdf8;
+  --border: rgba(32, 23, 15, 0.18);
+  --shadow: rgba(217, 164, 65, 0.35);
+}
+
+[data-theme='dog-tag'] {
+  --bg: #0c0e0a;
+  --panel: #14170f;
+  --ink: #eef2e6;
+  --dim: #aeb69a;
+  --primary: #b5c15a;
+  --secondary: #8f9b8a;
+  --accent: #ffd23f;
+  --cell: #14170f;
+  --border: rgba(181, 193, 90, 0.35);
+  --shadow: rgba(181, 193, 90, 0.4);
+}
+
+[data-theme='revival-disco'] {
+  --bg: #120a14;
+  --panel: #1b1020;
+  --ink: #ffeede;
+  --dim: #c9a7c0;
+  --primary: #ff7a1a;
+  --secondary: #c04bff;
+  --accent: #ffd23f;
+  --cell: #1b1020;
+  --border: rgba(192, 75, 255, 0.35);
+  --shadow: rgba(192, 75, 255, 0.4);
+}
+
+[data-theme='seriously-pink'] {
+  --bg: #1a0713;
+  --panel: #260a1c;
+  --ink: #ffe9f5;
+  --dim: #e59bc4;
+  --primary: #ff4fb0;
+  --secondary: #ff9ed8;
+  --accent: #fff06a;
+  --cell: #260a1c;
+  --border: rgba(255, 79, 176, 0.45);
+  --shadow: rgba(255, 79, 176, 0.45);
+}

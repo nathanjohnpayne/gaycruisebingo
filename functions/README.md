@@ -1,1 +1,0 @@
-Serverless functions or backend handlers.

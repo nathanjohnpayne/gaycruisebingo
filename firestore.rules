@@ -1,15 +1,68 @@
 rules_version = '2';
-
-// gaycruisebingo — Cloud Firestore security rules.
-//
-// Locked down by default: nothing is readable or writable until you
-// open specific paths as you build the game (rooms, boards, players,
-// called numbers). Never ship `allow read, write: if true;`.
-// Guide: https://firebase.google.com/docs/firestore/security/get-started
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    // Admin uids listed in the event doc's `admins` array.
+    function isAdmin(eventId) {
+      return signedIn() &&
+        request.auth.uid in get(/databases/$(database)/documents/events/$(eventId)).data.admins;
+    }
+
+    // Global user profiles.
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow write: if isOwner(uid);
+    }
+
+    match /events/{eventId} {
+      allow read: if signedIn();
+      // Only admins can change event config (theme default, claimMode, admins).
+      allow write: if isAdmin(eventId);
+
+      // Community-editable prompt pool.
+      match /items/{itemId} {
+        allow read: if signedIn();
+        // Anyone signed in can add an item (basic validation).
+        allow create: if signedIn()
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 80
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.status == 'active'
+          && request.resource.data.reportCount == 0;
+        // Report = increment reportCount by 1 only; admins can do anything.
+        allow update: if isAdmin(eventId)
+          || (signedIn()
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reportCount'])
+              && request.resource.data.reportCount == resource.data.reportCount + 1);
+        allow delete: if isAdmin(eventId);
+      }
+
+      // Membership + denormalized stats. Phase 0: client writes its own stats
+      // (honor-system game). Phase 1 moves these behind Cloud Functions.
+      match /players/{uid} {
+        allow read: if signedIn();
+        allow create, update: if isOwner(uid) || isAdmin(eventId);
+        allow delete: if isAdmin(eventId);
+      }
+
+      // A player's board is private to them.
+      match /boards/{uid} {
+        allow read, write: if isOwner(uid) || isAdmin(eventId);
+      }
+
+      // Proofs (Phase 1). Owner-created; reportable; admin-moderated.
+      match /proofs/{proofId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+        allow update: if isAdmin(eventId)
+          || (signedIn()
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reportCount'])
+              && request.resource.data.reportCount == resource.data.reportCount + 1);
+        allow delete: if isOwner(resource.data.uid) || isAdmin(eventId);
+      }
     }
   }
 }
