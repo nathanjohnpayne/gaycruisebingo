@@ -1,7 +1,7 @@
 import { collection, doc, increment, runTransaction, updateDoc } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
 import { uploadProofMedia, deleteStoragePath } from './storage';
-import { markerDisplayName } from './api';
+import { markerDisplayName } from './attribution';
 import { completedLines, countMarked, isBlackout } from '../game/logic';
 import type { Cell, ClaimMode, ProofDoc, ProofType } from '../types';
 

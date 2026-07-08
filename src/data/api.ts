@@ -16,6 +16,7 @@ import {
 } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 import { db, EVENT_ID } from '../firebase';
+import { markerDisplayName } from './attribution';
 import { itemsCol } from './paths';
 import { FREE_TEXT } from './seed';
 import {
@@ -281,27 +282,10 @@ export function computeMark(params: {
 // call's read runs only after the previous call has issued its batch.
 const markChains = new Map<string, Promise<unknown>>();
 
-/**
- * A rules-valid attributed name for a Tally marker, shared by the honor-Mark
- * (`setMark`) and proofed-Mark (`attachProof`) paths. Prefers the caller-resolved
- * `displayName` — production (Board.tsx) resolves the saved player-row identity +
- * auth fallback via `resolveDisplayName` (the SAME validated pattern joinAndDeal
- * uses) — falling back to the already-cached/looked-up player row's denormalized
- * name (so a direct caller like the offline durability harness still attributes),
- * then 'Anonymous'. Always a non-empty string within the 100-char cap the
- * tally-marker rule enforces, so a marker write can NEVER violate the rule and
- * poison the atomic board+player+marker batch (setMark) or the
- * proof+board+player+marker transaction (attachProof).
- */
-export function markerDisplayName(preferred: string | undefined, cachedPlayerName: unknown): string {
-  const candidate =
-    typeof preferred === 'string' && preferred.trim().length > 0
-      ? preferred
-      : typeof cachedPlayerName === 'string' && cachedPlayerName.trim().length > 0
-        ? cachedPlayerName
-        : 'Anonymous';
-  return candidate.slice(0, 100);
-}
+// The shared marker-attribution helper (`markerDisplayName`) lives in the
+// Firestore-free ./attribution module so proofs.ts can share it without
+// pulling this file's firebase/firestore import surface into its tests
+// (Codex P2, PR #87 round 2).
 
 export async function setMark(params: {
   uid: string;
