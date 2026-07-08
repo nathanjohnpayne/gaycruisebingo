@@ -1,0 +1,30 @@
+---
+spec_id: w1-profile-avatar
+status: accepted
+---
+
+# Profile: display name + custom avatar upload (`src/data/profile.ts`, `src/components/ProfileEditor.tsx`, `src/components/Avatar.tsx`)
+
+A User's global profile (`users/{uid}`) is attributed and public everywhere the User appears — Tally, Feed, Leaderboard (ADR 0002) — so this ticket adds a display-name + custom-avatar edit surface on top of the already-scaffolded `uploadAvatar`/`downscaleImage` (`src/data/storage.ts`) and `UserDoc.customPhoto` (`src/types.ts`). It is exercised by `src/components/w1-profile-avatar.test.tsx` (unit + RTL-jsdom).
+
+## `data/profile.ts` persists edits to `users/{uid}`, reusing `storage.ts`
+
+- **Given** a signed-in User types a new display name **when** `updateDisplayName(uid, name)` is called **then** it trims the name and writes `users/{uid}.displayName`; a blank/whitespace-only name is a no-op so a cleared input can't wipe out the existing name. (Test: "trims and persists the display name, no-ops on blank".)
+- **Given** a signed-in User picks a photo **when** `updateAvatar(uid, blob)` is called **then** it calls the existing `uploadAvatar` (`storage.ts:42`, unmodified) — no new upload path — which still downscales and writes exactly `avatars/{uid}.jpg` with `image/jpeg`, and then writes both `users/{uid}.photoURL` (the returned URL) and `users/{uid}.customPhoto = true`. (Test: "reuses uploadAvatar (avatars/{uid}.jpg, image/jpeg) then flips customPhoto + photoURL".)
+
+## `Avatar` prefers a custom photo over the passed `src`
+
+- **Given** a `customPhoto` URL is passed **when** `Avatar` renders **then** it shows that URL instead of `src`; **given** no `customPhoto` **then** it falls back to `src`; **given** neither is set **then** it falls back to the name's initial. (Test: "prefers customPhoto, falls back to src, then to an initial".)
+
+## `ProfileEditor` — the edit surface
+
+Mounted globally at `src/main.tsx` (a stable, non-frozen mount point — `App.tsx`/`Nav.tsx` stay untouched) so it is reachable from every tab rather than tied to one page.
+
+- **Given** the signed-in User's live profile (`useMyUser`) **when** the editor opens **then** the name field is pre-filled with the current display name, and saving an edit calls `updateDisplayName` with the trimmed value and closes the sheet. (Test: "opens pre-filled with the live display name and saves an edit to users/{uid}".)
+- **Given** the User picks a file from the hidden file input **when** the change fires **then** `updateAvatar` is called and persists it; once the live `users/{uid}` subscription reports `customPhoto: true`, the previewed Avatar switches from the signed-in User's Google photo to the custom one. (Test: "uploading a photo persists it, and the live update flips the previewed Avatar to it".)
+- **Given** no signed-in User (or auth still resolving) **when** `ProfileEditor` renders **then** it renders nothing. (Test: "renders nothing while signed out".)
+
+## Out of scope
+
+- A rules-emulator assertion that a non-owner cannot write `avatars/{otherUid}.jpg` is not added here: the `/avatars/{file}` rule itself predates this ticket (`storage.rules:20-26`, scaffolded already) and its emulator coverage is `w0-storage-rules` (#19)'s own deliverable; `test:rules` also needs a local JRE + the Firebase emulator, unavailable in this sandboxed unit-test environment. `npm run typecheck && npm test && npm run build` are this ticket's verified gates, matching the DoD's "no lint script; app tests are not CI-run" note.
+- Propagating a display-name/avatar edit into already-denormalized snapshots (`PlayerDoc`, `ProofDoc`, `MomentDoc`, `TallyEntry`) is intentionally not built here — those are written once at their own create time by tickets that own `src/data/api.ts` this wave, and re-syncing every historical snapshot on a profile edit is a larger, separate change.

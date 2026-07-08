@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
-import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol } from '../data/paths';
+import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef } from '../data/paths';
 import { sortPlayers } from '../game/logic';
-import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc } from '../types';
+import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc } from '../types';
 
 function useDocSub<T>(ref: DocumentReference<T> | null, key: string) {
   const [data, setData] = useState<T | null>(null);
@@ -78,6 +78,11 @@ export function useBoard(uid: string | undefined) {
 
 export function useMyPlayer(uid: string | undefined) {
   return useDocSub<PlayerDoc>(uid ? playerRef(uid) : null, `player:${uid ?? 'none'}`);
+}
+
+/** The signed-in User's global profile (`users/{uid}`) — display name + avatar. */
+export function useMyUser(uid: string | undefined) {
+  return useDocSub<UserDoc>(uid ? userRef(uid) : null, `user:${uid ?? 'none'}`);
 }
 
 export function useLeaderboard() {

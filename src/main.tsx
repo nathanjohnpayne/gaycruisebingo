@@ -7,6 +7,7 @@ import { useEventDoc, useMyPlayer } from './hooks/useData';
 import type { ThemeId } from './types';
 import App from './App';
 import ConsentNotice from './components/ConsentNotice';
+import ProfileEditor from './components/ProfileEditor';
 import './theme/themes.css';
 import './index.css';
 
@@ -27,6 +28,8 @@ function ThemedApp() {
   return (
     <ThemeProvider defaultTheme={defaultTheme}>
       <App />
+      {/* Global profile editor — App.tsx/Nav.tsx are frozen, so it mounts here. */}
+      <ProfileEditor />
     </ThemeProvider>
   );
 }
