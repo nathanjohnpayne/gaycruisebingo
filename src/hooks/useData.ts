@@ -64,8 +64,17 @@ export function useEventDoc(enabled = true) {
   return useDocSub<EventDoc>(enabled ? eventRef() : null, enabled ? 'event' : 'event:disabled');
 }
 
-export function useItems() {
-  const { data, loading } = useColSub<ItemDoc>(itemsCol(), 'items');
+export function useItems(enabled = true) {
+  // `enabled` lets Board skip this subscription once a Board is frozen (Codex
+  // P3 on PR #66): the pool only matters pre-deal, so a Player who already has
+  // a Board has no use for a live listener that fans every other Player's
+  // prompt add/report out as a full-pool read + rerender. Toggle the key (not
+  // just the query) so the effect re-subscribes if `enabled` flips back to
+  // true — mirrors useEventDoc's pre-auth gate above.
+  const { data, loading } = useColSub<ItemDoc>(
+    enabled ? itemsCol() : null,
+    enabled ? 'items' : 'items:disabled',
+  );
   const items = data
     .filter((i) => i.status === 'active')
     .sort((a, b) => a.createdAt - b.createdAt);

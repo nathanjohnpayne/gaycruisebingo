@@ -9,12 +9,15 @@ import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode } from '../types';
 
 export default function Board() {
-  const { user } = useAuth();
+  const { user, dealError, dealing, retryDeal } = useAuth();
   const uid = user?.uid;
   const { data: board, loading: boardLoading } = useBoard(uid);
   const { data: player } = useMyPlayer(uid);
   const { data: event } = useEventDoc();
-  const { items, loading: poolLoading } = useItems();
+  // Codex P3 (PR #66): the pool only matters before a Board is dealt, so once
+  // a Board exists this Player has no use for a live listener on every other
+  // Player's prompt add/report. Gate the subscription to the no-board state.
+  const { items, loading: poolLoading } = useItems(!board);
   const claimMode: ClaimMode = event?.claimMode ?? 'honor';
 
   const [celebrate, setCelebrate] = useState<null | 'bingo' | 'blackout'>(null);
@@ -22,8 +25,10 @@ export default function Board() {
   const wasBingo = useRef(false);
   const wasBlackout = useRef(false);
   const initialized = useRef(false);
+  const retryFiredRef = useRef(false);
 
   const cells: Cell[] = board?.cells ?? [];
+  const activePool = items.filter((i) => !i.isFreeSpace);
 
   useEffect(() => {
     if (!cells.length) return;
@@ -45,6 +50,25 @@ export default function Board() {
     wasBlackout.current = black;
   }, [cells]);
 
+  // Codex P2 (PR #66): joinAndDeal throws once on a thin pool and nothing
+  // previously re-attempted the deal after Prompts got added — the Player was
+  // stuck until a reload or account switch. Once the active non-free pool
+  // crosses back over MIN_POOL while a deal error is up and no deal is
+  // already in flight, fire AuthContext's retryDeal(). Edge-triggered on the
+  // pool crossing the threshold (the ref resets below it) so a healthy pool
+  // re-firing this effect on every later snapshot retries once per recovery,
+  // not once per snapshot.
+  useEffect(() => {
+    if (activePool.length < MIN_POOL) {
+      retryFiredRef.current = false;
+      return;
+    }
+    if (!board && dealError && !dealing && !retryFiredRef.current) {
+      retryFiredRef.current = true;
+      retryDeal();
+    }
+  }, [board, dealError, dealing, activePool.length, retryDeal]);
+
   if (!uid) return null;
   if (!board) {
     // A Board is dealt once at join from the active, non-free Prompt pool
@@ -56,7 +80,6 @@ export default function Board() {
     // board or a deal in flight, so keep the neutral state until both resolve —
     // this also avoids flashing the guard at a returning Player whose already
     // dealt board is mid-fetch when the pool has since gone thin.
-    const activePool = items.filter((i) => !i.isFreeSpace);
     if (!boardLoading && !poolLoading && activePool.length < MIN_POOL) {
       return (
         <div className="center muted" role="alert">
@@ -131,7 +154,7 @@ export default function Board() {
             }
             onClick={() => toggle(c)}
           >
-            {c.free ? 'FREE' : c.text}
+            {c.text}
             {c.marked && !c.free && (
               <button
                 className="proofbtn"

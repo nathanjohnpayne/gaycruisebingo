@@ -6,13 +6,19 @@ import type { BoardDoc, EventDoc, ItemDoc, PlayerDoc } from '../types';
 // Covers specs/w1-board-deal-join.md: Board render (24 sampled Prompts + the
 // always-marked "Complain about Circuit Music" Free Space centre, no re-deal /
 // Square-swap — ADR 0003), the Board-side pool<MIN_POOL deal guard (ADR 0004),
-// and `joinAndDeal` freeze-at-join semantics (deal once; re-joining never
-// re-deals; a thin pool never persists a blank Board).
+// `joinAndDeal` freeze-at-join semantics (deal once; re-joining never
+// re-deals; a thin pool never persists a blank Board), the pool-recovery
+// auto-retry into AuthContext's retryDeal, and gating the pool listener to
+// the no-board state (Codex findings on PR #66).
 
 // Hoisted so the vi.mock factories (Vitest lifts them above the imports) can
 // close over the same mutable fixtures and spies the test bodies drive.
 const H = vi.hoisted(() => ({
   authUser: null as User | null,
+  authDealError: null as string | null,
+  authDealing: false,
+  authRetryDeal: vi.fn(),
+  useItemsSpy: vi.fn(),
   data: {
     board: null as BoardDoc | null,
     boardLoading: false,
@@ -68,16 +74,31 @@ vi.mock('firebase/firestore', () => {
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 
 vi.mock('../auth/AuthContext', () => ({
-  useAuth: () => ({ user: H.authUser, loading: false, signIn: vi.fn(), signOutUser: vi.fn() }),
+  useAuth: () => ({
+    user: H.authUser,
+    loading: false,
+    dealError: H.authDealError,
+    dealing: H.authDealing,
+    signIn: vi.fn(),
+    signOutUser: vi.fn(),
+    retryDeal: H.authRetryDeal,
+  }),
 }));
 
 // Inject Board's live data through the hooks so the render test drives a real
 // dealt Board (and the guard's thin-pool path) without a Firestore listener.
+// useItems is spied so tests can assert Board threads the `enabled` flag
+// (Codex P3: gate the pool listener once a Board exists) without exercising
+// the real onSnapshot subscription — that gate is proven directly against the
+// real hook in src/hooks/useData.test.ts.
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.data.board, loading: H.data.boardLoading }),
   useMyPlayer: () => ({ data: H.data.player, loading: false }),
   useEventDoc: () => ({ data: H.data.event, loading: false }),
-  useItems: () => ({ items: H.data.items, loading: H.data.poolLoading }),
+  useItems: (enabled?: boolean) => {
+    H.useItemsSpy(enabled);
+    return { items: H.data.items, loading: H.data.poolLoading };
+  },
 }));
 
 // Real modules under test — imported after the mocks are declared.
@@ -106,6 +127,10 @@ const dealPool: DealItem[] = SEED_ITEMS.map((text, i) => ({ id: `seed${i}`, text
 
 beforeEach(() => {
   H.authUser = SIGNED_IN;
+  H.authDealError = null;
+  H.authDealing = false;
+  H.authRetryDeal.mockReset();
+  H.useItemsSpy.mockReset();
   H.data.board = null;
   H.data.boardLoading = false;
   H.data.player = null;
@@ -120,7 +145,7 @@ beforeEach(() => {
 });
 
 describe('Board render', () => {
-  it('renders 25 Squares with the Free Space centre marked and reading FREE', () => {
+  it('renders 25 Squares with the Free Space centre marked and reading the seeded FREE_TEXT', () => {
     const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
     H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
 
@@ -130,7 +155,12 @@ describe('Board render', () => {
     const free = container.querySelectorAll('.cell.free');
     expect(free).toHaveLength(1); // exactly one Free Space
     expect(container.querySelectorAll('.grid .cell')[CENTER]).toHaveClass('free');
-    expect(free[0]).toHaveTextContent('FREE');
+    // The spec's acceptance criteria require the Free Space centre to read
+    // the seeded "Complain about Circuit Music" copy, not the literal string
+    // "FREE" — Board renders each cell's `c.text`, which dealBoard already
+    // sets to FREE_TEXT for the centre (Codex P2 on PR #66).
+    expect(free[0]).toHaveTextContent(FREE_TEXT);
+    expect(free[0]).not.toHaveTextContent('FREE');
     expect(free[0]).toHaveClass('marked'); // the centre is always marked
   });
 
@@ -210,6 +240,83 @@ describe('Board deal guard (ADR 0004)', () => {
 
     expect(screen.getByText(/dealing your card/i)).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+describe('Board auto-retry after pool recovery (Codex P2)', () => {
+  it('fires retryDeal exactly once when the pool crosses MIN_POOL while a deal error is up', () => {
+    H.data.board = null;
+    H.data.items = activeItems(MIN_POOL - 1); // thin — matches the failed deal
+    H.authDealError = 'not enough prompts';
+    H.authDealing = false;
+
+    const { rerender } = render(<Board />);
+    expect(H.authRetryDeal).not.toHaveBeenCalled();
+
+    // The pool recovers past the floor.
+    H.data.items = activeItems(MIN_POOL + 2);
+    rerender(<Board />);
+    expect(H.authRetryDeal).toHaveBeenCalledTimes(1);
+
+    // Further snapshots at/above the threshold must not retry again — this is
+    // the "not per snapshot" guard against a retry loop.
+    H.data.items = activeItems(MIN_POOL + 5);
+    rerender(<Board />);
+    expect(H.authRetryDeal).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry while a deal is already in flight', () => {
+    H.data.board = null;
+    H.data.items = activeItems(MIN_POOL + 2); // healthy pool
+    H.authDealError = 'not enough prompts';
+    H.authDealing = true;
+
+    render(<Board />);
+
+    expect(H.authRetryDeal).not.toHaveBeenCalled();
+  });
+
+  it('does not retry when there is no deal error (healthy pool, deal simply in flight)', () => {
+    H.data.board = null;
+    H.data.items = activeItems(MIN_POOL + 2);
+    H.authDealError = null;
+    H.authDealing = false;
+
+    render(<Board />);
+
+    expect(H.authRetryDeal).not.toHaveBeenCalled();
+  });
+
+  it('does not retry once a Board exists, even if a stale deal error lingers', () => {
+    const cells = dealBoard(dealPool, FREE_TEXT, 5);
+    H.data.board = { uid: SIGNED_IN.uid, seed: 5, createdAt: 0, cells };
+    H.data.items = activeItems(MIN_POOL + 2);
+    H.authDealError = 'not enough prompts';
+    H.authDealing = false;
+
+    render(<Board />);
+
+    expect(H.authRetryDeal).not.toHaveBeenCalled();
+  });
+});
+
+describe('Board pool-listener gate (Codex P3)', () => {
+  it('keeps the pool subscription enabled while there is no Board yet', () => {
+    H.data.board = null;
+    H.data.items = activeItems(MIN_POOL + 3);
+
+    render(<Board />);
+
+    expect(H.useItemsSpy).toHaveBeenCalledWith(true);
+  });
+
+  it('opens no pool listener once a Player has a frozen Board', () => {
+    const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
+    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+
+    render(<Board />);
+
+    expect(H.useItemsSpy).toHaveBeenCalledWith(false);
   });
 });
 
