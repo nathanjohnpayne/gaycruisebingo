@@ -53,6 +53,6 @@ Deploys go through `op-firebase-deploy` (1Password-backed service-account impers
 | `tests/`, `src/**/*.test.*` | Automated validation |
 | `docs/`, `specs/`, `plans/`, `rules/` | Docs, product specs, execution plans, and binding repo constraints |
 
-## Repo conventions
+## Contributing
 
-Bootstrapped from the mergepath template, so it follows the **AI Agent Tooling Standard** — the goal is for multiple AI coding agents and dev tools to operate consistently without configuration drift. Agents should read, in order: [`AGENTS.md`](AGENTS.md) (operating rules) → [`rules/repo_rules.md`](rules/repo_rules.md) (structural constraints) → the relevant [`specs/`](specs/) → [`.ai_context.md`](.ai_context.md). Changes follow the [`REVIEW_POLICY.md`](REVIEW_POLICY.md) flow: branch + PR, a self-peer review by the authoring agent's reviewer identity, and automated external (Codex) review for changes above the size threshold or touching protected paths.
+Changes land via branch + pull request — see [`CONTRIBUTING.md`](CONTRIBUTING.md).
