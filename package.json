@@ -19,25 +19,26 @@
     "pretest:e2e": "playwright install chromium"
   },
   "dependencies": {
-    "firebase": "^10.14.1",
+    "firebase": "^12.15.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.2"
   },
   "devDependencies": {
-    "@firebase/rules-unit-testing": "^3.0.4",
+    "@firebase/rules-unit-testing": "^5.0.1",
     "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
-    "@vitejs/plugin-react": "^4.3.2",
+    "@vitejs/plugin-react": "^4.7.0",
+    "fake-indexeddb": "^6.2.5",
     "firebase-tools": "^15.22.4",
     "jsdom": "^25.0.1",
     "typescript": "^5.6.2",
-    "vite": "^5.4.8",
-    "vite-plugin-pwa": "^0.20.5",
+    "vite": "^6.4.3",
+    "vite-plugin-pwa": "^0.21.2",
     "vitest": "^3.2.6"
   }
 }

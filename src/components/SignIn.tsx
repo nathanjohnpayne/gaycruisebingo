@@ -37,3 +37,38 @@ export default function SignIn() {
     </div>
   );
 }
+
+// Retry surface shown when a signed-in Player's Board couldn't be dealt (see
+// App.tsx / AuthContext): a Player-worded reason plus a Retry that re-invokes
+// `joinAndDeal` in place, instead of dropping the Player onto a blank Board.
+export function DealError({
+  message,
+  onRetry,
+  retrying,
+}: {
+  message: string;
+  onRetry: () => void;
+  retrying: boolean;
+}) {
+  // Recovery is deliberately MANUAL: the Retry button re-invokes the deal, and
+  // the /items Prompts tab stays reachable (the shell keeps rendering) so a
+  // Player or Admin can add Prompts, then come back and retry. An automatic
+  // pool-recovery watcher was prototyped here during review and removed by
+  // human decision (PR #66 tiebreak): three review rounds showed it needs a
+  // deliberate design (misfires on non-pool deal failures because the pool
+  // subscription starts empty; unmounts when the Player navigates to /items —
+  // the exact recovery path; wants a context-level home). Tracked as a
+  // follow-up rather than accreted onto this ticket.
+  return (
+    <div className="signin" role="alert">
+      <h1>GAY CRUISE BINGO</h1>
+      <p className="muted">{message}</p>
+      <button className="btn primary block" disabled={retrying} onClick={onRetry}>
+        {retrying ? 'Dealing…' : 'Retry'}
+      </button>
+      <p className="muted" style={{ fontSize: 11 }}>
+        Lost signal at sea? The printed cards and PDF still work.
+      </p>
+    </div>
+  );
+}

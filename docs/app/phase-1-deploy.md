@@ -1,6 +1,6 @@
 # Phase 1 — deploy guide
 
-Phase 1 adds the proof system, moderation, authoritative stats, and dynamic share images. It needs the **Blaze** plan (Functions, Cloud Run, Vision API, outbound networking). Deploys go through `op-firebase-deploy` (1Password-backed) — see the root `DEPLOYMENT.md`; do not run `firebase login` / `firebase deploy` directly.
+Phase 1 adds the proof system, moderation, and dynamic share images. It needs the **Blaze** plan (Functions, Cloud Run, Vision API, outbound networking). Deploys go through `op-firebase-deploy` (1Password-backed) — see the root `DEPLOYMENT.md`; do not run `firebase login` / `firebase deploy` directly.
 
 Client code is already wired (proof capture, feed, admin console, App Check hook). This guide covers the backend + config.
 
@@ -9,7 +9,7 @@ Client code is already wired (proof capture, feed, admin console, App Check hook
 - Upgrade the `gaycruisebingo` project to Blaze (set a budget alert first).
 - Enable APIs: **Cloud Vision**, **Cloud Functions**, **Cloud Run**, **Cloud Build**, **Artifact Registry**.
 
-## 1. Cloud Functions (moderation, thumbnails, stats, share)
+## 1. Cloud Functions (moderation, thumbnails, share)
 
 Build the functions package, then deploy through the wrapper:
 
@@ -20,7 +20,9 @@ echo "OG_RENDERER_URL=https://og-renderer-XXXX.run.app" > functions/.env
 op-firebase-deploy --only functions
 ```
 
-Deploys: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail), `recomputeStats` (Firestore trigger → authoritative player stats), `share` (HTTP → crawler OG meta).
+Deploys: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail) and `share` (HTTP → crawler OG meta). Player stats are **not** server-recomputed — they stay client-authoritative by design (ADR 0001).
+
+**If a previously deployed project still carries `recomputeStats`:** this deploy is what deletes it — Firebase discovers exports removed from the source and prompts to confirm deleting the live function. The wrapper always runs `firebase deploy --non-interactive`, which stalls on that prompt, so the one-time cleanup deploy must pass the force flag through: `op-firebase-deploy --only functions --force` (extra args pass straight through to `firebase deploy`). The deletion is expected and required (#40, ADR 0001); do not recreate the function.
 
 **Moderation note:** SafeSearch is tuned to flag only extreme/violent content, **not** raciness (raciness is expected here). It cannot detect minors — user reporting + the admin console remain the primary control. Flagged proofs appear in **Admin → Flagged**.
 
@@ -50,19 +52,7 @@ Take the service URL and put it in `functions/.env` as `OG_RENDERER_URL`, then r
 op-firebase-deploy --only storage,firestore:rules,firestore:indexes
 ```
 
-**Optional hardening (recommended once `recomputeStats` is live):** stats are then authoritative on the server, so you can stop trusting client stat writes. Tighten the players rule in `firestore.rules`:
-
-```
-match /players/{uid} {
-  allow read: if signedIn();
-  // profile fields only; stats become server-owned:
-  allow create, update: if (isOwner(uid) &&
-      request.resource.data.diff(resource.data).affectedKeys()
-        .hasOnly(['displayName','photoURL','theme','joinedAt','uid'])) || isAdmin(eventId);
-}
-```
-
-**Apply the stat-write removal first.** This rule lets the player doc carry only profile fields (`displayName`, `photoURL`, `theme`, `joinedAt`, `uid`), so it rejects any write that still includes the stat fields `bingoCount`, `squaresMarked`, `firstBingoAt`, or `blackout`. The client still batch-writes those stats in `joinAndDeal` and `setMark` (`src/data/api.ts`) and in `attachProof` (`src/data/proofs.ts`) — so applying the tightened rule as-is makes joins and marks **fail** with a permission error. Remove the client stat writes from those three functions first (once `recomputeStats` is live the server owns them), or ship a rule that still permits those fields, and only then apply the hardening.
+**Do not lock player-stat writes — they stay client-authoritative by design (ADR 0001).** The honor system makes `players/{uid}` self-writable: each Player owns its own `bingoCount`, `squaresMarked`, `firstBingoAt`, and `blackout`. There is no server-side stat recompute to make those fields authoritative, so there is nothing to "harden" toward — do **not** tighten the `players/{uid}` rule to profile-fields-only / admins-only. Such a lock has nothing backing it and would break the client stat writes in `joinAndDeal` and `setMark` (`src/data/api.ts`) and in `attachProof` (`src/data/proofs.ts`), making joins and marks **fail** with a permission error.
 
 ## 5. What each Phase 1 piece gives you
 

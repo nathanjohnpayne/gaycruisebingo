@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useEventDoc } from '../hooks/useData';
+import { useBoard, useMyPlayer, useEventDoc, useItems } from '../hooks/useData';
 import { setMark } from '../data/api';
-import { hasBingo, isBlackout, winningCells, countMarked } from '../game/logic';
+import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
@@ -11,9 +11,13 @@ import type { Cell, ClaimMode } from '../types';
 export default function Board() {
   const { user } = useAuth();
   const uid = user?.uid;
-  const { data: board } = useBoard(uid);
+  const { data: board, loading: boardLoading, hasServerData: boardConfirmed } = useBoard(uid);
   const { data: player } = useMyPlayer(uid);
   const { data: event } = useEventDoc();
+  // Codex P3 (PR #66): the pool only matters before a Board is dealt, so once
+  // a Board exists this Player has no use for a live listener on every other
+  // Player's prompt add/report. Gate the subscription to the no-board state.
+  const { items, loading: poolLoading, hasServerData: poolConfirmed } = useItems(!board);
   const claimMode: ClaimMode = event?.claimMode ?? 'honor';
 
   const [celebrate, setCelebrate] = useState<null | 'bingo' | 'blackout'>(null);
@@ -45,7 +49,45 @@ export default function Board() {
   }, [cells]);
 
   if (!uid) return null;
-  if (!board) return <div className="center muted">Dealing your card…</div>;
+  if (!board) {
+    // A Board is dealt once at join from the active, non-free Prompt pool
+    // (ADR 0003). dealBoard needs >= MIN_POOL prompts (ADR 0004); with fewer the
+    // deal throws and no Board is ever written, so a bare `!board` check would
+    // spin on "Dealing…" forever. Detect the thin pool here and surface the
+    // guard to the Player rather than the blank card AC forbids. While either
+    // subscription is still loading we can't tell a thin pool from an unfetched
+    // board or a deal in flight, so keep the neutral state until both resolve —
+    // this also avoids flashing the guard at a returning Player whose already
+    // dealt board is mid-fetch when the pool has since gone thin. `loading`
+    // alone is not enough under the ADR 0006 persistent cache (Codex P2, PR #66
+    // round 4): a cold/stale IndexedDB can resolve both listeners FROM CACHE
+    // with board=null and items=[], which would flash "0 prompts" at a Player
+    // whose server state is a healthy pool or an existing Board — so the alert
+    // additionally requires both subscriptions' hasServerData latch (a
+    // server-confirmed snapshot has arrived). Cache-only data keeps the neutral
+    // state below. (The pool-recovery auto-retry is deliberately deferred to
+    // #70 — recovery is manual (the DealError panel's Retry). This empty state
+    // only explains the shortage; it must not promise automatic dealing.)
+    const activePool = items.filter((i) => !i.isFreeSpace);
+    if (
+      !boardLoading &&
+      !poolLoading &&
+      boardConfirmed &&
+      poolConfirmed &&
+      activePool.length < MIN_POOL
+    ) {
+      return (
+        <div className="center muted" role="alert">
+          <p>Not enough prompts to deal a full card yet.</p>
+          <p>
+            A card needs {MIN_POOL} prompts; the pool has {activePool.length}. Add prompts from the
+            Prompts tab, then retry dealing from the Card tab.
+          </p>
+        </div>
+      );
+    }
+    return <div className="center muted">Dealing your card…</div>;
+  }
 
   const wins = winningCells(cells);
 
@@ -107,7 +149,7 @@ export default function Board() {
             }
             onClick={() => toggle(c)}
           >
-            {c.free ? 'FREE' : c.text}
+            {c.text}
             {c.marked && !c.free && (
               <button
                 className="proofbtn"

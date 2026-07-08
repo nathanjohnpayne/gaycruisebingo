@@ -13,7 +13,7 @@ Phase 1 (proof system, dynamic Playwright OG images, moderation console, App Che
 - **Vite + React 18 + TypeScript** (strict).
 - **Firebase**: Auth (Google), Firestore (data), Storage (avatars/proofs), Analytics (GA4), Hosting.
 - **vite-plugin-pwa** for installability.
-- Phase 0 is **Cloud Functions-free** — each player writes their own stats and the leaderboard is a client-side sort. Phase 1 moves stats server-side.
+- Phase 0 is **Cloud Functions-free** — each player writes their own stats and the leaderboard is a client-side sort. Stats stay client-authoritative in every phase (ADR 0001); Phase 1 adds moderation functions, not stat authority.
 
 ## 1. Firebase project (one-time — already done)
 
@@ -141,7 +141,7 @@ src/
   hooks/useData.ts       # real-time Firestore hooks
   components/            # SignIn, Nav, Board, Leaderboard, ItemPool, ThemeSwitcher, Celebration, Avatar, Admin, Proof*
 firestore.rules · storage.rules · firestore.indexes.json
-functions/               # Phase 1 Cloud Functions (Vision, thumbnails, stats, share)
+functions/               # Phase 1 Cloud Functions (Vision, thumbnails, share)
 cloud-run/og-renderer/   # Phase 1 Playwright OG image service
 scripts/seed.mjs
 ```
@@ -152,13 +152,13 @@ Public app with user-generated content, so even under minimal gating: a one-time
 
 ## Known Phase 0 simplifications
 
-- Stats are client-written (honor-system game). Trivially spoofable; that's fine for the vibe and moves server-side in Phase 1.
+- Stats are client-written (honor-system game). Trivially spoofable; that is the accepted ADR-0001 trade-off — they never move server-side (`recomputeStats` was removed as anti-cheat, #40).
 - Boards are frozen at deal time; prompts added later feed *future* deals only.
 - OG image is static; per-share dynamic images are Phase 1.
 
 ## Phase 1 (scaffolded — see [`phase-1-deploy.md`](phase-1-deploy.md))
 
-Phase 1 is scaffolded in this same repo and wired into the client: proof system (`ProofSheet` + live Proof Feed), admin console (`/admin`), verified mode, `functions/` (Vision moderation, thumbnails, authoritative stats, crawler `share` page), `cloud-run/og-renderer/` (Playwright OG images), and an App Check hook in `src/firebase.ts`. Backend deploy steps are in [`phase-1-deploy.md`](phase-1-deploy.md).
+Phase 1 is scaffolded in this same repo and wired into the client: proof system (`ProofSheet` + live Proof Feed), admin console (`/admin`), verified mode, `functions/` (Vision moderation, thumbnails, crawler `share` page — stats stay client-authoritative, ADR 0001), `cloud-run/og-renderer/` (Playwright OG images), and an App Check hook in `src/firebase.ts`. Backend deploy steps are in [`phase-1-deploy.md`](phase-1-deploy.md).
 
 ## Verified
 

@@ -4,6 +4,14 @@ import type { Cell, PlayerDoc } from '../types';
 export const GRID = 5;
 export const CENTER = 12;
 
+/**
+ * Minimum active, non-free Prompt pool needed to deal a Board: 24 = the 25 cells
+ * minus the free center (ADR 0003). Below this, `dealBoard` fails fast (ADR 0004
+ * guard) rather than persisting a card with blank cells. Exported so the Board
+ * render can surface the same threshold instead of duplicating the literal.
+ */
+export const MIN_POOL = 24;
+
 /** The 12 winning lines (5 rows, 5 cols, 2 diagonals) as cell indices. */
 export const LINES: number[][] = (() => {
   const L: number[][] = [];
@@ -42,11 +50,11 @@ export interface DealItem {
 
 /** Deal a frozen 5x5 board: 24 sampled prompts + free center (index 12). */
 export function dealBoard(pool: DealItem[], freeText: string, seed: number): Cell[] {
-  // A board needs 24 non-free prompts; dealing from a smaller pool would leave
-  // blank cells (itemId: null, empty text). Fail fast so callers (joinAndDeal)
-  // never persist a broken board.
-  if (pool.length < 24) {
-    throw new Error(`dealBoard needs at least 24 prompts, received ${pool.length}.`);
+  // A board needs MIN_POOL (24) non-free prompts; dealing from a smaller pool
+  // would leave blank cells (itemId: null, empty text). Fail fast so callers
+  // (joinAndDeal) never persist a broken board.
+  if (pool.length < MIN_POOL) {
+    throw new Error(`dealBoard needs at least ${MIN_POOL} prompts, received ${pool.length}.`);
   }
   const rnd = mulberry32(seed);
   const picks = shuffle(pool, rnd).slice(0, 24);
