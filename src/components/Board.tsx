@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useEventDoc } from '../hooks/useData';
+import { useBoard, useMyPlayer, useEventDoc, useItems } from '../hooks/useData';
 import { setMark } from '../data/api';
-import { hasBingo, isBlackout, winningCells, countMarked } from '../game/logic';
+import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
@@ -11,9 +11,10 @@ import type { Cell, ClaimMode } from '../types';
 export default function Board() {
   const { user } = useAuth();
   const uid = user?.uid;
-  const { data: board } = useBoard(uid);
+  const { data: board, loading: boardLoading } = useBoard(uid);
   const { data: player } = useMyPlayer(uid);
   const { data: event } = useEventDoc();
+  const { items, loading: poolLoading } = useItems();
   const claimMode: ClaimMode = event?.claimMode ?? 'honor';
 
   const [celebrate, setCelebrate] = useState<null | 'bingo' | 'blackout'>(null);
@@ -45,7 +46,30 @@ export default function Board() {
   }, [cells]);
 
   if (!uid) return null;
-  if (!board) return <div className="center muted">Dealing your card…</div>;
+  if (!board) {
+    // A Board is dealt once at join from the active, non-free Prompt pool
+    // (ADR 0003). dealBoard needs >= MIN_POOL prompts (ADR 0004); with fewer the
+    // deal throws and no Board is ever written, so a bare `!board` check would
+    // spin on "Dealing…" forever. Detect the thin pool here and surface the
+    // guard to the Player rather than the blank card AC forbids. While either
+    // subscription is still loading we can't tell a thin pool from an unfetched
+    // board or a deal in flight, so keep the neutral state until both resolve —
+    // this also avoids flashing the guard at a returning Player whose already
+    // dealt board is mid-fetch when the pool has since gone thin.
+    const activePool = items.filter((i) => !i.isFreeSpace);
+    if (!boardLoading && !poolLoading && activePool.length < MIN_POOL) {
+      return (
+        <div className="center muted" role="alert">
+          <p>Not enough prompts to deal a full card yet.</p>
+          <p>
+            A card needs {MIN_POOL} prompts; the pool has {activePool.length}. Add prompts from the
+            Prompts tab and your card deals automatically.
+          </p>
+        </div>
+      );
+    }
+    return <div className="center muted">Dealing your card…</div>;
+  }
 
   const wins = winningCells(cells);
 

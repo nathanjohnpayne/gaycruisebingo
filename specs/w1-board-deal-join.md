@@ -1,0 +1,29 @@
+# Board render + deal/freeze-at-join (w1-board-deal-join)
+
+Feature: a Player's Board is dealt once, at join, from the active non-free Prompt pool and then frozen — 24 sampled Prompts plus the always-marked "Complain about Circuit Music" Free Space centre, rendered as a 5×5 card. There is NO re-deal and NO Square-swap (ADR 0003). When the active pool is too thin to fill a card (< 24 Prompts, ADR 0004) the deal guard is surfaced to the Player instead of a blank, forever-spinning card.
+
+## Contract
+
+- `src/game/logic.ts` — `dealBoard(pool, freeText, seed)` deals a frozen 5×5 Board deterministically from `seed`: 24 Prompts sampled from `pool` plus the free centre at index `CENTER` (12), which is `free: true` and `marked: true`. It throws when `pool.length < MIN_POOL` (24) rather than persisting a card with blank cells. `MIN_POOL` is the single source of truth for the 24-Prompt floor, shared by the deal and the Board render.
+- `src/data/api.ts` — `joinAndDeal(u)` freezes the Board at join: it early-returns when a Board already exists for the uid (re-joining never re-deals), otherwise reads the active, non-free Prompt pool (`items` where `status == 'active'` and `!isFreeSpace`), deals via `dealBoard` seeded per-uid (`seedFromUid`), and batch-writes the `boards/{uid}` doc plus the Player row. The `dealBoard` throw propagates (it is not caught here), so a thin pool never persists a broken Board.
+- `src/components/Board.tsx` — renders the dealt Board's 25 Squares under the fixed `B I N G O` header: each cell shows its Prompt text (or `FREE` for the centre) and reflects `marked` / `pending` / winning state. There is no re-deal, shuffle, or Square-swap control anywhere on the card. Before a Board exists, the component surfaces the ADR 0004 guard: once the active non-free pool has loaded and is `< MIN_POOL`, it shows the "not enough prompts" message (`role="alert"`) rather than the neutral "Dealing your card…" state, so a thin pool is never rendered as a blank card.
+
+## Acceptance criteria
+
+- Given an active pool of ≥ 24 Prompts, when a User joins, then a frozen 5×5 Board is dealt once (24 Prompts + Free Space) and re-joining does not re-deal or swap any Square.
+- Given an active pool of < 24 Prompts, when a User joins, then `dealBoard`/`joinAndDeal` throw rather than persisting a blank Board, and the Board render surfaces the guard to the Player (ADR 0004) instead of a blank card.
+- The Free Space centre reads "Complain about Circuit Music", is always marked, and counts toward completed lines.
+- No re-deal / Square-swap affordance exists on the Board (ADR 0003).
+
+## Test coverage
+
+`src/components/w1-board-deal-join.test.tsx` (Vitest, RTL-jsdom + firestore-mocked unit):
+
+- Board render — a real `dealBoard` result (from the seed pool) rendered through `Board`: exactly 25 Squares, one Free Space at the centre marked and reading `FREE`, and no re-deal / shuffle / swap / "new card" control present.
+- Board deal guard — with no Board yet and the active non-free pool `< MIN_POOL`, `Board` shows the guard alert; with the pool `≥ MIN_POOL` (or still loading) it shows the neutral "Dealing…" state, proving the guard fires only on a genuinely thin pool, not on an in-flight deal.
+- `joinAndDeal` freeze-at-join — with an existing Board doc it early-returns without reading the pool or writing (no re-deal); with no Board and a healthy pool it deals once and batch-writes a 25-cell Board whose centre is the marked `FREE_TEXT` ("Complain about Circuit Music"), excluding the Free Space item from the sampled Prompts.
+- `joinAndDeal` guard propagation — with no Board and a pool of `< MIN_POOL` active Prompts, the deal throws and no Board doc is committed (the api-layer half of the "not a blank Board" criterion).
+
+The pure `dealBoard` contract — deterministic sampling, 24 unique Prompts + null centre, and the `< 24` throw — is unit-tested in `src/game/logic.test.ts` (owned by the test-harness ticket) and not duplicated here.
+
+The Player-facing sign-in-time surfacing of a failed deal (a toast at join, distinct from this Board-side empty-state) is wired in the auth/App join effect and owned by the auth ticket; this spec covers only the Board-side render guard that keeps a thin pool from showing as a blank card.
