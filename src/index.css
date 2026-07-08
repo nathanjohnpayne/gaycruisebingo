@@ -568,10 +568,7 @@ a {
   padding: 8px 14px;
   font-size: 11px;
 }
-/* .tabs is a sibling mounted deep in the auth-gated tree; stack above it
-   (61px = its border+padding+min-height, safe-area is additive) instead of
-   the two fixed-bottom bars overlapping and hiding the tab bar. */
+/* Stack above .tabs (61px = its own height) instead of hiding it — see specs/w1-pwa.md. */
 body:has(.tabs) .install-prompt {
   bottom: calc(61px + env(safe-area-inset-bottom));
-  padding-bottom: 10px;
 }
