@@ -29,8 +29,15 @@ export default defineConfig({
       }
     })
   ],
+  // Vitest "app" layer: jsdom so React Testing Library can mount components.
+  // Only src/ unit + component specs run here; the Firestore-emulator rules
+  // layer lives in vitest.rules.config.ts (node env) and the Playwright e2e
+  // layer in playwright.config.ts, so `npm test` never needs a running
+  // emulator or browser.
   test: {
     globals: true,
-    environment: 'node'
+    environment: 'jsdom',
+    include: ['src/**/*.test.{ts,tsx}'],
+    setupFiles: ['./src/test/setup.ts']
   }
 });
