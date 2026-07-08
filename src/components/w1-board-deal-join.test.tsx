@@ -77,12 +77,11 @@ vi.mock('../auth/AuthContext', () => ({
 }));
 
 // Inject the live data through the hooks so the render tests drive a real
-// dealt Board (and the guard's thin-pool path) — and DealError's recovery
-// watcher — without a Firestore listener. useItems is spied so tests can
-// assert Board threads the `enabled` flag (Codex P3: gate the pool listener
-// once a Board exists) without exercising the real onSnapshot subscription —
-// that gate is proven directly against the real hook in
-// src/hooks/useData.test.ts.
+// dealt Board (and the guard's thin-pool path) without a Firestore listener.
+// useItems is spied so tests can assert Board threads the `enabled` flag
+// (Codex P3: gate the pool listener once a Board exists) without exercising
+// the real onSnapshot subscription — that gate is proven directly against the
+// real hook in src/hooks/useData.test.ts.
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.data.board, loading: H.data.boardLoading }),
   useMyPlayer: () => ({ data: H.data.player, loading: false }),
@@ -388,6 +387,59 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
     await joinAndDeal(SIGNED_IN);
 
     expect(playerWrite()).toMatchObject({ displayName: 'Sailor' });
+  });
+
+  it('ignores an empty / whitespace-only saved name', async () => {
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false })
+      .mockResolvedValueOnce({
+        exists: () => true,
+        data: () => ({ displayName: '   ', createdAt: 0 }),
+      });
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN);
+
+    expect(playerWrite()).toMatchObject({ displayName: 'Sailor' });
+  });
+
+  it('rejects a custom photo that is not an https URL (scheme downgrade)', async () => {
+    // The photo guard requires the https URL *shape*, not just a string —
+    // an http:// (or javascript:/data:) value saved into the self-writable
+    // profile must not be denormalized into the public row.
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false })
+      .mockResolvedValueOnce({
+        exists: () => true,
+        data: () => ({
+          displayName: 'Deck Daddy',
+          photoURL: 'http://cdn.example/custom.jpg', // string, but not https
+          customPhoto: true,
+          createdAt: 0,
+        }),
+      });
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN_WITH_PHOTO);
+
+    expect(playerWrite()).toMatchObject({
+      displayName: 'Deck Daddy', // per-field: the valid name still wins
+      photoURL: 'https://lh3.example/google.jpg', // auth fallback for the photo
+    });
+  });
+
+  it('rejects a custom photo that does not parse as a URL at all', async () => {
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false })
+      .mockResolvedValueOnce({
+        exists: () => true,
+        data: () => ({ photoURL: 'not a url', customPhoto: true, createdAt: 0 }),
+      });
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN_WITH_PHOTO);
+
+    expect(playerWrite()).toMatchObject({ photoURL: 'https://lh3.example/google.jpg' });
   });
 
   it('falls back to the auth identity when no users/{uid} profile exists', async () => {

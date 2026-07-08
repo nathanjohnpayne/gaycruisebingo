@@ -32,6 +32,22 @@ const rawPlayer = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
 const rawItems = () => collection(db, 'events', EVENT_ID, 'items');
 const rawItem = (id: string) => doc(db, 'events', EVENT_ID, 'items', id);
 
+/**
+ * True only for a well-formed `https://` URL — the only photo shape the public
+ * players row accepts from the self-writable users/{uid} profile. Rejects
+ * non-strings, unparseable strings, and every other scheme (`http:`,
+ * `javascript:`, `data:`, …), so a malformed saved photo can never be
+ * denormalized into a public doc other clients render.
+ */
+function isHttpsUrl(v: unknown): v is string {
+  if (typeof v !== 'string') return false;
+  try {
+    return new URL(v).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 /** Deterministic 32-bit seed from a uid so a player's board is stable. */
 export function seedFromUid(uid: string): number {
   let h = 2166136261;
@@ -75,17 +91,21 @@ export async function joinAndDeal(u: User): Promise<void> {
   ]);
   const profile = profileSnap?.exists() ? (profileSnap.data() as Partial<UserDoc>) : null;
   // Validate before denormalizing (Codex P2 on PR #66 round 3): users/{uid} is
-  // self-writable, so a malformed saved profile must not flow into the public
-  // players row (nor fail the join against the rules' shape checks). A saved
-  // name counts only when it is a real, non-empty string within the 100-char
-  // cap the proof rules also use; a saved photo only when it is a string URL.
+  // self-writable — firestore.rules only shape-checks its attestedAdultAt — so
+  // a malformed saved profile must not flow into the public players row (nor
+  // fail the join against the rules' shape checks). A saved name counts only
+  // when it is a real, trimmed-non-empty string within the 100-char cap the
+  // rules enforce on every other public displayName denormalization (markers,
+  // moments, proofs); a saved photo only when it is a well-formed https:// URL.
+  // Anything malformed falls back per-field to the auth values, exactly like a
+  // missing profile.
   const savedName =
     typeof profile?.displayName === 'string' &&
     profile.displayName.trim().length > 0 &&
     profile.displayName.length <= 100
       ? profile.displayName
       : null;
-  const savedPhoto = typeof profile?.photoURL === 'string' ? profile.photoURL : null;
+  const savedPhoto = profile && isHttpsUrl(profile.photoURL) ? profile.photoURL : null;
   const displayName = savedName ?? (u.displayName ?? 'Anonymous');
   const photoURL = profile?.customPhoto ? (savedPhoto ?? u.photoURL ?? null) : (u.photoURL ?? null);
 
