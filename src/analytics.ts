@@ -1,5 +1,6 @@
 import { logEvent } from 'firebase/analytics';
 import { analytics } from './firebase';
+import { phCapture } from './posthog';
 
 /**
  * GA4 event catalog — the single source of truth for every analytics event
@@ -33,7 +34,13 @@ export const GA4_EVENTS = [
 
 export type GA4EventName = (typeof GA4_EVENTS)[number];
 
-/** Fire a GA4 event if analytics is available. Never throws. */
+/**
+ * Fire an analytics event to BOTH sinks — GA4 and PostHog (#96) — from one call
+ * site. Each sink is independently guarded and never throws, so one being
+ * unavailable (or failing) never blocks the other. Same event name + params go
+ * to both; PostHog is configured to send only these explicit events (see
+ * posthog.ts). Never throws.
+ */
 export function track(name: GA4EventName, params?: Record<string, unknown>): void {
   try {
     // Firebase's `logEvent` overloads key off literal reserved event names
@@ -43,4 +50,6 @@ export function track(name: GA4EventName, params?: Record<string, unknown>): voi
   } catch {
     /* no-op */
   }
+  // PostHog, alongside GA4 — same event, same params (internally guarded).
+  phCapture(name, params);
 }
