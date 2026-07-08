@@ -325,4 +325,46 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
     const player = await getDocFromServer(doc(tab.db, playerPath));
     expect((player.data() as PlayerDoc).squaresMarked).toBe(2);
   });
+
+  // Harder than back-to-back: OVERLAPPING calls, neither awaited before the
+  // other starts — exactly what Board.toggle produces, since doMark is
+  // fire-and-forget. Without the per-board serialization chain (Codex P1,
+  // PR #75), both calls pass getDocFromCache before either has issued its
+  // batch, fold onto the same cached board, and the later commit clobbers the
+  // earlier Mark even WITH the cache fold in place.
+  it('two OVERLAPPING unawaited Marks both survive (per-board serialization)', async () => {
+    const tab = await makeClient('gcb-mark-overlap-tab');
+    const boardPath = `events/${EVENT_ID}/boards/${tab.uid}`;
+    const playerPath = `events/${EVENT_ID}/players/${tab.uid}`;
+    const boardRef = doc(tab.db, boardPath);
+
+    await setDoc(boardRef, unmarkedBoard(tab.uid));
+    await setDoc(doc(tab.db, playerPath), freshPlayer(tab.uid));
+    await waitForPendingWrites(tab.db);
+
+    await disableNetwork(tab.db);
+
+    const staleSnapshot = unmarkedBoard(tab.uid).cells;
+    const common = {
+      uid: tab.uid,
+      cells: staleSnapshot,
+      nextMarked: true,
+      claimMode: 'honor' as const,
+      currentFirstBingoAt: null,
+      database: tab.db,
+    };
+    await Promise.all([
+      setMark({ ...common, index: 5 }),
+      setMark({ ...common, index: 11 }),
+    ]);
+
+    await enableNetwork(tab.db);
+    await waitForPendingWrites(tab.db);
+
+    const synced = await getDocFromServer(boardRef);
+    expect((synced.data() as BoardDoc).cells[5].marked).toBe(true);
+    expect((synced.data() as BoardDoc).cells[11].marked).toBe(true);
+    const player = await getDocFromServer(doc(tab.db, playerPath));
+    expect((player.data() as PlayerDoc).squaresMarked).toBe(2);
+  });
 });

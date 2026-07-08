@@ -234,6 +234,52 @@ describe('setMark (folds onto the freshest cached Board, not a stale cells prop)
     expect(playerWrite.squaresMarked).toBe(2); // both count, not just this call's
   });
 
+  // Overlap, not just staleness: Board.toggle fires doMark without awaiting,
+  // so two Marks can BOTH pass getDocFromCache before either has issued its
+  // batch — the cache fold alone cannot help if neither write has applied
+  // yet. setMark serializes per board (Codex P1, PR #75); this test's fake
+  // cache returns whatever the LAST board batch.set wrote (the latency-
+  // compensation contract), so an unserialized setMark makes both reads see
+  // the pristine board and the final write carries only one Mark.
+  it('two unawaited overlapping Marks both land — the second folds onto the first (serialization)', async () => {
+    getDocFromCacheSpy.mockImplementation((ref?: unknown) => {
+      const path = (ref as { path?: string })?.path ?? '';
+      if (path.endsWith('/boards/u1')) {
+        const boardWrites = setSpy.mock.calls.filter((c) =>
+          (c[0] as { path: string }).path.endsWith('/boards/u1'),
+        );
+        const last = boardWrites[boardWrites.length - 1];
+        if (!last) return Promise.reject(new Error('not cached'));
+        return Promise.resolve({
+          exists: () => true,
+          data: () => ({ cells: (last[1] as { cells: Cell[] }).cells }),
+        });
+      }
+      return Promise.reject(new Error('not cached'));
+    });
+
+    const common = {
+      uid: 'u1',
+      cells: dealt(),
+      nextMarked: true,
+      claimMode: 'honor' as const,
+      currentFirstBingoAt: null,
+    };
+    await Promise.all([setMark({ ...common, index: 3 }), setMark({ ...common, index: 7 })]);
+
+    const boardWrites = setSpy.mock.calls.filter((c) =>
+      (c[0] as { path: string }).path.endsWith('/boards/u1'),
+    );
+    expect(boardWrites).toHaveLength(2);
+    const finalBoard = boardWrites[1][1] as { cells: Cell[] };
+    expect(finalBoard.cells[3].marked).toBe(true); // first Mark survived into the second write
+    expect(finalBoard.cells[7].marked).toBe(true);
+    const playerWrites = setSpy.mock.calls.filter((c) =>
+      (c[0] as { path: string }).path.endsWith('/players/u1'),
+    );
+    expect((playerWrites[playerWrites.length - 1][1] as { squaresMarked: number }).squaresMarked).toBe(2);
+  });
+
   it('falls back to the caller-supplied cells when nothing is cached yet', async () => {
     getDocFromCacheSpy.mockRejectedValueOnce(new Error('not cached'));
 

@@ -153,11 +153,14 @@ export function computeMark(params: {
  * both would fold onto the SAME stale `cells` and the second write's full-array
  * replacement would silently clobber the first — no other writer is needed for
  * that race, just the same owner acting twice before their own echo lands.
- * `getDocFromCache` closes it: a cache-only read (works offline, no server
- * round trip) that sees this client's own just-applied mutations — and, via
- * the shared persistent multi-tab cache, another tab's already-synced ones —
- * so the fold is onto the freshest LOCAL knowledge of the Board (and, for
- * `firstBingoAt`, the Player row) rather than a potentially-stale prop. Each
+ * Two mechanisms close it together: `getDocFromCache` — a cache-only read
+ * (works offline, no server round trip) that sees this client's own
+ * just-applied mutations and, via the shared persistent multi-tab cache,
+ * another tab's already-synced ones — folds onto the freshest LOCAL knowledge
+ * of the Board (and, for `firstBingoAt`, the Player row) rather than a
+ * potentially-stale prop; and the per-board serialization chain below, which
+ * keeps OVERLAPPING calls from both reading that cache before either has
+ * issued its batch (Codex P1, PR #75). Each
  * falls back to its caller-supplied param only when nothing is cached yet
  * (this write is the first local knowledge of the doc, e.g. a test double
  * with no cache). Both docs go in one `writeBatch` so they queue and apply
@@ -170,6 +173,15 @@ export function computeMark(params: {
  * reflects it at once — awaiting would stall the Mark on the network. The caller
  * gets the win-detection result synchronously from the local compute.
  */
+// Overlapping Marks must not interleave between the cache read and the local
+// batch application: Board.toggle fires doMark without awaiting, so two fast
+// taps can otherwise BOTH pass getDocFromCache before either commit()'s
+// latency compensation applies, folding onto the same cached board and
+// clobbering each other exactly like the stale-prop race the cache read
+// closed (Codex P1, PR #75). setMark therefore serializes per board: each
+// call's read runs only after the previous call has issued its batch.
+const markChains = new Map<string, Promise<unknown>>();
+
 export async function setMark(params: {
   uid: string;
   cells: Cell[];
@@ -181,6 +193,35 @@ export async function setMark(params: {
 }): Promise<{ cells: Cell[]; bingo: boolean; blackout: boolean }> {
   const { uid } = params;
   const database = params.database ?? db;
+  const chainKey = `${(database as unknown as { app?: { name?: string } }).app?.name ?? 'default'}/${uid}`;
+  const prev = markChains.get(chainKey) ?? Promise.resolve();
+  const next = prev.then(
+    () => runSetMark(params, database),
+    () => runSetMark(params, database),
+  );
+  // The stored tail never rejects, so one failed Mark cannot poison the chain.
+  markChains.set(
+    chainKey,
+    next.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return next;
+}
+
+async function runSetMark(
+  params: {
+    uid: string;
+    cells: Cell[];
+    index: number;
+    nextMarked: boolean;
+    claimMode: ClaimMode;
+    currentFirstBingoAt: number | null;
+  },
+  database: Firestore,
+): Promise<{ cells: Cell[]; bingo: boolean; blackout: boolean }> {
+  const { uid } = params;
   const boardRef = doc(database, 'events', EVENT_ID, 'boards', uid);
   const playerRef = doc(database, 'events', EVENT_ID, 'players', uid);
 
