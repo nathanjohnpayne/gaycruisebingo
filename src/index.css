@@ -232,6 +232,34 @@ a {
   opacity: 0.5;
 }
 
+/* ---------- leaderboard filters ---------- */
+/* Presentational-only (ADR 0001) all/with-BINGO/Blackout toggle, styled after
+   the .seg/.seg-btn segmented control (ProofSheet) but scoped to the
+   Leaderboard so this ticket's filter styling can't collide with that
+   surface's own claim this wave. */
+.lb-filters {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+.lb-filter-btn {
+  flex: 1;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--dim);
+  border-radius: 40px;
+  padding: 9px 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 12px;
+}
+.lb-filter-btn.on {
+  color: var(--ink);
+  border-color: var(--primary);
+  box-shadow: 0 0 10px var(--shadow);
+}
+
 /* ---------- lists (leaderboard + items) ---------- */
 .list {
   display: flex;
