@@ -170,8 +170,8 @@ export default function Board() {
     blackout: false,
     firstBingo: false,
   });
-  // Set by doMark when THIS player's own tap changes the board; consumed (cleared)
-  // by the next cells-effect run (round 3 finding A). The round-2 rule baselines
+  // Incremented by doMark when THIS player's own tap changes the board; consumed
+  // one snapshot at a time by the cells-effect (round 3 finding A). The round-2 rule baselines
   // EVERY snapshot while the board is still cache-only (!boardConfirmed) — which
   // silently swallowed a win completed OFFLINE (an offline reload never confirms
   // until reconnect, so the player's own line got baselined and the edge never
@@ -179,8 +179,10 @@ export default function Board() {
   // CAUSED is not hydration: the cells effect treats it as a LIVE edge against
   // the pre-action baseline, and the queued Moment rides the offline queue
   // exactly as designed (setDoc pends, ADR 0006). Passive unconfirmed snapshots
-  // (no local action pending) keep the round-2 baseline behavior.
-  const localActionPending = useRef(false);
+  // (no local action pending) keep the round-2 baseline behavior. This is a count,
+  // not a boolean: two fast offline taps can produce two local snapshots before
+  // server confirmation, and the second snapshot may be the winning edge.
+  const localActionsPending = useRef(0);
 
   // Account switch (finding 5, hardened by round 2 finding B): the edge state is
   // per-uid, and the reset must happen BEFORE any effect of the uid-switch render
@@ -199,7 +201,7 @@ export default function Board() {
     wasBingo.current = false;
     wasBlackout.current = false;
     pending.current = { bingo: false, blackout: false, firstBingo: false };
-    localActionPending.current = false;
+    localActionsPending.current = 0;
   }
 
   const cells: Cell[] = board?.cells ?? [];
@@ -346,10 +348,11 @@ export default function Board() {
     // can run one render with the PREVIOUS uid's board still in the subscription;
     // that data must neither seed the new uid's baseline nor read as an edge.
     if (!cellsAttributable || !cells.length) return;
-    // Consume the local-action marker for THIS snapshot (round 3 finding A) —
-    // read-and-clear, so a later passive snapshot can never inherit it.
-    const localAction = localActionPending.current;
-    localActionPending.current = false;
+    // Consume one local-action marker for THIS snapshot (round 3 finding A) so
+    // back-to-back local snapshots each keep their own live-edge treatment, while
+    // later passive snapshots cannot inherit it.
+    const localAction = localActionsPending.current > 0;
+    if (localActionsPending.current > 0) localActionsPending.current -= 1;
     const bingo = hasBingo(cells);
     const black = isBlackout(cells);
     // Baseline vs detection (round 2 finding C): under the ADR 0006 persistent
@@ -479,7 +482,7 @@ export default function Board() {
     // The next board snapshot is THIS player's own action, not passive hydration
     // (round 3 finding A): set before the write so the latency-compensation
     // snapshot — which can arrive before setMark resolves — is already marked.
-    localActionPending.current = true;
+    localActionsPending.current += 1;
     try {
       const res = await setMark({
         uid,
@@ -499,9 +502,9 @@ export default function Board() {
          rejection is logged inside setMark and self-corrects when Firestore
          rolls the write back and the live listener re-renders without the Mark.
          This catch only guards a synchronous throw from setMark itself — no
-         write happened, so no snapshot is coming: clear the local-action
-         marker rather than let it misread a later passive snapshot as live. */
-      localActionPending.current = false;
+         write happened, so no snapshot is coming: remove this action's marker
+         rather than let it misread a later passive snapshot as live. */
+      localActionsPending.current = Math.max(0, localActionsPending.current - 1);
     }
   };
 

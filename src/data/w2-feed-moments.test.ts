@@ -48,7 +48,7 @@ import {
   hasPriorBingoWitness,
   FIRST_BINGO_MOMENT_ID,
 } from './moments';
-import { mergeFeed } from '../hooks/useData';
+import { hasCanonicalMomentId, mergeFeed } from '../hooks/useData';
 import { addDoc, runTransaction } from 'firebase/firestore';
 
 // Drain the write-once pre-check's microtasks (getDocFromCache → setDoc): the
@@ -206,5 +206,19 @@ describe('mergeFeed — Proofs + Moments into one newest-first stream (specs/w2-
 
   it('a bare Mark (neither a Proof nor a Moment) yields no Feed entry (ADR 0002)', () => {
     expect(mergeFeed([], [])).toEqual([]);
+  });
+});
+
+describe('hasCanonicalMomentId — read-side singleton/per-player Moment filter', () => {
+  it('accepts only the deterministic ids the writer uses for each Moment kind', () => {
+    expect(hasCanonicalMomentId({ ...moment('u1-bingo', 1, 'bingo'), uid: 'u1' })).toBe(true);
+    expect(hasCanonicalMomentId({ ...moment('u1-blackout', 1, 'blackout'), uid: 'u1' })).toBe(true);
+    expect(hasCanonicalMomentId({ ...moment('first_bingo', 1, 'first_bingo'), uid: 'u1' })).toBe(true);
+
+    expect(hasCanonicalMomentId({ ...moment('spoof-first', 1, 'first_bingo'), uid: 'u1' })).toBe(false);
+    expect(hasCanonicalMomentId({ ...moment('u1-first_bingo', 1, 'first_bingo'), uid: 'u1' })).toBe(false);
+    expect(hasCanonicalMomentId({ ...moment('spoof-bingo', 1, 'bingo'), uid: 'u1' })).toBe(false);
+    expect(hasCanonicalMomentId({ ...moment('u2-bingo', 1, 'bingo'), uid: 'u1' })).toBe(false);
+    expect(hasCanonicalMomentId({ ...moment('u1-streak', 1, 'bingo'), kind: 'streak' as MomentKind, uid: 'u1' })).toBe(false);
   });
 });

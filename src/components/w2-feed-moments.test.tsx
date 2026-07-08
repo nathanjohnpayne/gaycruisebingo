@@ -427,6 +427,30 @@ describe('Board — broadcasts Moments on the BINGO/Blackout edge (specs/w2-feed
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1); // fired once with the local edge, not re-fired
   });
 
+  it('counts multiple queued local Marks so the winning offline snapshot is still live (round 4 finding A)', async () => {
+    // Two fast taps before the listener emits either latency-compensated snapshot:
+    // the first snapshot is non-winning, the second completes row 0. A one-bit
+    // marker is consumed by the non-winning snapshot and loses the real edge.
+    H.boardConfirmed = false;
+    H.board = boardWith([0, 1, 2]);
+    const { rerender } = render(<Board />);
+
+    fireEvent.click(screen.getByText('p3'));
+    fireEvent.click(screen.getByText('p4'));
+    expect(H.setMark).toHaveBeenCalledTimes(2);
+
+    H.board = boardWith([0, 1, 2, 3]); // first local snapshot: still no BINGO
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled();
+
+    H.board = boardWith(ROW0); // second local snapshot: the actual winning edge
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+  });
+
   it('still baselines a PASSIVE unconfirmed snapshot with a standing win — hydration is not an edge (round 3 finding A)', async () => {
     // Same cache-only board, but the win arrives WITHOUT any local action (deeper
     // hydration / another tab's cached write): round-2 baseline behavior holds.

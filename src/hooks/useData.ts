@@ -161,8 +161,24 @@ export function useProofFeed(max = 60) {
  */
 export function useMoments(max = 60) {
   const { data, loading } = useColSub<MomentDoc>(momentsCol(), 'moments');
-  const moments = data.sort((a, b) => b.createdAt - a.createdAt).slice(0, max);
+  const moments = data
+    .filter(hasCanonicalMomentId)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, max);
   return { moments, loading };
+}
+
+/**
+ * The rules intentionally allow caller-chosen Moment document ids, so the read
+ * side enforces the deterministic ids the writer relies on before anything can
+ * render in the public Feed.
+ */
+export function hasCanonicalMomentId(moment: MomentDoc): boolean {
+  if (moment.kind === 'first_bingo') return moment.id === 'first_bingo';
+  if (moment.kind === 'bingo' || moment.kind === 'blackout') {
+    return moment.id === `${moment.uid}-${moment.kind}`;
+  }
+  return false;
 }
 
 /**
