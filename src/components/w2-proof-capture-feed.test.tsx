@@ -2,15 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import type { ProofDoc } from '../types';
 
-// w2-proof-capture, Feed layer (RTL-jsdom). Drives the REAL ProofFeed + the
-// REAL useProofFeed hook (Firestore's onSnapshot stubbed so we can hand-deliver
-// a proofs snapshot), proving the ADR 0002 promise end to end: a posted Proof
-// IS the Feed entry — it shows newest-first with the Player's name + the Prompt
-// text, and it renders per capture type (photo <img>, audio <audio>, text
-// quote). It also proves the PR #75 cross-writer guarantee: the Feed resolves
-// each entry from the proofs DOC (displayName / itemText / media / cellIndex all
-// live there), never from boards/{uid}.cells — so a queued bare-Mark drain that
-// drops cells[i].proofId can never orphan a live Proof out of the Feed.
+// w2-proof-capture, Feed layer (RTL-jsdom). Drives the REAL ProofFeed + the REAL
+// useFeed hook (composing useProofFeed + useMoments; Firestore's onSnapshot
+// stubbed so we can hand-deliver snapshots), proving the ADR 0002 promise end to
+// end: a posted Proof IS a Feed entry — it shows newest-first with the Player's
+// name + the Prompt text, and it renders per capture type (photo <img>, audio
+// <audio>, text quote). It also proves the PR #75 cross-writer guarantee: the
+// Feed resolves each entry from the proofs DOC (displayName / itemText / media /
+// cellIndex all live there), never from boards/{uid}.cells — so a queued
+// bare-Mark drain that drops cells[i].proofId can never orphan a live Proof out
+// of the Feed. Moments are delivered EMPTY here (this is the proof half); the
+// merged Proofs+Moments ordering lives in src/components/w2-feed-moments.test.tsx.
 
 const H = vi.hoisted(() => ({ onSnapshot: vi.fn(), reportProof: vi.fn(), deleteProof: vi.fn() }));
 
@@ -45,16 +47,25 @@ vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' 
 import ProofFeed from './ProofFeed';
 
 type SnapCb = (snap: unknown) => void;
-function captureOnNext(): { fire: (snap: unknown) => void } {
-  const captured: { cb: SnapCb | null } = { cb: null };
-  H.onSnapshot.mockImplementation((_target: unknown, _options: unknown, onNext: SnapCb) => {
-    captured.cb = onNext;
+// ProofFeed subscribes to BOTH proofs (useProofFeed) and moments (useMoments) via
+// useFeed, so route each onSnapshot by target: the proofs sub is a query()
+// ({ query: [...] }); the moments sub is a bare collection ref. `fire` delivers a
+// proofs snapshot plus (by default) an empty moments snapshot in one act(), so
+// existing call sites — `sub.fire(colSnap([...]))` — keep working unchanged.
+function captureOnNext(): { fire: (proofs: unknown, moments?: unknown) => void } {
+  const captured: { proofs: SnapCb | null; moments: SnapCb | null } = { proofs: null, moments: null };
+  H.onSnapshot.mockImplementation((target: unknown, _options: unknown, onNext: SnapCb) => {
+    if (target && typeof target === 'object' && 'query' in (target as object)) captured.proofs = onNext;
+    else captured.moments = onNext;
     return () => {};
   });
   return {
-    fire: (snap: unknown) => {
-      if (!captured.cb) throw new Error('onSnapshot not subscribed');
-      act(() => captured.cb!(snap));
+    fire: (proofs: unknown, moments: unknown = colSnap([])) => {
+      if (!captured.proofs || !captured.moments) throw new Error('feed not fully subscribed');
+      act(() => {
+        captured.proofs!(proofs);
+        captured.moments!(moments);
+      });
     },
   };
 }
@@ -149,10 +160,10 @@ describe('ProofFeed — the Proof IS the Feed entry (ADR 0002)', () => {
     expect(screen.getByText(/Backing cell was clobbered/)).toBeInTheDocument();
   });
 
-  it('shows the empty state once a server snapshot arrives with no proofs', () => {
+  it('shows the empty state once server snapshots arrive with no proofs and no moments', () => {
     const sub = captureOnNext();
     render(<ProofFeed />);
     sub.fire(colSnap([]));
-    expect(screen.getByText(/no proof yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/nothing in the feed yet/i)).toBeInTheDocument();
   });
 });

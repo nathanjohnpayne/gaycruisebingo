@@ -35,6 +35,21 @@ vi.mock('../hooks/useData', () => ({
   // 0002, #31), so a test that marks a Square exercises useTally; an empty Tally
   // keeps these gating tests focused on the mark flow, not the count.
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
+  // Board reads the roster for the First-to-BINGO Moment (#34); these gating
+  // tests never cross a bingo edge, so an empty roster suffices.
+  useLeaderboard: () => ({ players: [], loading: false }),
+}));
+// Stub the Moment broadcasts (#34): these tests never cross a bingo/blackout edge
+// so none fires, and mocking the module also keeps Board's real
+// src/data/moments.ts (which imports the prod ../firebase singleton) from loading
+// getAuth() into this suite, which does not stub ../firebase.
+// hasPriorBingoWitness (the finding-D durable-witness check) is stubbed to the
+// no-witness default for the same reason; with no edge crossed it is never called.
+vi.mock('../data/moments', () => ({
+  broadcastBingo: vi.fn(),
+  broadcastBlackout: vi.fn(),
+  broadcastFirstBingo: vi.fn(),
+  hasPriorBingoWitness: vi.fn(() => Promise.resolve(false)),
 }));
 // Board resolves the caller's display name via resolveDisplayName (fed the player
 // row) for BOTH the Tally marker and ProofSheet (#31/#78). Stub it here to mirror

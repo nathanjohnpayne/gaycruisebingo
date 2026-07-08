@@ -27,14 +27,21 @@ const H = vi.hoisted(() => ({
 }));
 
 // ProofSheet imports attachProof + track; ProofFeed imports reportProof/
-// deleteProof + track + useProofFeed + useAuth. safeMediaUrl and Avatar stay real.
+// deleteProof + track + useFeed + useAuth. safeMediaUrl and Avatar stay real.
 vi.mock('../data/proofs', () => ({
   attachProof: H.attachProof,
   reportProof: H.reportProof,
   deleteProof: H.deleteProof,
 }));
 vi.mock('../analytics', () => ({ track: H.track }));
-vi.mock('../hooks/useData', () => ({ useProofFeed: () => ({ proofs: H.proofs, loading: false }) }));
+// ProofFeed reads the merged Feed via useFeed (#34); this XSS suite only exercises
+// Proof media sinks, so wrap H.proofs as proof Feed entries (no Moments).
+vi.mock('../hooks/useData', () => ({
+  useFeed: () => ({
+    entries: H.proofs.map((proof) => ({ feedKind: 'proof' as const, createdAt: proof.createdAt, proof })),
+    loading: false,
+  }),
+}));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
 
 import ProofSheet from './ProofSheet';

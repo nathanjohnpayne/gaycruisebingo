@@ -33,6 +33,9 @@ vi.mock('../hooks/useData', () => ({
   // fixture with a marked Square would hit an undefined hook from this factory
   // mock before reaching any attribution assertion (Codex P2, PR #87 round 2).
   useTally: () => ({ count: 0, markers: [], loading: false }),
+  // Board reads the roster for the First-to-BINGO Moment (#34); this fixture
+  // never crosses a bingo edge, so an empty roster suffices.
+  useLeaderboard: () => ({ players: [], loading: false }),
 }));
 vi.mock('./ProofSheet', () => ({
   default: (props: { displayName: string; photoURL: string | null }) => {

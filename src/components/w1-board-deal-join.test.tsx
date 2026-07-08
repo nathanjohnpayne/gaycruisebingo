@@ -113,6 +113,9 @@ vi.mock('../hooks/useData', () => ({
   // Squares — a freshly dealt card has none, so useTally is not exercised here,
   // but the mock must export it so Board's module resolves.
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
+  // Board reads the roster for the First-to-BINGO Moment (#34); no fixture here
+  // crosses a bingo edge, so an empty roster suffices.
+  useLeaderboard: () => ({ players: [], loading: false }),
 }));
 
 // Real modules under test — imported after the mocks are declared.

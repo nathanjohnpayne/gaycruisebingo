@@ -36,6 +36,9 @@ vi.mock('../hooks/useData', () => ({
   useEventDoc: () => ({ data: { claimMode: 'honor' }, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
+  // Board reads the roster to derive the First-to-BINGO Moment (#34); this suite's
+  // single non-winning tap never crosses a bingo edge, so an empty roster suffices.
+  useLeaderboard: () => ({ players: [], loading: false }),
 }));
 // Keep the REAL resolveDisplayName (the validated resolver under test feeds the
 // prop) and stub only the write.

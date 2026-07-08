@@ -9,6 +9,7 @@ import {
   proofConverter,
   claimConverter,
   tallyMarkerConverter,
+  momentConverter,
 } from './converters';
 
 // Typed, converter-attached references for reads.
@@ -36,3 +37,10 @@ export const claimRef = (id: string) =>
 // 1), so in Phase 0 the count is derived from this subcollection's size.
 export const tallyMarkersCol = (itemId: string) =>
   collection(db, 'events', EVENT_ID, 'tally', itemId, 'markers').withConverter(tallyMarkerConverter);
+// Feed Moments: events/{EVENT_ID}/moments (ADR 0002) — broadcast BINGO / Blackout
+// / First-to-BINGO beats that merge newest-first with Proofs into the one Feed.
+// Mirrors the proofs helpers; the write path (src/data/moments.ts) uses raw refs.
+export const momentsCol = () =>
+  collection(db, 'events', EVENT_ID, 'moments').withConverter(momentConverter);
+export const momentRef = (id: string) =>
+  doc(db, 'events', EVENT_ID, 'moments', id).withConverter(momentConverter);
