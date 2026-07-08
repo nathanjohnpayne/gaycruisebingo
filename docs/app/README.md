@@ -6,6 +6,8 @@ Live, multiplayer bingo PWA. React (Vite) + TypeScript + Firebase. Ships the pre
 
 Phase 1 (proof system, dynamic Playwright OG images, moderation console, App Check) can land as live updates during the sailing without reworking this — see [`phase-1-deploy.md`](phase-1-deploy.md).
 
+> **Live (2026-07-07):** Phase 0 is deployed at **https://gaycruisebingo.web.app** (Firestore rules/indexes + Storage rules + hosting). The event `events/med-2026` is seeded (honor mode, `neon-playground` theme, 32 prompts). The custom domain `gaycruisebingo.com` is registered with Hosting and its DNS is set (SSL auto-provisioning). The Phase-1 backend (`functions`, Cloud Run OG renderer) is intentionally not deployed yet — it is Blaze-gated and lands later per [`phase-1-deploy.md`](phase-1-deploy.md). Sections 1–6 below are the runbook to reproduce or re-run any of this.
+
 ## Stack
 
 - **Vite + React 18 + TypeScript** (strict).
@@ -13,20 +15,29 @@ Phase 1 (proof system, dynamic Playwright OG images, moderation console, App Che
 - **vite-plugin-pwa** for installability.
 - Phase 0 is **Cloud Functions-free** — each player writes their own stats and the leaderboard is a client-side sort. Phase 1 moves stats server-side.
 
-## 1. Configure Firebase (console, one-time)
+## 1. Firebase project (one-time — already done)
 
-1. **Add a Web App**: Project settings > General > Your apps > Web. Copy the config values.
-2. **Enable Google sign-in**: Authentication > Sign-in method > Google > Enable.
-3. **Firestore** is already provisioned (`us-west1`, Native mode). **Storage**: Storage > Get started if not yet enabled.
-4. **(Blaze)** Upgrade to the Blaze plan only when you add Phase 1 (Functions/Cloud Run/Vision). Phase 0 runs on Spark.
-5. **Authorized domains**: Authentication > Settings > Authorized domains — add `gaycruisebingo.com` and your Firebase Hosting domains.
+These one-time steps are complete on the `gaycruisebingo` project; recorded here for reference / rebuild.
+
+1. **Web app** registered (`Project settings > General > Your apps`) — app id `1:849798007162:web:70dffafa77cc65a8306ec3`. Pull its config with `firebase apps:sdkconfig WEB` (see §2) rather than copying by hand.
+2. **Google sign-in** enabled (`Authentication > Sign-in method > Google`).
+3. **Firestore** `(default)` in `us-west1` (Native mode — permanent location). **Storage** default bucket `gaycruisebingo.firebasestorage.app` enabled.
+4. **Blaze** plan enabled with a budget alert (required for the Phase-1 Functions/Cloud Run/Vision; Phase 0 itself stays within Spark limits).
+5. **Authorized domains** (`Authentication > Settings > Authorized domains`) include `localhost`, `gaycruisebingo.firebaseapp.com`, `gaycruisebingo.web.app`, and `gaycruisebingo.com`.
 
 ## 2. Local env
 
+`.env.local` holds the Firebase web-app config. These are **non-secret client identifiers** — they are baked into the client bundle by design, and security is enforced by the Firestore/Storage rules + Auth, not by hiding them. It is gitignored. Regenerate it any time from the registered web app instead of copying values by hand:
+
 ```bash
 cp .env.example .env.local
-# fill VITE_FIREBASE_* from the web app config, and VITE_FIREBASE_MEASUREMENT_ID from GA4
+
+# Fetch the live config (needs a deploy credential — see §5 for the SA key):
+GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcb-sa.json \
+  firebase apps:sdkconfig WEB --project gaycruisebingo --non-interactive
 ```
+
+Map the JSON fields into `.env.local`: `apiKey`→`VITE_FIREBASE_API_KEY`, `authDomain`→`VITE_FIREBASE_AUTH_DOMAIN`, `projectId`→`VITE_FIREBASE_PROJECT_ID`, `storageBucket`→`VITE_FIREBASE_STORAGE_BUCKET`, `messagingSenderId`→`VITE_FIREBASE_MESSAGING_SENDER_ID`, `appId`→`VITE_FIREBASE_APP_ID`, `measurementId`→`VITE_FIREBASE_MEASUREMENT_ID`. `VITE_EVENT_ID` defaults to `med-2026`; `VITE_RECAPTCHA_SITE_KEY` is Phase-1 (App Check) — leave it blank for Phase 0.
 
 ## 3. Install & run
 
@@ -39,35 +50,74 @@ npm run typecheck  # tsc --noEmit
 
 ## 4. Seed the event + prompts
 
-`scripts/seed.mjs` uses the Firebase Admin SDK (bypasses security rules). Authenticate it with your Application Default Credentials (or the project's deployer SA key from 1Password — the same credential deploys use); no `serviceAccountKey.json` is committed to the repo:
+`scripts/seed.mjs` uses the Firebase Admin SDK (bypasses security rules), so it needs an admin credential and the **admin's Auth UID**. The admin UID is a signed-in user's Firebase Auth id, so the admin must sign in once at the deployed URL before their UID exists — there is no UID to seed against on a project where nobody has logged in yet.
+
+**Get the admin UID** — read it straight from Auth (no manual copying). With a deploy credential active (see §5):
 
 ```bash
-npm i -D firebase-admin
-gcloud auth application-default login          # ADC — no key file on disk
-ADMIN_UID=<your-google-uid> GOOGLE_CLOUD_PROJECT=gaycruisebingo node scripts/seed.mjs
+curl -s -X POST \
+  "https://identitytoolkit.googleapis.com/v1/projects/gaycruisebingo/accounts:query" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H "Content-Type: application/json" -d '{"returnUserInfo":true}' \
+  | jq -r '.userInfo[] | "\(.localId)  \(.email)"'
 ```
 
-This creates `events/med-2026` (claim mode, default theme, your admin uid) and the 32 starter prompts. The free center ("Complain about Circuit Music") is synthetic and not stored as an item. See the header of `scripts/seed.mjs` for details.
+**Seed** — the Admin SDK needs `firebase-admin` plus a credential (ADC, or the Firebase-vault SA key as `serviceAccountKey.json`, which is gitignored and never committed — `seed.mjs` prefers the key file if present, else falls back to ADC):
+
+```bash
+npm i -D firebase-admin                 # or ephemeral: npm i --no-save firebase-admin
+
+# credential — pick one:
+gcloud auth application-default login    # ADC (no key file on disk), OR
+op document get "gaycruisebingo — Firebase Deployer SA Key" \
+  --vault Firebase --out-file serviceAccountKey.json
+
+ADMIN_UID=<admin-uid> GOOGLE_CLOUD_PROJECT=gaycruisebingo node scripts/seed.mjs
+rm -f serviceAccountKey.json             # don't leave the key on disk
+```
+
+This creates `events/med-2026` (honor claim-mode, `neon-playground` default theme, the admin uid) and the 32 starter prompts. It is idempotent — deterministic doc ids + merge, so it is safe to re-run (e.g. to add a new admin or refresh prompts). The free center ("Complain about Circuit Music") is synthetic and not stored as an item. See the header of `scripts/seed.mjs` for details.
 
 ## 5. Deploy
 
-Deploys use `op-firebase-deploy` (1Password-backed — it resolves the project's Firebase-vault SA key) — see the root `DEPLOYMENT.md`.
+Deploys go through `op-firebase-deploy` (1Password-backed — it resolves the project's Firebase-vault SA key and impersonates the deployer SA; never `firebase login` / `firebase deploy` directly). See the root `DEPLOYMENT.md`.
 
 ```bash
-# rules + indexes + storage
+# 1. Security rules + indexes + Storage rules FIRST, so access is locked
+#    before the app goes live. (Rules compile-check happens here — a bad
+#    rule fails this step, not at runtime.)
 op-firebase-deploy --only firestore:rules,firestore:indexes,storage
 
-# app (vite build + hosting)
+# 2. The app (build + hosting):
 npm run deploy:hosting    # = vite build + op-firebase-deploy --only hosting
 ```
 
+`op-firebase-deploy` re-resolves the SA key from 1Password on each run (a biometric prompt). To run several commands in one session without re-prompting — e.g. `apps:sdkconfig` in §2, then both deploys — materialize the key once and pass it explicitly (it is honored as the rank-1 credential):
+
+```bash
+op document get "gaycruisebingo — Firebase Deployer SA Key" \
+  --vault Firebase --out-file /tmp/gcb-sa.json
+GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcb-sa.json op-firebase-deploy --only firestore:rules,firestore:indexes,storage
+GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcb-sa.json op-firebase-deploy --only hosting
+rm -f /tmp/gcb-sa.json    # wipe the key when done
+```
+
+Phase 0 deploys rules/indexes/storage + hosting only. The Phase-1 backend (`functions` and the Cloud Run OG renderer) deploys separately once Blaze features are live — see [`phase-1-deploy.md`](phase-1-deploy.md). The `firebase.json` `/s/**` → `share` rewrite targets the Phase-1 `share` function, so that route 404s until Phase 1 is deployed; Phase-0 hosting is otherwise unaffected.
+
 ## 6. Custom domain (→ Firebase Hosting)
 
-1. Firebase Hosting > Add custom domain > `gaycruisebingo.com`.
-2. At your DNS provider add the **TXT** verification record Firebase gives you.
-3. Add the **A records** to the Firebase IPs; **remove** any conflicting A/AAAA/CNAME.
-4. If your DNS is proxied (e.g. Cloudflare orange-cloud), set these records to **DNS-only / unproxied** so Firebase can issue the SSL cert.
-5. Wait for SSL (usually minutes, up to ~24h). Do this step early.
+`gaycruisebingo.com` is registered as a Hosting custom domain and added to Auth's authorized domains. To wire (or re-wire) it, add these DNS records at the registrar — the values are Firebase's for this site:
+
+| Type | Host | Value |
+|------|------|-------|
+| `A` | `@` (apex) | `199.36.158.100` |
+| `TXT` | `@` (apex) | `hosting-site=gaycruisebingo` |
+
+- **Remove** any conflicting apex `A`/`AAAA`/`CNAME` records.
+- If DNS is proxied (Cloudflare orange-cloud), set both records to **DNS-only / unproxied** so Firebase can complete the ACME challenge and issue the SSL cert.
+- Firebase then auto-verifies ownership (via the TXT) and issues SSL — usually minutes, up to ~24h. Once live, `gaycruisebingo.com` just mirrors `gaycruisebingo.web.app`.
+
+The console path is `Hosting > Add custom domain`. To do it programmatically: `POST https://firebasehosting.googleapis.com/v1beta1/projects/gaycruisebingo/sites/gaycruisebingo/customDomains?customDomainId=gaycruisebingo.com`, then `GET …/customDomains/gaycruisebingo.com` and read `requiredDnsUpdates.desired[].records` for the exact records above. Sign-in on a custom domain also requires it in the authorized-domains list (`Authentication > Settings`, or Identity Toolkit `admin/v2/projects/gaycruisebingo/config`, field `authorizedDomains`) — already done for `gaycruisebingo.com`.
 
 ## 7. Configuration knobs
 
