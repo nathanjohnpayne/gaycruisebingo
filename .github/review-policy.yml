@@ -29,6 +29,14 @@ external_review_paths:
   - "**/*secret*"
   - "**/*credential*"
   - ".github/**"
+  # Security-critical backend surfaces (proposed in #42, w3-security-hardening):
+  # the Firestore/Storage security rules and Cloud Functions gate every client's
+  # access, so any change to them should always draw external (Phase 4) review
+  # regardless of line count — closing the protected-path gap the
+  # parallelization plan names.
+  - "firestore.rules"
+  - "storage.rules"
+  - "functions/**"
 
 # ---------------------------------------------------------------------------
 # Propagation PR review lane (#264)
