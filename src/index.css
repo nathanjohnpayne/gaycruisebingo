@@ -572,3 +572,16 @@ a {
 body:has(.tabs) .install-prompt {
   bottom: calc(61px + env(safe-area-inset-bottom));
 }
+/* Reserve extra .app bottom clearance only while the banner is actually up (either
+   variant — Chromium or the iOS hint), so the last scrollable row doesn't sit
+   underneath it; growing .app's base 112px unconditionally would waste that space
+   the rest of the time. `install-prompt-visible` is toggled on <body> by
+   InstallPrompt (src/components/InstallPrompt.tsx) — see specs/w1-pwa.md. ~64px is
+   reasoned from the banner's own padding/border plus up to two wrapped lines of its
+   copy on narrow phones, not confirmed against a live rendered measurement — treat
+   it as a generous, unverified estimate (see specs/w1-pwa.md) pending a real-device
+   check; jsdom has no layout engine so it can't be verified by an automated test
+   either. */
+body.install-prompt-visible .app {
+  padding-bottom: 176px; /* 112px .app base + ~64px banner */
+}

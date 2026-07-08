@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { track } from '../analytics';
 
 const DISMISS_KEY = 'gcb.install.dismissedAt';
+/** Toggled on <body> while the banner (either variant) is on screen — index.css
+ *  keys extra `.app` bottom clearance off it, see specs/w1-pwa.md. */
+const VISIBLE_CLASS = 'install-prompt-visible';
 
 /** Non-standard event (Chromium/Android only) — not in TS's lib.dom.d.ts. */
 interface BeforeInstallPromptEvent extends Event {
@@ -34,13 +37,22 @@ function isIOS(): boolean {
 /**
  * Install-prompt banner (w1-pwa, #30): captures `beforeinstallprompt` and offers an
  * in-app Install button (Chromium/Android), or a manual "Add to Home Screen" hint on
- * iOS. Fires `install_pwa` (analytics.ts, #38) only once `userChoice` resolves
- * `accepted`. Mounted at `main.tsx` alongside `ConsentNotice` (#17).
+ * iOS. Fires `install_pwa` (analytics.ts, #38) once `userChoice` resolves `accepted`,
+ * or once `appinstalled` fires for an install that never went through this button
+ * (e.g. the browser's own address-bar/app-menu install UI) — a ref-backed guard keeps
+ * the two paths from double-counting the same install. Mounted at `main.tsx` alongside
+ * `ConsentNotice` (#17). Toggles `VISIBLE_CLASS` on `<body>` while the banner (either
+ * variant) is on screen, so `index.css` can reserve extra `.app` bottom clearance only
+ * while it's actually up.
  */
 export default function InstallPrompt() {
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [standalone, setStandalone] = useState(isStandalone);
   const [dismissed, setDismissed] = useState(isDismissed);
+  // Guards `track('install_pwa')` against firing twice for one install: the
+  // banner-accept path (in `install()` below) and `appinstalled` both fire for a
+  // banner-driven install, and only `appinstalled` fires for a browser-UI install.
+  const trackedInstallRef = useRef(false);
 
   useEffect(() => {
     if (standalone) return; // already installed — nothing to capture or offer
@@ -49,6 +61,10 @@ export default function InstallPrompt() {
       setDeferred(e as BeforeInstallPromptEvent);
     };
     const onAppInstalled = () => {
+      if (!trackedInstallRef.current) {
+        trackedInstallRef.current = true;
+        track('install_pwa');
+      }
       setStandalone(true);
       setDeferred(null);
     };
@@ -60,10 +76,17 @@ export default function InstallPrompt() {
     };
   }, [standalone]);
 
-  if (standalone || dismissed) return null;
-
   const showIOSHint = !deferred && isIOS();
-  if (!deferred && !showIOSHint) return null;
+  const visible = !standalone && !dismissed && (!!deferred || showIOSHint);
+
+  useEffect(() => {
+    document.body.classList.toggle(VISIBLE_CLASS, visible);
+    return () => {
+      document.body.classList.remove(VISIBLE_CLASS);
+    };
+  }, [visible]);
+
+  if (!visible) return null;
 
   const dismiss = () => {
     try {
@@ -79,7 +102,10 @@ export default function InstallPrompt() {
     try {
       await deferred.prompt();
       const choice = await deferred.userChoice;
-      if (choice.outcome === 'accepted') track('install_pwa');
+      if (choice.outcome === 'accepted' && !trackedInstallRef.current) {
+        trackedInstallRef.current = true;
+        track('install_pwa');
+      }
     } catch {
       /* prompt() can reject if the browser revoked eligibility mid-flow — no-op */
     } finally {
