@@ -103,7 +103,10 @@ export interface ProofDoc {
   text?: string | null;
   createdAt: number;
   reportCount: number;
-  status: 'active' | 'hidden' | 'flagged';
+  // 'pending' = created under admin_confirmed Claim Mode (data/proofs attachProof);
+  // admin-only readable per firestore.rules until confirming the Claim flips it
+  // to 'active'. A rejected Claim leaves its Proof 'pending' rather than exposed.
+  status: 'active' | 'pending' | 'hidden' | 'flagged';
   visionFlag?: string | null; // set by the moderation function for illegal/extreme content
 }
 
