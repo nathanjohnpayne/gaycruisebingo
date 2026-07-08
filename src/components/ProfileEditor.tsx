@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import type { User } from 'firebase/auth';
 import { useAuth } from '../auth/AuthContext';
 import { useMyUser } from '../hooks/useData';
 import { updateAvatar, updateDisplayName } from '../data/profile';
@@ -17,10 +18,30 @@ const fabStyle = {
  * A signed-in User's display-name + avatar editor, reachable from anywhere
  * (identity is public everywhere it appears — ADR 0002). Writes go through
  * data/profile.ts, which reuses uploadAvatar/downscaleImage (data/storage.ts).
+ *
+ * The editor proper is keyed by uid, so an auth transition (sign-out, account
+ * switch) unmounts it wholesale instead of letting state straddle accounts:
+ * - the sheet's open/name/busy/error state resets — a sheet account A left
+ *   open (or half-typed) can never reappear under, or be saved to, account B;
+ * - the useMyUser subscription state resets too. Its `loading` flag only
+ *   re-latches inside an effect keyed on the uid, so a single persistent
+ *   instance hands the FIRST render after a new sign-in the PREVIOUS
+ *   subscription's settled `false` (e.g. from signed-out useMyUser(undefined))
+ *   — a one-render window where the trigger showed and the form could seed,
+ *   and save, the Google name before the new users/{uid} snapshot arrived. A
+ *   fresh instance per uid starts loading=true, so the gate below is per-uid
+ *   by construction and that window cannot exist.
  */
 export default function ProfileEditor() {
   const { user, loading } = useAuth();
-  const { data: profile, loading: profileLoading } = useMyUser(user?.uid);
+  if (loading || !user) return null;
+  return <Editor key={user.uid} user={user} />;
+}
+
+function Editor({ user }: { user: User }) {
+  // Fresh per uid (see the key above): `profileLoading` starts true and can
+  // never be another subscription's leftover settled flag.
+  const { data: profile, loading: profileLoading } = useMyUser(user.uid);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
@@ -33,7 +54,7 @@ export default function ProfileEditor() {
   // reads `user.displayName` (the Google name). Rendering earlier risked
   // seeding — and, on an immediate Save, persisting — the Google name over a
   // saved custom displayName that simply hadn't arrived yet.
-  if (loading || !user || profileLoading) return null;
+  if (profileLoading) return null;
 
   const currentName = profile?.displayName ?? user.displayName ?? 'Anonymous';
   // customPhoto flags whether photoURL currently holds a custom upload (vs.
