@@ -156,9 +156,11 @@ async function seed() {
   await batch.commit();
 
   console.log(`Seeded ${ITEMS.length} prompts into events/${EVENT_ID}.`);
+  // Redacted on purpose (CodeQL js/clear-text-logging, alert #2): report that the
+  // roster was set — and how many uids parsed — without echoing the env-sourced uids.
   console.log(
     admins.length
-      ? `Admins: ${admins.join(', ')}`
+      ? `Admins: set (${admins.length})`
       : 'No ADMIN_UID set — set the roster (comma-separated uids) and re-run to grant admin.',
   );
   process.exit(0);
