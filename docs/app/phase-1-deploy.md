@@ -22,7 +22,7 @@ op-firebase-deploy --only functions
 
 Deploys: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail) and `share` (HTTP → crawler OG meta). Player stats are **not** server-recomputed — they stay client-authoritative by design (ADR 0001).
 
-**If a previously deployed project still carries `recomputeStats`:** this deploy is what deletes it — Firebase discovers exports removed from the source and prompts to confirm deleting the live function (non-interactive runs need `--force`). Confirming that deletion is expected and required (#40, ADR 0001); do not recreate the function.
+**If a previously deployed project still carries `recomputeStats`:** this deploy is what deletes it — Firebase discovers exports removed from the source and prompts to confirm deleting the live function. The wrapper always runs `firebase deploy --non-interactive`, which stalls on that prompt, so the one-time cleanup deploy must pass the force flag through: `op-firebase-deploy --only functions --force` (extra args pass straight through to `firebase deploy`). The deletion is expected and required (#40, ADR 0001); do not recreate the function.
 
 **Moderation note:** SafeSearch is tuned to flag only extreme/violent content, **not** raciness (raciness is expected here). It cannot detect minors — user reporting + the admin console remain the primary control. Flagged proofs appear in **Admin → Flagged**.
 
