@@ -41,15 +41,14 @@ jobs:
         run: npm run build
 
       # The Firestore emulator is a Java process; rules tests boot it via
-      # `firebase emulators:exec`, so Java + the Firebase CLI must be present.
+      # `firebase emulators:exec`. Java comes from setup-java; the Firebase
+      # CLI is a devDependency (firebase-tools), so the `npm ci` above already
+      # put the `firebase` binary on npm's script PATH.
       - name: Set up Java (Firestore emulator runtime)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-
-      - name: Install Firebase CLI
-        run: npm install -g firebase-tools
 
       - name: Firestore rules tests (emulator)
         run: npm run test:rules

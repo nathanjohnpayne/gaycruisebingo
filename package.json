@@ -15,7 +15,8 @@
     "test:e2e": "playwright test",
     "emulator": "firebase emulators:start --only auth,firestore,storage",
     "deploy": "npm run build && op-firebase-deploy",
-    "deploy:hosting": "npm run build && op-firebase-deploy --only hosting"
+    "deploy:hosting": "npm run build && op-firebase-deploy --only hosting",
+    "pretest:e2e": "playwright install chromium"
   },
   "dependencies": {
     "firebase": "^10.14.1",
@@ -32,6 +33,7 @@
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.2",
+    "firebase-tools": "^15.22.4",
     "jsdom": "^25.0.1",
     "typescript": "^5.6.2",
     "vite": "^5.4.8",

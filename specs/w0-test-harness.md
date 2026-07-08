@@ -32,6 +32,7 @@ The substantive honor-system invariants are out of scope for this ticket; they a
 Runner: `npm run test:e2e` (Playwright, `playwright.config.ts`). Test: `tests/e2e/smoke.spec.ts`.
 
 - `npm run test:e2e` launches the Playwright runner in a real Chromium browser, drives a page, and a page assertion passes. This layer is a smoke runner only; the full join → mark → BINGO → leaderboard round is `x-e2e-happy-path`, which adds the dev-server `webServer` + `baseURL` wiring on top of this config.
+- A fresh checkout can run this layer without manual setup: the `pretest:e2e` script runs `playwright install chromium` before every e2e run (a fast no-op once the browser is cached).
 
 ## Harness wiring
 
@@ -39,7 +40,7 @@ Runner: `npm run test:e2e` (Playwright, `playwright.config.ts`). Test: `tests/e2
 - `vitest.rules.config.ts` runs the rules layer in a Node environment scoped to `tests/rules/**/*.test.ts`.
 - `playwright.config.ts` runs the e2e layer from `tests/e2e/` and matches `*.spec.ts`, so Vitest and Playwright never claim each other's files.
 - `firebase.json` carries an `emulators` block (auth, firestore, storage) that pins the ports `test:rules` and `emulator` boot.
-- `package.json` exposes the `test:rules`, `test:e2e`, and `emulator` scripts alongside the existing `test`.
+- `package.json` exposes the `test:rules`, `test:e2e`, and `emulator` scripts alongside the existing `test`. `firebase-tools` is a devDependency, so `npm install` puts the `firebase` binary on npm's script PATH in a fresh checkout (locally and in CI alike); the only external prerequisite for the rules layer is a Java runtime for the emulator.
 - `.github/workflows/app-ci.yml` runs typecheck + the jsdom test suite + build + the Firestore rules tests on every pull request and on pushes to `main`.
 
 ## Acceptance criteria
