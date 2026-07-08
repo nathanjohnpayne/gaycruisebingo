@@ -76,6 +76,7 @@ function dealt(): Cell[] {
 let boardState: { cells: Cell[] } | undefined;
 let playerState: Record<string, unknown> | undefined;
 let proofState: Record<string, unknown> | undefined;
+let markerState: Record<string, unknown> | undefined; // an existing Tally marker, if any
 
 // The tx.set payload written to the first ref whose path contains `frag`.
 function setPayload(frag: string): Record<string, unknown> | undefined {
@@ -90,6 +91,7 @@ beforeEach(() => {
   boardState = { cells: dealt() };
   playerState = { firstBingoAt: null };
   proofState = undefined;
+  markerState = undefined;
   uploadSpy.mockResolvedValue({
     path: `proofs/${EVENT_ID}/u1/UPLOADED.jpg`,
     url: `https://firebasestorage.googleapis.com/v0/b/b/o/proofs%2F${EVENT_ID}%2Fu1%2FUPLOADED.jpg?alt=media`,
@@ -101,6 +103,7 @@ beforeEach(() => {
     if (ref.path.includes('/boards/')) return Promise.resolve({ data: () => boardState });
     if (ref.path.includes('/players/')) return Promise.resolve({ data: () => playerState });
     if (ref.path.includes('/proofs/')) return Promise.resolve({ data: () => proofState });
+    if (ref.path.includes('/tally/')) return Promise.resolve({ data: () => markerState });
     return Promise.resolve({ data: () => undefined });
   });
 });
@@ -307,14 +310,22 @@ describe('per-Prompt Tally marker — every proofed Mark publishes too (ADR 0002
     expect(call).toBeDefined();
     expect((call![0] as Ref).path).toBe(`events/${EVENT_ID}/tally/i5/markers/u1`);
     // The exact rules-valid shape: uid == doc id, non-empty ≤100 name, numeric stamp.
+    // No marker existed (fresh mark), so markedAt is stamped `now` (1000).
     expect(call![1]).toEqual({ uid: 'u1', displayName: 'Deck Daddy', markedAt: 1000 });
+    // A Firestore transaction requires ALL reads before ANY write, and the marker
+    // read (for the preserve-markedAt rule below) must obey it: pin that every
+    // tx.get in the transaction ran before its first tx.set.
+    expect(Math.max(...txGet.mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...txSet.mock.invocationCallOrder),
+    );
   });
 
   it('admin_confirmed: still publishes the marker — the pending cell is marked immediately, so it tallies like setMark', async () => {
     // The cell is set marked:true (status 'pending') in this same txn, so it
     // publishes exactly as setMark writes the marker on a pending Mark. If an admin
-    // later REJECTS the claim and unmarks it, that resolve path (#37/#41) must
-    // delete this marker, symmetric to deleteProof below.
+    // later REJECTS the claim and unmarks it, rejectClaim (src/data/admin.ts)
+    // deletes this marker in ITS transaction — the marked→unmarked ↔ marker-delete
+    // symmetry, pinned in src/data/w2-tally.test.ts.
     await attachProof({
       ...baseArgs,
       claimMode: 'admin_confirmed',
@@ -325,6 +336,31 @@ describe('per-Prompt Tally marker — every proofed Mark publishes too (ADR 0002
     expect(call).toBeDefined();
     expect((call![0] as Ref).path).toBe(`events/${EVENT_ID}/tally/i5/markers/u1`);
     expect(call![1]).toEqual({ uid: 'u1', displayName: 'Deck Daddy', markedAt: 1000 });
+  });
+
+  it('preserves an existing marker’s original markedAt and refreshes its attribution (proof on an already-marked square)', async () => {
+    // The Player marked this square earlier (bare Mark at t=111, under an older
+    // name) and now attaches a Proof to it. Re-stamping markedAt with `now` would
+    // reorder the chronological who-list by proof-attach time (Codex P2, PR #87):
+    // the original stamp must survive, while uid/displayName refresh is fine.
+    markerState = { uid: 'u1', displayName: 'Old Salt', markedAt: 111 };
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 111, status: 'confirmed' };
+    boardState = { cells: board };
+
+    await attachProof({
+      ...baseArgs, // displayName 'Deck Daddy'
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'told you' },
+    });
+
+    const call = markerSet();
+    expect(call![1]).toEqual({ uid: 'u1', displayName: 'Deck Daddy', markedAt: 111 });
+    // The preserve requires reading the marker — and that read still precedes
+    // every write, per the transaction contract.
+    expect(Math.max(...txGet.mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...txSet.mock.invocationCallOrder),
+    );
   });
 
   it('bounds an over-long attributed name to the marker rule’s 100-char cap', async () => {

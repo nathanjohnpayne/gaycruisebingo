@@ -91,9 +91,15 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
   await runTransaction(db, async (tx) => {
     const boardRef = rawBoard(uid);
     const playerRef = rawPlayer(uid);
-    // Read board + player before any write (transactions require reads first).
+    const markerRef = itemId ? rawMarker(itemId, uid) : null;
+    // Read board + player before any write — a Firestore transaction requires ALL
+    // reads before the FIRST write. The existing Tally marker is read HERE with
+    // them (never down at its write below): attaching a Proof to an ALREADY-marked
+    // square must preserve the marker's original markedAt (Codex P2, PR #87), and
+    // that needs a read the transaction contract forbids once anything is written.
     const boardSnap = await tx.get(boardRef);
     const playerSnap = await tx.get(playerRef);
+    const markerSnap = markerRef ? await tx.get(markerRef) : null;
     const liveCells = (boardSnap.data()?.cells as Cell[] | undefined) ?? cells;
     const next: Cell[] = liveCells.map((c) =>
       c.index === cellIndex
@@ -142,13 +148,23 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
     // with setMark), falling back to the live player row already read above. The free
     // centre never opens ProofSheet (no itemId), but guard defensively. Because it
     // rides this runTransaction, the marker is ONLINE-only like the proof itself (ADR
-    // 0006): a transaction rejects offline and never queues — see #37/#41 for the
-    // admin resolve that must delete this marker if a pending claim is later rejected.
-    if (itemId) {
-      tx.set(rawMarker(itemId, uid), {
+    // 0006): a transaction rejects offline and never queues. The marked→unmarked
+    // symmetry is kept by every unmark path: setMark (bare unmark), deleteProof
+    // (below), and rejectClaim (src/data/admin.ts) when an admin rejects a pending
+    // claim — wherever a cell flips marked→unmarked, that cell's marker is deleted.
+    //
+    // A Proof attached to an ALREADY-marked square (the cell's proofbtn) must not
+    // re-stamp the marker: the who-list is chronological by FIRST mark, and
+    // overwriting markedAt with `now` would reorder it by proof-attach time (Codex
+    // P2, PR #87). Preserve an existing marker's original markedAt — refreshing
+    // uid/displayName is fine — and stamp `now` only when no marker exists yet (a
+    // fresh mark, or a legacy pre-Tally mark that never had one).
+    if (markerRef) {
+      const priorMarkedAt = (markerSnap?.data() as { markedAt?: unknown } | undefined)?.markedAt;
+      tx.set(markerRef, {
         uid,
         displayName: markerDisplayName(displayName, playerSnap.data()?.displayName),
-        markedAt: now,
+        markedAt: typeof priorMarkedAt === 'number' ? priorMarkedAt : now,
       });
     }
     if (pending) {

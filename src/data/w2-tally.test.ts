@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Cell } from '../types';
+import type { Cell, ClaimDoc } from '../types';
 
 // specs/w2-tally.md, unit layer. Proves setMark's per-Prompt Tally extension
 // (ADR 0002): every non-free Mark self-publishes an ATTRIBUTED marker at
@@ -9,6 +9,12 @@ import type { Cell } from '../types';
 // bounded so the write always satisfies the marker rule. The rules-side proof
 // that this shape is accepted/denied is tests/rules/w2-tally.test.ts; the
 // offline-durable proof is tests/offline/w2-tally.test.ts.
+//
+// Also pins the admin-resolve half of the marker symmetry (Codex P2, PR #87):
+// rejectClaim (src/data/admin.ts) deletes the rejected cell's marker exactly
+// when it flips the cell marked→unmarked — never otherwise. The proofed-attach
+// half (attachProof publishes + preserves markedAt) lives in
+// src/data/w2-proof-capture.test.ts, alongside that transaction's harness.
 
 const EVENT_ID = 'med-2026'; // src/firebase.ts default when VITE_EVENT_ID is unset
 
@@ -37,6 +43,7 @@ vi.mock('firebase/firestore', async (importOriginal) => {
 });
 
 import { setMark } from './api';
+import { rejectClaim, confirmClaim } from './admin';
 import { addDoc, runTransaction } from 'firebase/firestore';
 
 // A dealt board: every non-free Square carries itemId `i{index}`; the free
@@ -127,5 +134,87 @@ describe('setMark — per-Prompt Tally marker (specs/w2-tally.md)', () => {
     await setMark({ ...base, index: 5, nextMarked: true, displayName: 'x'.repeat(140) });
 
     expect((markerWrite()[1].displayName as string).length).toBe(100);
+  });
+});
+
+describe('rejectClaim / confirmClaim — the admin resolve keeps the marker symmetry (specs/w2-tally.md)', () => {
+  // ADR 0002 invariant (Codex P2, PR #87): wherever a write flips a cell
+  // marked→unmarked it must delete that cell's Tally marker (setMark's unmark,
+  // deleteProof, and — here — rejectClaim), and wherever it flips →marked it must
+  // ensure one (setMark, attachProof). Without the rejectClaim delete, a rejected
+  // admin_confirmed claim reverses the board + stats but leaves the Player in the
+  // Prompt's public count/who-list. These drive the REAL resolve() transaction in
+  // src/data/admin.ts with the mocked runTransaction wired to a tx stub.
+  const txGet = vi.fn();
+  const txSet = vi.fn();
+  const txDelete = vi.fn();
+  let cells: Cell[];
+
+  const claim = (over: Partial<ClaimDoc> = {}): ClaimDoc => ({
+    id: 'c1',
+    uid: 'u1',
+    displayName: 'Deck Daddy',
+    cellIndex: 5,
+    itemText: 'p5',
+    proofId: 'P',
+    status: 'pending',
+    createdAt: 0,
+    resolvedBy: null,
+    ...over,
+  });
+
+  const boardWrite = () =>
+    txSet.mock.calls.find((c) => (c[0] as { path: string }).path.includes('/boards/'))?.[1] as
+      | { cells: Cell[] }
+      | undefined;
+
+  beforeEach(() => {
+    cells = dealt();
+    vi.mocked(runTransaction).mockImplementation(async (_db, fn) =>
+      fn({ get: txGet, set: txSet, delete: txDelete } as never),
+    );
+    txGet.mockImplementation((ref: { path: string }): Promise<FakeSnap> => {
+      if (ref.path.includes('/boards/'))
+        return Promise.resolve({ exists: () => true, data: () => ({ cells }) });
+      if (ref.path.includes('/players/'))
+        return Promise.resolve({ exists: () => true, data: () => ({ firstBingoAt: null }) });
+      return Promise.resolve({ exists: () => false, data: () => undefined });
+    });
+  });
+
+  it('rejecting a claim deletes the rejected cell’s marker in the SAME transaction (marked→unmarked symmetry)', async () => {
+    cells[5] = { ...cells[5], marked: true, markedAt: 9, proofId: 'P', status: 'pending' };
+
+    await rejectClaim(claim(), 'admin-1');
+
+    // The claim's cell flipped unmarked...
+    expect(boardWrite()!.cells[5]).toMatchObject({ marked: false, proofId: null, markedAt: null });
+    // ...and exactly that cell's marker went with it — the same path
+    // setMark/attachProof write, keyed by the claim owner's uid.
+    expect(txDelete).toHaveBeenCalledTimes(1);
+    expect((txDelete.mock.calls[0][0] as { path: string }).path).toBe(
+      `events/${EVENT_ID}/tally/i5/markers/u1`,
+    );
+  });
+
+  it('a reject that flips NO cell (the proof’s cell projection was drained away) deletes no marker', async () => {
+    // The claim's cell no longer references the proof (a queued bare-Mark drain
+    // took the cell over): isClaimCell matches nothing, the transform is a no-op,
+    // and the marker — now owned by the live bare Mark — must survive.
+    cells[5] = { ...cells[5], marked: true, markedAt: 9, proofId: null, status: 'confirmed' };
+
+    await rejectClaim(claim(), 'admin-1');
+
+    expect(boardWrite()!.cells[5].marked).toBe(true); // left to the Mark that owns it
+    expect(txDelete).not.toHaveBeenCalled();
+  });
+
+  it('confirming a claim never unmarks, so it deletes no marker', async () => {
+    cells[5] = { ...cells[5], marked: true, markedAt: 9, proofId: 'P', status: 'pending' };
+
+    await confirmClaim(claim(), 'admin-1');
+
+    expect(boardWrite()!.cells[5]).toMatchObject({ marked: true, status: 'confirmed' });
+    expect(txDelete).not.toHaveBeenCalled();
   });
 });

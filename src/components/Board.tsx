@@ -112,6 +112,20 @@ export default function Board() {
   // users/{uid} + the player row, #76/#78) — through `resolveDisplayName`, the same
   // validated resolver joinAndDeal uses (trim, ≤100-char cap, else the live auth value).
   const displayName = resolveDisplayName(player, user?.displayName);
+  // ...but that saved identity is KNOWN only under the same tri-state as
+  // knownFirstBingoAt above: while the subscription is still loading, or when a
+  // cache-only snapshot settled "absent" without server confirmation, the row is
+  // UNKNOWN — and `displayName` above has silently fallen back to the AUTH name.
+  // Stamping that onto a Tally marker would publish a returning Player's stale
+  // Google name over their customized one for any Mark tapped in the loading
+  // window (Codex P2, PR #87). So doMark passes `displayName` only when the row
+  // is known, and `undefined` otherwise — markerDisplayName then falls back to
+  // the CACHED player row (the saved name), then 'Anonymous', deliberately never
+  // the possibly-stale auth value. A loaded-null row IS known (a real "no saved
+  // row"), so the auth fallback is then legitimate. ProofSheet keeps the resolved
+  // string either way: its sheet only opens after a render with the row loaded in
+  // practice, and #78 pins auth as its explicit pre-load fallback.
+  const identityKnown = !playerLoading && (player !== null || playerConfirmed);
   const { data: event } = useEventDoc();
   // Codex P3 (PR #66): the pool only matters before a Board is dealt, so once
   // a Board exists this Player has no use for a live listener on every other
@@ -200,7 +214,7 @@ export default function Board() {
         nextMarked,
         claimMode,
         currentFirstBingoAt: knownFirstBingoAt(player, playerLoading, playerConfirmed),
-        displayName,
+        displayName: identityKnown ? displayName : undefined,
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');

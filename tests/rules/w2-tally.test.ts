@@ -92,6 +92,14 @@ describe('firestore.rules — per-Prompt Tally (specs/w2-tally.md)', () => {
     await assertSucceeds(getDoc(doc(db(BOB), markerPath(ITEM, CAROL)))); // Bob reads who else got it
   });
 
+  it('an admin may delete another Player’s marker; a non-admin peer may not', async () => {
+    // The rejectClaim resolve (src/data/admin.ts) depends on this allowance: an
+    // admin rejecting a pending claim deletes the claimant's marker in the same
+    // transaction (the marked→unmarked ↔ marker-delete symmetry). Peers cannot.
+    await assertFails(deleteDoc(doc(db(BOB), markerPath(ITEM, CAROL)))); // a peer cannot moderate
+    await assertSucceeds(deleteDoc(doc(db(ADMIN), markerPath(ITEM, CAROL)))); // the admin resolve can
+  });
+
   it('the aggregate tally/{itemId} doc is admin-maintained, never client-forged', async () => {
     const agg = { itemId: ITEM, count: 1, markers: [] };
     await assertFails(setDoc(doc(db(ALICE), at(`tally/${ITEM}`)), agg)); // a Player cannot forge the count
