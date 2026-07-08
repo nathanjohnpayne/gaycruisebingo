@@ -7,6 +7,7 @@ import { useEventDoc, useMyPlayer } from './hooks/useData';
 import type { ThemeId } from './types';
 import App from './App';
 import ConsentNotice from './components/ConsentNotice';
+import AcceptableUse from './components/AcceptableUse';
 import InstallPrompt from './components/InstallPrompt';
 import './theme/themes.css';
 import './index.css';
@@ -28,6 +29,11 @@ function ThemedApp() {
   return (
     <ThemeProvider defaultTheme={defaultTheme}>
       <App />
+      {/* Acceptable-use / community-guidelines affordance in the app chrome. It
+          self-gates on the signed-in User (ADR 0005 — behind the auth wall, no
+          public page) and is mounted here rather than in the frozen tab route
+          table. */}
+      <AcceptableUse />
     </ThemeProvider>
   );
 }

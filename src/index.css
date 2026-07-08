@@ -585,3 +585,27 @@ body:has(.tabs) .install-prompt {
 body.install-prompt-visible .app {
   padding-bottom: 176px; /* 112px .app base + ~64px banner */
 }
+
+/* ---------- acceptable-use trigger ---------- */
+/* The "18+ · Guidelines" pill (src/components/AcceptableUse.tsx), fixed above
+   the tab bar. Positioning lives in this class (not inline) so the
+   install-banner override below can win over it. */
+.guidelines-trigger {
+  position: fixed;
+  right: 12px;
+  bottom: calc(64px + env(safe-area-inset-bottom));
+  z-index: 30;
+  font-size: 12px;
+  padding: 6px 10px;
+  opacity: 0.85;
+}
+/* The install banner (.install-prompt above, z-index 55) sits in the same
+   bottom-right region once it's up and would otherwise cover the trigger —
+   the app's only entry point to the guidelines dialog. Lift the trigger
+   clear of the banner's ~64px footprint (see the .app padding-bottom
+   comment above) and raise it above the banner's stacking context as a
+   second line of defense in case that estimate runs short (#69 P3). */
+body.install-prompt-visible .guidelines-trigger {
+  bottom: calc(64px + 64px + env(safe-area-inset-bottom));
+  z-index: 56;
+}
