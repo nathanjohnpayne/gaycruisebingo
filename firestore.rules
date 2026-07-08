@@ -57,15 +57,26 @@ service cloud.firestore {
         allow delete: if isAdmin(eventId);
       }
 
-      // Membership + denormalized stats. Phase 0: client writes its own stats
-      // (honor-system game). Phase 1 moves these behind Cloud Functions.
+      // Membership + denormalized stats. Self-writable BY DESIGN (ADR 0001):
+      // Marks are client-authoritative, so a Player writes their OWN stats
+      // (bingoCount, squaresMarked, firstBingoAt) directly. This is the
+      // honor-system trust model, NOT a hole to close — a reviewer who "fixes"
+      // it by gating stat writes behind a Cloud Function has misread the design.
+      // #40 deliberately removed the server recompute that implied otherwise;
+      // any Phase-1 recompute is consistency/repair, never integrity/anti-cheat.
+      // Cross-Player writes stay denied by isOwner(uid); admins may moderate.
       match /players/{uid} {
         allow read: if signedIn();
         allow create, update: if isOwner(uid) || isAdmin(eventId);
         allow delete: if isAdmin(eventId);
       }
 
-      // A player's board is private to them.
+      // A Player's Board (layout + bingo progress) is PRIVATE to its owner
+      // (ADR 0002) and, like players/{uid}, self-writable BY DESIGN (ADR 0001):
+      // the owner reads and writes their own frozen card directly under the
+      // honor-system model. Do NOT lock these writes down — self-write is the
+      // intended trust model, not a gap. Admins may read/moderate; all others
+      // are denied by isOwner(uid).
       match /boards/{uid} {
         allow read, write: if isOwner(uid) || isAdmin(eventId);
       }
@@ -153,6 +164,12 @@ service cloud.firestore {
       // attributed per-Prompt tally: every Mark — proofed or not — publishes WHO
       // marked the Prompt. That public disclosure is the "see who else got this
       // square" feature, not a leak; there is no anonymity by design.
+      // This is the PUBLIC half of the honor-system model whose PRIVATE half is
+      // the self-writable Board/stats above (ADR 0001): a Player self-records the
+      // Mark on their Board AND self-publishes their own attributed Tally entry
+      // (markers/{uid} below). A bare Mark publishes ONLY here — nothing lands on
+      // the Feed (moments/**) without a Moment. Documented, not altered, per #18:
+      // do not lock down Tally reads or the owner-only marker writes.
       match /tally/{itemId} {
         // The denormalized aggregate ({ itemId, count, markers }) that backs the
         // Square badge is public-read; in Phase 0 the badge count is derived from
