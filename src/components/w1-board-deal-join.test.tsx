@@ -7,17 +7,17 @@ import type { BoardDoc, EventDoc, ItemDoc, PlayerDoc } from '../types';
 // always-marked "Complain about Circuit Music" Free Space centre, no re-deal /
 // Square-swap — ADR 0003), the Board-side pool<MIN_POOL deal guard (ADR 0004),
 // `joinAndDeal` freeze-at-join semantics (deal once; re-joining never
-// re-deals; a thin pool never persists a blank Board), the pool-recovery
-// auto-retry into AuthContext's retryDeal, and gating the pool listener to
-// the no-board state (Codex findings on PR #66).
+// re-deals; a thin pool never persists a blank Board) plus its join-time
+// preference for the saved users/{uid} identity over the raw Google one
+// (Codex P2 on PR #67, api half), the pool-recovery auto-retry on the
+// DealError surface — the panel App mounts INSTEAD of Board while dealError
+// is set (Codex P2 round 2) — and gating Board's pool listener to the
+// no-board state (Codex P3 on PR #66).
 
 // Hoisted so the vi.mock factories (Vitest lifts them above the imports) can
 // close over the same mutable fixtures and spies the test bodies drive.
 const H = vi.hoisted(() => ({
   authUser: null as User | null,
-  authDealError: null as string | null,
-  authDealing: false,
-  authRetryDeal: vi.fn(),
   useItemsSpy: vi.fn(),
   data: {
     board: null as BoardDoc | null,
@@ -74,23 +74,16 @@ vi.mock('firebase/firestore', () => {
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 
 vi.mock('../auth/AuthContext', () => ({
-  useAuth: () => ({
-    user: H.authUser,
-    loading: false,
-    dealError: H.authDealError,
-    dealing: H.authDealing,
-    signIn: vi.fn(),
-    signOutUser: vi.fn(),
-    retryDeal: H.authRetryDeal,
-  }),
+  useAuth: () => ({ user: H.authUser, loading: false, signIn: vi.fn(), signOutUser: vi.fn() }),
 }));
 
-// Inject Board's live data through the hooks so the render test drives a real
-// dealt Board (and the guard's thin-pool path) without a Firestore listener.
-// useItems is spied so tests can assert Board threads the `enabled` flag
-// (Codex P3: gate the pool listener once a Board exists) without exercising
-// the real onSnapshot subscription — that gate is proven directly against the
-// real hook in src/hooks/useData.test.ts.
+// Inject the live data through the hooks so the render tests drive a real
+// dealt Board (and the guard's thin-pool path) — and DealError's recovery
+// watcher — without a Firestore listener. useItems is spied so tests can
+// assert Board threads the `enabled` flag (Codex P3: gate the pool listener
+// once a Board exists) without exercising the real onSnapshot subscription —
+// that gate is proven directly against the real hook in
+// src/hooks/useData.test.ts.
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.data.board, loading: H.data.boardLoading }),
   useMyPlayer: () => ({ data: H.data.player, loading: false }),
@@ -103,11 +96,17 @@ vi.mock('../hooks/useData', () => ({
 
 // Real modules under test — imported after the mocks are declared.
 import Board from './Board';
+import { DealError } from './SignIn';
 import { joinAndDeal } from '../data/api';
 import { dealBoard, MIN_POOL, CENTER, type DealItem } from '../game/logic';
 import { FREE_TEXT, SEED_ITEMS } from '../data/seed';
 
 const SIGNED_IN = { uid: 'sailor-1', displayName: 'Sailor', photoURL: null } as unknown as User;
+const SIGNED_IN_WITH_PHOTO = {
+  uid: 'sailor-1',
+  displayName: 'Sailor',
+  photoURL: 'https://lh3.example/google.jpg',
+} as unknown as User;
 
 function mkItem(id: string, isFreeSpace = false): ItemDoc {
   return {
@@ -127,9 +126,6 @@ const dealPool: DealItem[] = SEED_ITEMS.map((text, i) => ({ id: `seed${i}`, text
 
 beforeEach(() => {
   H.authUser = SIGNED_IN;
-  H.authDealError = null;
-  H.authDealing = false;
-  H.authRetryDeal.mockReset();
   H.useItemsSpy.mockReset();
   H.data.board = null;
   H.data.boardLoading = false;
@@ -138,6 +134,10 @@ beforeEach(() => {
   H.data.items = [];
   H.data.poolLoading = false;
   H.getDoc.mockReset();
+  // Default doc reads: no Board yet, no saved users/{uid} profile. Tests that
+  // need an existing Board or a saved profile queue overrides with
+  // mockResolvedValueOnce in joinAndDeal's read order (board, then profile).
+  H.getDoc.mockResolvedValue({ exists: () => false });
   H.getDocs.mockReset();
   H.batchSet.mockReset();
   H.batchCommit.mockReset();
@@ -243,60 +243,80 @@ describe('Board deal guard (ADR 0004)', () => {
   });
 });
 
-describe('Board auto-retry after pool recovery (Codex P2)', () => {
-  it('fires retryDeal exactly once when the pool crosses MIN_POOL while a deal error is up', () => {
-    H.data.board = null;
-    H.data.items = activeItems(MIN_POOL - 1); // thin — matches the failed deal
-    H.authDealError = 'not enough prompts';
-    H.authDealing = false;
+describe('DealError auto-retry after pool recovery (Codex P2, round 2)', () => {
+  // While dealError is set, App renders <DealError> INSTEAD of Board (the #61
+  // wiring), so a watcher inside Board is never mounted in the state it must
+  // observe. These tests render DealError alone — Board is absent throughout,
+  // exactly the app's state after a failed join — proving the watcher that
+  // fires the retry is genuinely active on the mounted surface.
+  const msg = 'pool below 24';
 
-    const { rerender } = render(<Board />);
-    expect(H.authRetryDeal).not.toHaveBeenCalled();
+  it('fires onRetry exactly once when the pool crosses MIN_POOL, then stays quiet on later snapshots', () => {
+    const onRetry = vi.fn();
+    H.data.items = activeItems(MIN_POOL - 1); // thin — matches the failed deal
+
+    const { rerender } = render(<DealError message={msg} onRetry={onRetry} retrying={false} />);
+    expect(onRetry).not.toHaveBeenCalled();
+    // The watcher subscribes to the pool itself (no Board mounted to do it).
+    expect(H.useItemsSpy).toHaveBeenCalled();
+    expect(H.useItemsSpy).not.toHaveBeenCalledWith(false);
 
     // The pool recovers past the floor.
     H.data.items = activeItems(MIN_POOL + 2);
-    rerender(<Board />);
-    expect(H.authRetryDeal).toHaveBeenCalledTimes(1);
+    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
+    expect(onRetry).toHaveBeenCalledTimes(1);
 
     // Further snapshots at/above the threshold must not retry again — this is
-    // the "not per snapshot" guard against a retry loop.
+    // the "once per recovery, not per snapshot" guard against a retry loop.
     H.data.items = activeItems(MIN_POOL + 5);
-    rerender(<Board />);
-    expect(H.authRetryDeal).toHaveBeenCalledTimes(1);
+    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it('does not retry while a deal is already in flight', () => {
-    H.data.board = null;
+  it('does not fire while a retry is already in flight', () => {
+    const onRetry = vi.fn();
     H.data.items = activeItems(MIN_POOL + 2); // healthy pool
-    H.authDealError = 'not enough prompts';
-    H.authDealing = true;
 
-    render(<Board />);
+    render(<DealError message={msg} onRetry={onRetry} retrying={true} />);
 
-    expect(H.authRetryDeal).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
   });
 
-  it('does not retry when there is no deal error (healthy pool, deal simply in flight)', () => {
-    H.data.board = null;
-    H.data.items = activeItems(MIN_POOL + 2);
-    H.authDealError = null;
-    H.authDealing = false;
+  it('does not fire while the pool stays below MIN_POOL', () => {
+    const onRetry = vi.fn();
+    H.data.items = activeItems(MIN_POOL - 3);
 
-    render(<Board />);
+    const { rerender } = render(<DealError message={msg} onRetry={onRetry} retrying={false} />);
+    // The pool grows but never crosses the floor (23 real + the Free Space
+    // item is 24 docs but still 23 toward the threshold).
+    H.data.items = [...activeItems(MIN_POOL - 1), mkItem('free', true)];
+    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
 
-    expect(H.authRetryDeal).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
   });
 
-  it('does not retry once a Board exists, even if a stale deal error lingers', () => {
-    const cells = dealBoard(dealPool, FREE_TEXT, 5);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 5, createdAt: 0, cells };
-    H.data.items = activeItems(MIN_POOL + 2);
-    H.authDealError = 'not enough prompts';
-    H.authDealing = false;
+  it('does not loop after a failed auto-retry; re-arms only on a fresh recovery', () => {
+    const onRetry = vi.fn();
+    H.data.items = activeItems(MIN_POOL - 1);
+    const { rerender } = render(<DealError message={msg} onRetry={onRetry} retrying={false} />);
 
-    render(<Board />);
+    H.data.items = activeItems(MIN_POOL); // crosses the floor exactly
+    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
+    expect(onRetry).toHaveBeenCalledTimes(1);
 
-    expect(H.authRetryDeal).not.toHaveBeenCalled();
+    // The fired retry runs and fails — the error surface stays mounted with
+    // the pool still healthy. The latch must hold: no second auto-fire.
+    rerender(<DealError message={msg} onRetry={onRetry} retrying={true} />);
+    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+
+    // Only a genuine new recovery (pool dips below the floor, then crosses it
+    // again) re-arms the watcher.
+    H.data.items = activeItems(MIN_POOL - 1);
+    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
+    H.data.items = activeItems(MIN_POOL + 1);
+    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
+    expect(onRetry).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -326,13 +346,13 @@ describe('joinAndDeal freeze-at-join', () => {
 
     await joinAndDeal(SIGNED_IN);
 
+    expect(H.getDoc).toHaveBeenCalledTimes(1); // board check only — no profile read for returning Players
     expect(H.getDocs).not.toHaveBeenCalled(); // never reads the pool
     expect(H.batchSet).not.toHaveBeenCalled(); // never re-writes the Board
     expect(H.batchCommit).not.toHaveBeenCalled();
   });
 
   it('deals once from the active non-free pool (24 Prompts + marked Free Space)', async () => {
-    H.getDoc.mockResolvedValueOnce({ exists: () => false });
     const docs = [...activeItems(30), mkItem('free', true)].map((it) => ({ data: () => it }));
     H.getDocs.mockResolvedValueOnce({ docs });
 
@@ -349,11 +369,88 @@ describe('joinAndDeal freeze-at-join', () => {
   });
 
   it('propagates the pool<MIN_POOL guard and never persists a blank Board', async () => {
-    H.getDoc.mockResolvedValueOnce({ exists: () => false });
     const docs = activeItems(MIN_POOL - 1).map((it) => ({ data: () => it }));
     H.getDocs.mockResolvedValueOnce({ docs });
 
     await expect(joinAndDeal(SIGNED_IN)).rejects.toThrow(/at least 24 prompts/);
     expect(H.batchCommit).not.toHaveBeenCalled(); // no broken Board written
+  });
+});
+
+describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', () => {
+  // joinAndDeal denormalizes an identity into the public players/{uid} row.
+  // It must prefer the Player's SAVED users/{uid} profile — read order in
+  // joinAndDeal is board doc first, then profile — so a custom name/avatar is
+  // never overwritten by the raw Google identity at join.
+  const healthyPoolDocs = () => ({
+    docs: activeItems(30).map((it) => ({ data: () => it })),
+  });
+  const playerWrite = () => H.batchSet.mock.calls[1][1] as PlayerDoc;
+
+  it('prefers the saved profile name and custom avatar over the Google identity', async () => {
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false }) // no Board yet
+      .mockResolvedValueOnce({
+        exists: () => true,
+        data: () => ({
+          displayName: 'Deck Daddy',
+          photoURL: 'https://cdn.example/custom.jpg',
+          customPhoto: true,
+          createdAt: 0,
+        }),
+      });
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN_WITH_PHOTO);
+
+    expect(playerWrite()).toMatchObject({
+      displayName: 'Deck Daddy', // saved name, not the Google "Sailor"
+      photoURL: 'https://cdn.example/custom.jpg', // custom avatar wins
+    });
+  });
+
+  it('keeps the live Google photo when the saved profile has no custom avatar', async () => {
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false }) // no Board yet
+      .mockResolvedValueOnce({
+        exists: () => true,
+        data: () => ({
+          displayName: 'Deck Daddy',
+          photoURL: 'https://stale.example/copied-at-first-signin.jpg',
+          createdAt: 0, // no customPhoto flag — profile photo is a stale copy
+        }),
+      });
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN_WITH_PHOTO);
+
+    expect(playerWrite()).toMatchObject({
+      displayName: 'Deck Daddy',
+      photoURL: 'https://lh3.example/google.jpg', // live auth photo, not the stale copy
+    });
+  });
+
+  it('falls back to the auth identity when no users/{uid} profile exists', async () => {
+    // beforeEach default: board missing AND profile missing.
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN);
+
+    expect(playerWrite()).toMatchObject({ displayName: 'Sailor', photoURL: null });
+  });
+
+  it('falls back to the auth identity when the profile read fails outright', async () => {
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false }) // no Board yet
+      .mockRejectedValueOnce(new Error('offline')); // profile read fails — must not block the deal
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN_WITH_PHOTO);
+
+    expect(H.batchCommit).toHaveBeenCalledTimes(1); // the deal still lands
+    expect(playerWrite()).toMatchObject({
+      displayName: 'Sailor',
+      photoURL: 'https://lh3.example/google.jpg',
+    });
   });
 });

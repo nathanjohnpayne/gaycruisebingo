@@ -9,7 +9,7 @@ import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode } from '../types';
 
 export default function Board() {
-  const { user, dealError, dealing, retryDeal } = useAuth();
+  const { user } = useAuth();
   const uid = user?.uid;
   const { data: board, loading: boardLoading } = useBoard(uid);
   const { data: player } = useMyPlayer(uid);
@@ -25,10 +25,8 @@ export default function Board() {
   const wasBingo = useRef(false);
   const wasBlackout = useRef(false);
   const initialized = useRef(false);
-  const retryFiredRef = useRef(false);
 
   const cells: Cell[] = board?.cells ?? [];
-  const activePool = items.filter((i) => !i.isFreeSpace);
 
   useEffect(() => {
     if (!cells.length) return;
@@ -50,25 +48,6 @@ export default function Board() {
     wasBlackout.current = black;
   }, [cells]);
 
-  // Codex P2 (PR #66): joinAndDeal throws once on a thin pool and nothing
-  // previously re-attempted the deal after Prompts got added — the Player was
-  // stuck until a reload or account switch. Once the active non-free pool
-  // crosses back over MIN_POOL while a deal error is up and no deal is
-  // already in flight, fire AuthContext's retryDeal(). Edge-triggered on the
-  // pool crossing the threshold (the ref resets below it) so a healthy pool
-  // re-firing this effect on every later snapshot retries once per recovery,
-  // not once per snapshot.
-  useEffect(() => {
-    if (activePool.length < MIN_POOL) {
-      retryFiredRef.current = false;
-      return;
-    }
-    if (!board && dealError && !dealing && !retryFiredRef.current) {
-      retryFiredRef.current = true;
-      retryDeal();
-    }
-  }, [board, dealError, dealing, activePool.length, retryDeal]);
-
   if (!uid) return null;
   if (!board) {
     // A Board is dealt once at join from the active, non-free Prompt pool
@@ -79,7 +58,11 @@ export default function Board() {
     // subscription is still loading we can't tell a thin pool from an unfetched
     // board or a deal in flight, so keep the neutral state until both resolve —
     // this also avoids flashing the guard at a returning Player whose already
-    // dealt board is mid-fetch when the pool has since gone thin.
+    // dealt board is mid-fetch when the pool has since gone thin. (The
+    // pool-recovery auto-retry does NOT live here: while dealError is set App
+    // renders <DealError> instead of Board, so its watcher — see SignIn.tsx —
+    // is the surface that is actually mounted in that state.)
+    const activePool = items.filter((i) => !i.isFreeSpace);
     if (!boardLoading && !poolLoading && activePool.length < MIN_POOL) {
       return (
         <div className="center muted" role="alert">
