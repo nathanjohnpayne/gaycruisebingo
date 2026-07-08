@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useMyPlayer, useEventDoc, useItems, useTally } from '../hooks/useData';
-import { setMark } from '../data/api';
+import { setMark, resolveDisplayName } from '../data/api';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
 import { track } from '../analytics';
 import Celebration from './Celebration';
@@ -104,14 +104,14 @@ export default function Board() {
   const uid = user?.uid;
   const { data: board, loading: boardLoading, hasServerData: boardConfirmed } = useBoard(uid);
   const { data: player, loading: playerLoading, hasServerData: playerConfirmed } = useMyPlayer(uid);
-  // ONE resolution of the caller's public display name, sourced from the saved
-  // player row — the denormalized identity the profile editor keeps current
-  // (data/profile.ts writes users/{uid} + the player row, #76/#78) — with the
-  // live auth value as the pre-load fallback. It feeds BOTH the per-Prompt Tally
-  // marker attribution (setMark, below) AND the new-Proof attribution (ProofSheet),
-  // so a Mark and a Proof always publish the SAME identity the leaderboard shows —
-  // never two divergent name sources (ADR 0002).
-  const displayName = player?.displayName ?? user?.displayName ?? 'Anonymous';
+  // ONE resolution of the caller's public display name, fed to BOTH the per-Prompt
+  // Tally marker (setMark, below) AND the new-Proof attribution (ProofSheet), so a
+  // Mark and a Proof always publish the SAME identity the leaderboard shows — never
+  // two divergent name sources (ADR 0002). It runs the saved player-row identity —
+  // the denormalized name the profile editor keeps current (data/profile.ts writes
+  // users/{uid} + the player row, #76/#78) — through `resolveDisplayName`, the same
+  // validated resolver joinAndDeal uses (trim, ≤100-char cap, else the live auth value).
+  const displayName = resolveDisplayName(player, user?.displayName);
   const { data: event } = useEventDoc();
   // Codex P3 (PR #66): the pool only matters before a Board is dealt, so once
   // a Board exists this Player has no use for a live listener on every other

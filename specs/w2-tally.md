@@ -18,17 +18,27 @@ The aggregate parent `tally/{itemId}` doc (`{ itemId, count, markers }`) is publ
 - `src/data/api.ts` — `setMark`'s existing `writeBatch` (board `cells` + player stats) also writes/deletes the Tally marker at `tally/{itemId}/markers/{uid}`. Marking adds `{ uid, displayName, markedAt }`; unmarking deletes exactly that Player's entry, mirroring the cell toggle so the Tally never drifts from the Board. The write rides INSIDE the existing per-board serialization chain and the SINGLE batch (never a second unserialized path, never a `runTransaction` — the whole Mark path is offline-queueable, ADR 0006). The Tally lives in its own subcollection, never in the `cells` array a bare Mark rewrites. The free centre Square (no `itemId`) never tallies. `resolveDisplayName` is extracted from `joinAndDeal` so the join-side denormalization and the marker attribution resolve the public name the SAME validated way (saved `users/{uid}` name within the 100-char cap, else the auth value); `markerDisplayName` bounds the final name to the rules' non-empty ≤100 contract so a marker write can never poison the atomic batch.
 - `src/data/paths.ts` + `src/data/converters.ts` — a converter-attached `tallyMarkersCol(itemId)` for reads; the converter pins `uid` to the doc id (the forgery-deniable attribution).
 - `src/hooks/useData.ts` — `useTally(itemId)` subscribes to the marker subcollection and returns the derived `count` plus the who-list sorted by `markedAt`.
-- `src/components/Board.tsx` — a count badge on each marked, non-free Square; tapping it opens a who-list sheet naming every Player who marked the Prompt. The Player's attributed name is resolved once from the saved `users/{uid}` profile + auth via `resolveDisplayName` and passed to `setMark`.
+- `src/components/Board.tsx` — a count badge on each marked, non-free Square; tapping it opens a who-list sheet naming every Player who marked the Prompt. The Player's attributed name is resolved ONCE — from the saved player-row identity + auth via `resolveDisplayName` (the same validated resolver `joinAndDeal` uses, unified post-#78 with the saved-player source `ProofSheet` uses) — and fed to BOTH `setMark` (the bare-Mark marker) AND `ProofSheet` (the proofed-Mark attribution), so a Mark and a Proof publish the SAME identity the leaderboard shows and Board never holds two divergent name sources.
+- `src/data/proofs.ts` — a Mark made in `proof_required` / `admin_confirmed` mode is captured through `ProofSheet` → `attachProof` (never `setMark`), so `attachProof` publishes the SAME attributed marker INSIDE its existing `runTransaction` (alongside the proof + board + player + optional claim), and `deleteProof` removes it when it genuinely unmarks the backing cell. `ProofSheet` threads the cell's `itemId` into `attachProof`. Every Mark — bare or proofed — therefore publishes; ADR 0002 holds for BOTH mark paths (this closes #31 AC 3, which the `setMark`-only half left open for proofed events).
 
 ## Constraints inherited from PR #75 (encoded here)
 
-- The marker write is part of the SAME `writeBatch` as board + player and rides the SAME per-board serialization chain — no second write path, no transaction (offline-queueable). Verified by the write-shape unit test and the offline durability layer.
+- **Bare honor Mark (`setMark`):** the marker write is part of the SAME `writeBatch` as board + player and rides the SAME per-board serialization chain — no second write path, no transaction, so it is offline-queueable. Verified by the write-shape unit test and the offline durability layer. (The proofed-Mark marker instead rides `attachProof`'s transaction and is online-only — see "Proofed Marks publish too" below.)
 - Tally state is its OWN subcollection; a bare Mark's full-`cells` merge never touches it, so the cross-writer `cells` clobber documented in `specs/w1-board-mark-win.md` cannot drop a marker.
 - Attribution reuses `joinAndDeal`'s validated `resolveDisplayName`; the marker always carries a rules-valid non-empty ≤100 `displayName`.
 
+## Proofed Marks publish too — pending and online nuances (ADR 0002, #31 AC 3)
+
+`setMark` is only the HONOR path. In `proof_required` and `admin_confirmed`, `Board` routes a Mark through `ProofSheet` → `attachProof`, NOT `setMark`; if only `setMark` tallied, a proofed Mark would silently never publish — a direct ADR 0002 / AC-3 violation. `attachProof` therefore publishes the marker in the SAME `runTransaction` it already uses for the proof + board + player (+ optional claim), under the SAME condition the cell becomes marked.
+
+- **Both claim modes publish immediately.** `attachProof` sets the backing cell `marked: true` in BOTH modes — `proof_required` → `status: 'confirmed'`, `admin_confirmed` → `status: 'pending'`. The marker publishes in both, exactly as `setMark` writes it on `nextMarked` regardless of pending/confirmed status. A pending Mark is still a Mark (the Player asserts they got the Prompt); Tally membership tracks the mark act, not confirmed stats — the `pending` exclusion is a STATS concern (`squaresMarked`/`bingoCount`), not a Tally one. There is no `attachProof` mode that leaves the cell unmarked-until-resolve, so there is no deferred-publish case.
+- **The admin resolve owes the symmetric delete (#37/#41).** If an admin later REJECTS an `admin_confirmed` claim and UNMARKS the cell, the resolve path (admin console) MUST delete the marker at `tally/{itemId}/markers/{uid}` — symmetric to `deleteProof`'s unmark below — so the Tally never shows a Player whose Mark was reversed. `attachProof` cannot do this (it runs at attach time, not resolve time); it is a requirement on the resolve path, recorded here.
+- **Unmarking removes it.** `deleteProof` deletes the marker in the same transaction when — and ONLY when — it flips the backing cell back to unmarked (the cell is still backed by this proof). The drained bare-Mark clobber that leaves the cell to another Mark does NOT unmark and does NOT touch the marker (accepted residual, ADR 0001; see `specs/w2-proof-capture.md`).
+- **Online-only, unlike the bare Mark.** `attachProof` rides a `runTransaction`, which needs a server round-trip and REJECTS offline — it never queues (`specs/w2-proof-capture.md` § offline). The marker inherits that: proofed-mode Tally entries are ONLINE-ONLY, matching the proof flow itself. The offline-durable, queue-on-reconnect Tally write is the bare honor Mark's `setMark` batch (`tests/offline/w2-tally.test.ts`). The proofed path is deliberately NOT converted to a `writeBatch` — that is #32's transaction, kept for its live-board read-modify-write.
+
 ## Claim → test
 
-Every claim maps to an assertion in a `w2-tally.test.*` file (basename-aligned; no vacuous coverage).
+Every claim maps to a real assertion — the bare-Mark claims in a `w2-tally.test.*` file, and the proofed-Mark claims (which ride `attachProof`'s transaction) in `src/data/w2-proof-capture.test.ts`, the harness that drives that transaction (basename-aligned to `specs/w2-proof-capture.md`); no vacuous coverage.
 
 ### Rules — a Player self-publishes their OWN attributed marker; forgery denied; reads public
 
@@ -48,6 +58,16 @@ Runner: `npm test` (Vitest, jsdom). Test: `src/data/w2-tally.test.ts`.
 - The free centre Square (no `itemId`) never writes a marker.
 - No `runTransaction` and no `addDoc` (ADR 0006 offline-queueable; ADR 0002 a bare Mark posts nothing to the Feed).
 
+### Unit — the proofed Mark publishes/removes the marker inside `attachProof`'s transaction
+
+Runner: `npm test` (Vitest, jsdom). Test: `src/data/w2-proof-capture.test.ts` (the real `attachProof`/`deleteProof` transaction harness — the marker rides that transaction, so its assertions live alongside the proof write it joins).
+
+- `proof_required` `attachProof` writes the attributed marker at `tally/{itemId}/markers/{uid}` (`{ uid, displayName, markedAt }`) in the SAME `runTransaction` as the proof + board + player (one `runTransaction`, no second write path).
+- `admin_confirmed` `attachProof` also writes the marker — the pending cell is marked immediately, so it tallies like `setMark` does on a pending Mark.
+- The attributed name is bounded to the marker rule's ≤100-char cap.
+- The free centre (null `itemId`) writes no marker.
+- `deleteProof` deletes the marker at that same path when it genuinely unmarks the backing cell, and leaves it untouched on the clobbered-cell residual.
+
 ### RTL — `useTally` returns the count + who-list for a Prompt
 
 Runner: `npm test` (Vitest, jsdom). Test: `src/hooks/w2-tally.test.tsx`.
@@ -59,6 +79,6 @@ Runner: `npm test` (Vitest, jsdom). Test: `src/hooks/w2-tally.test.tsx`.
 
 - Given a Player marks a Square, when the write commits, then an attributed entry (`uid` + `displayName`) appears in that Prompt's Tally and the Square shows an incremented count — `src/data/w2-tally.test.ts` (marker write) + `src/hooks/w2-tally.test.tsx` (count) + `tests/rules/w2-tally.test.ts` (rules-allowed shape).
 - Given a Prompt's Tally has entries, when a Player taps the count, then the who-list names every Player who marked it — no anonymity (ADR 0002) — `src/hooks/w2-tally.test.tsx` (who-list) + the `Board.tsx` `TallySheet`.
-- Every Mark, proofed or not, publishes to the Tally; a bare Mark still posts nothing to the Feed — `src/data/w2-tally.test.ts` (no `addDoc`).
-- Unmarking removes the Player's own Tally entry — `src/data/w2-tally.test.ts` (unmark `batch.delete`) + `tests/rules/w2-tally.test.ts` (own-delete allowed).
+- Every Mark, proofed or not, publishes to the Tally; a bare Mark still posts nothing to the Feed — `src/data/w2-tally.test.ts` (bare Mark: marker in the one batch, no `addDoc`) + `src/data/w2-proof-capture.test.ts` (proofed Mark: marker in `attachProof`'s transaction, both claim modes).
+- Unmarking removes the Player's own Tally entry — `src/data/w2-tally.test.ts` (bare-Mark unmark `batch.delete`) + `src/data/w2-proof-capture.test.ts` (proofed-Mark `deleteProof` marker delete) + `tests/rules/w2-tally.test.ts` (own-delete allowed).
 - The Board's layout/progress stays private; only per-Prompt Tally membership is public — the Tally is its own subcollection with public marker reads, while `boards/{uid}` stays owner-only (`firestore.rules`).

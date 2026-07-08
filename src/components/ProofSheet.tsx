@@ -78,6 +78,7 @@ export default function ProofSheet(props: Props) {
         photoURL,
         cells,
         cellIndex: cell.index,
+        itemId: cell.itemId, // the Prompt this Mark tallies (ADR 0002); null for the free centre
         itemText: cell.text,
         claimMode,
         currentFirstBingoAt,

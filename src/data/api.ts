@@ -282,15 +282,18 @@ export function computeMark(params: {
 const markChains = new Map<string, Promise<unknown>>();
 
 /**
- * A rules-valid attributed name for a Tally marker. Prefers the caller-resolved
- * `displayName` — production passes the saved users/{uid} name + auth fallback via
- * `resolveDisplayName` (the SAME validated pattern joinAndDeal uses) — falling back
- * to the already-cached player row's denormalized name (so a direct caller like the
- * offline durability harness still attributes), then 'Anonymous'. Always a non-empty
- * string within the 100-char cap the tally-marker rule enforces, so a marker write
- * can NEVER violate the rule and poison the atomic board+player+marker batch on drain.
+ * A rules-valid attributed name for a Tally marker, shared by the honor-Mark
+ * (`setMark`) and proofed-Mark (`attachProof`) paths. Prefers the caller-resolved
+ * `displayName` — production (Board.tsx) resolves the saved player-row identity +
+ * auth fallback via `resolveDisplayName` (the SAME validated pattern joinAndDeal
+ * uses) — falling back to the already-cached/looked-up player row's denormalized
+ * name (so a direct caller like the offline durability harness still attributes),
+ * then 'Anonymous'. Always a non-empty string within the 100-char cap the
+ * tally-marker rule enforces, so a marker write can NEVER violate the rule and
+ * poison the atomic board+player+marker batch (setMark) or the
+ * proof+board+player+marker transaction (attachProof).
  */
-function markerDisplayName(preferred: string | undefined, cachedPlayerName: unknown): string {
+export function markerDisplayName(preferred: string | undefined, cachedPlayerName: unknown): string {
   const candidate =
     typeof preferred === 'string' && preferred.trim().length > 0
       ? preferred
@@ -311,7 +314,7 @@ export async function setMark(params: {
   // loading so a cache-miss Mark can't restamp an earlier server value.
   currentFirstBingoAt: number | null | undefined;
   // The marker's attributed name for the per-Prompt Tally write (ADR 0002).
-  // Board.tsx resolves it from the saved users/{uid} profile + auth via
+  // Board.tsx resolves it from the saved player-row identity + auth via
   // `resolveDisplayName` (the SAME validated pattern joinAndDeal uses). Optional
   // so direct callers (the offline durability harness) can omit it and fall back
   // to the cached player row's already-denormalized name — see `markerDisplayName`.
