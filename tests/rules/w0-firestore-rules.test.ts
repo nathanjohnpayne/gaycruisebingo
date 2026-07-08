@@ -1,0 +1,143 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
+import {
+  assertFails,
+  assertSucceeds,
+  initializeTestEnvironment,
+  type RulesTestEnvironment,
+} from '@firebase/rules-unit-testing';
+import { deleteDoc, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+
+// Substantive firestore.rules invariants on the w0-test-harness (#8) rules layer.
+// This extends firestore-harness.test.ts (which only proves the emulator boots and
+// enforces rules) with the honor-system contract the ADRs pin:
+//   ADR 0001 — Marks are client-authoritative: boards/players are self-writable BY
+//              DESIGN, so these tests assert those writes are ALLOWED (not a hole).
+//   ADR 0002 — a Mark is private on the Board but public as an attributed per-Prompt
+//              Tally; Moments broadcast a big beat.
+//   ADR 0004 — reactive moderation: items updates are report-only increments and
+//              settings.reportHideThreshold is validated.
+// The PERMISSION_DENIED lines the SDK logs to stderr are the expected assertFails
+// denials, not test failures.
+
+const RULES_PATH = fileURLToPath(new URL('../../firestore.rules', import.meta.url));
+const EVENT = 'cruise';
+const [ADMIN, ALICE, BOB, CAROL] = ['admin-uid', 'alice', 'bob', 'carol'];
+const NOW = () => Date.now();
+
+let testEnv: RulesTestEnvironment;
+const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
+const at = (p: string) => `events/${EVENT}/${p}`;
+
+// A fully-valid `photo` Proof whose storagePath + mediaURL are pinned to this
+// proof's OWN doc id (proofs/{event}/{uid}/{id}.jpg); `over` mutates one field.
+const photoProof = (id: string, over: Record<string, unknown> = {}) => ({
+  uid: ALICE, displayName: 'Alice', photoURL: null, type: 'photo', cellIndex: 5,
+  itemText: 'Saw a drag show', storagePath: `proofs/${EVENT}/${ALICE}/${id}.jpg`,
+  mediaURL: `https://firebasestorage.googleapis.com/v0/b/demo-bucket/o/proofs%2F${EVENT}%2F${ALICE}%2F${id}.jpg?alt=media&token=t`,
+  thumbURL: null, text: null, createdAt: NOW(), reportCount: 0, status: 'active', visionFlag: null, ...over,
+});
+
+beforeAll(async () => {
+  // Under `firebase emulators:exec` the host is exported here; fall back to the
+  // firebase.json firestore port so a direct run still connects.
+  const host = process.env.FIRESTORE_EMULATOR_HOST ?? '127.0.0.1:8080';
+  const [hostname, port] = host.split(':');
+  testEnv = await initializeTestEnvironment({
+    projectId: 'demo-gaycruisebingo-rules',
+    firestore: { host: hostname, port: Number(port), rules: readFileSync(RULES_PATH, 'utf8') },
+  });
+});
+
+afterAll(async () => {
+  await testEnv?.cleanup();
+});
+
+// Each test starts clean with a canonical Event (admins=[ADMIN], numeric threshold),
+// a reportable prompt, and public-read fixtures (a foreign Tally entry, Doubt, Moment).
+beforeEach(async () => {
+  await testEnv.clearFirestore();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const s = ctx.firestore();
+    await setDoc(doc(s, `events/${EVENT}`), {
+      name: 'Cruise', sailStart: '2026-01-01', sailEnd: '2026-01-07', status: 'active',
+      defaultTheme: 'neon-playground', claimMode: 'honor', admins: [ADMIN],
+      settings: { reportHideThreshold: 3 },
+    });
+    await setDoc(doc(s, at('items/item1')), {
+      text: 'Saw a drag show', createdBy: ALICE, createdAt: NOW(), isFreeSpace: false,
+      status: 'active', reportCount: 0,
+    });
+    await setDoc(doc(s, at(`tally/item1/markers/${CAROL}`)), { uid: CAROL, displayName: 'Carol', markedAt: NOW() });
+    await setDoc(doc(s, at('doubts/seed')), {
+      itemId: 'item1', cellIndex: 4, fromUid: CAROL, fromDisplayName: 'Carol',
+      targetUid: BOB, targetDisplayName: 'Bob', createdAt: NOW(),
+    });
+    await setDoc(doc(s, at('moments/seed')), { kind: 'bingo', uid: CAROL, displayName: 'Carol', photoURL: null, createdAt: NOW() });
+  });
+});
+
+describe('firestore.rules — honor-system invariants', () => {
+  it('ADR 0001: boards/players are self-writable; cross-player writes denied', async () => {
+    const board = (uid: string) => ({ uid, seed: 1, createdAt: NOW(), cells: [] });
+    const player = (uid: string) => ({ uid, displayName: uid, photoURL: null, joinedAt: NOW(), bingoCount: 0, squaresMarked: 0, firstBingoAt: null });
+    await assertSucceeds(setDoc(doc(db(ALICE), at(`boards/${ALICE}`)), board(ALICE)));
+    await assertFails(setDoc(doc(db(ALICE), at(`boards/${BOB}`)), board(BOB)));
+    await assertSucceeds(setDoc(doc(db(ALICE), at(`players/${ALICE}`)), player(ALICE)));
+    await assertFails(setDoc(doc(db(ALICE), at(`players/${BOB}`)), player(BOB)));
+  });
+
+  it('ADR 0002: a Mark publishes an attributed Tally entry; forgery denied; reads public', async () => {
+    const entry = (uid: string) => ({ uid, displayName: uid, markedAt: NOW() });
+    const mine = doc(db(ALICE), at(`tally/item1/markers/${ALICE}`));
+    await assertSucceeds(setDoc(mine, entry(ALICE))); // own attributed entry
+    await assertSucceeds(deleteDoc(mine)); // unmarking removes exactly that entry
+    await assertFails(setDoc(doc(db(ALICE), at(`tally/item1/markers/${BOB}`)), entry(ALICE))); // another's slot
+    await assertFails(setDoc(doc(db(ALICE), at(`tally/item1/markers/${ALICE}`)), entry(BOB))); // forged uid in own slot
+    await assertSucceeds(getDoc(doc(db(BOB), at(`tally/item1/markers/${CAROL}`)))); // public read, no anonymity
+    // The denormalized aggregate is admin/Cloud-Function-maintained, never client-forged.
+    const agg = { itemId: 'item1', count: 1, markers: [] };
+    await assertFails(setDoc(doc(db(ALICE), at('tally/item1')), agg));
+    await assertSucceeds(setDoc(doc(db(ADMIN), at('tally/item1')), agg));
+  });
+
+  it('ADR 0004: items are report-only increments; reportHideThreshold validated', async () => {
+    const item = doc(db(ALICE), at('items/item1'));
+    await assertFails(updateDoc(item, { reportCount: 1, text: 'changed' })); // any other field
+    await assertSucceeds(updateDoc(item, { reportCount: 1 })); // +1 only
+    const event = doc(db(ADMIN), `events/${EVENT}`);
+    await assertSucceeds(updateDoc(event, { 'settings.reportHideThreshold': 5 })); // numeric
+    await assertFails(updateDoc(event, { 'settings.reportHideThreshold': 'high' })); // non-numeric
+    await assertFails(updateDoc(doc(db(ALICE), `events/${EVENT}`), { name: 'Hacked' })); // non-admin
+  });
+
+  it('proofs media is pinned to the proof’s own Storage object', async () => {
+    await assertSucceeds(setDoc(doc(db(ALICE), at('proofs/p1')), photoProof('p1'))); // matching pin
+    // Fresh create at a distinct id whose mediaURL points at a DIFFERENT object.
+    await assertFails(setDoc(doc(db(ALICE), at('proofs/p2')), photoProof('p2', {
+      mediaURL: `https://firebasestorage.googleapis.com/v0/b/demo-bucket/o/proofs%2F${EVENT}%2F${ALICE}%2Fp2.png?alt=media&token=t`,
+    })));
+  });
+
+  it('ADR 0001: a User self-attests 18+ (attestedAdultAt); cross/invalid denied', async () => {
+    const profile = (over = {}) => ({ displayName: 'Alice', photoURL: null, createdAt: NOW(), attestedAdultAt: NOW(), ...over });
+    await assertSucceeds(setDoc(doc(db(ALICE), `users/${ALICE}`), profile())); // self-write
+    await assertFails(setDoc(doc(db(ALICE), `users/${BOB}`), profile())); // cross-user
+    await assertFails(setDoc(doc(db(ALICE), `users/${ALICE}`), profile({ attestedAdultAt: 'yes' }))); // non-numeric
+  });
+
+  it('ADR 0001: Doubts are social pressure — own-attributed, public, never a gate', async () => {
+    const doubt = (over = {}) => ({ itemId: 'item1', cellIndex: 5, fromUid: ALICE, fromDisplayName: 'Alice', targetUid: BOB, targetDisplayName: 'Bob', createdAt: NOW(), ...over });
+    await assertSucceeds(setDoc(doc(db(ALICE), at('doubts/d1')), doubt())); // raised on another's Mark
+    await assertFails(setDoc(doc(db(ALICE), at('doubts/d2')), doubt({ fromUid: BOB, targetUid: CAROL }))); // forged fromUid
+    await assertSucceeds(getDoc(doc(db(ALICE), at('doubts/seed')))); // public read
+  });
+
+  it('ADR 0002: Moments broadcast a big beat — own-attributed, public', async () => {
+    const moment = (over = {}) => ({ kind: 'bingo', uid: ALICE, displayName: 'Alice', photoURL: null, createdAt: NOW(), ...over });
+    await assertSucceeds(setDoc(doc(db(ALICE), at('moments/m1')), moment())); // own beat
+    await assertFails(setDoc(doc(db(ALICE), at('moments/m2')), moment({ uid: BOB }))); // forged uid
+    await assertSucceeds(getDoc(doc(db(ALICE), at('moments/seed')))); // public read
+  });
+});
