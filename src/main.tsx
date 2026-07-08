@@ -6,6 +6,7 @@ import { ThemeProvider } from './theme/ThemeContext';
 import { useEventDoc, useMyPlayer } from './hooks/useData';
 import type { ThemeId } from './types';
 import App from './App';
+import ConsentNotice from './components/ConsentNotice';
 import './theme/themes.css';
 import './index.css';
 
@@ -32,6 +33,10 @@ function ThemedApp() {
 
 createRoot(rootEl).render(
   <React.StrictMode>
+    {/* Mounted outside the auth-gated tree (stable, non-frozen mount point —
+        see #17) so the 18+ analytics disclosure shows even on the signed-out
+        SignIn screen, since GA4's automatic events can fire before sign-in. */}
+    <ConsentNotice />
     <AuthProvider>
       <BrowserRouter>
         <ThemedApp />
