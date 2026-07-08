@@ -7,6 +7,7 @@ import { useEventDoc, useMyPlayer } from './hooks/useData';
 import type { ThemeId } from './types';
 import App from './App';
 import ConsentNotice from './components/ConsentNotice';
+import ProfileEditor from './components/ProfileEditor';
 import AcceptableUse from './components/AcceptableUse';
 import InstallPrompt from './components/InstallPrompt';
 import './theme/themes.css';
@@ -29,6 +30,8 @@ function ThemedApp() {
   return (
     <ThemeProvider defaultTheme={defaultTheme}>
       <App />
+      {/* Global profile editor — App.tsx/Nav.tsx are frozen, so it mounts here. */}
+      <ProfileEditor />
       {/* Acceptable-use / community-guidelines affordance in the app chrome. It
           self-gates on the signed-in User (ADR 0005 — behind the auth wall, no
           public page) and is mounted here rather than in the frozen tab route
