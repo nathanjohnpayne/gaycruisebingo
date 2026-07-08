@@ -220,8 +220,8 @@ service cloud.firestore {
 
       // Moments (ADR 0002): a broadcast of a big social beat (BINGO / Blackout /
       // First to BINGO) posted to the Feed. A bare Mark broadcasts nothing here.
-      // Own-beat create only (a forged uid is denied); public read; immutable
-      // except admin moderation.
+      // Own-beat create only (a forged uid is denied); public read; fully immutable
+      // (no update path); deletable by owner or admin.
       match /moments/{momentId} {
         allow read: if signedIn();
         allow create: if isOwner(request.resource.data.uid)
@@ -229,8 +229,27 @@ service cloud.firestore {
           && request.resource.data.displayName is string
           && request.resource.data.displayName.size() > 0
           && request.resource.data.displayName.size() <= 100
-          && request.resource.data.createdAt is number;
-        allow update: if isAdmin(eventId);
+          // createdAt is client-set and the Feed sorts by it desc; require a
+          // numeric, near-now value (same tolerance as proofs above: within +60s /
+          // -24h of request.time) so a bad clock or a forged far-future stamp can't
+          // pin a Moment above all Feed activity forever (Codex P2, PR #99 finding
+          // 3). The client writes Date.now() — in bounds by construction; an offline
+          // Moment drains with its ORIGINAL stamp, so a >24h offline queue would trip
+          // the lower bound (accepted residual — see specs/w2-feed-moments.md).
+          && request.resource.data.createdAt is number
+          && request.resource.data.createdAt <= request.time.toMillis() + 60000
+          && request.resource.data.createdAt >= request.time.toMillis() - 86400000;
+        // No update path — a Moment is fully immutable (Codex P2, PR #99 finding 4).
+        // The deterministic-id, create-only dedup the writer relies on (moments.ts:
+        // `${uid}-bingo`, the `first_bingo` singleton) is only sound if a re-broadcast
+        // to an existing id is DENIED for EVERYONE. An admin-writable update let an
+        // admin-player's repeat broadcast become an authorized overwrite — clobbering
+        // the first_bingo singleton under a stale-roster race. MomentDoc carries NO
+        // moderation/status field (src/types.ts: kind/uid/displayName/photoURL/
+        // createdAt), so there is nothing an update could legitimately change without
+        // rewriting content; moderation here is delete-only. A moderation-only update
+        // (a status field + a hasOnly() diff) is deferred to #37/#41, which own that
+        // schema evolution.
         allow delete: if isAdmin(eventId) || isOwner(resource.data.uid);
       }
     }

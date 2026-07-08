@@ -26,8 +26,9 @@ const rawMoment = (id: string) => doc(db, 'events', EVENT_ID, 'moments', id);
  * § moments), the doc id is CALLER-CHOSEN — the strongest dedup the rules allow.
  * A fixed per-event id makes "First to BINGO" structurally ONCE per Event: the
  * first writer's create wins, and any later writer hits the doc-exists `update`
- * rule, which is admin-only, so their write is denied and swallowed (see
- * `broadcast`). This is the honest, ceremonial, self-reported honour (ADR 0001):
+ * rule, which is DENIED for everyone — a Moment is fully immutable (see
+ * firestore.rules § moments, PR #99 finding 4) — so their write is denied and
+ * swallowed (see `broadcast`). This is the honest, ceremonial, self-reported honour (ADR 0001):
  * under an offline/latency race two Players may each briefly believe they are
  * first and each optimistically show their own local Moment, but exactly one
  * create reaches the server and both clients converge on it. The value cannot
@@ -53,9 +54,11 @@ export interface MomentActor {
  *
  * `id` is deterministic so the dedup is STRUCTURAL, not a race we hope to win:
  * the moments rules block allows `create` (own-uid, valid kind/displayName/
- * createdAt) but restricts `update` to admins, so re-broadcasting an already
- * written id lands on the `update` rule and is denied — a second first-BINGO for
- * the same Player, or a duplicate First-to-BINGO, can never post. The Board edge
+ * createdAt) but DENIES `update` entirely (a Moment is immutable; moderation is
+ * delete-only, with a status field deferred to #37/#41), so re-broadcasting an
+ * already written id lands on the `update` rule and is denied — for admins exactly
+ * like everyone else, so a second first-BINGO for the same Player, or a duplicate
+ * First-to-BINGO, can never post. The Board edge
  * refs (`wasBingo`/`wasBlackout`) are the first line (no re-fire within a session
  * or across a reload); this create-only id is the structural backstop for reloads,
  * multiple tabs, and the First-to-BINGO race.
@@ -78,7 +81,7 @@ function broadcast(id: string, kind: MomentKind, who: MomentActor): void {
     // Not the offline case: offline the write PENDS in the persistent cache and
     // drains on reconnect (ADR 0006). A rejection is either a genuine online
     // failure (permission/auth) OR the expected once-only backstop — a
-    // re-broadcast of an already-claimed deterministic id hitting the admin-only
+    // re-broadcast of an already-claimed deterministic id hitting the deny-all
     // `update` rule. Either way it must not vanish silently; log with context.
     console.error('[moments] broadcast rejected', { id, kind, uid: who.uid }, err);
   });

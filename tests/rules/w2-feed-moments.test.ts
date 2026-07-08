@@ -9,19 +9,21 @@ import {
 } from '@firebase/rules-unit-testing';
 import { deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 
-// specs/w2-feed-moments.md — the Moments rules contract (ADR 0002), pinned
-// against the block that ALREADY ships in firestore.rules (from #16/#18; this
-// ticket designs strictly within it, never edits it). A Moment is an own-beat,
-// self-published broadcast: a Player may create ONLY a Moment carrying their own
-// uid (a forged uid is denied), with a valid kind + non-empty ≤100 displayName +
-// numeric createdAt; reads are public; a Moment is immutable except admin
-// moderation, and deletable by its owner or an admin.
+// specs/w2-feed-moments.md — the Moments rules contract (ADR 0002). Pinned against
+// the block that shipped from #16/#18 and was TIGHTENED in PR #99 (Codex P2): the
+// create rule now bounds createdAt near request.time (finding 3), and the update
+// path was removed so a Moment is fully immutable (finding 4). A Moment is an
+// own-beat, self-published broadcast: a Player may create ONLY a Moment carrying
+// their own uid (a forged uid is denied), with a valid kind + non-empty ≤100
+// displayName + a numeric, near-now createdAt; reads are public; a Moment is fully
+// immutable (no update path); deletable by its owner or an admin.
 //
 // Two design-critical facts this suite PINS honestly (see the spec):
 //   1. The doc id is CALLER-CHOSEN (no rule constrains momentId), and `update` is
-//      admin-only — so a deterministic id (`${uid}-bingo`, the event-singleton
-//      `first_bingo`) makes the once-only STRUCTURAL: a re-broadcast hits `update`
-//      and is denied. This is the strongest dedup the rules allow.
+//      DENIED for everyone — so a deterministic id (`${uid}-bingo`, the event-
+//      singleton `first_bingo`) makes the once-only STRUCTURAL: a re-broadcast hits
+//      the deny-all `update` rule and is denied, for admins exactly like everyone
+//      else. This is the strongest dedup the rules allow.
 //   2. The create rule has NO hasOnly/keys() constraint, so it does NOT reject a
 //      Moment carrying extra media/proofId fields. The ADR 0002 "a Moment carries
 //      no evidence" guarantee is therefore a WRITER + TYPE contract (moments.ts
@@ -102,14 +104,34 @@ describe('firestore.rules — Feed Moments (specs/w2-feed-moments.md)', () => {
     await assertSucceeds(setDoc(p('cap-name'), moment(ALICE, { displayName: 'x'.repeat(100) }))); // exactly the cap
   });
 
-  it('is immutable except admin moderation — the caller-chosen id + admin-only update IS the once-only backstop', async () => {
-    // The strongest dedup the rules allow: a deterministic id makes a re-broadcast
-    // a doc-exists `update`, which only an admin may do — so a duplicate BINGO /
-    // First-to-BINGO can never post. (moments.ts relies on exactly this.)
+  it('is FULLY immutable — the caller-chosen id + create-only rule is the once-only backstop, and NO ONE (not even an admin) can update (PR #99 finding 4)', async () => {
+    // The strongest dedup the rules allow: a deterministic id makes a re-broadcast a
+    // doc-exists `update`, which is DENIED for everyone — a Moment has no update
+    // path. So a duplicate BINGO / First-to-BINGO can never post, and an admin
+    // cannot overwrite an existing Moment (which would clobber the first_bingo
+    // singleton under a stale-roster race). MomentDoc has no moderation field to
+    // change; moderation here is delete-only (a status field is deferred to #37/#41).
+    // moments.ts relies on exactly this.
     const id = `${ALICE}-bingo`;
     await assertSucceeds(setDoc(doc(db(ALICE), momentPath(id)), moment(ALICE))); // create wins
-    await assertFails(setDoc(doc(db(ALICE), momentPath(id)), moment(ALICE, { displayName: 'again' }))); // update denied
-    await assertSucceeds(setDoc(doc(db(ADMIN), momentPath(id)), moment(ALICE, { displayName: 'moderated' }))); // admin may
+    await assertFails(setDoc(doc(db(ALICE), momentPath(id)), moment(ALICE, { displayName: 'again' }))); // owner re-broadcast denied
+    // An admin repeat-broadcast AND an admin content rewrite are BOTH denied now —
+    // the admin update path is gone, so an admin-player is dedup'd like everyone else.
+    await assertFails(setDoc(doc(db(ADMIN), momentPath(id)), moment(ALICE))); // admin repeat-broadcast denied
+    await assertFails(setDoc(doc(db(ADMIN), momentPath(id)), moment(ALICE, { displayName: 'moderated' }))); // admin content rewrite denied
+  });
+
+  it('bounds createdAt near request.time like proofs — in-bounds accepted, far-future and far-past denied (PR #99 finding 3)', async () => {
+    // An unbounded createdAt let a bad clock or a forged far-future stamp pin a
+    // Moment above all Feed activity forever; the create rule now requires the same
+    // +60s / -24h window proofs uses. The client writes Date.now() (in bounds by
+    // construction); an offline Moment drains with its ORIGINAL stamp, so a >24h
+    // offline queue would trip the lower bound (accepted residual — see the spec).
+    const p = (id: string) => doc(db(ALICE), momentPath(id));
+    const now = Date.now();
+    await assertSucceeds(setDoc(p('ts-now'), moment(ALICE, { createdAt: now }))); // near-now: accepted
+    await assertFails(setDoc(p('ts-future'), moment(ALICE, { createdAt: now + 3600000 }))); // +1h > +60s: denied
+    await assertFails(setDoc(p('ts-past'), moment(ALICE, { createdAt: now - 172800000 }))); // -2d < -24h: denied
   });
 
   it('does NOT reject extra media/proofId fields — no-evidence is a writer/type contract, not a rules one', async () => {

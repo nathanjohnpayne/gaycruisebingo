@@ -131,8 +131,13 @@ export function useMyUser(uid: string | undefined) {
 }
 
 export function useLeaderboard() {
-  const { data, loading } = useColSub<PlayerDoc>(playersCol(), 'players');
-  return { players: sortPlayers(data), loading };
+  // `hasServerData` is the roster's server-confirmed latch (see useColSub): Board's
+  // First-to-BINGO edge only claims the ceremonial Moment against a server-backed
+  // roster, since an initial empty `players` from a still-loading (or cache-only)
+  // subscription is not proof nobody has bingoed yet (Codex P2, PR #99). The
+  // Leaderboard view ignores it and reads only `players`/`loading`.
+  const { data, loading, hasServerData } = useColSub<PlayerDoc>(playersCol(), 'players');
+  return { players: sortPlayers(data), loading, hasServerData };
 }
 
 export function useProofFeed(max = 60) {

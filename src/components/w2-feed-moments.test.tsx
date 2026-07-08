@@ -26,7 +26,10 @@ const H = vi.hoisted(() => ({
   user: null as User | null,
   board: null as BoardDoc | null,
   player: null as PlayerDoc | null,
+  playerLoading: false,
+  playerConfirmed: true,
   players: [] as PlayerDoc[],
+  rosterConfirmed: true,
   feedEntries: [] as FeedEntry[],
   setMark: vi.fn(),
   broadcastBingo: vi.fn(),
@@ -39,12 +42,12 @@ vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user, loading: false }) }));
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
-  useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
+  useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
   // honor mode so a completed line marks straight through (no ProofSheet detour).
   useEventDoc: () => ({ data: { claimMode: 'honor' }, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
-  useLeaderboard: () => ({ players: H.players, loading: false }),
+  useLeaderboard: () => ({ players: H.players, loading: false, hasServerData: H.rosterConfirmed }),
   useFeed: () => ({ entries: H.feedEntries, loading: false }),
 }));
 // Keep the REAL resolveDisplayName (Board feeds its resolved output to the actor);
@@ -89,7 +92,10 @@ beforeEach(() => {
   H.user = { uid: 'u1', displayName: 'Sailor', photoURL: null } as unknown as User;
   H.board = null;
   H.player = { displayName: 'Deck Daddy', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+  H.playerLoading = false;
+  H.playerConfirmed = true;
   H.players = [];
+  H.rosterConfirmed = true;
   H.feedEntries = [];
   H.setMark.mockResolvedValue({ cells: [], bingo: false, blackout: false });
 });
@@ -154,6 +160,84 @@ describe('Board — broadcasts Moments on the BINGO/Blackout edge (specs/w2-feed
     rerender(<Board />);
     expect(H.broadcastBlackout).toHaveBeenCalledTimes(1);
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // not re-announced
+  });
+
+  it('HOLDS a broadcast fired while identity is UNKNOWN, then fires it once with the SAVED name (PR #99 finding 1)', () => {
+    // Identity UNKNOWN: the player row is still loading, so `displayName` has fallen
+    // back to the auth/Google name — the same window in which setMark passes
+    // `undefined` rather than stamp it. A BINGO edge here must NOT write that stale
+    // name into an immutable Moment; it holds (never dropped) until identity resolves.
+    H.playerLoading = true;
+    H.player = null;
+    H.board = boardWith([]);
+    const { rerender } = render(<Board />);
+
+    H.board = boardWith(ROW0); // BINGO edge crosses WHILE identity is unknown
+    rerender(<Board />);
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // held — not dropped, not stale
+
+    // Identity resolves to the SAVED player-row name: the held broadcast fires ONCE.
+    H.playerLoading = false;
+    H.playerConfirmed = true;
+    H.player = { displayName: 'Deck Daddy', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+    rerender(<Board />);
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null });
+  });
+
+  it('HOLDS First-to-BINGO while the roster is unconfirmed, then does NOT claim it if the confirmed roster shows an earlier bingo (PR #99 finding 2)', () => {
+    // An initial empty roster from a still-loading subscription is NOT proof nobody
+    // has bingoed. The player's own BINGO posts (identity is known), but the
+    // ceremonial First-to-BINGO is held until the roster is server-confirmed.
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.board = boardWith([]);
+    const { rerender } = render(<Board />);
+
+    H.board = boardWith(ROW0); // BINGO edge WHILE the roster is unconfirmed
+    rerender(<Board />);
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // own BINGO posts
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // ceremonial claim held, not guessed
+
+    // Roster confirms — and another Player already had a firstBingoAt: not first.
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'someone-else', firstBingoAt: 123 } as unknown as PlayerDoc];
+    rerender(<Board />);
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // no ceremonial Moment
+  });
+
+  it('HOLDS First-to-BINGO while the roster is unconfirmed, then CLAIMS it once the confirmed roster shows no earlier bingo (PR #99 finding 2)', () => {
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.board = boardWith([]);
+    const { rerender } = render(<Board />);
+
+    H.board = boardWith(ROW0);
+    rerender(<Board />);
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // held while unconfirmed
+
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc]; // only self, no earlier bingo
+    rerender(<Board />);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets the edge refs on account switch — a new uid whose board already has a standing bingo does NOT fire a spurious edge (PR #99 finding 5)', () => {
+    // u1 has NO bingo standing: init leaves wasBingo=false (the baseline).
+    H.board = boardWith([]);
+    const { rerender } = render(<Board />);
+    expect(H.broadcastBingo).not.toHaveBeenCalled();
+
+    // Switch to u2 whose FIRST snapshot already has a standing bingo. Without a
+    // per-uid reset, the carried-over wasBingo=false + bingo=true would read as a
+    // fresh edge and fire a spurious Moment attributed to u2; the reset re-establishes
+    // init (no fire) before the cells effect re-runs.
+    H.user = { uid: 'u2', displayName: 'Sailor', photoURL: null } as unknown as User;
+    H.player = { displayName: 'Second Sailor', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+    H.board = boardWith(ROW0); // u2's board, bingo already standing
+    rerender(<Board />);
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // no spurious edge for u2
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
   });
 });
 
