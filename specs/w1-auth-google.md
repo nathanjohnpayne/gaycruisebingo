@@ -1,0 +1,31 @@
+# Google sign-in & AuthContext deal-error hardening (w1-auth-google)
+
+Feature: Google is the only login (PRD non-goal: no non-Google login), and the client-driven honor-system deal (ADR 0001) that runs on sign-in no longer fails silently. When `joinAndDeal` throws — chiefly the ADR-0003/0004 `dealBoard` guard that rejects a Board when the active non-free Prompt pool is below the 24 a card needs — the Player sees a Player-worded retry surface instead of the blank Board the old `App.tsx` `.catch(() => {})` left behind.
+
+## Contract
+
+- `src/auth/AuthContext.tsx` owns the post-sign-in deal. It runs `joinAndDeal` when the User becomes known, fires `track('join_event')` on success, and exposes `dealError: string | null`, `dealing: boolean`, and `retryDeal(): void`. `signIn` opens the Google popup and fires `track('login', { method: 'google' })`; Google remains the only provider.
+- A raw deal failure is translated to Player-facing copy: the pool-below-24 guard yields a "prompt pool is below the 24 a card needs" message; any other failure yields a connection-worded fallback. Both are recoverable via `retryDeal`, which re-invokes `joinAndDeal` for the current User with no full reload and clears `dealError` on success.
+- `src/App.tsx` no longer swallows the deal error. Once a User is signed in, a non-null `dealError` renders `<DealError>` in place of the app shell / Board, so the failure is never hidden behind a blank Board.
+- `src/components/SignIn.tsx` exports `DealError`, the retry surface: it shows the message with `role="alert"` and a Retry button that calls `onRetry`, disabled and relabeled while `retrying`.
+
+## Acceptance criteria
+
+- Given the active Prompt pool has fewer than 24 non-free Prompts, when a User signs in and `joinAndDeal` throws, then the Player sees a retry surface explaining the deal failed (not a blank Board).
+- Given a signed-in User whose deal failed, when the Player taps Retry, then `joinAndDeal` is re-invoked without a full reload and the surface clears once a deal succeeds.
+- Given a deal failure that is not the pool guard, when it is surfaced, then the Player sees the connection-worded fallback copy.
+- Given sign-in succeeds, when the User authenticates, then `track('login', { method: 'google' })` has fired.
+- Given a healthy pool, when the User signs in, then the Board is dealt and `track('join_event')` fires with no error surfaced.
+
+## Test coverage
+
+`src/auth/AuthContext.test.tsx` (Vitest RTL-jsdom) mounts the real `AuthProvider` with the Firebase boundary mocked and drives the auth callback directly:
+
+- A pool-below-24 `joinAndDeal` rejection surfaces the "24 a card needs" message; tapping Retry re-invokes `joinAndDeal` (a second call), clears the error, and fires `track('join_event')` — covering the healthy-deal path on the retry.
+- A non-guard rejection surfaces the connection-worded fallback.
+- `signIn` fires `track('login', { method: 'google' })`.
+
+`src/w1-auth-google.test.tsx` (Vitest RTL-jsdom) covers the App wiring and the retry affordance:
+
+- With a `dealError` present, `App` renders the `role="alert"` retry surface and does not mount the app shell (`.app`), and its Retry button invokes `retryDeal`.
+- `DealError` renders the message as an alert, calls `onRetry` when Retry is tapped, and disables/relabels the button while a retry is in flight.
