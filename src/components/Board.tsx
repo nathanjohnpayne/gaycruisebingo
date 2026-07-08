@@ -62,7 +62,9 @@ export default function Board() {
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
     } catch {
-      /* offline — the live listener reconciles when back online */
+      /* An offline Mark does NOT land here: setMark queues it durably in the
+         persistent local cache (ADR 0006, #20) and it syncs on reconnect — it
+         never rejects. This guards only a genuinely unexpected write error. */
     }
   };
 

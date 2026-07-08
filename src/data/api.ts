@@ -6,11 +6,11 @@ import {
   getDocs,
   increment,
   query,
-  runTransaction,
   setDoc,
   updateDoc,
   where,
   writeBatch,
+  type Firestore,
 } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 import { db, EVENT_ID } from '../firebase';
@@ -89,7 +89,74 @@ export async function joinAndDeal(u: User): Promise<void> {
   await batch.commit();
 }
 
-/** Toggle a square and recompute the player's denormalized stats. */
+/**
+ * Fold a single Mark toggle into the next Board cells plus the denormalized
+ * Player stats it implies. Pure (no Firestore, no clock) and exported so the
+ * write path (`setMark`) and its unit test share one source of truth — and,
+ * critically, so the write never needs a server read to compute the next state.
+ */
+export function computeMark(params: {
+  cells: Cell[];
+  index: number;
+  nextMarked: boolean;
+  claimMode: ClaimMode;
+  currentFirstBingoAt: number | null;
+  now: number;
+}): {
+  cells: Cell[];
+  player: { squaresMarked: number; bingoCount: number; firstBingoAt: number | null; blackout: boolean };
+  bingo: boolean;
+  blackout: boolean;
+} {
+  const { cells, index, nextMarked, claimMode, currentFirstBingoAt, now } = params;
+  const next: Cell[] = cells.map((c) =>
+    c.index === index
+      ? {
+          ...c,
+          marked: nextMarked,
+          markedAt: nextMarked ? now : null,
+          status: claimMode === 'admin_confirmed' && nextMarked ? 'pending' : 'confirmed',
+        }
+      : c,
+  );
+
+  const bingoCount = completedLines(next).length;
+  const squaresMarked = countMarked(next);
+  const blackout = isBlackout(next);
+  // Keep the first-bingo timestamp while a bingo still stands; clear it when
+  // unmarking removes the last bingo, so the leaderboard stops crediting a
+  // non-winner. `currentFirstBingoAt` is the caller's live value (the
+  // useMyPlayer listener), so preserving it needs no server read.
+  const firstBingoAt = bingoCount > 0 ? (currentFirstBingoAt ?? now) : null;
+
+  return {
+    cells: next,
+    player: { squaresMarked, bingoCount, firstBingoAt, blackout },
+    bingo: bingoCount > 0,
+    blackout,
+  };
+}
+
+/**
+ * Toggle a Square and write the Board + the Player's denormalized stats.
+ *
+ * Client-authoritative (ADR 0001) and offline-queueable (ADR 0006). Deliberately
+ * a plain batched write, NOT a `runTransaction`: a transaction needs a server
+ * round-trip and REJECTS while offline, so a Mark made in a ship-wifi dead zone
+ * would be dropped instead of queuing durably in the persistent local cache. A
+ * Board is single-writer by design — only its owner writes `boards/{uid}` and
+ * `players/{uid}` (firestore.rules) — and the live listener keeps the caller's
+ * `cells` current across tabs via the shared persistent cache, so we compute the
+ * next state from that local snapshot and write it last-write-wins. Both docs go
+ * in one `writeBatch` so they queue and apply atomically. A bare Mark writes
+ * ONLY these two docs — nothing to the Feed (moments/proofs), per ADR 0002.
+ *
+ * `commit()` is intentionally not awaited: offline it resolves only on a server
+ * ack that may never come in this tab's lifetime, while the write lands in the
+ * local cache synchronously (latency compensation) and the live listener
+ * reflects it at once — awaiting would stall the Mark on the network. The caller
+ * gets the win-detection result synchronously from the local compute.
+ */
 export async function setMark(params: {
   uid: string;
   cells: Cell[];
@@ -97,46 +164,22 @@ export async function setMark(params: {
   nextMarked: boolean;
   claimMode: ClaimMode;
   currentFirstBingoAt: number | null;
+  database?: Firestore;
 }): Promise<{ cells: Cell[]; bingo: boolean; blackout: boolean }> {
-  const { uid, cells, index, nextMarked, claimMode, currentFirstBingoAt } = params;
-  const now = Date.now();
+  const { uid } = params;
+  const database = params.database ?? db;
+  const { cells, player, bingo, blackout } = computeMark({ ...params, now: Date.now() });
 
-  // Recompute cells from the live board inside a transaction so a concurrent
-  // mark from another tab/device isn't clobbered by this caller's stale snapshot
-  // (mirrors attachProof).
-  return runTransaction(db, async (tx) => {
-    const boardRef = rawBoard(uid);
-    const playerRef = rawPlayer(uid);
-    const boardSnap = await tx.get(boardRef);
-    const liveCells = (boardSnap.data()?.cells as Cell[] | undefined) ?? cells;
-    const next: Cell[] = liveCells.map((c) =>
-      c.index === index
-        ? {
-            ...c,
-            marked: nextMarked,
-            markedAt: nextMarked ? now : null,
-            status: claimMode === 'admin_confirmed' && nextMarked ? 'pending' : 'confirmed',
-          }
-        : c,
-    );
-
-    const bingoCount = completedLines(next).length;
-    const squares = countMarked(next);
-    const blackout = isBlackout(next);
-    // Keep the first-bingo timestamp while a bingo still stands; clear it when
-    // unmarking removes the last bingo, so the leaderboard stops crediting a
-    // non-winner (mirrors deleteProof). Read the live player row so a concurrent
-    // update isn't lost.
-    const playerSnap = await tx.get(playerRef);
-    const existingFirst =
-      (playerSnap.data()?.firstBingoAt as number | null | undefined) ?? currentFirstBingoAt ?? null;
-    const firstBingoAt = bingoCount > 0 ? (existingFirst ?? now) : null;
-
-    tx.set(boardRef, { cells: next }, { merge: true });
-    tx.set(playerRef, { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
-
-    return { cells: next, bingo: bingoCount > 0, blackout };
+  const batch = writeBatch(database);
+  batch.set(doc(database, 'events', EVENT_ID, 'boards', uid), { cells }, { merge: true });
+  batch.set(doc(database, 'events', EVENT_ID, 'players', uid), player, { merge: true });
+  void batch.commit().catch(() => {
+    /* Offline: the write stays queued and drains on reconnect. A genuine
+       failure is swallowed like the prior transaction's rejection — the Mark
+       UX is client-authoritative and reconciled by the live listener. */
   });
+
+  return { cells, bingo, blackout };
 }
 
 /** Add a prompt to the community pool. */
