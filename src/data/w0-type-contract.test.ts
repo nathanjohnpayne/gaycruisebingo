@@ -6,6 +6,7 @@ import type {
   DoubtDoc,
   EventDoc,
   MomentDoc,
+  ProofDoc,
   TallyDoc,
   TallyEntry,
   UserDoc,
@@ -62,6 +63,27 @@ describe('eventConverter (migration applied on read)', () => {
     const event = eventConverter.fromFirestore(snapshotOf({ ...baseEvent, claimMode: 'verified' }));
     const written = eventConverter.toFirestore(event) as { claimMode: ClaimMode };
     expect(written.claimMode).toBe('admin_confirmed');
+  });
+});
+
+describe('ProofDoc status contract', () => {
+  it("covers the 'pending' state attachProof writes under admin_confirmed Claim Mode", () => {
+    // Compile-time pin: a Proof created under admin_confirmed starts 'pending'
+    // (data/proofs attachProof, admin-only readable per firestore.rules), so the
+    // ProofDoc.status union must include it — narrowing it back breaks this literal.
+    const pendingProof: ProofDoc = {
+      id: 'pr1',
+      uid: 'u1',
+      displayName: 'Ada',
+      photoURL: null,
+      type: 'photo',
+      cellIndex: 3,
+      itemText: 'Sang at the piano bar',
+      createdAt: 1,
+      reportCount: 0,
+      status: 'pending',
+    };
+    expect(pendingProof.status).toBe('pending');
   });
 });
 
