@@ -25,11 +25,11 @@ export default function Admin() {
   const isAdmin = !!(user && event?.admins?.includes(user.uid));
   if (!isAdmin) return <div className="center muted">Admins only.</div>;
 
-  const modes: ClaimMode[] = ['honor', 'proof_required', 'verified'];
+  const modes: ClaimMode[] = ['honor', 'proof_required', 'admin_confirmed'];
   const modeLabel: Record<ClaimMode, string> = {
     honor: 'Honor',
     proof_required: 'Proof req.',
-    verified: 'Verified',
+    admin_confirmed: 'Admin-confirmed',
   };
 
   return (

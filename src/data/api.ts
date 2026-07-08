@@ -115,7 +115,7 @@ export async function setMark(params: {
             ...c,
             marked: nextMarked,
             markedAt: nextMarked ? now : null,
-            status: claimMode === 'verified' && nextMarked ? 'pending' : 'confirmed',
+            status: claimMode === 'admin_confirmed' && nextMarked ? 'pending' : 'confirmed',
           }
         : c,
     );

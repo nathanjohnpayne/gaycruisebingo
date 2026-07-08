@@ -58,7 +58,7 @@ describe('win detection', () => {
     expect(winningCells(cells).has(12)).toBe(true);
   });
 
-  it('ignores pending marks in verified mode', () => {
+  it('ignores pending marks in admin-confirmed mode', () => {
     const cells = dealBoard(pool, 'FREE', 2);
     for (const i of [10, 11, 13, 14]) {
       cells[i].marked = true;
