@@ -25,6 +25,42 @@ The transaction protected a read-modify-write of the Board doc against a concurr
 
 `commit()` is intentionally not awaited: offline it resolves only on a server ack that may never come in this tab's lifetime, whereas the write lands in the local cache synchronously (latency compensation) and the listener reflects it at once — so the Mark is instant and the win result returns from the local compute, not the network.
 
+## Write-failure semantics: an online rejection is real, and no longer swallowed (Codex P2, PR #75)
+
+Not awaiting `commit()` must not mean *ignoring* it. The two outcomes are asymmetric, and only one is benign:
+
+- **Offline — the write PENDS.** `commit()` neither resolves nor rejects in this tab's lifetime; the mutation sits durably in the persistent cache and drains on reconnect (ADR 0006). This is the queued-Mark happy path and is not an error.
+- **Online — a rejection is a GENUINE failure.** Because offline pends, a rejection can only be an online write the backend refused: a `permission-denied` after an auth-state change, or a malformed update the rules reject. Firestore's latency compensation then **rolls the optimistic local mutation back**, and the live `onSnapshot` listener re-renders the Board **without** the Mark — so the optimistic UI self-corrects on its own, with no caller action.
+
+The Mark UX stays client-authoritative (ADR 0001), so `setMark` deliberately keeps its optimistic return contract unchanged and adds **no** retry surface, toast, or analytics event (the GA4 catalog stays closed). What it no longer does is **silently discard** the failure: the prior `catch(() => {})` is replaced by a `console.error` carrying the Mark context (`uid`, `index`, `nextMarked`, and the error), so a real rejection is observable in logs even though the UI heals itself. `Board.tsx`'s `doMark` catch comment is corrected to match: neither an offline Mark nor an online rejection reaches it (the commit is fire-and-forget and logged inside `setMark`); it guards only a synchronous throw from `setMark` itself.
+
+## First-bingo timestamp under a player-doc cache miss (Codex P2, PR #75)
+
+`firstBingoAt` is the one denormalized Player field that depends on prior **server** state rather than purely on the folded `cells`. A cache miss on the player doc — the board snapshot has loaded but `useMyPlayer` has not yet returned its first snapshot (e.g. right after a reload) — must not be conflated with a genuine "no first bingo yet":
+
+- The caller signal is `useMyPlayer`'s **`loading` flag**, not the `data` shape (the hook returns `data: null` both while loading *and* when the row is genuinely absent, so `data` alone cannot disambiguate). `Board.tsx` passes `currentFirstBingoAt: playerLoading ? undefined : (player?.firstBingoAt ?? null)`.
+- `computeMark`/`setMark` treat **`undefined` as UNKNOWN** and **`null` as a KNOWN "none"**. On UNKNOWN with a player-doc cache miss, `firstBingoAt` is **omitted from the player merge payload entirely**, so the `{ merge: true }` write leaves the server's existing (possibly-earlier) stamp untouched — a re-completed bingo line cannot re-stamp it with `now` and clobber the true earliest value. A KNOWN `null` keeps today's stamp-on-first-bingo behavior, and a cached player row always wins (a row that predates the field reads as a known `null`, never UNKNOWN). `ProofSheet` → `attachProof` is unaffected: it reads the live player row inside its own transaction, so it keeps its `number | null` prop.
+
+## Cross-writer staleness: a queued Mark's full-`cells` drain can clobber `resolve()` / `attachProof` — accepted residual (Codex P2, PR #75)
+
+`setMark` writes `boards/{uid}` as `batch.set(boardRef, { cells }, { merge: true })` — and a Firestore `{ merge: true }` write replaces an **array** field **wholesale**; there is no element-level array merge in the API. Two *other* writers also write the same `boards/{uid}.cells` as a whole array, both today, both via `runTransaction`:
+
+- **`src/data/admin.ts` `resolve()`** — reached through `Admin.tsx`'s Confirm/Reject buttons (`confirmClaim`/`rejectClaim`). It writes `{ cells: next }` flipping the claim cell's `status` to `'confirmed'` (confirm) or resetting it to `{ marked: false, status: 'confirmed', proofId: null, markedAt: null }` (reject), plus the player stats, the claim's `status`/`resolvedBy`, and (on confirm) the proof's `status: 'active'`. `firestore.rules` grants `boards/{uid}` write to `isOwner(uid) || isAdmin(eventId)`, so an admin legitimately writes another player's board.
+- **`src/data/proofs.ts` `attachProof()`** — reached through `ProofSheet.tsx` (the per-cell `＋` proof button in every mode, and the mark-with-proof flow in `proof_required`/`admin_confirmed`). It writes `{ cells: next }` setting the target cell's `marked`/`markedAt`/`proofId`/`status`, plus the player stats, the proof doc, and (admin_confirmed) a claim.
+
+**The window.** A bare Mark is queued OFFLINE folded onto the owner's cached `cells`, which predate the other writer's change. While it sits queued, `resolve()` or `attachProof` commits its cell change to the server (both run **online** — transactions reject offline, so they cannot themselves be queued). On reconnect the queued Mark drains, and its whole-`cells` merge **replaces the array**, dropping the other writer's change: a confirmed/rejected claim's cell `status` reverts, or an attached proof's `proofId`/`status` is erased — orphaning the proof doc, whose row still exists but is no longer referenced by any cell. It needs no second *adversary*, only the owner's own offline device racing an admin action or the same owner's second (online) device.
+
+**Why a targeted fix isn't expressible here.** Firestore cannot merge "element *N* of `cells` while leaving the rest"; the array is replaced or it is not. The pre-rework `setMark` avoided the clobber by re-reading the latest `cells` **inside a `runTransaction`** (so it folded onto the other writer's change) — but that server round-trip is exactly the property ADR 0006 offline-queueability trades away. The `getDocFromCache` fold + per-board serialization close every *same-process* race; they cannot see a *cross-process* server write made while this client was offline.
+
+**Disposition — accept and document (ADR 0001).** Under the single-friend-group, no-motivated-cheater, single-Player-usually-single-tab threat model, this is a low-probability, non-adversarial data race in the same family as the same-cell residual already accepted above — surfaced, not hidden. It is **reachable today** through merged scaffold (the `Admin.tsx` resolve UI and the honor-mode `＋` proof), but it breaks **no accepted acceptance criterion**: the tickets that OWN these flows — **#32 `w2-proof-capture`** (proof references) and **#41 `w3-claim-modes`** (the admin-confirm cell lifecycle) — are still Backlog, and this ticket's own ACs cover only the bare-Mark path. This rework did, honestly, *widen* the residual by removing the transactional protection those scaffolds implicitly leaned on.
+
+**Hard constraint handed forward.** Because a queued bare-Mark drain will wholesale-replace `cells`, #41 and #32 MUST design their durable state to survive a stale full-`cells` overwrite rather than storing it solely in the `cells` array a bare Mark rewrites:
+
+- **#41 (claim-modes)** — keep the authoritative admin-confirm state in the `claims` doc (already the source of truth for the admin queue) and treat `cells[i].status` as a *reconciled projection* of it, so a resurrected `pending`/`confirmed` cell can be re-derived after a clobber instead of being lost.
+- **#32 (proof-capture)** — keep the proof→cell linkage resolvable from the `proofs` doc (which already carries `uid` + `cellIndex`), not solely from `cells[i].proofId`, so a dropped `proofId` doesn't orphan a live proof.
+
+Both should also reconcile the board from those side docs on drain (e.g. a listener or a repair pass), since a field-level `cells` merge is not available to make the array write itself safe.
+
 ## Claim → test
 
 Every claim maps to an assertion in the named test (no vacuous coverage).
@@ -39,6 +75,8 @@ Runner: `npm test` (Vitest, jsdom). Test: `src/data/w1-board-mark-win.test.ts`.
 - Marking the final Square is a Blackout (`blackout === true`).
 - `setMark` writes **exactly two** docs in one batch — `boards/{uid}` then `players/{uid}`, both partial `{ merge: true }` — carrying the toggled cell and the recomputed stats. It calls **no `addDoc`** (ADR 0002: a bare Mark posts nothing to the Feed) and **no `runTransaction`** (ADR 0006: offline-queueable), and fires a single fire-and-forget `commit()` while returning the win result synchronously.
 - **Concurrency fix:** when `getDocFromCache` resolves a cached Board with a Mark the caller's `cells` prop does not yet know about, `setMark`'s write folds onto the cached state — both Marks survive (`squaresMarked` counts both), not just the caller's own toggle. When nothing is cached (or the cached doc does not exist), it falls back to the caller-supplied `cells` exactly as before.
+- **First-bingo cache-miss fix (Codex P2):** `computeMark` with an UNKNOWN (`undefined`) `currentFirstBingoAt` **omits** `firstBingoAt` from the player payload even on a fresh bingo (a KNOWN `null` still stamps). Driven end-to-end through `setMark`: on a player-doc cache miss it omits `firstBingoAt` when the caller is UNKNOWN (so a re-completed line preserves the server's earlier stamp), stamps `now` when the caller is a KNOWN `null` and the bingo is fresh, and lets a cached player value win even over an UNKNOWN caller.
+- **Write-failure observability (Codex P2):** a rejected `commit()` calls `console.error` with the Mark context **and the error** (the failure is no longer swallowed), while `setMark`'s returned optimistic result is unchanged.
 
 ### Offline — the real setMark path survives a reload before any sync, then syncs, and two rapid Marks don't clobber
 
@@ -63,4 +101,7 @@ Runner: `firebase emulators:exec --only auth,firestore "vitest run --config vite
 - Given a dealt Board, when a Player Marks a Square in Honor mode, then it Marks instantly and `hasBingo`/`isBlackout` fire the `Celebration` on a new line/blackout — `src/data/w1-board-mark-win.test.ts` (compute) + the `Board.tsx` transition effect.
 - Given a Player Marks offline, when they reload, then the Mark is still queued and syncs on reconnect (ADR 0006 offline metric) — `tests/offline/w1-board-mark-win.test.ts`.
 - Given a bare Mark (no Proof), when it is written, then nothing posts to the Feed (ADR 0002) — `setMark` write-shape (no `addDoc`) + the offline test's empty `moments`.
+- Given an ONLINE Mark the backend rejects (e.g. `permission-denied` after an auth change), when `commit()` rejects, then the failure is logged with context (not swallowed) and the optimistic UI self-corrects via the listener rollback, while `setMark`'s optimistic return is unchanged — `src/data/w1-board-mark-win.test.ts` (commit-failure).
+- Given a player-doc cache miss with an UNKNOWN caller (player row still loading), when a re-completed bingo line is Marked, then `firstBingoAt` is omitted from the write so the server's earlier stamp survives (a KNOWN `null` still stamps `now` on a fresh bingo) — `src/data/w1-board-mark-win.test.ts` (cache-miss).
+- Given a queued offline Mark racing a concurrent `resolve()`/`attachProof` write to the same board, the queued Mark's full-`cells` drain can clobber the other writer's cell change — an accepted, documented residual (ADR 0001) with the hard constraint routed to #32/#41 (§ Cross-writer staleness), reachable via merged scaffold but breaking no accepted AC.
 - `Board.tsx` false offline comment corrected; no server-side stat recompute justified as anti-cheat (ADR 0001).

@@ -131,6 +131,25 @@ describe('computeMark (win detection + stats)', () => {
     expect(r.player.firstBingoAt).toBeNull();
   });
 
+  it('OMITS firstBingoAt entirely when the caller value is UNKNOWN (undefined)', () => {
+    // undefined = the player row has not loaded and nothing is cached. Even on a
+    // fresh bingo, firstBingoAt must be left off the payload so the { merge:true }
+    // write preserves whatever earlier stamp the server holds, instead of
+    // clobbering it with `now` (Codex P2, PR #75). A KNOWN null still stamps.
+    const r = computeMark({
+      cells: withMarked([0, 1, 2, 3]),
+      index: 4, // completes the top row
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: undefined,
+      now: 2000,
+    });
+    expect(r.bingo).toBe(true);
+    expect(r.player.bingoCount).toBe(1);
+    expect(r.player.squaresMarked).toBe(5); // non-dependent stats are still written
+    expect('firstBingoAt' in r.player).toBe(false); // omitted, not null
+  });
+
   it('admin_confirmed marks start pending, so they do not yet count', () => {
     const r = computeMark({
       cells: dealt(),
@@ -338,5 +357,132 @@ describe('setMark (folds onto the freshest cached Board, not a stale cells prop)
 
     const playerWrite = setSpy.mock.calls[1][1] as { firstBingoAt: number | null };
     expect(playerWrite.firstBingoAt).toBe(777); // preserved from the cache, not re-stamped
+  });
+});
+
+describe('setMark (preserves firstBingoAt across a player-doc cache miss)', () => {
+  // The board can be cached while the player doc is NOT (a fresh reload, before
+  // useMyPlayer returns its first snapshot). In that window Board.tsx passes
+  // `currentFirstBingoAt: undefined` (UNKNOWN). If setMark treated undefined as
+  // a real "no first bingo yet" and the cached board already carried a bingo, a
+  // fresh Mark would re-stamp firstBingoAt with `now` and clobber the true
+  // earlier server value. The fix: on a player cache MISS + UNKNOWN caller,
+  // OMIT firstBingoAt so the merge leaves the server value alone; a KNOWN null
+  // (loaded live player) still stamps; a cached value always wins (Codex P2).
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // A cache with the board present but the player doc absent.
+  function cacheBoardOnly(cells: Cell[]) {
+    getDocFromCacheSpy.mockReset();
+    getDocFromCacheSpy.mockImplementation((ref?: unknown) => {
+      const path = (ref as { path?: string })?.path ?? '';
+      if (path.endsWith('/boards/u1')) {
+        return Promise.resolve({ exists: () => true, data: () => ({ cells }) });
+      }
+      return Promise.reject(new Error('player not cached')); // player cache MISS
+    });
+  }
+
+  it('cache-miss + UNKNOWN caller: omits firstBingoAt on a re-completed bingo (server stamp survives)', async () => {
+    cacheBoardOnly(withMarked([0, 1, 2, 3, 4])); // cached board already has a standing bingo
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(), // stale prop
+      index: 6, // another square while the top-row bingo still stands
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: undefined, // UNKNOWN: player row still loading
+    });
+
+    const playerWrite = setSpy.mock.calls[1][1] as { firstBingoAt?: number | null; bingoCount: number };
+    expect(playerWrite.bingoCount).toBe(1);
+    expect('firstBingoAt' in playerWrite).toBe(false); // omitted → merge preserves the server value
+  });
+
+  it('cache-miss + loaded-null caller: stamps firstBingoAt on a fresh bingo (KNOWN "none")', async () => {
+    cacheBoardOnly(withMarked([0, 1, 2, 3])); // one square shy of the top row
+
+    await setMark({
+      uid: 'u1',
+      cells: withMarked([0, 1, 2, 3]),
+      index: 4, // completes the top row → first bingo
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null, // KNOWN: player loaded, no prior bingo
+    });
+
+    const playerWrite = setSpy.mock.calls[1][1] as { firstBingoAt?: number | null; bingoCount: number };
+    expect(playerWrite.bingoCount).toBe(1);
+    expect(typeof playerWrite.firstBingoAt).toBe('number'); // stamped with now
+  });
+
+  it('a cached player value wins even when the caller is UNKNOWN (undefined)', async () => {
+    getDocFromCacheSpy.mockReset();
+    getDocFromCacheSpy.mockImplementation((ref?: unknown) => {
+      const path = (ref as { path?: string })?.path ?? '';
+      if (path.endsWith('/boards/u1')) {
+        return Promise.resolve({ exists: () => true, data: () => ({ cells: withMarked([0, 1, 2, 3, 4]) }) });
+      }
+      if (path.endsWith('/players/u1')) {
+        return Promise.resolve({ exists: () => true, data: () => ({ firstBingoAt: 555 }) });
+      }
+      return Promise.reject(new Error('not cached'));
+    });
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 6,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: undefined, // UNKNOWN, but the cache holds a real value
+    });
+
+    const playerWrite = setSpy.mock.calls[1][1] as { firstBingoAt?: number | null };
+    expect(playerWrite.firstBingoAt).toBe(555); // cache wins over the UNKNOWN caller
+  });
+});
+
+describe('setMark (surfaces a genuine commit failure instead of swallowing it)', () => {
+  // Offline, commit() PENDS (never resolves/rejects in this tab), so a rejection
+  // is always a real ONLINE failure (permission-denied after an auth change, a
+  // malformed update). It must not be silently discarded. setMark logs it via
+  // console.error with the Mark context; Firestore's latency compensation rolls
+  // the optimistic write back and the live listener un-marks the UI, so the
+  // returned optimistic result is deliberately left unchanged (Codex P2, PR #75).
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getDocFromCacheSpy.mockReset();
+    getDocFromCacheSpy.mockRejectedValue(new Error('no cache in this test double'));
+  });
+
+  it('logs a rejected commit via console.error with the error, and the returned result is unaffected', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const failure = new Error('permission-denied');
+    commitSpy.mockImplementationOnce(() => Promise.reject(failure));
+
+    const res = await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 3,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+    });
+
+    // Optimistic contract unchanged: setMark still resolves with the locally
+    // computed win result even though the write will be rolled back.
+    expect(res).toEqual({ cells: expect.any(Array), bingo: false, blackout: false });
+
+    // commit() is fire-and-forget, so the .catch runs on a later microtask.
+    await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+    const call = errorSpy.mock.calls[0];
+    expect(call[0]).toEqual(expect.stringContaining('setMark'));
+    expect(call).toContain(failure); // the actual error is logged, not swallowed
+
+    errorSpy.mockRestore();
   });
 });

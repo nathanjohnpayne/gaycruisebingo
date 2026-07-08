@@ -12,7 +12,7 @@ export default function Board() {
   const { user } = useAuth();
   const uid = user?.uid;
   const { data: board } = useBoard(uid);
-  const { data: player } = useMyPlayer(uid);
+  const { data: player, loading: playerLoading } = useMyPlayer(uid);
   const { data: event } = useEventDoc();
   const claimMode: ClaimMode = event?.claimMode ?? 'honor';
 
@@ -57,14 +57,22 @@ export default function Board() {
         index: c.index,
         nextMarked,
         claimMode,
-        currentFirstBingoAt: player?.firstBingoAt ?? null,
+        // While the player row is still loading its first snapshot, pass
+        // `undefined` (UNKNOWN) rather than a `null` that reads as a real "no
+        // first bingo yet": on a cache miss that null would let setMark restamp
+        // firstBingoAt with now and clobber the earlier server value (Codex P2,
+        // PR #75). Once loaded, a genuine null is passed through.
+        currentFirstBingoAt: playerLoading ? undefined : (player?.firstBingoAt ?? null),
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
     } catch {
-      /* An offline Mark does NOT land here: setMark queues it durably in the
-         persistent local cache (ADR 0006, #20) and it syncs on reconnect — it
-         never rejects. This guards only a genuinely unexpected write error. */
+      /* Neither an offline Mark nor an online write REJECTION lands here:
+         setMark's commit is fire-and-forget. Offline it queues durably in the
+         persistent cache (ADR 0006, #20) and syncs on reconnect; an online
+         rejection is logged inside setMark and self-corrects when Firestore
+         rolls the write back and the live listener re-renders without the Mark.
+         This catch only guards a synchronous throw from setMark itself. */
     }
   };
 

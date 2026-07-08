@@ -101,11 +101,19 @@ export function computeMark(params: {
   index: number;
   nextMarked: boolean;
   claimMode: ClaimMode;
-  currentFirstBingoAt: number | null;
+  // `undefined` means the caller's first-bingo state is UNKNOWN (the player row
+  // has not loaded yet AND nothing is cached); `null` is a KNOWN "no first
+  // bingo yet". The two are folded differently below — see the firstBingoAt
+  // handling — because stamping `now` over an UNKNOWN prior value can clobber a
+  // real, earlier server timestamp (Codex P2, PR #75).
+  currentFirstBingoAt: number | null | undefined;
   now: number;
 }): {
   cells: Cell[];
-  player: { squaresMarked: number; bingoCount: number; firstBingoAt: number | null; blackout: boolean };
+  // firstBingoAt is OPTIONAL on purpose: it is omitted from the player payload
+  // when the prior value is UNKNOWN, so the `{ merge: true }` write preserves
+  // whatever stamp the server already holds instead of overwriting it.
+  player: { squaresMarked: number; bingoCount: number; firstBingoAt?: number | null; blackout: boolean };
   bingo: boolean;
   blackout: boolean;
 } {
@@ -124,15 +132,31 @@ export function computeMark(params: {
   const bingoCount = completedLines(next).length;
   const squaresMarked = countMarked(next);
   const blackout = isBlackout(next);
-  // Keep the first-bingo timestamp while a bingo still stands; clear it when
-  // unmarking removes the last bingo, so the leaderboard stops crediting a
-  // non-winner. `currentFirstBingoAt` is the caller's live value (the
-  // useMyPlayer listener), so preserving it needs no server read.
-  const firstBingoAt = bingoCount > 0 ? (currentFirstBingoAt ?? now) : null;
+
+  const player: {
+    squaresMarked: number;
+    bingoCount: number;
+    blackout: boolean;
+    firstBingoAt?: number | null;
+  } = { squaresMarked, bingoCount, blackout };
+  // firstBingoAt is the one denormalized field that depends on prior SERVER
+  // state, not purely on `next`. When that prior value is UNKNOWN — `undefined`,
+  // meaning the caller's player row has not loaded and nothing is cached (e.g. a
+  // Mark fired during the post-reload window before useMyPlayer's first
+  // snapshot) — OMIT firstBingoAt from the payload entirely, so the
+  // `{ merge: true }` write leaves the server's existing (possibly-earlier)
+  // stamp untouched rather than clobbering it with `now` (Codex P2, PR #75). A
+  // KNOWN value keeps the original rule: preserve the earlier stamp while a
+  // bingo stands, stamp `now` on a first bingo (`null ?? now`), and clear to
+  // null when unmarking removes the last bingo so the leaderboard stops
+  // crediting a non-winner.
+  if (currentFirstBingoAt !== undefined) {
+    player.firstBingoAt = bingoCount > 0 ? (currentFirstBingoAt ?? now) : null;
+  }
 
   return {
     cells: next,
-    player: { squaresMarked, bingoCount, firstBingoAt, blackout },
+    player,
     bingo: bingoCount > 0,
     blackout,
   };
@@ -188,7 +212,10 @@ export async function setMark(params: {
   index: number;
   nextMarked: boolean;
   claimMode: ClaimMode;
-  currentFirstBingoAt: number | null;
+  // `undefined` = UNKNOWN (player row still loading, no cache); `null` = a known
+  // "no first bingo yet". Board.tsx passes `undefined` while useMyPlayer is
+  // loading so a cache-miss Mark can't restamp an earlier server value.
+  currentFirstBingoAt: number | null | undefined;
   database?: Firestore;
 }): Promise<{ cells: Cell[]; bingo: boolean; blackout: boolean }> {
   const { uid } = params;
@@ -217,7 +244,7 @@ async function runSetMark(
     index: number;
     nextMarked: boolean;
     claimMode: ClaimMode;
-    currentFirstBingoAt: number | null;
+    currentFirstBingoAt: number | null | undefined;
   },
   database: Firestore,
 ): Promise<{ cells: Cell[]; bingo: boolean; blackout: boolean }> {
@@ -238,8 +265,14 @@ async function runSetMark(
     baseCells = (cachedBoard.value.data() as { cells: Cell[] }).cells;
   }
   if (cachedPlayer.status === 'fulfilled' && cachedPlayer.value.exists()) {
+    // A cached Player row is KNOWN state: the cached value always wins over the
+    // caller's prop, and even a row that predates the firstBingoAt field is a
+    // known "no first bingo yet" (null), never UNKNOWN. Only a genuine cache
+    // MISS (below) leaves baseFirstBingoAt as the caller's param, which may be
+    // `undefined` (UNKNOWN) so computeMark omits the field and the server value
+    // survives (Codex P2, PR #75).
     const cachedFirst = (cachedPlayer.value.data() as { firstBingoAt?: number | null }).firstBingoAt;
-    if (cachedFirst !== undefined) baseFirstBingoAt = cachedFirst;
+    baseFirstBingoAt = cachedFirst ?? null;
   }
 
   const { cells, player, bingo, blackout } = computeMark({
@@ -252,10 +285,23 @@ async function runSetMark(
   const batch = writeBatch(database);
   batch.set(boardRef, { cells }, { merge: true });
   batch.set(playerRef, player, { merge: true });
-  void batch.commit().catch(() => {
-    /* Offline: the write stays queued and drains on reconnect. A genuine
-       failure is swallowed like the prior transaction's rejection — the Mark
-       UX is client-authoritative and reconciled by the live listener. */
+  void batch.commit().catch((err: unknown) => {
+    // A rejection here is NOT the offline case. Offline, commit() PENDS — it
+    // neither resolves nor rejects in this tab's lifetime — while the write sits
+    // durably in the persistent cache and drains on reconnect (ADR 0006). So a
+    // rejection is always a genuine ONLINE failure: a permission-denied after an
+    // auth-state change, or a malformed update the rules reject. Firestore's
+    // latency compensation ROLLS BACK the optimistic local write on rejection,
+    // so the live onSnapshot listener re-renders the Board without the Mark and
+    // the optimistic UI self-corrects on its own. The Mark UX stays
+    // client-authoritative (ADR 0001), so we do not surface a retry/toast here —
+    // but the failure must not vanish silently (the prior code discarded it), so
+    // log it with the Mark context for observability.
+    console.error(
+      '[setMark] batch.commit() rejected — online write failure; Firestore will roll back the optimistic Mark and the live listener will un-mark the UI',
+      { uid, index: params.index, nextMarked: params.nextMarked },
+      err,
+    );
   });
 
   return { cells, bingo, blackout };
