@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useMyUser, useEventDoc, useItems, useTally } from '../hooks/useData';
-import { setMark, resolveDisplayName } from '../data/api';
+import { useBoard, useMyPlayer, useEventDoc, useItems, useTally } from '../hooks/useData';
+import { setMark } from '../data/api';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
 import { track } from '../analytics';
 import Celebration from './Celebration';
@@ -104,12 +104,14 @@ export default function Board() {
   const uid = user?.uid;
   const { data: board, loading: boardLoading, hasServerData: boardConfirmed } = useBoard(uid);
   const { data: player, loading: playerLoading, hasServerData: playerConfirmed } = useMyPlayer(uid);
-  // The saved users/{uid} profile backs the Tally marker's attribution: resolve
-  // the public name the SAME validated way joinAndDeal does (saved name within the
-  // 100-char cap, else the live auth value), so a Mark self-publishes the same
-  // identity the leaderboard shows — never the raw Google name over a custom one.
-  const { data: profile } = useMyUser(uid);
-  const displayName = resolveDisplayName(profile, user?.displayName);
+  // ONE resolution of the caller's public display name, sourced from the saved
+  // player row — the denormalized identity the profile editor keeps current
+  // (data/profile.ts writes users/{uid} + the player row, #76/#78) — with the
+  // live auth value as the pre-load fallback. It feeds BOTH the per-Prompt Tally
+  // marker attribution (setMark, below) AND the new-Proof attribution (ProofSheet),
+  // so a Mark and a Proof always publish the SAME identity the leaderboard shows —
+  // never two divergent name sources (ADR 0002).
+  const displayName = player?.displayName ?? user?.displayName ?? 'Anonymous';
   const { data: event } = useEventDoc();
   // Codex P3 (PR #66): the pool only matters before a Board is dealt, so once
   // a Board exists this Player has no use for a live listener on every other
@@ -279,8 +281,18 @@ export default function Board() {
       {proofTarget && user && (
         <ProofSheet
           uid={uid}
-          displayName={user.displayName ?? 'Anonymous'}
-          photoURL={user.photoURL ?? null}
+          // Attribute new proofs to the denormalized player identity, which the
+          // profile editor keeps current (data/profile.ts writes users/{uid} +
+          // the player row, #76). Sourcing straight from the Firebase Auth user
+          // would stamp the stale Google name onto proofs a renamed player
+          // creates. displayName reuses the single `displayName` resolved above,
+          // so a Proof and its Tally marker always carry the SAME name — one
+          // source, never two. photoURL keys on whether `player` is loaded rather
+          // than `??`-chaining: PlayerDoc.photoURL is nullable, and a loaded row
+          // with a null photo means "no avatar" — that null must win over the
+          // stale auth photo, not be masked by it.
+          displayName={displayName}
+          photoURL={player ? player.photoURL : (user.photoURL ?? null)}
           cells={cells}
           cell={proofTarget}
           claimMode={claimMode}

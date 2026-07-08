@@ -1,0 +1,53 @@
+---
+spec_id: w2-proof-capture
+status: accepted
+---
+
+# w2-proof-capture — Proof capture (photo/audio/text) posts to the Feed, gates a proof-required Mark, and holds offline
+
+A Proof is the playful photo, audio clip, or text callout a Player attaches when marking a Square. It posts to the Feed (ADR 0002 — the Proof IS the Feed entry) and is flavour, never enforcement (ADR 0001). Most of the pipeline was scaffolded by earlier tickets (`ProofSheet` capture, `attachProof`, `downscaleImage`/`uploadProofMedia`, `ProofFeed`); this ticket completes and verifies it end to end. The PR #75 cross-writer constraint on the proof→cell link (the link must be resolvable from the proofs doc, not solely from `cells[i].proofId`) was already satisfied by the scaffold — `attachProof` already wrote `uid` + `cellIndex` onto the proof doc, and `ProofFeed`/`useProofFeed` already resolved every Feed entry from the `proofs` collection, never from `cells` — so this ticket's job for that constraint is verification, pinned by new tests. The one code change in `src/data/proofs.ts` is that `deleteProof` now looks the backing cell up by the proof doc's own `cellIndex` rather than scanning `cells[i].proofId`; given `proofId`'s uniqueness this is behaviorally equivalent to the prior scan in every reachable state (confirmed by reverting it and rerunning the new tests unchanged), so it is a clarity/consistency change, not a new protection against the clobber — `attachProof`'s contract (online-only, resolvable link) is documented alongside it.
+
+Every claim below maps to a real assertion. Layers and runners: `src/data/w2-proof-capture.test.ts` (unit, `npm test`) drives the real `attachProof`/`deleteProof` write paths with Firestore stubbed to spies; `src/components/w2-proof-capture.test.tsx` and `src/components/w2-proof-capture-feed.test.tsx` (RTL-jsdom, `npm test`) mount the real `ProofSheet`, `Board`, and `ProofFeed` (+ the real `useProofFeed`); the proof media path + MIME/size caps + the Storage↔Firestore `proofs`-create pinning are proven against the emulators by `tests/rules/w0-storage-rules.test.ts` (rules layer, `npm run test:rules`, delivered with #19 and cross-referenced here rather than duplicated). The offline-durable Mark itself is `tests/offline/w1-board-mark-win.test.ts` (#27), which this ticket does not rework.
+
+## Proof capture: photo, audio, and text all post to the Feed (ADR 0002)
+
+- A photo Proof uploads its media (`uploadProofMedia(uid, proofId, blob, 'photo')`) and writes an `active`, Feed-visible proof doc carrying the Player's `displayName`, the Prompt `itemText`, `type: 'photo'`, a numeric `createdAt` (the field the Feed sorts on), `reportCount: 0`, and the server-only moderation fields left null (`visionFlag`, `thumbURL`); the backing cell is marked-confirmed and references the proof — `src/data/w2-proof-capture.test.ts`.
+- A text Proof uploads no media (`storagePath`/`mediaURL` null) and carries the callout text — `src/data/w2-proof-capture.test.ts`.
+- An audio Proof uploads a `.webm` clip and writes `type: 'audio'` — `src/data/w2-proof-capture.test.ts`.
+- `ProofSheet` turns each capture type (photo `<input capture>`, audio via `MediaRecorder`, text) into a valid submit that calls `attachProof` and closes the sheet — `src/components/w2-proof-capture.test.tsx`.
+- The Feed renders each posted Proof newest-first with the Player's name and the Prompt text, and per type — a photo `<img>`, an audio `<audio>`, a text quote — `src/components/w2-proof-capture-feed.test.tsx`.
+- The pinned Storage object shape `uploadProofMedia` writes (`proofs/{eventId}/{uid}/{proofId}.{jpg|webm}`), its `okImage`/`okAudio` MIME + size caps, and the lockstep with the Firestore `proofs`-create rule are asserted against the emulators by `tests/rules/w0-storage-rules.test.ts` (#19).
+
+## Proof-to-mark is friction, not trust (ADR 0001)
+
+- In `proof_required`, tapping an unmarked Square opens `ProofSheet` and writes no Mark until a Proof is attached — `src/components/w2-proof-capture.test.tsx`.
+- A cancelled sheet leaves the Square unmarked (no `attachProof`, no `setMark`) — `src/components/w2-proof-capture.test.tsx`.
+- Unmarking an already-marked Square stays instant even in `proof_required` (no proof gate on unmark) — `src/components/w2-proof-capture.test.tsx`.
+- In `honor` mode a Square marks directly with no sheet — a Proof never gates credit — `src/components/w2-proof-capture.test.tsx`.
+- `admin_confirmed` starts the Proof `pending` (admin-only readable per the rules), holds the cell `pending` so it is excluded from stats, and files a claim for the admin queue referencing the proof + cell — `src/data/w2-proof-capture.test.ts`.
+- `ProofSheet` never frames a Proof as "required for credit" — `src/components/w2-proof-capture.test.tsx`.
+
+## Offline: the Mark queues, the Proof media does not (ADR 0006)
+
+- The bare honor Mark is the offline-durable path: it queues in the persistent cache and survives a reload — `tests/offline/w1-board-mark-win.test.ts` (#27). This ticket does not rework `setMark`.
+- `attachProof` is ONLINE-only and does NOT queue: when the media upload has no signal it rejects before any write, so no proof doc and no transaction are written — the caller keeps the capture and retries on reconnect — `src/data/w2-proof-capture.test.ts`.
+- Even a media-free text Proof cannot queue: `attachProof` rides a `runTransaction`, which needs a server round-trip and rejects offline — `src/data/w2-proof-capture.test.ts`.
+- The transaction reads the live board/player inside itself so a concurrent writer is not clobbered — the very server round-trip that makes `attachProof` online-only — `src/data/w2-proof-capture.test.ts`.
+- Capture-then-retry lives in `ProofSheet`: a failed submit keeps the captured photo/audio/text in component state (the sheet stays open with its preview) so the Player retries when signal returns without re-capturing, and the retry then closes the sheet — `src/components/w2-proof-capture.test.tsx`. This is durable for the session, not across a reload; only the honor Mark survives a reload.
+- Media cannot queue by rule as well as by transport: `firestore.rules` pins a photo/audio proof's `storagePath`/`mediaURL` to the exact uploaded Storage object, so a media proof doc is unwritable before its upload exists — the negative-pinning case in `tests/rules/w0-storage-rules.test.ts`.
+
+## The proof→cell link is authoritative in the proof doc (PR #75 cross-writer constraint)
+
+- `attachProof` writes the proof→cell link into the proof DOC itself — `uid` + `cellIndex` — and the `proofId` it denormalizes into the cell equals the proof doc's own id, so the projection points back at the authoritative doc — `src/data/w2-proof-capture.test.ts`.
+- The Feed resolves every entry from the proofs doc (name, prompt, media, cellIndex), never from `boards/{uid}.cells`, so a queued bare-Mark drain that wholesale-replaces `cells` and drops `cells[i].proofId` can never orphan a live Proof out of the Feed — `src/components/w2-proof-capture-feed.test.tsx`.
+- `deleteProof` resolves the backing cell by the proof's own `cellIndex` (not by scanning `cells[i].proofId`), unmarking it and recomputing the owner's stats when the cell is still backed by this proof — `src/data/w2-proof-capture.test.ts`. This lookup is behaviorally equivalent to the prior `cells[i].proofId` scan in every reachable state (given `proofId`'s uniqueness and that `cellIndex` never changes after creation) — it is a clarity change, not a new protection, and it does NOT recover a clobbered projection: once a drain has actually dropped `cells[cellIndex].proofId`, this lookup sees the same dropped value the scan would have, and `deleteProof` correctly no-ops either way (next bullet).
+- Accepted residual (ADR 0001): after a bare-Mark drain clobbers `cells[i].proofId`, `deleteProof` still removes the proof doc but leaves the cell to the Mark that now owns it — it never fights a live Mark — `src/data/w2-proof-capture.test.ts`. A field-level `cells` merge that would make the array write itself safe is not available in the Firestore API; a live board-reconcile pass is deferred because it would touch the #31-owned Board / `useData` surface, and the drain race breaks no acceptance criterion here. The residual test passes unchanged whether `deleteProof` looks the cell up by `cellIndex` or by scanning `cells[i].proofId` — the `cellIndex` lookup is not what discharges the constraint (the Feed's proof-doc-only resolution, above, is).
+
+## Acceptance criteria
+
+- Given a Player attaches a Proof, when it commits, then the Proof appears newest-first in the Feed with the Player's name and the Prompt text (ADR 0002) — `src/components/w2-proof-capture-feed.test.tsx` + `src/data/w2-proof-capture.test.ts`.
+- Given the Event is in Proof-to-mark, when a Player taps an unmarked Square, then the Square does not mark until a Proof is attached (friction, not trust — ADR 0001) — `src/components/w2-proof-capture.test.tsx`.
+- Given a Player marks offline, when the app reloads and reconnects, then the (honor) Mark survives and the media attaches on reconnect; the proof-required attach itself is online-only and retried, never silently queued (ADR 0006) — `tests/offline/w1-board-mark-win.test.ts` (Mark durability) + `src/data/w2-proof-capture.test.ts` (attach rejects offline) + `src/components/w2-proof-capture.test.tsx` (capture-then-retry).
+- Photo, audio, and text Proofs all post to the Feed — `src/data/w2-proof-capture.test.ts` + `src/components/w2-proof-capture-feed.test.tsx`.
+- A Proof never gates credit — it is flavour, not enforcement — `src/components/w2-proof-capture.test.tsx`.
+- The proof→cell link is resolvable from the proofs doc (`uid` + `cellIndex`) and never depends solely on `cells[i].proofId` (PR #75) — `src/data/w2-proof-capture.test.ts` + `src/components/w2-proof-capture-feed.test.tsx`.

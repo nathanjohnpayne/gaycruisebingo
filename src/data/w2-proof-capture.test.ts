@@ -1,0 +1,325 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Cell } from '../types';
+
+// w2-proof-capture, data layer. Drives the REAL attachProof / deleteProof write
+// paths (src/data/proofs.ts) with Firestore stubbed to inspectable spies — no
+// emulator. Three concerns:
+//   1. attachProof posts an `active`, Feed-visible Proof (ADR 0002: the Proof
+//      IS the Feed entry) carrying the Player name + Prompt text + type, and
+//      marks the backing cell — for photo, audio, AND text. admin_confirmed
+//      starts the Proof `pending` (admin-only readable) + files a claim.
+//   2. The proof→cell link is written into the proof DOC itself (uid +
+//      cellIndex) — the authoritative, clobber-resilient link the PR #75
+//      cross-writer constraint requires — and deleteProof resolves the backing
+//      cell by that cellIndex, not by scanning cells[i].proofId.
+//   3. attachProof is ONLINE-only (ADR 0006): the media upload needs signal and
+//      the transaction rejects offline, so it does NOT queue — it rejects, and
+//      the capture is retried (ProofSheet, w2-proof-capture.test.tsx). The
+//      offline-durable path is the bare honor Mark (tests/offline/w1-...).
+
+const EVENT_ID = 'med-2026'; // src/firebase.ts default when VITE_EVENT_ID is unset
+
+type Ref = { __kind: 'doc' | 'collection'; id?: string; path: string };
+type Snap = { data: () => unknown };
+
+const { txGet, txSet, txDelete, runTx, uploadSpy, deleteStorageSpy } = vi.hoisted(() => ({
+  txGet: vi.fn(),
+  txSet: vi.fn(),
+  txDelete: vi.fn(),
+  runTx: vi.fn(),
+  uploadSpy: vi.fn(),
+  deleteStorageSpy: vi.fn(),
+}));
+
+vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'med-2026', storage: {} }));
+// storage.ts talks to Cloud Storage; stub the two functions proofs.ts uses so we
+// never touch a real bucket (uploadProofMedia is exercised for real against the
+// emulator by tests/rules/w0-storage-rules.test.ts).
+vi.mock('./storage', () => ({ uploadProofMedia: uploadSpy, deleteStoragePath: deleteStorageSpy }));
+
+let autoSeq = 0;
+vi.mock('firebase/firestore', () => ({
+  collection: (_db: unknown, ...segments: string[]): Ref => ({
+    __kind: 'collection',
+    path: segments.join('/'),
+  }),
+  doc: (a: unknown, ...rest: string[]): Ref => {
+    // doc(collectionRef) — an auto-id child ref (proofs / claims).
+    if (a && (a as Ref).__kind === 'collection' && rest.length === 0) {
+      const col = (a as Ref).path;
+      const id = `auto-${col.split('/').pop()}-${autoSeq++}`;
+      return { __kind: 'doc', id, path: `${col}/${id}` };
+    }
+    // doc(db, ...segments) — an explicit path ref (boards / players / a proof by id).
+    return { __kind: 'doc', id: rest[rest.length - 1], path: rest.join('/') };
+  },
+  runTransaction: (_db: unknown, fn: (tx: unknown) => unknown) => runTx(_db, fn),
+  increment: (n: number) => ({ __inc: n }),
+  updateDoc: vi.fn(),
+}));
+
+import { attachProof, deleteProof } from './proofs';
+
+// A dealt board: every non-free Square unmarked, the free center (12) "on".
+function dealt(): Cell[] {
+  return Array.from({ length: 25 }, (_, index) => ({
+    index,
+    itemId: index === 12 ? null : `i${index}`,
+    text: index === 12 ? 'FREE' : `p${index}`,
+    free: index === 12,
+    marked: index === 12,
+    markedAt: null,
+  }));
+}
+
+// Mutable per-test server state the transaction reads through tx.get(ref).
+let boardState: { cells: Cell[] } | undefined;
+let playerState: Record<string, unknown> | undefined;
+let proofState: Record<string, unknown> | undefined;
+
+// The tx.set payload written to the first ref whose path contains `frag`.
+function setPayload(frag: string): Record<string, unknown> | undefined {
+  const call = txSet.mock.calls.find((c) => (c[0] as Ref).path.includes(frag));
+  return call ? (call[1] as Record<string, unknown>) : undefined;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  autoSeq = 0;
+  vi.spyOn(Date, 'now').mockReturnValue(1000);
+  boardState = { cells: dealt() };
+  playerState = { firstBingoAt: null };
+  proofState = undefined;
+  uploadSpy.mockResolvedValue({
+    path: `proofs/${EVENT_ID}/u1/UPLOADED.jpg`,
+    url: `https://firebasestorage.googleapis.com/v0/b/b/o/proofs%2F${EVENT_ID}%2Fu1%2FUPLOADED.jpg?alt=media`,
+  });
+  runTx.mockImplementation((_db: unknown, fn: (tx: unknown) => unknown) =>
+    fn({ get: txGet, set: txSet, delete: txDelete }),
+  );
+  txGet.mockImplementation((ref: Ref): Promise<Snap> => {
+    if (ref.path.includes('/boards/')) return Promise.resolve({ data: () => boardState });
+    if (ref.path.includes('/players/')) return Promise.resolve({ data: () => playerState });
+    if (ref.path.includes('/proofs/')) return Promise.resolve({ data: () => proofState });
+    return Promise.resolve({ data: () => undefined });
+  });
+});
+
+const baseArgs = {
+  uid: 'u1',
+  displayName: 'Deck Daddy',
+  photoURL: null as string | null,
+  cells: dealt(),
+  cellIndex: 5,
+  itemText: 'Saw a sailor in Speedos',
+  currentFirstBingoAt: null as number | null,
+};
+
+describe('attachProof — posts an active Proof to the Feed and marks the cell (ADR 0002)', () => {
+  it('writes an active, Feed-visible photo Proof with the Player name + Prompt text, and marks the cell', async () => {
+    await attachProof({
+      ...baseArgs,
+      claimMode: 'proof_required',
+      proof: { type: 'photo', blob: new Blob(['x'], { type: 'image/jpeg' }) },
+    });
+
+    // Media uploaded under the owner's folder, keyed by the proof's own id.
+    expect(uploadSpy).toHaveBeenCalledWith('u1', expect.any(String), expect.any(Blob), 'photo');
+
+    const proof = setPayload('/proofs/')!;
+    // Feed-visible immediately, and it carries the name + prompt the Feed renders.
+    expect(proof.status).toBe('active');
+    expect(proof.displayName).toBe('Deck Daddy');
+    expect(proof.itemText).toBe('Saw a sailor in Speedos');
+    expect(proof.type).toBe('photo');
+    expect(proof.createdAt).toBe(1000); // the feed sorts newest-first by createdAt
+    expect(proof.reportCount).toBe(0);
+    // Moderation fields are server-set (firestore.rules): never client-forged.
+    expect(proof.visionFlag).toBeNull();
+    expect(proof.thumbURL).toBeNull();
+    // The upload result is wired into the doc so the Feed can render the media.
+    expect(proof.storagePath).toBe(`proofs/${EVENT_ID}/u1/UPLOADED.jpg`);
+    expect(proof.mediaURL).toContain('firebasestorage');
+    expect(proof.text).toBeNull();
+
+    // The backing cell is marked-confirmed and references the proof.
+    const board = setPayload('/boards/') as { cells: Cell[] };
+    expect(board.cells[5]).toMatchObject({ marked: true, markedAt: 1000, status: 'confirmed' });
+    expect(typeof board.cells[5].proofId).toBe('string');
+    // proof_required credits the square (not pending), so it counts.
+    expect(setPayload('/players/')).toMatchObject({ squaresMarked: 1 });
+  });
+
+  it('the proof→cell link lives in the proof DOC (uid + cellIndex) — the authoritative, clobber-resilient link (PR #75)', async () => {
+    await attachProof({
+      ...baseArgs,
+      cellIndex: 5,
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'ask him yourself' },
+    });
+
+    const proof = setPayload('/proofs/')!;
+    // The Proof carries its own uid + cellIndex, so the proof→cell link is
+    // resolvable from the proofs doc alone. A queued bare-Mark drain can drop
+    // cells[i].proofId, but never this — the Feed and any repair pass re-resolve
+    // the link from here (specs/w1-board-mark-win.md § cross-writer).
+    expect(proof.uid).toBe('u1');
+    expect(proof.cellIndex).toBe(5);
+    // The proofId written into the cell equals the proof doc's own id, so the
+    // denormalized projection points back at the authoritative doc.
+    const proofRef = txSet.mock.calls.find((c) => (c[0] as Ref).path.includes('/proofs/'))![0] as Ref;
+    const board = setPayload('/boards/') as { cells: Cell[] };
+    expect(board.cells[5].proofId).toBe(proofRef.id);
+  });
+
+  it('a text Proof uploads no media (storagePath / mediaURL null) and carries the callout text', async () => {
+    await attachProof({
+      ...baseArgs,
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: '  he did NOT  ' },
+    });
+
+    expect(uploadSpy).not.toHaveBeenCalled();
+    const proof = setPayload('/proofs/')!;
+    expect(proof.type).toBe('text');
+    expect(proof.storagePath).toBeNull();
+    expect(proof.mediaURL).toBeNull();
+    expect(proof.text).toBe('  he did NOT  '); // ProofSheet trims; attachProof stores as given
+    expect(proof.status).toBe('active');
+  });
+
+  it('an audio Proof uploads a webm clip', async () => {
+    uploadSpy.mockResolvedValueOnce({
+      path: `proofs/${EVENT_ID}/u1/UPLOADED.webm`,
+      url: `https://firebasestorage.googleapis.com/v0/b/b/o/proofs%2F${EVENT_ID}%2Fu1%2FUPLOADED.webm?alt=media`,
+    });
+    await attachProof({
+      ...baseArgs,
+      claimMode: 'honor',
+      proof: { type: 'audio', blob: new Blob(['x'], { type: 'audio/webm' }) },
+    });
+
+    expect(uploadSpy).toHaveBeenCalledWith('u1', expect.any(String), expect.any(Blob), 'audio');
+    const proof = setPayload('/proofs/')!;
+    expect(proof.type).toBe('audio');
+    expect(proof.storagePath).toBe(`proofs/${EVENT_ID}/u1/UPLOADED.webm`);
+  });
+
+  it('admin_confirmed starts the Proof pending (admin-only readable), holds the cell pending, and files a claim', async () => {
+    await attachProof({
+      ...baseArgs,
+      claimMode: 'admin_confirmed',
+      proof: { type: 'text', text: 'confirm me' },
+    });
+
+    const proof = setPayload('/proofs/')!;
+    expect(proof.status).toBe('pending'); // NOT publicly visible until an admin confirms
+
+    const board = setPayload('/boards/') as { cells: Cell[] };
+    expect(board.cells[5].status).toBe('pending');
+    // A pending square does not yet count toward stats (the mask excludes pending).
+    expect(setPayload('/players/')).toMatchObject({ squaresMarked: 0 });
+
+    // A claim is filed for the admin queue, referencing the proof + cell.
+    const claim = setPayload('/claims/')!;
+    expect(claim).toMatchObject({ uid: 'u1', cellIndex: 5, status: 'pending' });
+    expect(typeof claim.proofId).toBe('string');
+  });
+
+  it('folds onto the LIVE board inside the transaction so a concurrent mark is not clobbered', async () => {
+    // Another of the owner's writes already marked index 3 on the server; the
+    // caller's `cells` prop predates it. The transaction reads the live board,
+    // so both marks survive — this live read is exactly why attachProof needs a
+    // server round-trip (and therefore cannot queue offline).
+    const live = dealt();
+    live[3] = { ...live[3], marked: true, markedAt: 1, status: 'confirmed' };
+    boardState = { cells: live };
+
+    await attachProof({
+      ...baseArgs,
+      cells: dealt(), // stale: does not know about index 3
+      cellIndex: 7,
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'both' },
+    });
+
+    const board = setPayload('/boards/') as { cells: Cell[] };
+    expect(board.cells[3].marked).toBe(true); // survived, from the live read
+    expect(board.cells[7].marked).toBe(true); // this proof's mark
+    expect(setPayload('/players/')).toMatchObject({ squaresMarked: 2 });
+  });
+});
+
+describe('attachProof — ONLINE-only: it rejects offline rather than queuing (ADR 0006)', () => {
+  it('rejects (does not queue) when the media upload has no signal — no proof doc is written', async () => {
+    uploadSpy.mockRejectedValueOnce(new Error('storage/retry-limit-exceeded (offline)'));
+
+    await expect(
+      attachProof({
+        ...baseArgs,
+        claimMode: 'proof_required',
+        proof: { type: 'photo', blob: new Blob(['x'], { type: 'image/jpeg' }) },
+      }),
+    ).rejects.toThrow();
+
+    // The upload precedes the write, so nothing durable was written: the caller
+    // (ProofSheet) keeps the capture and retries on reconnect — it does not queue.
+    expect(txSet).not.toHaveBeenCalled();
+    expect(runTx).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the transaction cannot reach the server (a transaction rejects offline)', async () => {
+    // Even a media-free text Proof cannot queue: attachProof rides a
+    // runTransaction, which needs a round-trip and rejects offline.
+    runTx.mockRejectedValueOnce(new Error('Failed to get document because the client is offline.'));
+
+    await expect(
+      attachProof({
+        ...baseArgs,
+        claimMode: 'proof_required',
+        proof: { type: 'text', text: 'no signal' },
+      }),
+    ).rejects.toThrow(/offline/);
+  });
+});
+
+describe('deleteProof — resolves the backing cell by the proof doc cellIndex (PR #75)', () => {
+  it('deletes the storage object + doc and unmarks the cell the proof backs (found via cellIndex)', async () => {
+    proofState = { uid: 'u1', cellIndex: 5, storagePath: `proofs/${EVENT_ID}/u1/P.jpg` };
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 9, proofId: 'P', status: 'confirmed' };
+    boardState = { cells: board };
+    playerState = { firstBingoAt: null };
+
+    await deleteProof('P', `proofs/${EVENT_ID}/u1/P.jpg`);
+
+    // Storage first so a doc is never left referencing deleted media.
+    expect(deleteStorageSpy).toHaveBeenCalledWith(`proofs/${EVENT_ID}/u1/P.jpg`);
+    // The backing cell — resolved by the proof's cellIndex — is unmarked + unlinked.
+    const written = setPayload('/boards/') as { cells: Cell[] };
+    expect(written.cells[5]).toMatchObject({ marked: false, markedAt: null, proofId: null });
+    expect(setPayload('/players/')).toMatchObject({ squaresMarked: 0 });
+    // The proof doc itself is removed.
+    const deleted = txDelete.mock.calls[0][0] as Ref;
+    expect(deleted.path).toContain('/proofs/P');
+  });
+
+  it('after a bare-Mark drain dropped cells[i].proofId, it still deletes the proof but leaves the clobbered cell (accepted residual, ADR 0001)', async () => {
+    // The queued bare-Mark drain wholesale-replaced cells and dropped the
+    // proofId projection: cell 5 is marked but no longer references the proof.
+    // deleteProof resolves the cell by cellIndex but gates the unmark on
+    // proofId === id, so it does NOT fight the drained bare Mark — it removes the
+    // proof doc and leaves the cell to the Mark that now owns it.
+    proofState = { uid: 'u1', cellIndex: 5, storagePath: null };
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 9, proofId: null, status: 'confirmed' };
+    boardState = { cells: board };
+
+    await deleteProof('P');
+
+    expect(setPayload('/boards/')).toBeUndefined(); // the live Mark's cell is left intact
+    expect(setPayload('/players/')).toBeUndefined();
+    const deleted = txDelete.mock.calls[0][0] as Ref;
+    expect(deleted.path).toContain('/proofs/P'); // the proof doc is still removed
+  });
+});

@@ -23,8 +23,41 @@ export interface AttachProofArgs {
 }
 
 /**
- * Mark a square and attach a playful proof. In admin_confirmed mode the square
- * goes pending (doesn't count) and a claim is created for an admin/peer to confirm.
+ * Mark a square and attach a playful proof (ADR 0002: the Proof IS the Feed
+ * entry — a bare Mark posts nothing, an attached Proof posts here). In
+ * admin_confirmed mode the square goes pending (doesn't count) and a claim is
+ * created for an admin/peer to confirm. A Proof is flavour, never enforcement
+ * (ADR 0001): it enriches the Feed, it does not make the Mark more trustworthy.
+ *
+ * Online-only, by design AND by rule (ADR 0006) — unlike a bare honor Mark
+ * (`setMark`), attachProof does NOT queue offline:
+ *   - it runs in a `runTransaction`, which needs a server round-trip and REJECTS
+ *     offline (the read-modify-write folds onto the LIVE board/player so a
+ *     concurrent admin resolve / another of the owner's tabs isn't clobbered),
+ *     and
+ *   - a photo/audio proof is unwritable before its media exists: firestore.rules
+ *     pins `storagePath`/`mediaURL` to the EXACT uploaded Storage object, and a
+ *     Storage upload needs signal — so a media proof doc can't be queued ahead of
+ *     its upload. (A text proof carries no media, but still rides the same
+ *     rejecting transaction.)
+ * The offline-durable path is therefore the bare honor Mark; the Proof and its
+ * media attach when connectivity returns (ADR 0006: "marks queue, proof media
+ * doesn't"). Capture-then-retry lives in `ProofSheet`: a failed submit keeps the
+ * captured blob/text in component state so the Player retries without
+ * re-capturing — durable for the session, NOT across a reload (only the honor
+ * Mark survives a reload).
+ *
+ * The proof→cell link is authoritative in the proof DOC (`uid` + `cellIndex`),
+ * which this writes; `cells[i].proofId` is only a denormalized projection a
+ * queued bare-Mark drain can wholesale-replace and drop
+ * (specs/w1-board-mark-win.md § cross-writer). This is what discharges that
+ * constraint for proof-capture: the Feed (`ProofFeed`/`useProofFeed`) renders
+ * every entry from this doc, never from `cells`, so a dropped `proofId` never
+ * removes a Proof from the Feed. `deleteProof` looks the backing cell up by
+ * this same `cellIndex` rather than scanning for `proofId` — equivalent to the
+ * scan given `proofId`'s uniqueness, so this is a clarity change, not a new
+ * protection; see its own comment for what it does and does not do once a
+ * drain has actually clobbered the projection.
  */
 export async function attachProof(args: AttachProofArgs): Promise<void> {
   const { uid, displayName, photoURL, cells, cellIndex, itemText, claimMode, currentFirstBingoAt, proof } =
@@ -125,11 +158,30 @@ export async function deleteProof(id: string, storagePath?: string | null): Prom
       const playerRef = rawPlayer(proof.uid);
       const boardSnap = await tx.get(boardRef);
       const cells = boardSnap.data()?.cells as Cell[] | undefined;
-      if (cells?.some((c) => c.proofId === id)) {
+      // Resolve the backing cell from the proof's OWN cellIndex — the
+      // authoritative proof→cell link (specs/w1-board-mark-win.md § cross-writer)
+      // — rather than scanning for `cells[i].proofId === id`. Given `proofId`'s
+      // uniqueness and that a proof's `cellIndex` never changes after creation,
+      // the two lookups pick out the same cell in every reachable state: this is
+      // a clarity/consistency change, not a new protection, and it does NOT
+      // recover a clobbered projection. A queued bare-Mark drain does a
+      // whole-array { merge:true } replace of `cells` and can drop the
+      // `proofId` at `cellIndex`; once that has happened, this lookup sees the
+      // same dropped value a `cells.some(c => c.proofId === id)` scan would have
+      // seen, so the guard below no-ops identically either way. We gate the
+      // unmark on `proofId === id` so we never fight a bare Mark that has since
+      // taken the cell over — if the projection was dropped, the drained bare
+      // Mark owns the cell and deleteProof leaves it (accepted residual, ADR
+      // 0001) rather than un-marking a live Mark. What DOES discharge the PR #75
+      // constraint for proof-capture is that the Feed resolves a Proof from this
+      // doc's own `uid`/`cellIndex`, never solely from `cells[i].proofId` — see
+      // `ProofFeed`/`useProofFeed`.
+      const backing = cells?.find((c) => c.index === proof.cellIndex);
+      if (cells && backing?.proofId === id) {
         const playerSnap = await tx.get(playerRef);
         const existingFirst = (playerSnap.data()?.firstBingoAt as number | null | undefined) ?? null;
         const next: Cell[] = cells.map((c) =>
-          c.proofId === id
+          c.index === proof.cellIndex
             ? { ...c, marked: false, markedAt: null, proofId: null, status: 'confirmed' }
             : c,
         );
