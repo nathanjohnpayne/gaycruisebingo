@@ -430,7 +430,48 @@ async function runSetMark(
   return { cells, bingo, blackout };
 }
 
-/** Add a prompt to the community pool. */
+// --- Phase 0 client-side rate limiting (add / report a Prompt, #28) ---
+//
+// No Cloud Functions exist yet (ADR 0004's Phase 0 posture), so this guard is
+// CLIENT-SIDE and PRESENTATIONAL ONLY — it throttles the honest common case
+// (a double-tap, a fast re-submit) so the pool doesn't get spammed by an
+// enthusiastic or fat-fingered Player. It is trivially bypassable by a
+// motivated caller (a second tab, a raw network call) and is NOT a security
+// boundary; server-authoritative rate limiting (a Function or rules-enforced
+// quota) is a Phase 1 concern — the same deferral ADR 0004 makes for the
+// reactive-moderation hide. Module-scope state is fine for a client-only
+// guard, same as `markChains` above — `Date.now()` is allowed in app code.
+// Keyed by a caller-supplied string (`ItemPool.tsx` keys by
+// `${action}:${uid}`) rather than one global bucket, so two different
+// signed-in identities sharing a browser never share a throttle window.
+export const ITEM_RATE_LIMIT_MS = 3_000;
+const lastItemActionAt = new Map<string, number>();
+
+/**
+ * True when `key` last succeeded more than `ITEM_RATE_LIMIT_MS` ago (or
+ * never) — and, in that case ONLY, stamps `now` as the new last-fired time so
+ * a call inside the window is judged against that SAME stamp rather than
+ * resetting its own clock (which would let a fast-enough drip of attempts
+ * dodge the limit forever). Call once per user action, before the guarded
+ * write — see the `addItem`/`reportItem` doc comments below for why the
+ * write functions themselves never also call this.
+ */
+export function checkItemRateLimit(key: string, now: number = Date.now()): boolean {
+  const last = lastItemActionAt.get(key);
+  if (last !== undefined && now - last < ITEM_RATE_LIMIT_MS) return false;
+  lastItemActionAt.set(key, now);
+  return true;
+}
+
+/**
+ * Add a prompt to the community pool.
+ *
+ * No rate limit is enforced HERE — the caller (`ItemPool.tsx`) checks
+ * `checkItemRateLimit` before invoking this, so the guard lives at the one
+ * real call site rather than inside the write itself (checking again in here
+ * would consume the SAME window a second time and silently drop the write
+ * the caller's own check just approved).
+ */
 export async function addItem(uid: string, text: string): Promise<void> {
   const t = text.trim();
   if (!t) return;
@@ -444,7 +485,11 @@ export async function addItem(uid: string, text: string): Promise<void> {
   });
 }
 
-/** Report a prompt (increments the report counter; auto-hide handled by admin/threshold). */
+/**
+ * Report a prompt (increments the report counter; auto-hide handled by
+ * admin/threshold). Same rate-limit posture as `addItem` above — throttled by
+ * the caller, not in here.
+ */
 export async function reportItem(id: string): Promise<void> {
   await updateDoc(rawItem(id), { reportCount: increment(1) });
 }
