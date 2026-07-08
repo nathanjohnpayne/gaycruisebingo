@@ -7,12 +7,13 @@ Feature: Google is the only login (PRD non-goal: no non-Google login), and the c
 - `src/auth/AuthContext.tsx` owns the post-sign-in deal. It runs `joinAndDeal` when the User becomes known, fires `track('join_event')` on success, and exposes `dealError: string | null`, `dealing: boolean`, and `retryDeal(): void`. `signIn` opens the Google popup and fires `track('login', { method: 'google' })`; Google remains the only provider.
 - Each deal attempt is tied to the latest launch. A late result from a superseded attempt — the initial deal is still in flight when the Player signs out and a different Google account signs in — is dropped, not applied, so it can never clobber the current User's board or error surface; auth changes also clear any stale `dealError`/`dealing` so the incoming User never flashes the previous account's surface.
 - A raw deal failure is translated to Player-facing copy: the pool-below-24 guard yields a "prompt pool is below the 24 a card needs" message; any other failure yields a connection-worded fallback. Both are recoverable via `retryDeal`, which re-invokes `joinAndDeal` for the current User with no full reload. The prior error stays visible while the retry is in flight (the surface is never unmounted mid-retry, so the Player is never dropped onto a blank Board); `dealError` is replaced only when the new attempt settles — cleared on success, updated on a fresh failure.
-- `src/App.tsx` no longer swallows the deal error. Once a User is signed in, a non-null `dealError` renders `<DealError>` in place of the app shell / Board, so the failure is never hidden behind a blank Board.
+- `src/App.tsx` no longer swallows the deal error. Once a User is signed in, a non-null `dealError` renders `<DealError>` as the Card tab's route content — the failure is never hidden behind a blank Board — while the app shell, Nav, and every other route stay mounted. In particular the `/items` Prompts tab remains reachable, because adding Prompts there is exactly how the pool-below-24 shortage is recovered; a full-screen takeover would lock the admin/player out of the fix.
 - `src/components/SignIn.tsx` exports `DealError`, the retry surface: it shows the message with `role="alert"` and a Retry button that calls `onRetry`, disabled and relabeled while `retrying`.
 
 ## Acceptance criteria
 
-- Given the active Prompt pool has fewer than 24 non-free Prompts, when a User signs in and `joinAndDeal` throws, then the Player sees a retry surface explaining the deal failed (not a blank Board).
+- Given the active Prompt pool has fewer than 24 non-free Prompts, when a User signs in and `joinAndDeal` throws, then the Player sees a retry surface on the Card tab explaining the deal failed (not a blank Board).
+- Given a deal failure is showing, when the Player uses the still-mounted Nav, then the other tabs — the `/items` Prompts tab in particular — remain reachable so Prompts can be added to recover, and returning to Card still shows the retry surface.
 - Given a signed-in User whose deal failed, when the Player taps Retry, then `joinAndDeal` is re-invoked without a full reload, the retry surface stays mounted (disabled `Dealing…` button) while the retry is in flight, and the surface clears once a deal succeeds.
 - Given a deal is in flight when the Player signs out and a different Google account signs in and deals, when the original deal settles late, then its result is ignored and the new account's board / error surface is untouched.
 - Given a deal failure that is not the pool guard, when it is surfaced, then the Player sees the connection-worded fallback copy.
@@ -30,5 +31,6 @@ Feature: Google is the only login (PRD non-goal: no non-Google login), and the c
 
 `src/w1-auth-google.test.tsx` (Vitest RTL-jsdom) covers the App wiring and the retry affordance:
 
-- With a `dealError` present, `App` renders the `role="alert"` retry surface and does not mount the app shell (`.app`), and its Retry button invokes `retryDeal`.
+- With a `dealError` present, `App` renders the `role="alert"` retry surface as the Card tab's content inside the still-mounted shell (`.app` and `.nav` both present), and its Retry button invokes `retryDeal`.
+- With the error active, tapping the Prompts tab navigates to `/items` and mounts the ItemPool page (the recovery path), and tapping Card again re-shows the retry surface.
 - `DealError` renders the message as an alert, calls `onRetry` when Retry is tapped, and disables/relabels the button while a retry is in flight.

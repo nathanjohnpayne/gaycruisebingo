@@ -19,10 +19,14 @@ vi.mock('./auth/AuthContext', () => ({
 }));
 
 // App imports the tab page components, which transitively pull in the real
-// Firebase SDK; App short-circuits to <DealError> before any of them render, so
-// a stub firebase module keeps the SDK from initializing.
+// Firebase SDK; a stub firebase module keeps the SDK from initializing, and
+// inert data hooks let the shell (Nav) and the /items page render under jsdom.
 vi.mock('./firebase', () => ({
   auth: {}, googleProvider: {}, db: {}, storage: {}, analytics: null, app: {}, EVENT_ID: 'x',
+}));
+vi.mock('./hooks/useData', () => ({
+  useEventDoc: () => ({ data: null, loading: false }),
+  useItems: () => ({ items: [], loading: false }),
 }));
 
 import App from './App';
@@ -36,8 +40,8 @@ beforeEach(() => {
   authState.value = { dealError: null, dealing: false, retryDeal: vi.fn() };
 });
 
-describe('App surfaces a failed deal instead of a blank Board', () => {
-  it('renders the retry surface — not the app shell / Board — when the deal failed', async () => {
+describe('App surfaces a failed deal on the Card tab, shell intact', () => {
+  it('renders the retry surface as Card content inside the still-mounted shell — never a blank Board', async () => {
     authState.value.dealError = POOL_MESSAGE;
     const { container } = render(
       <MemoryRouter>
@@ -45,14 +49,35 @@ describe('App surfaces a failed deal instead of a blank Board', () => {
       </MemoryRouter>,
     );
 
-    // The Player sees a Player-worded reason...
+    // The Player sees a Player-worded reason on the Card tab (no blank Board)...
     expect(screen.getByRole('alert')).toHaveTextContent(/24 a card needs/);
-    // ...and the app shell / Board never mounted (no blank Board behind a toast).
-    expect(container.querySelector('.app')).toBeNull();
+    // ...inside the still-mounted app shell with Nav, not a full-screen takeover
+    // that would hide the tabs (Codex P2: recovery lives on /items).
+    expect(container.querySelector('.app')).not.toBeNull();
+    expect(container.querySelector('.nav')).not.toBeNull();
 
     // Retry re-invokes the deal in place (no full reload).
     await userEvent.click(screen.getByRole('button', { name: /retry/i }));
     expect(authState.value.retryDeal).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps Nav and the /items Prompts route reachable while the deal error is active', async () => {
+    authState.value.dealError = POOL_MESSAGE;
+    render(
+      <MemoryRouter>
+        <App />
+      </MemoryRouter>,
+    );
+
+    // The pool-guard recovery path: the Prompts tab is rendered by Nav and
+    // navigating there mounts the ItemPool page while the error stays active.
+    await userEvent.click(screen.getByRole('link', { name: 'Prompts' }));
+    expect(screen.getByPlaceholderText(/add a prompt/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    // Back on Card, the retry surface is still up — never a blank Board.
+    await userEvent.click(screen.getByRole('link', { name: 'Card' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(/24 a card needs/);
   });
 });
 
