@@ -4,13 +4,25 @@ import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsC
 import { sortPlayers } from '../game/logic';
 import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc } from '../types';
 
+// Both subs subscribe with includeMetadataChanges so the cache→server
+// transition is always observable: with the ADR 0006 persistent cache, a cold
+// or stale IndexedDB can deliver a first snapshot `fromCache` (e.g. an empty
+// pool / missing board that the server would contradict), and WITHOUT metadata
+// events Firestore never re-notifies when the server confirms byte-identical
+// data — `hasServerData` would deadlock. The latch below turns true on the
+// first server-backed snapshot and stays true for the life of the key, so
+// consumers (Board's thin-pool guard) can tell "the server really says this"
+// from "the local cache says this so far". Errors leave it false — failing
+// toward the neutral loading state, never toward a false alert.
 function useDocSub<T>(ref: DocumentReference<T> | null, key: string) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hasServerData, setHasServerData] = useState(false);
   useEffect(() => {
     // Drop the previous ref's document so stale data from another subscription
     // (e.g. a different signed-in uid) can't render under the new key.
     setData(null);
+    setHasServerData(false);
     if (!ref) {
       setLoading(false);
       return;
@@ -18,25 +30,29 @@ function useDocSub<T>(ref: DocumentReference<T> | null, key: string) {
     setLoading(true);
     const unsub = onSnapshot(
       ref,
+      { includeMetadataChanges: true },
       (snap) => {
         setData(snap.exists() ? (snap.data() as T) : null);
         setLoading(false);
+        if (!snap.metadata.fromCache) setHasServerData(true);
       },
       () => setLoading(false),
     );
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return { data, loading };
+  return { data, loading, hasServerData };
 }
 
 function useColSub<T>(q: Query<T> | null, key: string) {
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
+  const [hasServerData, setHasServerData] = useState(false);
   useEffect(() => {
     // Drop the previous query's rows when the key changes so stale results can't
     // render against the new subscription.
     setData([]);
+    setHasServerData(false);
     if (!q) {
       setLoading(false);
       return;
@@ -44,16 +60,18 @@ function useColSub<T>(q: Query<T> | null, key: string) {
     setLoading(true);
     const unsub = onSnapshot(
       q,
+      { includeMetadataChanges: true },
       (snap) => {
         setData(snap.docs.map((d) => d.data() as T));
         setLoading(false);
+        if (!snap.metadata.fromCache) setHasServerData(true);
       },
       () => setLoading(false),
     );
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return { data, loading };
+  return { data, loading, hasServerData };
 }
 
 export function useEventDoc(enabled = true) {
@@ -71,14 +89,14 @@ export function useItems(enabled = true) {
   // prompt add/report out as a full-pool read + rerender. Toggle the key (not
   // just the query) so the effect re-subscribes if `enabled` flips back to
   // true — mirrors useEventDoc's pre-auth gate above.
-  const { data, loading } = useColSub<ItemDoc>(
+  const { data, loading, hasServerData } = useColSub<ItemDoc>(
     enabled ? itemsCol() : null,
     enabled ? 'items' : 'items:disabled',
   );
   const items = data
     .filter((i) => i.status === 'active')
     .sort((a, b) => a.createdAt - b.createdAt);
-  return { items, loading };
+  return { items, loading, hasServerData };
 }
 
 export function useBoard(uid: string | undefined) {

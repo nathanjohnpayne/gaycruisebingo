@@ -11,7 +11,10 @@ import type { BoardDoc, EventDoc, ItemDoc, PlayerDoc } from '../types';
 // preference for the saved users/{uid} identity over the raw Google one
 // (Codex P2 on PR #67, api half, with validation before denormalizing), and
 // gating Board's pool listener to the no-board state (Codex P3 on PR #66).
-// Deal-failure recovery is manual by human decision (PR #66 tiebreak).
+// The thin-pool guard additionally requires server-confirmed snapshots — the
+// ADR 0006 persistent cache can cold-start with an empty cache-only view that
+// must not flash the alert (Codex P2, round 4). Deal-failure recovery is
+// manual by human decision (PR #66 tiebreak).
 
 // Hoisted so the vi.mock factories (Vitest lifts them above the imports) can
 // close over the same mutable fixtures and spies the test bodies drive.
@@ -21,10 +24,15 @@ const H = vi.hoisted(() => ({
   data: {
     board: null as BoardDoc | null,
     boardLoading: false,
+    // hasServerData latches (ADR 0006 persistent cache): true = the sub has
+    // seen a server-confirmed snapshot. Defaults to true (the pre-cache
+    // assumption existing tests encode); the cold-cache tests flip them false.
+    boardServer: true,
     player: null as PlayerDoc | null,
     event: null as EventDoc | null,
     items: [] as ItemDoc[],
     poolLoading: false,
+    poolServer: true,
   },
   getDoc: vi.fn(),
   getDocs: vi.fn(),
@@ -83,12 +91,16 @@ vi.mock('../auth/AuthContext', () => ({
 // the real onSnapshot subscription — that gate is proven directly against the
 // real hook in src/hooks/useData.test.ts.
 vi.mock('../hooks/useData', () => ({
-  useBoard: () => ({ data: H.data.board, loading: H.data.boardLoading }),
+  useBoard: () => ({
+    data: H.data.board,
+    loading: H.data.boardLoading,
+    hasServerData: H.data.boardServer,
+  }),
   useMyPlayer: () => ({ data: H.data.player, loading: false }),
   useEventDoc: () => ({ data: H.data.event, loading: false }),
   useItems: (enabled?: boolean) => {
     H.useItemsSpy(enabled);
-    return { items: H.data.items, loading: H.data.poolLoading };
+    return { items: H.data.items, loading: H.data.poolLoading, hasServerData: H.data.poolServer };
   },
 }));
 
@@ -130,6 +142,8 @@ beforeEach(() => {
   H.data.event = null;
   H.data.items = [];
   H.data.poolLoading = false;
+  H.data.boardServer = true;
+  H.data.poolServer = true;
   H.getDoc.mockReset();
   // Default doc reads: no Board yet, no saved users/{uid} profile. Tests that
   // need an existing Board or a saved profile queue overrides with
@@ -236,6 +250,51 @@ describe('Board deal guard (ADR 0004)', () => {
     render(<Board />);
 
     expect(screen.getByText(/dealing your card/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('suppresses the guard over a cache-only cold start, then fires once the server confirms a thin pool', () => {
+    // ADR 0006 persistent cache (Codex P2, round 4): on a new device or a
+    // cleared IndexedDB, both listeners can resolve FROM CACHE with board=null
+    // and items=[] — loading is false, but nothing is server truth yet. The
+    // "0 prompts" alert must not flash in that window.
+    H.data.board = null;
+    H.data.items = []; // cache-only cold start: empty pool snapshot
+    H.data.boardLoading = false;
+    H.data.poolLoading = false;
+    H.data.boardServer = false;
+    H.data.poolServer = false;
+
+    const { rerender } = render(<Board />);
+    expect(screen.getByText(/dealing your card/i)).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    // The server confirms: still no board, and the pool is GENUINELY thin —
+    // only now may the guard alert.
+    H.data.items = activeItems(MIN_POOL - 1);
+    H.data.boardServer = true;
+    H.data.poolServer = true;
+    rerender(<Board />);
+    expect(screen.getByRole('alert')).toHaveTextContent(/not enough prompts/i);
+  });
+
+  it('renders the board, never the guard, when the server snapshot delivers a board after a cache-only start', () => {
+    // Returning player whose board was not cached: the cache phase must stay
+    // neutral, and the server phase mounts the real card.
+    H.data.board = null;
+    H.data.items = [];
+    H.data.boardServer = false;
+    H.data.poolServer = false;
+
+    const { rerender, container } = render(<Board />);
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
+    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+    H.data.boardServer = true;
+    rerender(<Board />);
+
+    expect(container.querySelectorAll('.cell')).toHaveLength(25);
     expect(screen.queryByRole('alert')).toBeNull();
   });
 });
@@ -434,6 +493,44 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
       .mockResolvedValueOnce({
         exists: () => true,
         data: () => ({ photoURL: 'not a url', customPhoto: true, createdAt: 0 }),
+      });
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN_WITH_PHOTO);
+
+    expect(playerWrite()).toMatchObject({ photoURL: 'https://lh3.example/google.jpg' });
+  });
+
+  it("ignores a truthy-junk customPhoto (the string 'false') — the flag must be exactly true", async () => {
+    // users/{uid} is unvalidated, so customPhoto can hold any type (round 4,
+    // Codex P3). A truthy non-boolean must not publish the saved photo.
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false })
+      .mockResolvedValueOnce({
+        exists: () => true,
+        data: () => ({
+          photoURL: 'https://stale.example/copied.jpg', // valid https, but not opted in
+          customPhoto: 'false',
+          createdAt: 0,
+        }),
+      });
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN_WITH_PHOTO);
+
+    expect(playerWrite()).toMatchObject({ photoURL: 'https://lh3.example/google.jpg' });
+  });
+
+  it('ignores a numeric customPhoto (1) — the flag must be exactly true', async () => {
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false })
+      .mockResolvedValueOnce({
+        exists: () => true,
+        data: () => ({
+          photoURL: 'https://stale.example/copied.jpg',
+          customPhoto: 1,
+          createdAt: 0,
+        }),
       });
     H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
 

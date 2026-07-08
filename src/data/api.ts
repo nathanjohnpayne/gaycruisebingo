@@ -96,9 +96,12 @@ export async function joinAndDeal(u: User): Promise<void> {
   // fail the join against the rules' shape checks). A saved name counts only
   // when it is a real, trimmed-non-empty string within the 100-char cap the
   // rules enforce on every other public displayName denormalization (markers,
-  // moments, proofs); a saved photo only when it is a well-formed https:// URL.
-  // Anything malformed falls back per-field to the auth values, exactly like a
-  // missing profile.
+  // moments, proofs); a saved photo only when it is a well-formed https:// URL
+  // AND the profile's customPhoto flag is EXACTLY boolean true (round 4: a
+  // malformed truthy value like 'false' or 1 must not publish the saved photo
+  // — the contract is customPhoto: true, and everything else in this doc is
+  // untrusted junk). Anything malformed falls back per-field to the auth
+  // values, exactly like a missing profile.
   const savedName =
     typeof profile?.displayName === 'string' &&
     profile.displayName.trim().length > 0 &&
@@ -107,7 +110,8 @@ export async function joinAndDeal(u: User): Promise<void> {
       : null;
   const savedPhoto = profile && isHttpsUrl(profile.photoURL) ? profile.photoURL : null;
   const displayName = savedName ?? (u.displayName ?? 'Anonymous');
-  const photoURL = profile?.customPhoto ? (savedPhoto ?? u.photoURL ?? null) : (u.photoURL ?? null);
+  const photoURL =
+    profile?.customPhoto === true ? (savedPhoto ?? u.photoURL ?? null) : (u.photoURL ?? null);
 
   const pool: DealItem[] = snap.docs
     .map((d) => d.data())
