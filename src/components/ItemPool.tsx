@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { useItems } from '../hooks/useData';
-import { addItem, checkItemRateLimit, reportItem, ITEM_RATE_LIMIT_MS } from '../data/api';
+import { addItem, checkItemRateLimit, itemRateLimitRemainingMs, reportItem } from '../data/api';
 import { track } from '../analytics';
 
 // Pre-sail framing (ADR 0003): a Board freezes the moment a Player joins, so
@@ -40,10 +40,16 @@ export default function ItemPool() {
 
   const add = async () => {
     if (!user || !text.trim()) return;
-    if (!checkItemRateLimit(`add:${user.uid}`)) {
+    const now = Date.now();
+    const key = `add:${user.uid}`;
+    if (!checkItemRateLimit(key, now)) {
       setAddThrottled(true);
       if (addTimer.current) clearTimeout(addTimer.current);
-      addTimer.current = setTimeout(() => setAddThrottled(false), ITEM_RATE_LIMIT_MS);
+      // Arm for the ACTUAL time left on the guard's window (anchored to the
+      // last SUCCESSFUL add), not a full re-armed ITEM_RATE_LIMIT_MS from
+      // THIS blocked attempt — the latter would drift the control's re-enable
+      // later than checkItemRateLimit itself expires (Codex P2, PR #92).
+      addTimer.current = setTimeout(() => setAddThrottled(false), itemRateLimitRemainingMs(key, now));
       return;
     }
     try {
@@ -57,10 +63,13 @@ export default function ItemPool() {
 
   const report = (id: string) => {
     if (!user) return;
-    if (!checkItemRateLimit(`report:${user.uid}`)) {
+    const now = Date.now();
+    const key = `report:${user.uid}`;
+    if (!checkItemRateLimit(key, now)) {
       setReportThrottled(true);
       if (reportTimer.current) clearTimeout(reportTimer.current);
-      reportTimer.current = setTimeout(() => setReportThrottled(false), ITEM_RATE_LIMIT_MS);
+      // Same real-remaining-time arming as `add` above, for the same reason.
+      reportTimer.current = setTimeout(() => setReportThrottled(false), itemRateLimitRemainingMs(key, now));
       return;
     }
     reportItem(id).catch(console.error);
@@ -77,7 +86,11 @@ export default function ItemPool() {
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') add();
+            // Gate Enter with the SAME `addThrottled` state the Add button's
+            // `disabled` uses, so the keyboard path can never submit while
+            // the UI is showing "throttled" — it now expires in lockstep
+            // with the button instead of re-checking the guard on its own.
+            if (e.key === 'Enter' && !addThrottled) add();
           }}
         />
         <button className="btn primary" onClick={add} disabled={!text.trim() || addThrottled}>

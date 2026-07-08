@@ -141,6 +141,66 @@ describe('client-side rate limit on Add (Phase 0, presentational only)', () => {
       await Promise.resolve();
     });
   });
+
+  it('recovers at the REAL remaining time — not a re-armed full window — when a blocked retry lands mid-window, and keeps Enter in lockstep with the disabled button (Codex P2, PR #92)', async () => {
+    vi.useFakeTimers();
+    signIn('add-mismatch-uid');
+
+    render(<ItemPool />);
+    const input = screen.getByPlaceholderText(/add a prompt/i);
+    const addButton = () => screen.getByRole('button', { name: 'Add' });
+
+    // t=0: a first Add succeeds — this is the timestamp checkItemRateLimit's
+    // 3s window is actually anchored to.
+    fireEvent.change(input, { target: { value: 'First prompt' } });
+    fireEvent.click(addButton());
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(addItemMock).toHaveBeenCalledTimes(1);
+
+    // t=2.9s: a retry lands INSIDE the window, with only ~100ms left on the
+    // REAL (data-layer) guard. It must still be blocked...
+    act(() => {
+      vi.advanceTimersByTime(2_900);
+    });
+    fireEvent.change(input, { target: { value: 'Second prompt' } });
+    fireEvent.click(addButton());
+    expect(addItemMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('alert')).toHaveTextContent(/slow down/i);
+    expect(addButton()).toBeDisabled();
+
+    // ...and while the UI says throttled, Enter must NOT reach `add()` at
+    // all — it is gated by the SAME `addThrottled` state as the button, so
+    // no path can submit while the alert is showing.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(addItemMock).toHaveBeenCalledTimes(1);
+
+    // The control must NOT wait a full re-armed window from THIS blocked
+    // retry (that would land at 2.9s + 3s = 5.9s): 99ms later (t=2.999s) it
+    // is still disabled...
+    act(() => {
+      vi.advanceTimersByTime(99);
+    });
+    expect(addButton()).toBeDisabled();
+    expect(addItemMock).toHaveBeenCalledTimes(1);
+
+    // ...but 1ms after that (t=3.0s — exactly when checkItemRateLimit itself
+    // re-opens, 3s after the ORIGINAL success at t=0) it recovers.
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(addButton()).not.toBeDisabled();
+
+    // After expiry, Enter works again and reaches `add()`.
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(addItemMock).toHaveBeenCalledTimes(2);
+    expect(addItemMock).toHaveBeenLastCalledWith('add-mismatch-uid', 'Second prompt');
+    await act(async () => {
+      await Promise.resolve();
+    });
+  });
 });
 
 describe('client-side rate limit on Report (Phase 0, presentational only)', () => {

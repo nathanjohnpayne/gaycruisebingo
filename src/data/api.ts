@@ -464,6 +464,30 @@ export function checkItemRateLimit(key: string, now: number = Date.now()): boole
 }
 
 /**
+ * Milliseconds remaining until `key` will next satisfy `checkItemRateLimit`
+ * — i.e., until `ITEM_RATE_LIMIT_MS` has elapsed since `key`'s last
+ * SUCCESSFUL action — or `0` when there is no wait (no prior success, or the
+ * window has already elapsed). Read-only: unlike `checkItemRateLimit`, this
+ * never stamps `lastItemActionAt`, so a caller can call it on every blocked
+ * attempt without itself consuming or resetting the window.
+ *
+ * `ItemPool.tsx` calls this the moment a blocked attempt lands, to arm its
+ * disabled-timer for the ACTUAL time left rather than re-arming a full
+ * `ITEM_RATE_LIMIT_MS` window on every blocked attempt. The guard's own
+ * window is anchored to the last SUCCESSFUL call (a blocked call never moves
+ * `last` — see above), so a retry late in the window (say, 2.9s into a 3s
+ * window) has only ~100ms left; re-arming a full window from THAT retry
+ * would keep the control disabled long after `checkItemRateLimit` itself
+ * would allow the next attempt (Codex P2, PR #92).
+ */
+export function itemRateLimitRemainingMs(key: string, now: number = Date.now()): number {
+  const last = lastItemActionAt.get(key);
+  if (last === undefined) return 0;
+  const remaining = ITEM_RATE_LIMIT_MS - (now - last);
+  return remaining > 0 ? remaining : 0;
+}
+
+/**
  * Add a prompt to the community pool.
  *
  * No rate limit is enforced HERE — the caller (`ItemPool.tsx`) checks
