@@ -8,6 +8,27 @@ import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode } from '../types';
 
+/**
+ * The caller's first-bingo state for a Mark is KNOWN only when the player row
+ * genuinely resolved. While the subscription is still loading, OR when a
+ * cache-only snapshot settled as "absent" without server confirmation (an
+ * offline reload can cache the board but not the player row, and Firestore
+ * reports an uncached doc as non-existent), the prior value is UNKNOWN —
+ * `undefined` — so setMark omits the preserve-vs-stamp write instead of
+ * treating a phantom `null` as a real "no first bingo yet" and re-stamping
+ * over the server's earlier value (Codex P2, PR #75 rounds 2 + 4). A CACHED
+ * row is real knowledge either way; a loaded `null` is a known none.
+ * Exported for the unit test in `src/data/w1-board-mark-win.test.ts`.
+ */
+export function knownFirstBingoAt(
+  player: { firstBingoAt?: number | null } | null,
+  loading: boolean,
+  serverConfirmed: boolean,
+): number | null | undefined {
+  if (loading || (player === null && !serverConfirmed)) return undefined;
+  return player?.firstBingoAt ?? null;
+}
+
 export default function Board() {
   const { user } = useAuth();
   const uid = user?.uid;
@@ -99,20 +120,7 @@ export default function Board() {
         index: c.index,
         nextMarked,
         claimMode,
-        // While the player row is still loading its first snapshot, pass
-        // `undefined` (UNKNOWN) rather than a `null` that reads as a real "no
-        // first bingo yet": on a cache miss that null would let setMark restamp
-        // firstBingoAt with now and clobber the earlier server value (Codex P2,
-        // PR #75). Once loaded, a genuine null is passed through.
-        // KNOWN only when the row genuinely resolved: while loading, OR when a
-        // cache-only snapshot settled as "absent" without server confirmation
-        // (an offline reload can cache the board but not the player row), the
-        // prior first-bingo state is UNKNOWN — a null here is not a known none
-        // (Codex P2, PR #75 round 4). A CACHED row is real knowledge either way.
-        currentFirstBingoAt:
-          playerLoading || (player === null && !playerConfirmed)
-            ? undefined
-            : (player?.firstBingoAt ?? null),
+        currentFirstBingoAt: knownFirstBingoAt(player, playerLoading, playerConfirmed),
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');

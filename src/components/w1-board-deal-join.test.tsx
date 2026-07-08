@@ -99,7 +99,7 @@ vi.mock('../hooks/useData', () => ({
     loading: H.data.boardLoading,
     hasServerData: H.data.boardServer,
   }),
-  useMyPlayer: () => ({ data: H.data.player, loading: false }),
+  useMyPlayer: () => ({ data: H.data.player, loading: false, hasServerData: true }),
   useEventDoc: () => ({ data: H.data.event, loading: false }),
   useItems: (enabled?: boolean) => {
     H.useItemsSpy(enabled);

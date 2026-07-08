@@ -53,6 +53,7 @@ vi.mock('firebase/firestore', async (importOriginal) => {
 });
 
 import { computeMark, setMark } from './api';
+import { knownFirstBingoAt } from '../components/Board';
 import { addDoc, runTransaction } from 'firebase/firestore';
 
 // A dealt board: every non-free Square unmarked, the free center (12) "on".
@@ -148,6 +149,19 @@ describe('computeMark (win detection + stats)', () => {
     expect(r.player.bingoCount).toBe(1);
     expect(r.player.squaresMarked).toBe(5); // non-dependent stats are still written
     expect('firstBingoAt' in r.player).toBe(false); // omitted, not null
+  });
+
+  it('knownFirstBingoAt treats a settled-but-unconfirmed absent row as UNKNOWN', () => {
+    // Offline reload: the board doc is cached but the player row is not, so
+    // useMyPlayer SETTLES (loading=false) with data=null from a cache-only
+    // snapshot that merely means "not cached", not "does not exist". Passing
+    // that null through as a known none would let a bingo re-stamp
+    // firstBingoAt over the server's earlier value (Codex P2, PR #75 round 4).
+    expect(knownFirstBingoAt(null, false, false)).toBeUndefined(); // the round-4 case
+    expect(knownFirstBingoAt(null, true, false)).toBeUndefined(); // still loading
+    expect(knownFirstBingoAt(null, false, true)).toBeNull(); // server-confirmed absent = known none
+    expect(knownFirstBingoAt({ firstBingoAt: 111 }, false, false)).toBe(111); // a cached row is real knowledge
+    expect(knownFirstBingoAt({ firstBingoAt: null }, false, true)).toBeNull(); // loaded known none
   });
 
   it('CLEARS firstBingoAt even when the prior value is UNKNOWN, once no bingo stands', () => {
