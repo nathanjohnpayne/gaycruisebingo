@@ -1,0 +1,38 @@
+---
+spec_id: w1-event-seed
+status: accepted
+---
+
+# Event/pool seed script (`scripts/seed.mjs`)
+
+`scripts/seed.mjs` is the run-once Admin script that establishes `events/{id}` and the dense pre-cruise Prompt pool. This spec pins the Phase-0 reconciliation of the seeded payload to the accepted ADRs: the ADR 0001 Claim Mode rename, the ADR 0003 pool-density requirement, and the ADR 0004 dead-config removal, plus the `ADMIN_UID` roster flow pending decision #15. The seed payload is exported as import-safe constants — seeding runs only when the script is the entry module, so importing it needs neither Firebase credentials nor the dev-only `firebase-admin` install — and every claim below maps to an assertion in `src/test/w1-event-seed.test.ts` (layer: unit).
+
+## Seeded settings match ADR 0004
+
+`settings.reportHideThreshold` is load-bearing (reactive moderation auto-hides a Prompt at the report threshold) and stays at `4` pending final confirmation via #15. The flag ADR 0004 removed as dead config is not seeded — the type dropped it in `w0-type-contract`, and the seed no longer writes fields the contract does not admit.
+
+- **Given** the seed payload **when** `events/{id}` is written **then** `settings` contains `reportHideThreshold: 4`. (Test: "seeds settings.reportHideThreshold at the load-bearing value 4".)
+- **Given** the seed payload **when** `events/{id}` is written **then** `settings` has exactly one key — the removed ADR 0004 flag is absent from the payload and from the seed source entirely. (Tests: "seeds no blackoutEnabled — ADR 0004 removed it as dead config"; the source scan in "documents the mode set as honor | proof_required | admin_confirmed, never the pre-rename name".)
+
+## Claim Mode names the post-rename value (ADR 0001)
+
+The seeded `claimMode` stays `'honor'` (the default friction/vibe mode). The mode set documented alongside it uses the post-rename name `admin_confirmed`; no comment or value in the seed names the pre-rename mode (see `w0-type-contract` for why the old name is banned).
+
+- **Given** the seed payload **when** `events/{id}` is written **then** `claimMode` is `'honor'`. (Test: "seeds claimMode 'honor' (the default)".)
+- **Given** the seed source **when** scanned **then** the documented mode set is `'honor' | 'proof_required' | 'admin_confirmed'` and the pre-rename name appears nowhere. (Test: "documents the mode set as honor | proof_required | admin_confirmed, never the pre-rename name".)
+
+## ADMIN_UID roster flow (#15)
+
+Admin is the only privileged role, and `events/{id}.admins` is the roster the app trusts. The `ADMIN_UID` env var takes a comma-separated list of uids; the target roster is 2–4 Admins including Nathan's seed uid, with the concrete co-admin uids blocked on decision #15. Because the event write merges and omits `admins` when the roster is empty, the seed can be re-run with the final roster once #15 lands without ever wiping a granted roster in the meantime.
+
+- **Given** an `ADMIN_UID` value **when** parsed **then** it splits on commas, trims each uid, and drops empties (unset/empty parses to an empty roster). (Test: "parses ADMIN_UID as a comma-separated roster, trimming entries and dropping empties".)
+- **Given** a 2–4 uid roster including the seed uid **when** the event payload is built **then** the roster is written to `admins` verbatim. (Test: "writes the roster to events/{id}.admins when set (2–4 Admins incl. the seed uid)".)
+- **Given** an empty roster **when** the event payload is built **then** `admins` is omitted entirely, so a `merge: true` re-run never wipes an existing roster. (Test: "omits admins entirely when the roster is empty, so a merge re-run never wipes it".)
+
+## Prompt pool density (ADR 0003)
+
+The seed establishes the dense pre-cruise Prompt pool: `dealBoard` requires ≥ 24 active Prompts, and the seeded set stays in the dense ~30–50 band (currently 32) so a late joiner can still be dealt a full Board. Prompt doc ids are content hashes, so duplicate texts would collapse into one doc and silently shrink the pool — seeded texts must be unique.
+
+- **Given** the seeded pool **when** counted **then** it has at least 24 entries. (Test: "seeds at least 24 prompts so dealBoard always has a full sample".)
+- **Given** the seeded pool **when** counted **then** it is within the dense 30–50 band. (Test: "keeps the pool in the dense ~30–50 band so a late joiner can still be dealt a Board".)
+- **Given** the seeded pool **when** de-duplicated **then** every text is unique and non-empty. (Test: "seeds unique, non-empty prompt texts — content-hash doc ids collapse duplicates".)
