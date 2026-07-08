@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Cell } from '../types';
 
-// w1-board-mark-win, unit layer. Two concerns, no Firestore and no emulator:
+// w1-board-mark-win, unit layer. Three concerns, no Firestore and no emulator:
 //   1. computeMark — the pure fold of one Mark toggle into the next Board cells
 //      + denormalized Player stats (win detection). Deterministic via injected
 //      `now`.
@@ -10,17 +10,35 @@ import type { Cell } from '../types';
 //      0002) and that it is a plain batch, never a `runTransaction`
 //      (offline-queueable, ADR 0006). The durable-across-reload proof is the
 //      emulator sibling `tests/offline/w1-board-mark-win.test.ts`.
+//   3. setMark's cache-precedence wiring — a caller's `cells` prop can be
+//      stale relative to a Mark that already landed in the persistent local
+//      cache (two fast taps before the caller's onSnapshot listener has
+//      re-rendered it). setMark must fold onto that cache, not the stale
+//      prop, or a later write's full-array replacement silently clobbers the
+//      earlier Mark. The end-to-end proof against a real emulator + real
+//      persistent cache is the same emulator sibling file.
 
 const EVENT_ID = 'med-2026'; // src/firebase.ts default when VITE_EVENT_ID is unset
 
-const { setSpy, commitSpy } = vi.hoisted(() => ({
+// A stand-in for the DocumentSnapshot shape setMark actually reads (`exists()`
+// + `data()`); typed explicitly so `getDocFromCacheSpy.mockResolvedValueOnce`
+// accepts a fake snapshot literal instead of inferring `never` from the
+// default rejection below.
+type FakeSnap = { exists: () => boolean; data: () => unknown };
+
+const { setSpy, commitSpy, getDocFromCacheSpy } = vi.hoisted(() => ({
   setSpy: vi.fn(),
   commitSpy: vi.fn(() => Promise.resolve()),
+  // Rejects by default (nothing cached), matching a fresh test double with no
+  // real persistent cache; individual tests override with mockResolvedValueOnce
+  // to prove the write folds onto a cached Board instead of a stale `cells` arg.
+  getDocFromCacheSpy: vi.fn((): Promise<FakeSnap> => Promise.reject(new Error('no cache in this test double'))),
 }));
 
 // Keep the module graph loadable but the write path inspectable: real
 // firebase/firestore except `doc` (→ a bare { path }), `writeBatch` (→ our
-// spies), and the write fns we assert are NEVER called.
+// spies), `getDocFromCache` (→ our spy), and the write fns we assert are NEVER
+// called.
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'med-2026' }));
 vi.mock('firebase/firestore', async (importOriginal) => {
   const actual = await importOriginal<typeof import('firebase/firestore')>();
@@ -28,6 +46,7 @@ vi.mock('firebase/firestore', async (importOriginal) => {
     ...actual,
     doc: (_db: unknown, ...segments: string[]) => ({ path: segments.join('/') }),
     writeBatch: () => ({ set: setSpy, commit: commitSpy }),
+    getDocFromCache: getDocFromCacheSpy,
     addDoc: vi.fn(),
     runTransaction: vi.fn(),
   };
@@ -177,5 +196,101 @@ describe('setMark (write shape)', () => {
     // Fire-and-forget commit; the win result comes back from the local compute.
     expect(commitSpy).toHaveBeenCalledTimes(1);
     expect(res).toEqual({ cells: expect.any(Array), bingo: false, blackout: false });
+  });
+});
+
+describe('setMark (folds onto the freshest cached Board, not a stale cells prop)', () => {
+  // Two Marks issued in quick succession (two fast taps, or another of the
+  // owner's own tabs) fire before the live listener has re-rendered the
+  // caller with the first Mark, so a caller-supplied `cells` prop can be
+  // stale relative to a Mark that ALREADY landed in the shared persistent
+  // cache. setMark must fold onto that cache, not the stale prop, or the
+  // second write's full-array replacement silently clobbers the first Mark.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('a cached Board with a newer Mark wins over the caller-supplied stale cells', async () => {
+    const cachedCells = dealt();
+    cachedCells[5] = { ...cachedCells[5], marked: true, markedAt: 500, status: 'confirmed' };
+    getDocFromCacheSpy.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => ({ cells: cachedCells }),
+    });
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(), // stale: this caller does not know about index 5 yet
+      index: 6,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+    });
+
+    const boardWrite = setSpy.mock.calls[0][1] as { cells: Cell[] };
+    expect(boardWrite.cells[5].marked).toBe(true); // survived, from the cache
+    expect(boardWrite.cells[6].marked).toBe(true); // this Mark
+    const playerWrite = setSpy.mock.calls[1][1] as { squaresMarked: number };
+    expect(playerWrite.squaresMarked).toBe(2); // both count, not just this call's
+  });
+
+  it('falls back to the caller-supplied cells when nothing is cached yet', async () => {
+    getDocFromCacheSpy.mockRejectedValueOnce(new Error('not cached'));
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 4,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+    });
+
+    const boardWrite = setSpy.mock.calls[0][1] as { cells: Cell[] };
+    expect(boardWrite.cells[4].marked).toBe(true);
+  });
+
+  it('falls back to the caller-supplied cells when the cache has no Board doc yet', async () => {
+    getDocFromCacheSpy.mockResolvedValueOnce({ exists: () => false, data: () => undefined });
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 8,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+    });
+
+    const boardWrite = setSpy.mock.calls[0][1] as { cells: Cell[] };
+    expect(boardWrite.cells[8].marked).toBe(true);
+  });
+
+  it('a cached Player firstBingoAt wins over a stale (null) currentFirstBingoAt prop', async () => {
+    // A standing top-row BINGO already landed in the cache (from a Mark that
+    // stamped firstBingoAt=777), but the caller's own `currentFirstBingoAt`
+    // prop is still null -- its onSnapshot listener has not echoed that write
+    // back yet. Marking another Square that does not break the standing line
+    // must preserve 777, not re-stamp `now`, mirroring the cells fix above.
+    getDocFromCacheSpy.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => ({ cells: withMarked([0, 1, 2, 3, 4]) }),
+    });
+    getDocFromCacheSpy.mockResolvedValueOnce({
+      exists: () => true,
+      data: () => ({ firstBingoAt: 777 }),
+    });
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(), // stale: does not know about the standing bingo
+      index: 6,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null, // stale: does not know firstBingoAt was stamped
+    });
+
+    const playerWrite = setSpy.mock.calls[1][1] as { firstBingoAt: number | null };
+    expect(playerWrite.firstBingoAt).toBe(777); // preserved from the cache, not re-stamped
   });
 });

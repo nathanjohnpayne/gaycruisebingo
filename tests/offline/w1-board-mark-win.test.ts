@@ -25,6 +25,7 @@ import {
   getDocFromServer,
   onSnapshot,
   disableNetwork,
+  enableNetwork,
   waitForPendingWrites,
   terminate,
   type DocumentReference,
@@ -49,8 +50,12 @@ import type { BoardDoc, Cell, PlayerDoc } from '../../src/types';
 // (moments), per ADR 0002.
 //
 // Reverting setMark to a `runTransaction` makes this suite fail at the offline
-// Mark: the transaction rejects instead of queuing. Run it (app tests are not
-// CI-run):
+// Mark: the transaction rejects instead of queuing. A second test below drives
+// two real setMark calls back-to-back off one stale snapshot to prove the
+// `getDocFromCache` fold — not the caller's `cells` prop — is what the second
+// write actually lands on; reverting that fold to the caller's-`cells`-only
+// version fails it (the first Mark comes back unmarked, clobbered by the
+// second write's full-array replacement). Run it (app tests are not CI-run):
 //   firebase emulators:exec --only auth,firestore \
 //     "vitest run --config vitest.offline.config.ts"
 
@@ -64,6 +69,9 @@ const MARKED_CELL = 7;
 // Reusing this exact name for the post-"reload" client re-opens the same
 // IndexedDB persistence store.
 const TAB_APP_NAME = 'gcb-mark-tab';
+// A second, independent app name for the rapid-double-Mark race proof below,
+// so its persistent-cache store never collides with the reload proof's.
+const RACE_TAB_APP_NAME = 'gcb-mark-tab-race';
 
 function firestoreEmulator(): [string, number] {
   const host = process.env.FIRESTORE_EMULATOR_HOST ?? '127.0.0.1:8080';
@@ -259,5 +267,62 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
     // 8. A bare Mark posts NOTHING to the Feed (ADR 0002): no Moment was written.
     const moments = await getDocs(collection(observer.db, 'events', EVENT_ID, 'moments'));
     expect(moments.empty).toBe(true);
+  });
+
+  // ------------------------------------------------------------- concurrency -
+  // Two Marks issued back-to-back off the SAME pre-listener-echo snapshot —
+  // exactly what Board.tsx passes on two fast taps, since its `cells` closure
+  // only advances once the onSnapshot listener re-renders it with the prior
+  // Mark. Neither call here awaits a listener update between them. Before the
+  // `getDocFromCache` fold-onto-freshest-local-state fix, the second write's
+  // full-array `cells` replacement silently clobbered the first Mark (proven
+  // by temporarily reverting this behavior — see the unit-level sibling test
+  // in `src/data/w1-board-mark-win.test.ts`, which fails the same way against
+  // the pre-fix code).
+  it('two Marks fired back-to-back off the same stale snapshot both survive (no clobber)', async () => {
+    const tab = await makeClient(RACE_TAB_APP_NAME);
+    const boardPath = `events/${EVENT_ID}/boards/${tab.uid}`;
+    const playerPath = `events/${EVENT_ID}/players/${tab.uid}`;
+    const boardRef = doc(tab.db, boardPath);
+
+    await setDoc(boardRef, unmarkedBoard(tab.uid));
+    await setDoc(doc(tab.db, playerPath), freshPlayer(tab.uid));
+    await waitForPendingWrites(tab.db);
+
+    await disableNetwork(tab.db);
+
+    const staleSnapshot = unmarkedBoard(tab.uid).cells;
+    await setMark({
+      uid: tab.uid,
+      cells: staleSnapshot,
+      index: 3,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      database: tab.db,
+    });
+    // Still the ORIGINAL stale snapshot -- not the first call's result -- just
+    // like Board.tsx's render closure would be if its listener has not yet
+    // echoed the first Mark back.
+    await setMark({
+      uid: tab.uid,
+      cells: staleSnapshot,
+      index: 9,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      database: tab.db,
+    });
+
+    // `waitForPendingWrites` needs a backend ack, so it must not be called
+    // while still offline (it would hang) — reconnect first, then wait.
+    await enableNetwork(tab.db);
+    await waitForPendingWrites(tab.db);
+
+    const synced = await getDocFromServer(boardRef);
+    expect((synced.data() as BoardDoc).cells[3].marked).toBe(true);
+    expect((synced.data() as BoardDoc).cells[9].marked).toBe(true);
+    const player = await getDocFromServer(doc(tab.db, playerPath));
+    expect((player.data() as PlayerDoc).squaresMarked).toBe(2);
   });
 });

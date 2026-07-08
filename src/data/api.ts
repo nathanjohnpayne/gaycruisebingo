@@ -3,6 +3,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromCache,
   getDocs,
   increment,
   query,
@@ -145,11 +146,23 @@ export function computeMark(params: {
  * round-trip and REJECTS while offline, so a Mark made in a ship-wifi dead zone
  * would be dropped instead of queuing durably in the persistent local cache. A
  * Board is single-writer by design — only its owner writes `boards/{uid}` and
- * `players/{uid}` (firestore.rules) — and the live listener keeps the caller's
- * `cells` current across tabs via the shared persistent cache, so we compute the
- * next state from that local snapshot and write it last-write-wins. Both docs go
- * in one `writeBatch` so they queue and apply atomically. A bare Mark writes
- * ONLY these two docs — nothing to the Feed (moments/proofs), per ADR 0002.
+ * `players/{uid}` (firestore.rules) — but that does NOT make the caller's
+ * render-time `cells` snapshot safe to fold onto blind: two Marks issued in
+ * quick succession (two fast taps, or another of the owner's own tabs) fire
+ * before the live listener has re-rendered the caller with the first Mark, so
+ * both would fold onto the SAME stale `cells` and the second write's full-array
+ * replacement would silently clobber the first — no other writer is needed for
+ * that race, just the same owner acting twice before their own echo lands.
+ * `getDocFromCache` closes it: a cache-only read (works offline, no server
+ * round trip) that sees this client's own just-applied mutations — and, via
+ * the shared persistent multi-tab cache, another tab's already-synced ones —
+ * so the fold is onto the freshest LOCAL knowledge of the Board (and, for
+ * `firstBingoAt`, the Player row) rather than a potentially-stale prop. Each
+ * falls back to its caller-supplied param only when nothing is cached yet
+ * (this write is the first local knowledge of the doc, e.g. a test double
+ * with no cache). Both docs go in one `writeBatch` so they queue and apply
+ * atomically. A bare Mark writes ONLY these two docs — nothing to the Feed
+ * (moments/proofs), per ADR 0002.
  *
  * `commit()` is intentionally not awaited: offline it resolves only on a server
  * ack that may never come in this tab's lifetime, while the write lands in the
@@ -168,11 +181,36 @@ export async function setMark(params: {
 }): Promise<{ cells: Cell[]; bingo: boolean; blackout: boolean }> {
   const { uid } = params;
   const database = params.database ?? db;
-  const { cells, player, bingo, blackout } = computeMark({ ...params, now: Date.now() });
+  const boardRef = doc(database, 'events', EVENT_ID, 'boards', uid);
+  const playerRef = doc(database, 'events', EVENT_ID, 'players', uid);
+
+  let baseCells = params.cells;
+  let baseFirstBingoAt = params.currentFirstBingoAt;
+  const [cachedBoard, cachedPlayer] = await Promise.allSettled([
+    getDocFromCache(boardRef),
+    getDocFromCache(playerRef),
+  ]);
+  // Nothing cached yet for either doc falls back to the caller-supplied param
+  // (e.g. the very first local knowledge of it, or a test double with no
+  // cache) — that is the pre-fix behavior, unchanged.
+  if (cachedBoard.status === 'fulfilled' && cachedBoard.value.exists()) {
+    baseCells = (cachedBoard.value.data() as { cells: Cell[] }).cells;
+  }
+  if (cachedPlayer.status === 'fulfilled' && cachedPlayer.value.exists()) {
+    const cachedFirst = (cachedPlayer.value.data() as { firstBingoAt?: number | null }).firstBingoAt;
+    if (cachedFirst !== undefined) baseFirstBingoAt = cachedFirst;
+  }
+
+  const { cells, player, bingo, blackout } = computeMark({
+    ...params,
+    cells: baseCells,
+    currentFirstBingoAt: baseFirstBingoAt,
+    now: Date.now(),
+  });
 
   const batch = writeBatch(database);
-  batch.set(doc(database, 'events', EVENT_ID, 'boards', uid), { cells }, { merge: true });
-  batch.set(doc(database, 'events', EVENT_ID, 'players', uid), player, { merge: true });
+  batch.set(boardRef, { cells }, { merge: true });
+  batch.set(playerRef, player, { merge: true });
   void batch.commit().catch(() => {
     /* Offline: the write stays queued and drains on reconnect. A genuine
        failure is swallowed like the prior transaction's rejection — the Mark
