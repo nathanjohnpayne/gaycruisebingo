@@ -67,6 +67,7 @@ vi.mock('firebase/firestore', () => {
     query: (...args: unknown[]) => ({ query: args }),
     where: (...args: unknown[]) => ({ where: args }),
     getDoc: H.getDoc,
+    getDocFromCache: vi.fn(),
     getDocs: H.getDocs,
     writeBatch: () => ({ set: H.batchSet, commit: H.batchCommit }),
     addDoc: vi.fn(),
