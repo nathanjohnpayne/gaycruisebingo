@@ -17,9 +17,23 @@ describe('w1-event-seed: seeded settings (ADR 0004)', () => {
 
   it('seeds no blackoutEnabled — ADR 0004 removed it as dead config', () => {
     expect(EVENT_SEED.settings).not.toHaveProperty('blackoutEnabled');
-    // Exact shape: the threshold is the only settings key the seed writes.
+    // Exact shape: the threshold is the only settings key the static seed payload carries.
     expect(Object.keys(EVENT_SEED.settings)).toEqual(['reportHideThreshold']);
-    expect(eventWritePayload([]).settings).toEqual({ reportHideThreshold: 4 });
+  });
+
+  it('marks settings.blackoutEnabled for deletion in the merge write, so re-seeding an Event doc from the previous seed actually removes the stale field', () => {
+    // A `{ merge: true }` write only touches leaf paths present in the payload, so a
+    // pre-existing `settings.blackoutEnabled` from the old seed would otherwise survive a
+    // reseed untouched. `eventWritePayload` takes the delete sentinel as a parameter
+    // (rather than importing firebase-admin) so it stays import-safe without the dev-only
+    // install — stand in a fake sentinel here and assert it passes through untouched.
+    const deleteSentinel = Symbol('FieldValue.delete()');
+    const payload = eventWritePayload([], deleteSentinel);
+    expect(payload.settings).toEqual({ reportHideThreshold: 4, blackoutEnabled: deleteSentinel });
+  });
+
+  it('never seeds a literal value for blackoutEnabled — the seed source references it only as the delete target', () => {
+    expect(seedSource).not.toMatch(/blackoutEnabled:\s*(true|false)/);
   });
 });
 
@@ -31,7 +45,6 @@ describe('w1-event-seed: claim mode (ADR 0001)', () => {
   it('documents the mode set as honor | proof_required | admin_confirmed, never the pre-rename name', () => {
     expect(seedSource).toContain("'honor' | 'proof_required' | 'admin_confirmed'");
     expect(seedSource).not.toMatch(/verified/);
-    expect(seedSource).not.toMatch(/blackoutEnabled/);
   });
 });
 

@@ -9,10 +9,11 @@ status: accepted
 
 ## Seeded settings match ADR 0004
 
-`settings.reportHideThreshold` is load-bearing (reactive moderation auto-hides a Prompt at the report threshold) and stays at `4` pending final confirmation via #15. The flag ADR 0004 removed as dead config is not seeded — the type dropped it in `w0-type-contract`, and the seed no longer writes fields the contract does not admit.
+`settings.reportHideThreshold` is load-bearing (reactive moderation auto-hides a Prompt at the report threshold) and stays at `4` pending final confirmation via #15. The flag ADR 0004 removed as dead config is not seeded — the type dropped it in `w0-type-contract`, and the static seed payload no longer carries fields the contract does not admit. A Firestore `{ merge: true }` write only touches leaf paths present in the payload, though, so omitting the flag is not enough to remove it from an Event doc a previous seed run already wrote it to — the merge write also carries a Firestore delete sentinel (`FieldValue.delete()`) at `settings.blackoutEnabled`, so reseeding actively deletes the stale field instead of leaving it in place.
 
 - **Given** the seed payload **when** `events/{id}` is written **then** `settings` contains `reportHideThreshold: 4`. (Test: "seeds settings.reportHideThreshold at the load-bearing value 4".)
-- **Given** the seed payload **when** `events/{id}` is written **then** `settings` has exactly one key — the removed ADR 0004 flag is absent from the payload and from the seed source entirely. (Tests: "seeds no blackoutEnabled — ADR 0004 removed it as dead config"; the source scan in "documents the mode set as honor | proof_required | admin_confirmed, never the pre-rename name".)
+- **Given** the static seed payload **when** inspected **then** `settings` has exactly one key, and the seed source never assigns the removed ADR 0004 flag a literal value. (Tests: "seeds no blackoutEnabled — ADR 0004 removed it as dead config"; "never seeds a literal value for blackoutEnabled — the seed source references it only as the delete target".)
+- **Given** an Event doc a previous seed run already wrote `settings.blackoutEnabled` to **when** the seed reruns its `{ merge: true }` write **then** the write payload carries a Firestore delete sentinel at `settings.blackoutEnabled`, so the stale field is actively removed rather than merely omitted. (Test: "marks settings.blackoutEnabled for deletion in the merge write, so re-seeding an Event doc from the previous seed actually removes the stale field".)
 
 ## Claim Mode names the post-rename value (ADR 0001)
 

@@ -48,8 +48,21 @@ export function adminRoster(raw = '') {
 
 // The exact object written to events/{id}: `admins` is omitted when the roster is
 // empty so a `merge: true` re-run without ADMIN_UID leaves the existing roster alone.
-export function eventWritePayload(admins) {
-  return { ...EVENT_SEED, ...(admins.length ? { admins } : {}) };
+//
+// `deleteBlackoutEnabled` is a Firestore delete-field sentinel (`FieldValue.delete()`
+// from firebase-admin/firestore), injected by the caller rather than imported at module
+// scope so this function stays import-safe without the dev-only firebase-admin install
+// (see the dynamic import in `seed()` below). It is written at `settings.blackoutEnabled`
+// because a `{ merge: true }` write only touches leaf paths present in the payload:
+// re-running this seed against an Event doc the previous seed already wrote —
+// which included `blackoutEnabled` — would otherwise leave that stale ADR 0004 field in
+// place forever. The sentinel actively deletes it instead of merely omitting it.
+export function eventWritePayload(admins, deleteBlackoutEnabled) {
+  return {
+    ...EVENT_SEED,
+    settings: { ...EVENT_SEED.settings, blackoutEnabled: deleteBlackoutEnabled },
+    ...(admins.length ? { admins } : {}),
+  };
 }
 
 // Dense pre-cruise Prompt pool (ADR 0003): keep this ~30–50 strong so `dealBoard`
@@ -98,7 +111,7 @@ async function seed() {
   const { readFileSync, existsSync } = await import('node:fs');
   const { createHash } = await import('node:crypto');
   const { initializeApp, cert, applicationDefault } = await import('firebase-admin/app');
-  const { getFirestore } = await import('firebase-admin/firestore');
+  const { getFirestore, FieldValue } = await import('firebase-admin/firestore');
 
   const EVENT_ID = process.env.VITE_EVENT_ID || 'med-2026';
   const admins = adminRoster(process.env.ADMIN_UID);
@@ -110,7 +123,7 @@ async function seed() {
   const db = getFirestore();
 
   const eventRef = db.doc(`events/${EVENT_ID}`);
-  await eventRef.set(eventWritePayload(admins), { merge: true });
+  await eventRef.set(eventWritePayload(admins, FieldValue.delete()), { merge: true });
 
   const col = eventRef.collection('items');
   const now = Date.now();
