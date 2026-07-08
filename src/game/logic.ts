@@ -110,10 +110,14 @@ export function countMarked(cells: Cell[]): number {
 
 export type Rankable = Pick<PlayerDoc, 'bingoCount' | 'squaresMarked' | 'firstBingoAt'>;
 
-/** Leaderboard order: bingos desc, then squares desc, then earliest first-bingo. */
+/** Leaderboard order: bingos desc, then squares desc, then earliest first-bingo; two no-bingo Players tie at exactly 0. */
 export function comparePlayers(a: Rankable, b: Rankable): number {
   if (b.bingoCount !== a.bingoCount) return b.bingoCount - a.bingoCount;
   if (b.squaresMarked !== a.squaresMarked) return b.squaresMarked - a.squaresMarked;
+  // Both no-bingo: an explicit stable 0. Without this guard the `?? Infinity`
+  // fallback below computes Infinity - Infinity = NaN, and a NaN comparator
+  // result gives Array.prototype.sort unspecified order for the pair (#93).
+  if (a.firstBingoAt == null && b.firstBingoAt == null) return 0;
   const af = a.firstBingoAt ?? Number.POSITIVE_INFINITY;
   const bf = b.firstBingoAt ?? Number.POSITIVE_INFINITY;
   return af - bf;

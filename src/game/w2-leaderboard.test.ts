@@ -7,7 +7,9 @@ import { comparePlayers, sortPlayers, type Rankable } from './logic';
 // ("under verification, not change"), not a rewrite. src/game/logic.test.ts
 // already has a smaller 'leaderboard ordering' block — this file is the
 // basename-aligned, more exhaustive tie-break table plus the null-last rule
-// pinned in isolation.
+// pinned in isolation. Issue #93 later fixed the one quirk #35 pinned: two
+// null-firstBingoAt Players now compare as an explicit stable 0 (it used to
+// be Infinity - Infinity = NaN), and the pins below assert that fixed rule.
 
 function player(over: Partial<Rankable>): Rankable {
   return { bingoCount: 0, squaresMarked: 0, firstBingoAt: null, ...over };
@@ -54,19 +56,20 @@ describe('comparePlayers — bingos desc, then squares desc, then earliest first
       const noBingo = player({ bingoCount: 2, squaresMarked: 6, firstBingoAt: null });
       const veryLate = player({ bingoCount: 2, squaresMarked: 6, firstBingoAt: Number.MAX_SAFE_INTEGER });
       expect(comparePlayers(noBingo, veryLate)).toBeGreaterThan(0);
+      expect(comparePlayers(veryLate, noBingo)).toBeLessThan(0);
     });
 
-    it('two null-firstBingoAt Players: the raw comparator is NaN (Infinity - Infinity), not 0 — a pre-existing arithmetic quirk of the `?? Infinity` fallback, pinned honestly rather than asserted as a clean tie', () => {
-      // comparePlayers is under verification, not change, here — this is the
-      // function's REAL behavior on current `main`, not a bug this ticket
-      // introduces or a spec this ticket sets. The sortPlayers-level test
-      // below confirms the quirk is harmless for the Leaderboard: engines
-      // (V8 included) treat a NaN comparator result like "equal" (no swap),
-      // so the overall order still comes out stable.
+    it('two null-firstBingoAt Players: the comparator is exactly 0 both ways — a stable, engine-independent tie, never NaN (issue #93)', () => {
+      // Until #93, the `?? Infinity` fallback computed Infinity - Infinity =
+      // NaN for this pair, which hands Array.prototype.sort a formally
+      // unspecified order (the old pin here asserted that NaN honestly).
+      // comparePlayers now short-circuits the both-null tie to an explicit 0,
+      // so sort stability — not engine-specific NaN tolerance — is what keeps
+      // no-bingo-yet Players in their original relative order.
       const a = player({ bingoCount: 0, squaresMarked: 3, firstBingoAt: null });
       const b = player({ bingoCount: 0, squaresMarked: 3, firstBingoAt: null });
-      expect(Number.isNaN(comparePlayers(a, b))).toBe(true);
-      expect(Number.isNaN(comparePlayers(b, a))).toBe(true);
+      expect(comparePlayers(a, b)).toBe(0);
+      expect(comparePlayers(b, a)).toBe(0);
     });
   });
 });
@@ -97,7 +100,7 @@ describe('sortPlayers — purity and stability the presentational filter layer d
     expect(sortPlayers([c, b, a]).map((p) => p.id)).toEqual(['c', 'b', 'a']);
   });
 
-  it('stays stable even when two null-firstBingoAt Players tie (comparePlayers is NaN for that pair, not 0)', () => {
+  it('stays stable when two null-firstBingoAt Players tie (comparePlayers is exactly 0 for that pair)', () => {
     interface Tagged extends Rankable {
       id: string;
     }
@@ -105,8 +108,9 @@ describe('sortPlayers — purity and stability the presentational filter layer d
     const b: Tagged = { id: 'b', bingoCount: 0, squaresMarked: 3, firstBingoAt: null };
     const c: Tagged = { id: 'c', bingoCount: 0, squaresMarked: 3, firstBingoAt: null };
 
-    // No crash, and the input order survives — Array.prototype.sort treats a
-    // NaN comparator result like "equal" (no swap) rather than throwing.
+    // The both-null tie compares as an explicit 0 (issue #93 — it used to be
+    // NaN, which engines tolerated but the spec leaves unspecified), so the
+    // input order survives by guaranteed sort stability, not engine goodwill.
     expect(sortPlayers([a, b, c]).map((p) => p.id)).toEqual(['a', 'b', 'c']);
     expect(sortPlayers([c, b, a]).map((p) => p.id)).toEqual(['c', 'b', 'a']);
   });
