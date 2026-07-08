@@ -17,10 +17,12 @@ service firebase.storage {
         && request.resource.size < 12 * 1024 * 1024;
     }
 
-    // Custom avatars.
-    match /avatars/{uid} {
+    // Custom avatars. uploadAvatar() writes avatars/{uid}.jpg, so the wildcard
+    // captures the full filename ("<uid>.jpg"); bind it to the caller's own uid
+    // + .jpg rather than treating the filename as the uid (which never matched).
+    match /avatars/{file} {
       allow read: if true;
-      allow write: if isOwner(uid) && okImage();
+      allow write: if signedIn() && file == request.auth.uid + '.jpg' && okImage();
     }
 
     // Proof media (Phase 1). Path scoped to the uploading user.

@@ -77,7 +77,9 @@ export const recomputeStats = onDocumentWritten('events/{eventId}/boards/{uid}',
   const playerRef = db.doc(`events/${eventId}/players/${uid}`);
   const snap = await playerRef.get();
   const existingFirst = (snap.data()?.firstBingoAt as number | null) ?? null;
-  const firstBingoAt = existingFirst ?? (bingoCount > 0 ? Date.now() : null);
+  // Clear the stamp when the recomputed board has no bingo, so removing the last
+  // bingo stops the leaderboard from crediting a non-winner; keep it otherwise.
+  const firstBingoAt = bingoCount > 0 ? (existingFirst ?? Date.now()) : null;
 
   await playerRef.set({ bingoCount, squaresMarked: squares, blackout, firstBingoAt }, { merge: true });
 });

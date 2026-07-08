@@ -52,13 +52,14 @@ export function ThemeProvider({
   const userChoseTheme = useRef<boolean | null>(null);
   if (userChoseTheme.current === null) userChoseTheme.current = savedTheme() !== null;
 
+  // Apply the theme to the DOM for CSS. We deliberately do NOT persist here:
+  // writing on every theme change would save the initial/default theme on a first
+  // visit (before the Firestore event/player default resolves), and that
+  // auto-saved value would then make `savedTheme()` non-null on the next load,
+  // blocking the admin-set event default / the player's saved theme. Only an
+  // explicit user pick (setTheme) is persisted.
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    try {
-      localStorage.setItem(KEY, theme);
-    } catch {
-      /* ignore storage errors */
-    }
   }, [theme]);
 
   // The event/player default resolves from Firestore after mount; adopt it only
@@ -70,6 +71,12 @@ export function ThemeProvider({
 
   const setTheme = useCallback((t: ThemeId) => {
     userChoseTheme.current = true;
+    // Persist only explicit choices, so the default is never auto-saved.
+    try {
+      localStorage.setItem(KEY, t);
+    } catch {
+      /* ignore storage errors */
+    }
     setThemeState(t);
   }, []);
 

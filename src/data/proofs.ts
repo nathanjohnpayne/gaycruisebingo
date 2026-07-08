@@ -47,7 +47,10 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
   // mark from another tab/device isn't clobbered by this caller's stale snapshot.
   await runTransaction(db, async (tx) => {
     const boardRef = rawBoard(uid);
+    const playerRef = rawPlayer(uid);
+    // Read board + player before any write (transactions require reads first).
     const boardSnap = await tx.get(boardRef);
+    const playerSnap = await tx.get(playerRef);
     const liveCells = (boardSnap.data()?.cells as Cell[] | undefined) ?? cells;
     const next: Cell[] = liveCells.map((c) =>
       c.index === cellIndex
@@ -58,7 +61,12 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
     const bingoCount = completedLines(next).length;
     const squares = countMarked(next);
     const blackout = isBlackout(next);
-    const firstBingoAt = currentFirstBingoAt ?? (bingoCount > 0 ? now : null);
+    // Derive firstBingoAt from the live player row, not the caller's stale prop,
+    // so a concurrent proof/mark can't overwrite an earlier first-bingo stamp;
+    // clear it when no bingo stands (mirrors setMark/deleteProof).
+    const existingFirst =
+      (playerSnap.data()?.firstBingoAt as number | null | undefined) ?? currentFirstBingoAt ?? null;
+    const firstBingoAt = bingoCount > 0 ? (existingFirst ?? now) : null;
 
     tx.set(pRef, {
       uid,
@@ -73,11 +81,13 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
       text: proof.text ?? null,
       createdAt: now,
       reportCount: 0,
-      status: 'active',
+      // Verified-mode proofs stay 'pending' (admin-only readable) until an admin
+      // confirms the claim; otherwise the proof is public immediately.
+      status: pending ? 'pending' : 'active',
       visionFlag: null,
     });
     tx.set(boardRef, { cells: next }, { merge: true });
-    tx.set(rawPlayer(uid), { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
+    tx.set(playerRef, { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
     if (pending) {
       tx.set(doc(rawClaims()), {
         uid,

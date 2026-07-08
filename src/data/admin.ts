@@ -1,4 +1,4 @@
-import { doc, updateDoc, deleteDoc, getDoc, writeBatch } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, runTransaction } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout } from '../game/logic';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc } from '../types';
@@ -25,21 +25,32 @@ async function resolve(
   adminUid: string,
   status: 'confirmed' | 'rejected',
 ): Promise<void> {
-  const [bSnap, pSnap] = await Promise.all([getDoc(board(c.uid)), getDoc(player(c.uid))]);
-  if (!bSnap.exists()) return;
-  const cells = (bSnap.data().cells as Cell[]) ?? [];
-  const next = transform(cells);
-  const bingoCount = completedLines(next).length;
-  const squares = countMarked(next);
-  const blackout = isBlackout(next);
-  const existingFirst = pSnap.exists() ? ((pSnap.data().firstBingoAt as number | null) ?? null) : null;
-  const firstBingoAt = existingFirst ?? (bingoCount > 0 ? Date.now() : null);
+  await runTransaction(db, async (tx) => {
+    // Read board + player inside the txn so a concurrent mark/proof from the same
+    // player isn't clobbered by a stale snapshot (mirrors setMark/attachProof).
+    const bSnap = await tx.get(board(c.uid));
+    if (!bSnap.exists()) return;
+    const pSnap = await tx.get(player(c.uid));
+    const cells = (bSnap.data().cells as Cell[]) ?? [];
+    const next = transform(cells);
+    const bingoCount = completedLines(next).length;
+    const squares = countMarked(next);
+    const blackout = isBlackout(next);
+    const existingFirst = pSnap.exists() ? ((pSnap.data().firstBingoAt as number | null) ?? null) : null;
+    // Clear the first-bingo stamp when the resolved board has no bingo (rejecting
+    // a claim can remove the last line); keep the earliest stamp otherwise.
+    const firstBingoAt = bingoCount > 0 ? (existingFirst ?? Date.now()) : null;
 
-  const batch = writeBatch(db);
-  batch.set(board(c.uid), { cells: next }, { merge: true });
-  batch.set(player(c.uid), { squaresMarked: squares, bingoCount, blackout, firstBingoAt }, { merge: true });
-  batch.set(claim(c.id), { status, resolvedBy: adminUid }, { merge: true });
-  await batch.commit();
+    tx.set(board(c.uid), { cells: next }, { merge: true });
+    tx.set(player(c.uid), { squaresMarked: squares, bingoCount, blackout, firstBingoAt }, { merge: true });
+    tx.set(claim(c.id), { status, resolvedBy: adminUid }, { merge: true });
+    // Confirming a verified claim publishes its proof, which was created 'pending'
+    // (admin-only readable) so it stayed hidden from the public feed until now. A
+    // rejected proof is left 'pending' (still admin-only) rather than exposed.
+    if (status === 'confirmed' && c.proofId) {
+      tx.set(proof(c.proofId), { status: 'active' }, { merge: true });
+    }
+  });
 }
 
 /**

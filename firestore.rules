@@ -74,15 +74,30 @@ service cloud.firestore {
           && request.resource.data.cellIndex is number
           && request.resource.data.cellIndex >= 0
           && request.resource.data.cellIndex <= 24
-          && request.resource.data.status == 'active'
+          && request.resource.data.displayName is string
+          && request.resource.data.displayName.size() <= 100
+          && (request.resource.data.photoURL == null || request.resource.data.photoURL is string)
+          // createdAt is client-set and the feed sorts by it desc; require a
+          // numeric, near-now value so a far-future stamp can't pin the feed.
+          && request.resource.data.createdAt is number
+          && request.resource.data.createdAt <= request.time.toMillis() + 60000
+          && request.resource.data.createdAt >= request.time.toMillis() - 86400000
+          // Verified-mode proofs start 'pending' (admin-only readable per the read
+          // rule) until an admin confirms the claim; honor/proof_required proofs
+          // start 'active'. A 'pending' proof is never publicly visible.
+          && request.resource.data.status in ['active', 'pending']
           && request.resource.data.reportCount == 0
           && request.resource.data.visionFlag == null
           && request.resource.data.thumbURL == null
-          // Proof media must live under the uploader's OWN Storage path, and the
-          // client-supplied mediaURL must be a Firebase Storage download URL for
-          // that same path. Otherwise a client could set an arbitrary mediaURL and
-          // have the feed render it while bypassing the Storage size/content-type
-          // rules and the moderateProof Vision scan. Text proofs carry no media.
+          // Proof media must be the EXACT Storage object named after this proof's
+          // OWN doc id — proofs/{eventId}/{uid}/{proofId}.{ext} — which is what
+          // uploadProofMedia() writes (jpg for photo, webm for audio) and what
+          // moderateProof() scans. Pinning to the exact object (not just the
+          // uploader's folder) stops a client from setting storagePath to one
+          // object and mediaURL to a DIFFERENT, unscanned object in their folder
+          // (e.g. an unscanned .png) to bypass the Storage size/content-type rules
+          // and the moderateProof Vision scan. The client-supplied mediaURL must be
+          // the getDownloadURL for that same object. Text proofs carry no media.
           // Residual gap (not expressible here): rules can't confirm the object
           // actually exists or that the URL token is valid, and this pins the
           // standard getDownloadURL host (firebasestorage.googleapis.com); the
@@ -92,11 +107,15 @@ service cloud.firestore {
                  && request.resource.data.storagePath == null
                  && request.resource.data.mediaURL == null)
                ||
-               (request.resource.data.type in ['photo', 'audio']
-                 && request.resource.data.storagePath is string
-                 && request.resource.data.storagePath.matches('^proofs/' + eventId + '/' + request.auth.uid + '/.*$')
+               (request.resource.data.type == 'photo'
+                 && request.resource.data.storagePath == 'proofs/' + eventId + '/' + request.auth.uid + '/' + proofId + '.jpg'
                  && request.resource.data.mediaURL is string
-                 && request.resource.data.mediaURL.matches('^https://firebasestorage.googleapis.com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F.*'))
+                 && request.resource.data.mediaURL.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F' + proofId + '[.]jpg([?].*)?$'))
+               ||
+               (request.resource.data.type == 'audio'
+                 && request.resource.data.storagePath == 'proofs/' + eventId + '/' + request.auth.uid + '/' + proofId + '.webm'
+                 && request.resource.data.mediaURL is string
+                 && request.resource.data.mediaURL.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F' + proofId + '[.]webm([?].*)?$'))
              );
         allow update: if isAdmin(eventId)
           || (signedIn()
