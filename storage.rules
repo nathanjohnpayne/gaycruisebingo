@@ -1,0 +1,45 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function isEventAdmin(eventId) {
+      return signedIn()
+        && request.auth.uid in firestore.get(/databases/(default)/documents/events/$(eventId)).data.admins;
+    }
+    function okImage() {
+      return request.resource.contentType.matches('image/.*')
+        && request.resource.size < 8 * 1024 * 1024;
+    }
+    function okAudio() {
+      return request.resource.contentType.matches('audio/.*')
+        && request.resource.size < 12 * 1024 * 1024;
+    }
+
+    // Custom avatars. uploadAvatar() writes avatars/{uid}.jpg, so the wildcard
+    // captures the full filename ("<uid>.jpg"); bind it to the caller's own uid
+    // + .jpg rather than treating the filename as the uid (which never matched).
+    match /avatars/{file} {
+      allow read: if true;
+      allow write: if signedIn() && file == request.auth.uid + '.jpg' && okImage();
+    }
+
+    // Proof media (Phase 1). Path scoped to the uploading user.
+    match /proofs/{eventId}/{uid}/{file} {
+      allow read: if signedIn();
+      // Content-validate uploads, but keep delete separate: a delete carries no
+      // request.resource, so okImage()/okAudio() would reject it and leave the
+      // blob orphaned when deleteProof() removes the doc. Owners delete their own
+      // media; admins delete reported/flagged media during moderation.
+      allow create, update: if isOwner(uid) && (okImage() || okAudio());
+      allow delete: if isOwner(uid) || isEventAdmin(eventId);
+    }
+
+    // Server-generated OG images are written by backend only (Phase 1).
+    match /og/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}

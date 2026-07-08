@@ -11,6 +11,16 @@
 # wouldn't find the test.
 spec_test_map: {}
 # Glob patterns that identify test files. Supplements the default
-# ("tests/**/*.test.*") which doesn't cover shell-based tests.
+# ("tests/**/*.test.*") which doesn't cover shell-based tests or the
+# Vite app's colocated unit tests under src/.
 test_globs:
   - "tests/**"
+  - "src/**/*.test.*"
+
+# Top-level directories beyond the canonical set that are intentional in
+# this repo: the Vite app's static-assets dir and the Cloud Run OG
+# renderer. Justification per the Code Modification Rules lives in
+# plans/app-scaffold-dirs.md (this whitelist only silences the lint gate).
+# Inline-array form because check_no_forbidden_top_level_dirs only
+# recognizes `key: [a, b]`, not indented list items.
+extra_top_level_dirs: [public, cloud-run]

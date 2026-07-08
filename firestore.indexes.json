@@ -1,4 +1,14 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "players",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "bingoCount", "order": "DESCENDING" },
+        { "fieldPath": "squaresMarked", "order": "DESCENDING" },
+        { "fieldPath": "firstBingoAt", "order": "ASCENDING" }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }

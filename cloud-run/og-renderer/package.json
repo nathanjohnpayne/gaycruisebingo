@@ -1,0 +1,19 @@
+{
+  "name": "gaycruisebingo-og-renderer",
+  "description": "Cloud Run service that renders retina Open Graph images with Playwright.",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "start": "node lib/server.js",
+    "dev": "tsc && node lib/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "playwright": "1.47.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.0",
+    "typescript": "^5.6.2"
+  }
+}

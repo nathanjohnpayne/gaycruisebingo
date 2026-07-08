@@ -51,6 +51,8 @@ test-results/
 # Firebase
 .firebase/
 firebase-adminsdk*.json
+# Seed fallback service-account key (scripts/seed.mjs) — never commit
+serviceAccountKey.json
 
 # Misc
 tmp/

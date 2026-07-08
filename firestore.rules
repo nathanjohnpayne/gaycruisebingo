@@ -1,15 +1,136 @@
 rules_version = '2';
-
-// gaycruisebingo — Cloud Firestore security rules.
-//
-// Locked down by default: nothing is readable or writable until you
-// open specific paths as you build the game (rooms, boards, players,
-// called numbers). Never ship `allow read, write: if true;`.
-// Guide: https://firebase.google.com/docs/firestore/security/get-started
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    // Admin uids listed in the event doc's `admins` array.
+    function isAdmin(eventId) {
+      return signedIn() &&
+        request.auth.uid in get(/databases/$(database)/documents/events/$(eventId)).data.admins;
+    }
+
+    // Global user profiles.
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow write: if isOwner(uid);
+    }
+
+    match /events/{eventId} {
+      allow read: if signedIn();
+      // Only admins can change event config (theme default, claimMode, admins).
+      allow write: if isAdmin(eventId);
+
+      // Community-editable prompt pool.
+      match /items/{itemId} {
+        allow read: if signedIn();
+        // Anyone signed in can add an item (basic validation).
+        allow create: if signedIn()
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 80
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.status == 'active'
+          && request.resource.data.reportCount == 0;
+        // Report = increment reportCount by 1 only; admins can do anything.
+        allow update: if isAdmin(eventId)
+          || (signedIn()
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reportCount'])
+              && request.resource.data.reportCount == resource.data.reportCount + 1);
+        allow delete: if isAdmin(eventId);
+      }
+
+      // Membership + denormalized stats. Phase 0: client writes its own stats
+      // (honor-system game). Phase 1 moves these behind Cloud Functions.
+      match /players/{uid} {
+        allow read: if signedIn();
+        allow create, update: if isOwner(uid) || isAdmin(eventId);
+        allow delete: if isAdmin(eventId);
+      }
+
+      // A player's board is private to them.
+      match /boards/{uid} {
+        allow read, write: if isOwner(uid) || isAdmin(eventId);
+      }
+
+      // Proofs (Phase 1). Owner-created; reportable; admin-moderated.
+      match /proofs/{proofId} {
+        // Non-admins can read only visible ('active') proofs; hidden/flagged
+        // proofs are moderation-only and readable by admins.
+        allow read: if signedIn() && (isAdmin(eventId) || resource.data.status == 'active');
+        // Constrain the payload like /items: the uploader owns the doc, only the
+        // known fields are allowed, the proof starts visible + unreported, and
+        // moderation fields (visionFlag, thumbURL) must be server-set, not client.
+        allow create: if signedIn()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.keys().hasOnly([
+               'uid', 'displayName', 'photoURL', 'type', 'cellIndex', 'itemText',
+               'storagePath', 'mediaURL', 'thumbURL', 'text', 'createdAt',
+               'reportCount', 'status', 'visionFlag'
+             ])
+          && request.resource.data.type in ['photo', 'audio', 'text']
+          && request.resource.data.itemText is string
+          && request.resource.data.itemText.size() <= 200
+          && request.resource.data.cellIndex is number
+          && request.resource.data.cellIndex >= 0
+          && request.resource.data.cellIndex <= 24
+          && request.resource.data.displayName is string
+          && request.resource.data.displayName.size() <= 100
+          && (request.resource.data.photoURL == null || request.resource.data.photoURL is string)
+          // createdAt is client-set and the feed sorts by it desc; require a
+          // numeric, near-now value so a far-future stamp can't pin the feed.
+          && request.resource.data.createdAt is number
+          && request.resource.data.createdAt <= request.time.toMillis() + 60000
+          && request.resource.data.createdAt >= request.time.toMillis() - 86400000
+          // Verified-mode proofs start 'pending' (admin-only readable per the read
+          // rule) until an admin confirms the claim; honor/proof_required proofs
+          // start 'active'. A 'pending' proof is never publicly visible.
+          && request.resource.data.status in ['active', 'pending']
+          && request.resource.data.reportCount == 0
+          && request.resource.data.visionFlag == null
+          && request.resource.data.thumbURL == null
+          // Proof media must be the EXACT Storage object named after this proof's
+          // OWN doc id — proofs/{eventId}/{uid}/{proofId}.{ext} — which is what
+          // uploadProofMedia() writes (jpg for photo, webm for audio) and what
+          // moderateProof() scans. Pinning to the exact object (not just the
+          // uploader's folder) stops a client from setting storagePath to one
+          // object and mediaURL to a DIFFERENT, unscanned object in their folder
+          // (e.g. an unscanned .png) to bypass the Storage size/content-type rules
+          // and the moderateProof Vision scan. The client-supplied mediaURL must be
+          // the getDownloadURL for that same object. Text proofs carry no media.
+          // Residual gap (not expressible here): rules can't confirm the object
+          // actually exists or that the URL token is valid, and this pins the
+          // standard getDownloadURL host (firebasestorage.googleapis.com); the
+          // Storage rules + moderation trigger cover the object side.
+          && (
+               (request.resource.data.type == 'text'
+                 && request.resource.data.storagePath == null
+                 && request.resource.data.mediaURL == null)
+               ||
+               (request.resource.data.type == 'photo'
+                 && request.resource.data.storagePath == 'proofs/' + eventId + '/' + request.auth.uid + '/' + proofId + '.jpg'
+                 && request.resource.data.mediaURL is string
+                 && request.resource.data.mediaURL.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F' + proofId + '[.]jpg([?].*)?$'))
+               ||
+               (request.resource.data.type == 'audio'
+                 && request.resource.data.storagePath == 'proofs/' + eventId + '/' + request.auth.uid + '/' + proofId + '.webm'
+                 && request.resource.data.mediaURL is string
+                 && request.resource.data.mediaURL.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F' + proofId + '[.]webm([?].*)?$'))
+             );
+        allow update: if isAdmin(eventId)
+          || (signedIn()
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reportCount'])
+              && request.resource.data.reportCount == resource.data.reportCount + 1);
+        allow delete: if isOwner(resource.data.uid) || isAdmin(eventId);
+      }
+
+      // Verified-mode claims: a player creates a claim for their own square;
+      // admins read the queue and resolve (confirm/reject) them.
+      match /claims/{claimId} {
+        allow read: if isAdmin(eventId) || isOwner(resource.data.uid);
+        allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+        allow update, delete: if isAdmin(eventId);
+      }
     }
   }
 }
