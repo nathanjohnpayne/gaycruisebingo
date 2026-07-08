@@ -33,7 +33,13 @@ beforeAll(async () => {
   const host = process.env.FIRESTORE_EMULATOR_HOST ?? '127.0.0.1:8080';
   const [hostname, port] = host.split(':');
   testEnv = await initializeTestEnvironment({
-    projectId: 'demo-gaycruisebingo-rules',
+    // A distinct projectId from w0-firestore-rules.test.ts (which also uses
+    // clearFirestore() in beforeEach): the Firestore emulator hosts each
+    // projectId as isolated data, so two suites sharing one id race each
+    // other's clearFirestore() under Vitest's default file parallelism
+    // (vitest.rules.config.ts doesn't disable it). w0-storage-rules.test.ts
+    // already models a suite-specific id for the same reason.
+    projectId: 'demo-gcb-self-writable',
     firestore: { host: hostname, port: Number(port), rules: readFileSync(RULES_PATH, 'utf8') },
   });
 });

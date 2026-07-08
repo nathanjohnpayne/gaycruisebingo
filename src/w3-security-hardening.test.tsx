@@ -54,6 +54,80 @@ describe('AcceptableUse page (behind auth — ADR 0005)', () => {
     const main = readRepoFile('./main.tsx');
     expect(main).toMatch(/<AcceptableUse\s*\/>/);
   });
+
+  it('does not promise automatic report-threshold hiding', async () => {
+    // The report path only increments reportCount (src/data/api.ts,
+    // src/data/proofs.ts); status only changes via an Admin action
+    // (src/data/admin.ts). The copy must not claim otherwise.
+    authState.current = { user: { uid: 'alice', displayName: 'Alice' } };
+    const user = userEvent.setup();
+    render(<AcceptableUse />);
+    await user.click(screen.getByRole('button', { name: /guidelines/i }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent(/Admin/);
+    expect(dialog).not.toHaveTextContent(/enough reports hide/i);
+  });
+});
+
+describe('AcceptableUse modal focus management (keyboard/screen-reader users)', () => {
+  beforeEach(() => {
+    authState.current = { user: { uid: 'alice', displayName: 'Alice' } };
+  });
+
+  it('moves focus into the dialog on open and restores it to the trigger when "Got it" closes it', async () => {
+    const user = userEvent.setup();
+    render(<AcceptableUse />);
+    const trigger = screen.getByRole('button', { name: /guidelines/i });
+
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+
+    await user.click(screen.getByRole('button', { name: /got it/i }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('traps Tab and Shift+Tab within the dialog while it is open', async () => {
+    const user = userEvent.setup();
+    render(<AcceptableUse />);
+    await user.click(screen.getByRole('button', { name: /guidelines/i }));
+    const gotIt = screen.getByRole('button', { name: /got it/i });
+
+    await user.tab();
+    expect(gotIt).toHaveFocus();
+    await user.tab(); // wraps forward — stays inside the dialog
+    expect(gotIt).toHaveFocus();
+    await user.tab({ shift: true }); // wraps backward — stays inside the dialog
+    expect(gotIt).toHaveFocus();
+  });
+
+  it('closes on Escape and restores focus to the trigger', async () => {
+    const user = userEvent.setup();
+    render(<AcceptableUse />);
+    const trigger = screen.getByRole('button', { name: /guidelines/i });
+    await user.click(trigger);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('restores focus to the trigger when the backdrop closes the dialog', async () => {
+    const user = userEvent.setup();
+    render(<AcceptableUse />);
+    const trigger = screen.getByRole('button', { name: /guidelines/i });
+    await user.click(trigger);
+    const dialog = screen.getByRole('dialog');
+
+    // The backdrop is the dialog's fixed positioned parent; clicking it
+    // (not the dialog itself) is the "click outside" close path.
+    await user.click(dialog.parentElement as HTMLElement);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
 });
 
 describe('review-policy.yml protected paths (protected-path gap)', () => {
