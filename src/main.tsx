@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ThemeProvider } from './theme/ThemeContext';
 import { useEventDoc, useMyPlayer } from './hooks/useData';
+import { initPostHog, phIdentify, phReset, phPageview } from './posthog';
 import type { ThemeId } from './types';
 import App from './App';
 import ConsentNotice from './components/ConsentNotice';
@@ -12,6 +13,9 @@ import AcceptableUse from './components/AcceptableUse';
 import InstallPrompt from './components/InstallPrompt';
 import './theme/themes.css';
 import './index.css';
+
+// Initialize client-side PostHog once (alongside GA4). No-op without a key. (#96)
+initPostHog();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('root element missing');
@@ -27,6 +31,18 @@ function ThemedApp() {
   const { data: event } = useEventDoc(!!user);
   const { data: player } = useMyPlayer(user?.uid);
   const defaultTheme: ThemeId = player?.theme ?? event?.defaultTheme ?? 'neon-playground';
+  const location = useLocation();
+  // Tie PostHog events to the signed-in User by uid; clear on sign-out. (#96)
+  // Kept here (not in AuthContext) so the analytics wiring stays out of the
+  // protected src/auth/** path.
+  useEffect(() => {
+    if (user?.uid) phIdentify(user.uid);
+    else phReset();
+  }, [user?.uid]);
+  // Manual SPA pageview on route change — path only, no PII. (#96)
+  useEffect(() => {
+    phPageview(location.pathname);
+  }, [location.pathname]);
   return (
     <ThemeProvider defaultTheme={defaultTheme}>
       <App />
