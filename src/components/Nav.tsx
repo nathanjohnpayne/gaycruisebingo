@@ -1,14 +1,19 @@
-import { NavLink } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { useEventDoc } from '../hooks/useData';
 import ThemeSwitcher from './ThemeSwitcher';
 import Avatar from './Avatar';
+import TabBar from './TabBar';
 
+/**
+ * App shell chrome: a top identity bar (brand + avatar + sign-out) and the
+ * bottom tab bar (`TabBar`). The tab bar is fixed to the viewport bottom via
+ * `.tabs` in index.css for one-handed, thumb-reachable navigation — see
+ * `./tabs` for the frozen route/tab contract this renders.
+ */
 export default function Nav() {
   const { user, signOutUser } = useAuth();
   const { data: event } = useEventDoc();
   const isAdmin = !!(user && event?.admins?.includes(user.uid));
-  const cls = ({ isActive }: { isActive: boolean }) => 'tab' + (isActive ? ' active' : '');
 
   return (
     <>
@@ -22,25 +27,7 @@ export default function Nav() {
         </button>
       </div>
       <ThemeSwitcher />
-      <nav className="tabs">
-        <NavLink to="/" className={cls} end>
-          Card
-        </NavLink>
-        <NavLink to="/feed" className={cls}>
-          Feed
-        </NavLink>
-        <NavLink to="/leaderboard" className={cls}>
-          Ranks
-        </NavLink>
-        <NavLink to="/items" className={cls}>
-          Prompts
-        </NavLink>
-        {isAdmin && (
-          <NavLink to="/admin" className={cls}>
-            Admin
-          </NavLink>
-        )}
-      </nav>
+      <TabBar isAdmin={isAdmin} />
     </>
   );
 }
