@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import type { User } from 'firebase/auth';
 import type { BoardDoc, Cell, MomentDoc, MomentKind, PlayerDoc, ProofDoc } from '../types';
 import type { FeedEntry } from '../hooks/useData';
@@ -383,14 +383,90 @@ describe('Board — broadcasts Moments on the BINGO/Blackout edge (specs/w2-feed
     // …and the broadcast Moment doc is now the durable witness in the local cache.
     H.hasPriorBingoWitness.mockResolvedValue(true);
 
-    // Regaining a line still posts the plain bingo Moment (a denied duplicate
-    // create — fine), but must NOT re-queue the ceremonial event singleton: the
-    // player was not first EVER, their own witness proves a prior win.
+    // Regaining a line still posts the plain bingo Moment (skipped by the writer's
+    // write-once cache pre-check, or denied server-side on a cold cache — fine),
+    // but must NOT re-queue the ceremonial event singleton: the player was not
+    // first EVER, their own witness proves a prior win.
     H.board = boardWith(ROW0);
     rerender(<Board />);
     await flushAsync();
     expect(H.broadcastBingo).toHaveBeenCalledTimes(2); // plain bingo write still attempted
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1); // NOT re-claimed
+  });
+
+  it('fires for the player’s OWN Mark completing a line on a still-unconfirmed board — the offline win is queued, not swallowed (round 3 finding A)', async () => {
+    // Offline reload: the board hydrates from cache only and never confirms until
+    // reconnect. Four squares of row 0 are already on; the player taps the fifth.
+    H.boardConfirmed = false;
+    H.board = boardWith([0, 1, 2, 3]);
+    const { rerender } = render(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // hydration baseline, no edge
+
+    // The player's own tap (honor mode marks straight through) — doMark flags the
+    // NEXT snapshot as the player's own action, not passive hydration.
+    fireEvent.click(screen.getByText('p4'));
+    expect(H.setMark).toHaveBeenCalledTimes(1);
+
+    // The latency-compensation snapshot arrives, STILL unconfirmed: a LIVE edge
+    // against the pre-action baseline — the Moment queues (setDoc pends offline).
+    H.board = boardWith(ROW0);
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    // The saved-name identity gating is unchanged on this path.
+    expect(H.broadcastBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null });
+
+    // Reconnect ordering: the server confirmation of the SAME standing win is a
+    // baseline (init-without-firing) — nothing fires twice.
+    H.boardConfirmed = true;
+    H.board = boardWith(ROW0);
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1); // fired once with the local edge, not re-fired
+  });
+
+  it('still baselines a PASSIVE unconfirmed snapshot with a standing win — hydration is not an edge (round 3 finding A)', async () => {
+    // Same cache-only board, but the win arrives WITHOUT any local action (deeper
+    // hydration / another tab's cached write): round-2 baseline behavior holds.
+    H.boardConfirmed = false;
+    H.board = boardWith([]);
+    const { rerender } = render(<Board />);
+
+    H.board = boardWith(ROW0); // passive snapshot, no doMark
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('DROPS a held blackout when the board is gone at flush time — isBlackout([]) must not fire vacuously (round 3 finding B)', async () => {
+    // Cross the blackout edge while identity is UNKNOWN so both flags hold…
+    H.playerLoading = true;
+    H.player = null;
+    H.board = boardWith([]);
+    const { rerender } = render(<Board />);
+    H.board = boardWith(FULL_CARD);
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBlackout).not.toHaveBeenCalled(); // held
+
+    // …then the board disappears entirely (deleted / no longer attributable).
+    H.board = null;
+    rerender(<Board />);
+
+    // Identity resolves: revalidation sees NO board — [].every(Boolean) is
+    // vacuously true, so without the length gate the held blackout would fire
+    // against a board that no longer exists. It must drop instead.
+    H.playerLoading = false;
+    H.playerConfirmed = true;
+    H.player = { displayName: 'Deck Daddy', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBlackout).not.toHaveBeenCalled();
+    expect(H.broadcastBingo).not.toHaveBeenCalled();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
   });
 });
 

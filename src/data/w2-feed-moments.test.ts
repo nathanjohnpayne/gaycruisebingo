@@ -7,9 +7,12 @@ import type { MomentDoc, MomentKind, ProofDoc } from '../types';
 //    `bingo` Moment, a Blackout exactly one `blackout`, First-to-BINGO exactly one
 //    `first_bingo` — each a single offline-queueable setDoc (never addDoc/
 //    runTransaction), carrying EXACTLY the MomentDoc fields (ADR 0002: no media,
-//    no proofId), attributed + bounded like a Tally marker. The deterministic doc
-//    id (per-Player `${uid}-bingo`/`-blackout`; event-singleton `first_bingo`) is
-//    what makes the once-only structural — the rules half is
+//    no proofId), attributed + bounded like a Tally marker. Every write goes
+//    through the write-once cache pre-check (round 3 finding C): a Moment already
+//    in the LOCAL cache is skipped entirely so an optimistic duplicate can never
+//    overwrite its own doc and reorder the Feed until the server denies it. The
+//    deterministic doc id (per-Player `${uid}-bingo`/`-blackout`; event-singleton
+//    `first_bingo`) is what makes the once-only structural — the rules half is
 //    tests/rules/w2-feed-moments.test.ts.
 // 2. The Feed MERGE (mergeFeed in src/hooks/useData.ts): Proofs + Moments fold into
 //    one newest-first, capped stream; a bare Mark (neither a Proof nor a Moment)
@@ -48,18 +51,26 @@ import {
 import { mergeFeed } from '../hooks/useData';
 import { addDoc, runTransaction } from 'firebase/firestore';
 
+// Drain the write-once pre-check's microtasks (getDocFromCache → setDoc): the
+// broadcasts stay fire-and-forget, so assertions settle the queue first.
+const settle = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 beforeEach(() => {
   vi.clearAllMocks();
   setDocSpy.mockResolvedValue(undefined);
+  // Cache-miss default: getDocFromCache REJECTS when the doc is not cached, which
+  // is the fresh-state norm — the write-once pre-check then lets the write proceed.
+  getDocFromCacheSpy.mockRejectedValue(new Error('unavailable'));
 });
 
 describe('moments broadcasts — the Feed beat writer (specs/w2-feed-moments.md)', () => {
-  it('a first BINGO broadcasts exactly one `bingo` Moment at the per-Player id, no evidence', () => {
+  it('a first BINGO broadcasts exactly one `bingo` Moment at the per-Player id, no evidence', async () => {
     broadcastBingo({ uid: 'u1', displayName: 'Alice', photoURL: null });
+    await settle();
 
     expect(setDocSpy).toHaveBeenCalledTimes(1);
     const [ref, payload] = setDocSpy.mock.calls[0];
-    // Deterministic per-Player id → once-per-Player is structural (rules: update is admin-only).
+    // Deterministic per-Player id → once-per-Player is structural (rules: update is denied).
     expect(ref.path).toBe(`events/${EVENT_ID}/moments/u1-bingo`);
     // EXACTLY the MomentDoc fields — no media, mediaURL, storagePath, or proofId (ADR 0002).
     expect(payload).toEqual({
@@ -73,8 +84,9 @@ describe('moments broadcasts — the Feed beat writer (specs/w2-feed-moments.md)
     expect('proofId' in payload).toBe(false);
   });
 
-  it('a Blackout broadcasts exactly one `blackout` Moment at the per-Player id', () => {
+  it('a Blackout broadcasts exactly one `blackout` Moment at the per-Player id', async () => {
     broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: 'https://x/a.jpg' });
+    await settle();
 
     expect(setDocSpy).toHaveBeenCalledTimes(1);
     const [ref, payload] = setDocSpy.mock.calls[0];
@@ -82,28 +94,58 @@ describe('moments broadcasts — the Feed beat writer (specs/w2-feed-moments.md)
     expect(payload).toMatchObject({ kind: 'blackout', uid: 'u1', photoURL: 'https://x/a.jpg' });
   });
 
-  it('First-to-BINGO broadcasts one `first_bingo` Moment at the EVENT-singleton id', () => {
+  it('First-to-BINGO broadcasts one `first_bingo` Moment at the EVENT-singleton id', async () => {
     expect(FIRST_BINGO_MOMENT_ID).toBe('first_bingo');
     broadcastFirstBingo({ uid: 'u1', displayName: 'Alice', photoURL: null });
+    await settle();
 
     expect(setDocSpy).toHaveBeenCalledTimes(1);
     const [ref, payload] = setDocSpy.mock.calls[0];
     // A fixed per-Event id → once-per-Event structurally (first create wins; the
-    // race's later writers hit the admin-only update rule and are denied).
+    // race's later writers hit the deny-all update rule and are denied).
     expect(ref.path).toBe(`events/${EVENT_ID}/moments/first_bingo`);
     expect(payload).toMatchObject({ kind: 'first_bingo', uid: 'u1' });
   });
 
-  it('bounds an over-long attributed name to the 100-char Moment cap (rules-valid)', () => {
+  it('bounds an over-long attributed name to the 100-char Moment cap (rules-valid)', async () => {
     broadcastBingo({ uid: 'u1', displayName: 'x'.repeat(140), photoURL: null });
+    await settle();
     expect((setDocSpy.mock.calls[0][1].displayName as string).length).toBe(100);
   });
 
-  it('is offline-queueable — a plain setDoc, never addDoc or runTransaction', () => {
+  it('is offline-queueable — a plain setDoc, never addDoc or runTransaction', async () => {
     broadcastBingo({ uid: 'u1', displayName: 'Alice', photoURL: null });
+    await settle();
     expect(setDocSpy).toHaveBeenCalledTimes(1);
     expect(addDoc).not.toHaveBeenCalled();
     expect(runTransaction).not.toHaveBeenCalled();
+  });
+
+  it('SKIPS the write when the Moment is already in the local cache (round 3 finding C)', async () => {
+    // A duplicate deterministic-id setDoc would be denied server-side, but latency
+    // compensation applies it LOCALLY first — the refreshed createdAt would pin the
+    // old Moment to the Feed top until the denial (indefinitely offline). The
+    // write-once pre-check catches exactly this: doc cached → no write at all.
+    getDocFromCacheSpy.mockResolvedValue({ exists: () => true });
+    broadcastBingo({ uid: 'u1', displayName: 'Alice', photoURL: null });
+    await settle();
+    expect(setDocSpy).not.toHaveBeenCalled();
+  });
+
+  it('writes when the cache has no copy — a cached tombstone (exists=false) or a cache miss both proceed', async () => {
+    // exists() === false: the cache KNOWS the doc is absent (e.g. deleted) — write.
+    getDocFromCacheSpy.mockResolvedValue({ exists: () => false });
+    broadcastBingo({ uid: 'u1', displayName: 'Alice', photoURL: null });
+    await settle();
+    expect(setDocSpy).toHaveBeenCalledTimes(1);
+
+    // Cache miss (rejection — fresh device): the pre-check cannot protect anything
+    // (no cached copy to overwrite), so the write proceeds and any duplicate still
+    // resolves server-side via the create-only rule.
+    getDocFromCacheSpy.mockRejectedValue(new Error('unavailable'));
+    broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null });
+    await settle();
+    expect(setDocSpy).toHaveBeenCalledTimes(2);
   });
 });
 

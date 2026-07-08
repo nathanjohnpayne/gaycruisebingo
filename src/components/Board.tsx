@@ -170,6 +170,17 @@ export default function Board() {
     blackout: false,
     firstBingo: false,
   });
+  // Set by doMark when THIS player's own tap changes the board; consumed (cleared)
+  // by the next cells-effect run (round 3 finding A). The round-2 rule baselines
+  // EVERY snapshot while the board is still cache-only (!boardConfirmed) — which
+  // silently swallowed a win completed OFFLINE (an offline reload never confirms
+  // until reconnect, so the player's own line got baselined and the edge never
+  // fired, violating the offline-queueable Moments AC). A snapshot the player
+  // CAUSED is not hydration: the cells effect treats it as a LIVE edge against
+  // the pre-action baseline, and the queued Moment rides the offline queue
+  // exactly as designed (setDoc pends, ADR 0006). Passive unconfirmed snapshots
+  // (no local action pending) keep the round-2 baseline behavior.
+  const localActionPending = useRef(false);
 
   // Account switch (finding 5, hardened by round 2 finding B): the edge state is
   // per-uid, and the reset must happen BEFORE any effect of the uid-switch render
@@ -188,6 +199,7 @@ export default function Board() {
     wasBingo.current = false;
     wasBlackout.current = false;
     pending.current = { bingo: false, blackout: false, firstBingo: false };
+    localActionPending.current = false;
   }
 
   const cells: Cell[] = board?.cells ?? [];
@@ -263,9 +275,15 @@ export default function Board() {
     if (!cUid || !idKnown) return;
     const actor = { uid: cUid, displayName: cName, photoURL: cPhoto };
     // Fire-time revalidation (round 2 finding A) — recomputed from the CURRENT
-    // attributable cells; an empty/missing/other-uid board means nothing stands.
-    const bingoNow = hasBingo(cellsNow);
-    const blackoutNow = isBlackout(cellsNow);
+    // attributable cells. A missing/empty/other-uid board means NOTHING stands,
+    // and the length gate is load-bearing (round 3 finding B): isBlackout([]) is
+    // vacuously TRUE ([].every(Boolean)), so without it a held blackout would
+    // FIRE against a deleted or non-attributable board. hasBingo([]) is already
+    // false (no line completes over no cells), but the guard is applied uniformly
+    // so neither path ever rests on a vacuous-truth accident.
+    const boardStands = cellsNow.length > 0;
+    const bingoNow = boardStands && hasBingo(cellsNow);
+    const blackoutNow = boardStands && isBlackout(cellsNow);
     if (pending.current.bingo) {
       if (bingoNow) broadcastBingo(actor);
       pending.current.bingo = false; // fired, or dropped: the win no longer stands
@@ -300,8 +318,9 @@ export default function Board() {
   // the event singleton despite not being first EVER. The player's own immutable
   // `${uid}-bingo` Moment doc is the durable witness a prior win existed: if the
   // local cache holds it, the ceremonial candidate is SUPPRESSED (their regained
-  // line still posts the plain bingo Moment — a denied duplicate create, which is
-  // fine). On a cache miss (fresh device) the check resolves false and the
+  // line still attempts the plain bingo Moment, which the writer's write-once
+  // cache pre-check skips — or the create-only rule denies on a cold cache; round
+  // 3 finding C). On a cache miss (fresh device) the check resolves false and the
   // existing roster gate is the fallback — the narrowed residual is documented in
   // the spec. The uid recheck guards an account switch during the async check:
   // the pending state it would write belongs to the OLD uid and must not leak.
@@ -327,24 +346,42 @@ export default function Board() {
     // can run one render with the PREVIOUS uid's board still in the subscription;
     // that data must neither seed the new uid's baseline nor read as an edge.
     if (!cellsAttributable || !cells.length) return;
+    // Consume the local-action marker for THIS snapshot (round 3 finding A) —
+    // read-and-clear, so a later passive snapshot can never inherit it.
+    const localAction = localActionPending.current;
+    localActionPending.current = false;
     const bingo = hasBingo(cells);
     const black = isBlackout(cells);
     // Baseline vs detection (round 2 finding C): under the ADR 0006 persistent
     // cache the FIRST snapshot(s) can be cache-only, and a stale cache that lacks
     // a bingo the server already has would make the server confirmation read as a
     // live transition — a Moment for a win that already stood. So while the board
-    // is NOT server-confirmed, EVERY snapshot is baseline: keep re-seeding
+    // is NOT server-confirmed, EVERY PASSIVE snapshot is baseline: keep re-seeding
     // wasBingo/wasBlackout and never fire edges (initialized stays false). The
     // FIRST server-confirmed snapshot is baseline too (init-without-firing — a
     // standing win it reveals already stood server-side); only after it does edge
-    // DETECTION run. Local optimistic Marks still fire: `hasServerData` is a
-    // latch — once true it never un-sets — and latency compensation delivers the
-    // local write as the next snapshot under a confirmed board.
+    // DETECTION run. Under a confirmed board, local optimistic Marks fire via
+    // latency compensation: `hasServerData` is a latch — once true it never
+    // un-sets — and the local write arrives as the next snapshot.
+    //
+    // EXCEPTION — the player's own action on a still-unconfirmed board (round 3
+    // finding A): an offline reload never confirms until reconnect, so baselining
+    // the player's OWN just-completed line would swallow the win entirely (the
+    // edge would never fire, even after reconnect — the first confirmed snapshot
+    // baselines it as already standing). A snapshot doMark caused is not
+    // hydration; fall through to LIVE detection against the pre-action baseline
+    // instead, and let the Moment ride the offline queue. (By the time a tap is
+    // possible the cells have rendered, so a pre-action baseline always exists.)
+    // The later server confirmation re-baselines the same standing state
+    // (initialized is still false) without firing a second edge.
     if (!boardConfirmed || !initialized.current) {
-      wasBingo.current = bingo;
-      wasBlackout.current = black;
-      initialized.current = boardConfirmed;
-      return;
+      if (boardConfirmed || !localAction) {
+        wasBingo.current = bingo;
+        wasBlackout.current = black;
+        initialized.current = boardConfirmed;
+        return;
+      }
+      // fall through: local action on an unconfirmed board → live edge.
     }
     const bingoEdge = bingo && !wasBingo.current;
     const blackoutEdge = black && !wasBlackout.current;
@@ -373,8 +410,9 @@ export default function Board() {
     // fire-and-forget and offline-queueable (src/data/moments.ts). Each fires on its
     // OWN transition, independent of the celebration's visual priority, and once per
     // Player (the deterministic Moment doc id makes the once-only structural: a
-    // re-fire on a lose→regain, a reload, or another tab hits the create-only rule —
-    // updates are denied — and is rejected). On a real 5×5 board the first-line
+    // re-fire on a lose→regain, a reload, or another tab is SKIPPED by the writer's
+    // write-once cache pre-check, or denied by the create-only rule on a cold cache
+    // — updates are denied for everyone). On a real 5×5 board the first-line
     // (BINGO) edge always precedes the full-card (Blackout) edge, so a Blackout never
     // suppresses the earlier first-BINGO broadcast. A bare Mark that completes no line
     // crosses NO edge here, so it broadcasts nothing. A bingo edge enqueues the
@@ -438,6 +476,10 @@ export default function Board() {
   const wins = winningCells(cells);
 
   const doMark = async (c: Cell, nextMarked: boolean) => {
+    // The next board snapshot is THIS player's own action, not passive hydration
+    // (round 3 finding A): set before the write so the latency-compensation
+    // snapshot — which can arrive before setMark resolves — is already marked.
+    localActionPending.current = true;
     try {
       const res = await setMark({
         uid,
@@ -456,7 +498,10 @@ export default function Board() {
          persistent cache (ADR 0006, #20) and syncs on reconnect; an online
          rejection is logged inside setMark and self-corrects when Firestore
          rolls the write back and the live listener re-renders without the Mark.
-         This catch only guards a synchronous throw from setMark itself. */
+         This catch only guards a synchronous throw from setMark itself — no
+         write happened, so no snapshot is coming: clear the local-action
+         marker rather than let it misread a later passive snapshot as live. */
+      localActionPending.current = false;
     }
   };
 

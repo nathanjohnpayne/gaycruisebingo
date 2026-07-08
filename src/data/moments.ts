@@ -60,8 +60,11 @@ export interface MomentActor {
  * like everyone else, so a second first-BINGO for the same Player, or a duplicate
  * First-to-BINGO, can never post. The Board edge
  * refs (`wasBingo`/`wasBlackout`) are the first line (no re-fire within a session
- * or across a reload); this create-only id is the structural backstop for reloads,
- * multiple tabs, and the First-to-BINGO race.
+ * or across a reload); the write-once cache pre-check (`writeMomentOnce`, round 3
+ * finding C) skips a duplicate whose Moment is already in the local cache before
+ * it can optimistically overwrite it; the create-only id is the structural
+ * backstop for whatever remains (fresh devices, multiple tabs, the
+ * First-to-BINGO race).
  *
  * The payload is EXACTLY `Omit<MomentDoc, 'id'>` (the id is the doc id): no media
  * and no `proofId` ever reach a Moment. `displayName` is bounded through the
@@ -70,6 +73,40 @@ export interface MomentActor {
  * `resolveDisplayName` yields is not itself length-capped).
  */
 function broadcast(id: string, kind: MomentKind, who: MomentActor): void {
+  void writeMomentOnce(id, kind, who);
+}
+
+/**
+ * The write-once step behind every broadcast (round 3 finding C, PR #99). The
+ * create-only rules DENY a duplicate deterministic-id write server-side — but
+ * Firestore applies latency compensation FIRST: the duplicate setDoc briefly
+ * overwrites the LOCAL cache copy, and its refreshed `createdAt` pins the old
+ * Moment to the top of the Feed until the server's denial rolls it back —
+ * indefinitely while offline, where no denial ever arrives. So, extending the
+ * round-2 witness pattern to ALL broadcasts: check the local cache for the
+ * deterministic id first, and if the Moment already exists there, SKIP the write
+ * entirely. That is the designed once-only path doing its job, not an error —
+ * logged at debug level (the rules-denial path below keeps its error log). On a
+ * cache miss (fresh device / cold cache) the write proceeds: a duplicate from a
+ * cold cache still resolves server-side via the create-only rule, and the
+ * visible-flash window only exists when the doc IS cached — exactly the case
+ * this pre-check catches.
+ */
+async function writeMomentOnce(id: string, kind: MomentKind, who: MomentActor): Promise<void> {
+  const ref = rawMoment(id);
+  try {
+    const cached = await getDocFromCache(ref);
+    if (cached.exists()) {
+      console.debug('[moments] broadcast skipped — Moment already in local cache', {
+        id,
+        kind,
+        uid: who.uid,
+      });
+      return;
+    }
+  } catch {
+    // Not in the local cache — no duplicate to protect; proceed with the write.
+  }
   const payload: Omit<MomentDoc, 'id'> = {
     kind,
     uid: who.uid,
@@ -77,12 +114,13 @@ function broadcast(id: string, kind: MomentKind, who: MomentActor): void {
     photoURL: who.photoURL,
     createdAt: Date.now(),
   };
-  void setDoc(rawMoment(id), payload).catch((err: unknown) => {
+  await setDoc(ref, payload).catch((err: unknown) => {
     // Not the offline case: offline the write PENDS in the persistent cache and
     // drains on reconnect (ADR 0006). A rejection is either a genuine online
-    // failure (permission/auth) OR the expected once-only backstop — a
-    // re-broadcast of an already-claimed deterministic id hitting the deny-all
-    // `update` rule. Either way it must not vanish silently; log with context.
+    // failure (permission/auth) OR the once-only backstop for a COLD-cache
+    // duplicate — a re-broadcast of an already-claimed deterministic id hitting
+    // the deny-all `update` rule. Either way it must not vanish silently; log
+    // with context.
     console.error('[moments] broadcast rejected', { id, kind, uid: who.uid }, err);
   });
 }
