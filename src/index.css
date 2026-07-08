@@ -38,7 +38,10 @@ a {
 .app {
   max-width: 640px;
   margin: 0 auto;
-  padding: 12px 12px 96px;
+  /* Bottom padding clears the fixed .tabs bar (~44px tap targets + its own
+     padding/border + the iOS safe-area inset) so the last row of content
+     never sits underneath it. */
+  padding: 12px 12px 112px;
 }
 
 /* ---------- nav ---------- */
@@ -61,6 +64,10 @@ a {
 .brand b {
   color: var(--primary);
 }
+/* Bottom tab bar — the frozen stable-mount-point navigation (see
+   src/components/tabs.ts). Fixed to the viewport bottom for one-handed,
+   thumb-reachable navigation and padded for env(safe-area-inset-bottom) so
+   it clears the iOS home indicator on notched devices. */
 .tabs {
   position: fixed;
   bottom: 0;
@@ -78,6 +85,11 @@ a {
 .tab {
   flex: 1;
   max-width: 180px;
+  /* >=44px tap target (Apple HIG one-handed-reachability guidance). */
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   padding: 10px 8px;
   border-radius: 12px;
@@ -86,6 +98,7 @@ a {
   font-weight: 600;
   letter-spacing: 0.04em;
   font-size: 13px;
+  touch-action: manipulation;
 }
 .tab.active {
   color: var(--ink);

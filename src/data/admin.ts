@@ -44,7 +44,7 @@ async function resolve(
     tx.set(board(c.uid), { cells: next }, { merge: true });
     tx.set(player(c.uid), { squaresMarked: squares, bingoCount, blackout, firstBingoAt }, { merge: true });
     tx.set(claim(c.id), { status, resolvedBy: adminUid }, { merge: true });
-    // Confirming a verified claim publishes its proof, which was created 'pending'
+    // Confirming an admin-confirmed claim publishes its proof, which was created 'pending'
     // (admin-only readable) so it stayed hidden from the public feed until now. A
     // rejected proof is left 'pending' (still admin-only) rather than exposed.
     if (status === 'confirmed' && c.proofId) {
