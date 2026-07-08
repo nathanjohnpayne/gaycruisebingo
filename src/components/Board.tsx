@@ -1,12 +1,82 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useEventDoc, useItems } from '../hooks/useData';
-import { setMark } from '../data/api';
+import { useBoard, useMyPlayer, useMyUser, useEventDoc, useItems, useTally } from '../hooks/useData';
+import { setMark, resolveDisplayName } from '../data/api';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode } from '../types';
+
+/**
+ * The per-Prompt Tally count badge on a marked Square (ADR 0002). Subscribes to
+ * the Prompt's marker subcollection and shows how many Players have marked it;
+ * tapping opens the who-list. Rendered only on marked, non-free Squares, so a
+ * freshly dealt card (only the free centre "on") surfaces no badge at all.
+ */
+function TallyBadge({ itemId, onOpen }: { itemId: string; onOpen: () => void }) {
+  const { count } = useTally(itemId);
+  if (count <= 0) return null;
+  return (
+    <button
+      className="tally-badge"
+      title="See who marked this"
+      aria-label={`${count} marked — see who`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      {count}
+    </button>
+  );
+}
+
+/**
+ * The tap-to-see-who list for a Prompt's Tally (ADR 0002): names EVERY Player who
+ * marked the Prompt — no anonymity — chronologically. Reuses the proof-capture
+ * sheet chrome. Markers carry no photo (the marker doc is just uid + displayName +
+ * markedAt), so the avatar is the name's initial.
+ */
+function TallySheet({
+  itemId,
+  itemText,
+  onClose,
+}: {
+  itemId: string;
+  itemText: string;
+  onClose: () => void;
+}) {
+  const { markers, loading } = useTally(itemId);
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-title">Who marked “{itemText}”</div>
+        {loading && markers.length === 0 ? (
+          <p className="muted tally-empty">Loading…</p>
+        ) : markers.length === 0 ? (
+          <p className="muted tally-empty">No one has marked this yet.</p>
+        ) : (
+          <div className="list">
+            {markers.map((m) => (
+              <div className="row" key={m.uid}>
+                <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
+                <div className="grow">
+                  <div className="name">{m.displayName}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="sheet-actions">
+          <button className="btn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * The caller's first-bingo state for a Mark is KNOWN only when the player row
@@ -34,6 +104,12 @@ export default function Board() {
   const uid = user?.uid;
   const { data: board, loading: boardLoading, hasServerData: boardConfirmed } = useBoard(uid);
   const { data: player, loading: playerLoading, hasServerData: playerConfirmed } = useMyPlayer(uid);
+  // The saved users/{uid} profile backs the Tally marker's attribution: resolve
+  // the public name the SAME validated way joinAndDeal does (saved name within the
+  // 100-char cap, else the live auth value), so a Mark self-publishes the same
+  // identity the leaderboard shows — never the raw Google name over a custom one.
+  const { data: profile } = useMyUser(uid);
+  const displayName = resolveDisplayName(profile, user?.displayName);
   const { data: event } = useEventDoc();
   // Codex P3 (PR #66): the pool only matters before a Board is dealt, so once
   // a Board exists this Player has no use for a live listener on every other
@@ -43,6 +119,7 @@ export default function Board() {
 
   const [celebrate, setCelebrate] = useState<null | 'bingo' | 'blackout'>(null);
   const [proofTarget, setProofTarget] = useState<Cell | null>(null);
+  const [tallyTarget, setTallyTarget] = useState<Cell | null>(null);
   const wasBingo = useRef(false);
   const wasBlackout = useRef(false);
   const initialized = useRef(false);
@@ -121,6 +198,7 @@ export default function Board() {
         nextMarked,
         claimMode,
         currentFirstBingoAt: knownFirstBingoAt(player, playerLoading, playerConfirmed),
+        displayName,
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
@@ -188,6 +266,9 @@ export default function Board() {
                 ＋
               </button>
             )}
+            {c.marked && !c.free && c.itemId && (
+              <TallyBadge itemId={c.itemId} onOpen={() => setTallyTarget(c)} />
+            )}
           </div>
         ))}
       </div>
@@ -205,6 +286,13 @@ export default function Board() {
           claimMode={claimMode}
           currentFirstBingoAt={player?.firstBingoAt ?? null}
           onClose={() => setProofTarget(null)}
+        />
+      )}
+      {tallyTarget && tallyTarget.itemId && (
+        <TallySheet
+          itemId={tallyTarget.itemId}
+          itemText={tallyTarget.text}
+          onClose={() => setTallyTarget(null)}
         />
       )}
     </>

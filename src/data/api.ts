@@ -50,6 +50,27 @@ function isHttpsUrl(v: unknown): v is string {
   }
 }
 
+/**
+ * The public displayName to denormalize for a Player: their SAVED users/{uid}
+ * name when it is a real, trimmed-non-empty string within the 100-char cap the
+ * public-doc rules enforce (markers, moments, proofs), else the auth value, else
+ * 'Anonymous'. Single source of truth for the join-side attribution (`joinAndDeal`)
+ * and the per-Prompt Tally marker (`setMark`), so both resolve the name the SAME
+ * validated way — a malformed self-written profile never flows into a public doc.
+ */
+export function resolveDisplayName(
+  profile: { displayName?: unknown } | null | undefined,
+  authFallback: string | null | undefined,
+): string {
+  const saved =
+    typeof profile?.displayName === 'string' &&
+    profile.displayName.trim().length > 0 &&
+    profile.displayName.length <= 100
+      ? profile.displayName
+      : null;
+  return saved ?? authFallback ?? 'Anonymous';
+}
+
 /** Deterministic 32-bit seed from a uid so a player's board is stable. */
 export function seedFromUid(uid: string): number {
   let h = 2166136261;
@@ -96,23 +117,17 @@ export async function joinAndDeal(u: User): Promise<void> {
   // Validate before denormalizing (Codex P2 on PR #66 round 3): users/{uid} is
   // self-writable — firestore.rules only shape-checks its attestedAdultAt — so
   // a malformed saved profile must not flow into the public players row (nor
-  // fail the join against the rules' shape checks). A saved name counts only
-  // when it is a real, trimmed-non-empty string within the 100-char cap the
-  // rules enforce on every other public displayName denormalization (markers,
-  // moments, proofs); a saved photo only when it is a well-formed https:// URL
-  // AND the profile's customPhoto flag is EXACTLY boolean true (round 4: a
-  // malformed truthy value like 'false' or 1 must not publish the saved photo
-  // — the contract is customPhoto: true, and everything else in this doc is
-  // untrusted junk). Anything malformed falls back per-field to the auth
-  // values, exactly like a missing profile.
-  const savedName =
-    typeof profile?.displayName === 'string' &&
-    profile.displayName.trim().length > 0 &&
-    profile.displayName.length <= 100
-      ? profile.displayName
-      : null;
+  // fail the join against the rules' shape checks). The saved name is validated
+  // by `resolveDisplayName` (real, trimmed-non-empty, within the 100-char cap
+  // the rules enforce on every public displayName — markers, moments, proofs),
+  // the SAME guard the Tally marker write uses; a saved photo only counts when
+  // it is a well-formed https:// URL AND the profile's customPhoto flag is
+  // EXACTLY boolean true (round 4: a malformed truthy value like 'false' or 1
+  // must not publish the saved photo — the contract is customPhoto: true, and
+  // everything else in this doc is untrusted junk). Anything malformed falls
+  // back per-field to the auth values, exactly like a missing profile.
   const savedPhoto = profile && isHttpsUrl(profile.photoURL) ? profile.photoURL : null;
-  const displayName = savedName ?? (u.displayName ?? 'Anonymous');
+  const displayName = resolveDisplayName(profile, u.displayName);
   const photoURL =
     profile?.customPhoto === true ? (savedPhoto ?? u.photoURL ?? null) : (u.photoURL ?? null);
 
@@ -266,6 +281,25 @@ export function computeMark(params: {
 // call's read runs only after the previous call has issued its batch.
 const markChains = new Map<string, Promise<unknown>>();
 
+/**
+ * A rules-valid attributed name for a Tally marker. Prefers the caller-resolved
+ * `displayName` — production passes the saved users/{uid} name + auth fallback via
+ * `resolveDisplayName` (the SAME validated pattern joinAndDeal uses) — falling back
+ * to the already-cached player row's denormalized name (so a direct caller like the
+ * offline durability harness still attributes), then 'Anonymous'. Always a non-empty
+ * string within the 100-char cap the tally-marker rule enforces, so a marker write
+ * can NEVER violate the rule and poison the atomic board+player+marker batch on drain.
+ */
+function markerDisplayName(preferred: string | undefined, cachedPlayerName: unknown): string {
+  const candidate =
+    typeof preferred === 'string' && preferred.trim().length > 0
+      ? preferred
+      : typeof cachedPlayerName === 'string' && cachedPlayerName.trim().length > 0
+        ? cachedPlayerName
+        : 'Anonymous';
+  return candidate.slice(0, 100);
+}
+
 export async function setMark(params: {
   uid: string;
   cells: Cell[];
@@ -276,6 +310,12 @@ export async function setMark(params: {
   // "no first bingo yet". Board.tsx passes `undefined` while useMyPlayer is
   // loading so a cache-miss Mark can't restamp an earlier server value.
   currentFirstBingoAt: number | null | undefined;
+  // The marker's attributed name for the per-Prompt Tally write (ADR 0002).
+  // Board.tsx resolves it from the saved users/{uid} profile + auth via
+  // `resolveDisplayName` (the SAME validated pattern joinAndDeal uses). Optional
+  // so direct callers (the offline durability harness) can omit it and fall back
+  // to the cached player row's already-denormalized name — see `markerDisplayName`.
+  displayName?: string;
   database?: Firestore;
 }): Promise<{ cells: Cell[]; bingo: boolean; blackout: boolean }> {
   const { uid } = params;
@@ -305,6 +345,7 @@ async function runSetMark(
     nextMarked: boolean;
     claimMode: ClaimMode;
     currentFirstBingoAt: number | null | undefined;
+    displayName?: string;
   },
   database: Firestore,
 ): Promise<{ cells: Cell[]; bingo: boolean; blackout: boolean }> {
@@ -314,6 +355,9 @@ async function runSetMark(
 
   let baseCells = params.cells;
   let baseFirstBingoAt = params.currentFirstBingoAt;
+  // The already-denormalized public name on the player row is the fallback
+  // attribution for the Tally marker when the caller omits `displayName`.
+  let cachedPlayerName: unknown;
   const [cachedBoard, cachedPlayer] = await Promise.allSettled([
     getDocFromCache(boardRef),
     getDocFromCache(playerRef),
@@ -331,20 +375,52 @@ async function runSetMark(
     // MISS (below) leaves baseFirstBingoAt as the caller's param, which may be
     // `undefined` (UNKNOWN) so computeMark omits the field and the server value
     // survives (Codex P2, PR #75).
-    const cachedFirst = (cachedPlayer.value.data() as { firstBingoAt?: number | null }).firstBingoAt;
-    baseFirstBingoAt = cachedFirst ?? null;
+    const cachedData = cachedPlayer.value.data() as {
+      firstBingoAt?: number | null;
+      displayName?: unknown;
+    };
+    baseFirstBingoAt = cachedData.firstBingoAt ?? null;
+    cachedPlayerName = cachedData.displayName;
   }
 
+  const now = Date.now();
   const { cells, player, bingo, blackout } = computeMark({
     ...params,
     cells: baseCells,
     currentFirstBingoAt: baseFirstBingoAt,
-    now: Date.now(),
+    now,
   });
 
   const batch = writeBatch(database);
   batch.set(boardRef, { cells }, { merge: true });
   batch.set(playerRef, player, { merge: true });
+
+  // Per-Prompt Tally (ADR 0002, the embarkation-critical differentiator): every
+  // Mark — proofed or not — self-publishes an ATTRIBUTED entry to its Prompt's
+  // Tally, in the SAME offline-queueable batch as the board + player writes (never
+  // a second unserialized path or a transaction; the whole Mark path is
+  // offline-durable by design). The Tally lives in its OWN subcollection, never in
+  // the cells array a bare Mark rewrites, and the marker doc id IS the marker uid
+  // so firestore.rules keeps a forged attribution out. Marking adds the entry;
+  // unmarking deletes exactly that Player's entry, mirroring the cell toggle so the
+  // Tally never drifts from the Board. The free centre Square (no itemId) never
+  // tallies. A bare Mark still posts NOTHING to the Feed (moments/proofs) — the
+  // Tally is a separate surface (ADR 0002).
+  const toggled = cells.find((c) => c.index === params.index);
+  const tallyItemId = toggled && !toggled.free ? toggled.itemId : null;
+  if (tallyItemId) {
+    const markerRef = doc(database, 'events', EVENT_ID, 'tally', tallyItemId, 'markers', uid);
+    if (params.nextMarked) {
+      batch.set(markerRef, {
+        uid,
+        displayName: markerDisplayName(params.displayName, cachedPlayerName),
+        markedAt: now,
+      });
+    } else {
+      batch.delete(markerRef);
+    }
+  }
+
   void batch.commit().catch((err: unknown) => {
     // A rejection here is NOT the offline case. Offline, commit() PENDS — it
     // neither resolves nor rejects in this tab's lifetime — while the write sits

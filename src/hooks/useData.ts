@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
-import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef } from '../data/paths';
+import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol } from '../data/paths';
 import { sortPlayers } from '../game/logic';
-import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc } from '../types';
+import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry } from '../types';
 
 // Both subs subscribe with includeMetadataChanges so the cache→server
 // transition is always observable: with the ADR 0006 persistent cache, a cold
@@ -105,6 +105,24 @@ export function useBoard(uid: string | undefined) {
 
 export function useMyPlayer(uid: string | undefined) {
   return useDocSub<PlayerDoc>(uid ? playerRef(uid) : null, `player:${uid ?? 'none'}`);
+}
+
+/**
+ * A Prompt's public Tally (ADR 0002): the attributed list of Players who have
+ * marked `itemId`, plus the derived `count` for the Square's badge. The count is
+ * the marker-subcollection size (the aggregate tally/{itemId} doc is admin/Cloud-
+ * Function-maintained in Phase 1, not client-written), and the who-list is sorted
+ * by `markedAt` so it reads chronologically — earliest marker first. There is no
+ * anonymity: every entry names its Player (ADR 0002). Pass `null`/`undefined` (e.g.
+ * the free centre Square, which never tallies) to open no subscription.
+ */
+export function useTally(itemId: string | null | undefined) {
+  const { data, loading, hasServerData } = useColSub<TallyEntry>(
+    itemId ? tallyMarkersCol(itemId) : null,
+    itemId ? `tally:${itemId}` : 'tally:none',
+  );
+  const markers = [...data].sort((a, b) => a.markedAt - b.markedAt);
+  return { markers, count: markers.length, loading, hasServerData };
 }
 
 /** The signed-in User's global profile (`users/{uid}`) — display name + avatar. */

@@ -232,7 +232,7 @@ describe('setMark (write shape)', () => {
     vi.clearAllMocks();
   });
 
-  it('writes only the board + player docs in one batch — no Feed doc, no transaction', async () => {
+  it('writes the board + player + Tally-marker docs in one batch — no Feed doc, no transaction', async () => {
     const res = await setMark({
       uid: 'u1',
       cells: dealt(),
@@ -242,10 +242,16 @@ describe('setMark (write shape)', () => {
       currentFirstBingoAt: null,
     });
 
-    // Exactly two writes: the board, then the player — both partial merges.
-    expect(setSpy).toHaveBeenCalledTimes(2);
+    // Three writes now: the board, then the player, then the per-Prompt Tally
+    // marker that #31 (specs/w2-tally.md) added to this same batch — the board
+    // and player stay partial merges; the marker is a full set at
+    // tally/{itemId}/markers/{uid}. Deep marker assertions live in
+    // src/data/w2-tally.test.ts; here we only pin that the Tally write rides the
+    // SAME offline-queueable batch and is NOT a Feed post.
+    expect(setSpy).toHaveBeenCalledTimes(3);
     expect(setSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/boards/u1`);
     expect(setSpy.mock.calls[1][0].path).toBe(`events/${EVENT_ID}/players/u1`);
+    expect(setSpy.mock.calls[2][0].path).toBe(`events/${EVENT_ID}/tally/i3/markers/u1`);
     expect(setSpy.mock.calls[0][2]).toEqual({ merge: true });
     expect(setSpy.mock.calls[1][2]).toEqual({ merge: true });
     expect((setSpy.mock.calls[0][1].cells as Cell[])[3].marked).toBe(true);
@@ -255,8 +261,14 @@ describe('setMark (write shape)', () => {
       firstBingoAt: null,
       blackout: false,
     });
+    // The marker carries the attributed shape { uid, displayName, markedAt } and
+    // no merge flag (a full set of exactly that doc).
+    expect(setSpy.mock.calls[2][1]).toMatchObject({ uid: 'u1', displayName: expect.any(String) });
+    expect(typeof setSpy.mock.calls[2][1].markedAt).toBe('number');
+    expect(setSpy.mock.calls[2][2]).toBeUndefined();
 
-    // ADR 0002: a bare Mark posts nothing to the Feed (no addDoc to moments/proofs).
+    // ADR 0002: a bare Mark posts nothing to the Feed (no addDoc to moments/proofs);
+    // the Tally marker is a separate surface, not a Feed post.
     expect(addDoc).not.toHaveBeenCalled();
     // ADR 0006: offline-queueable — a batch, never a transaction.
     expect(runTransaction).not.toHaveBeenCalled();
