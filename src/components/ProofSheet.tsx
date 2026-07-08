@@ -144,10 +144,10 @@ export default function ProofSheet(props: Props) {
             Cancel
           </button>
           <button className="btn primary" disabled={!valid || busy} onClick={submit}>
-            {busy ? 'Saving…' : claimMode === 'verified' ? 'Submit claim' : 'Mark it'}
+            {busy ? 'Saving…' : claimMode === 'admin_confirmed' ? 'Submit claim' : 'Mark it'}
           </button>
         </div>
-        {claimMode === 'verified' && (
+        {claimMode === 'admin_confirmed' && (
           <p className="muted" style={{ fontSize: 11, textAlign: 'center', margin: '8px 0 0' }}>
             Goes pending until an admin confirms.
           </p>

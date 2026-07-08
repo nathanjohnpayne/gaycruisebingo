@@ -73,11 +73,15 @@ export default function Board() {
       return;
     }
     if (claimMode === 'honor') doMark(c, true);
-    else setProofTarget(c); // proof_required / verified capture proof first
+    else setProofTarget(c); // proof_required / admin_confirmed capture proof first
   };
 
   const modeLabel =
-    claimMode === 'honor' ? 'Honor system' : claimMode === 'proof_required' ? 'Proof required' : 'Verified';
+    claimMode === 'honor'
+      ? 'Honor system'
+      : claimMode === 'proof_required'
+        ? 'Proof required'
+        : 'Admin-confirmed';
 
   return (
     <>

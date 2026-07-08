@@ -23,8 +23,8 @@ export interface AttachProofArgs {
 }
 
 /**
- * Mark a square and attach a playful proof. In 'verified' mode the square goes
- * pending (doesn't count) and a claim is created for an admin/peer to confirm.
+ * Mark a square and attach a playful proof. In admin_confirmed mode the square
+ * goes pending (doesn't count) and a claim is created for an admin/peer to confirm.
  */
 export async function attachProof(args: AttachProofArgs): Promise<void> {
   const { uid, displayName, photoURL, cells, cellIndex, itemText, claimMode, currentFirstBingoAt, proof } =
@@ -41,7 +41,7 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
     mediaURL = up.url;
   }
 
-  const pending = claimMode === 'verified';
+  const pending = claimMode === 'admin_confirmed';
 
   // Recompute cells from the live board inside a transaction so a concurrent
   // mark from another tab/device isn't clobbered by this caller's stale snapshot.
@@ -81,7 +81,7 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
       text: proof.text ?? null,
       createdAt: now,
       reportCount: 0,
-      // Verified-mode proofs stay 'pending' (admin-only readable) until an admin
+      // Admin-confirmed-mode proofs stay 'pending' (admin-only readable) until an admin
       // confirms the claim; otherwise the proof is public immediately.
       status: pending ? 'pending' : 'active',
       visionFlag: null,
