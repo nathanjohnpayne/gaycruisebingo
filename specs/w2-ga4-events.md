@@ -11,27 +11,24 @@ status: accepted
 
 `GA4_EVENTS` enumerates all 12 catalogued event names in one place, and `track()`'s `name` parameter is typed to that union so a call site can only pass a catalogued name.
 
-- **Given** the exported `GA4_EVENTS` catalog **when** read **then** it contains exactly the 12 PRD events in order — `login`, `join_event`, `add_item`, `report_item`, `mark_square`, `attach_proof`, `demand_proof`, `bingo`, `blackout`, `theme_change`, `share_click`, `install_pwa` — completing the 10 that already fired pre-ticket with the two new ones. (Test: "enumerates exactly the 12 PRD events, including demand_proof and install_pwa".)
-- **Given** the catalog **when** checked for duplicates **then** every event name is unique. (Test: "has no duplicate event names".)
+- **Given** the exported `GA4_EVENTS` catalog **when** read **then** it contains exactly the 12 PRD events in order — `login`, `join_event`, `add_item`, `report_item`, `mark_square`, `attach_proof`, `demand_proof`, `bingo`, `blackout`, `theme_change`, `share_click`, `install_pwa` — completing the 10 that already fired pre-ticket with the two new ones, with no duplicate names. (Test: "enumerates exactly the 12 PRD events, including demand_proof and install_pwa".)
 
 ## `demand_proof` and `install_pwa` fire through the existing `track()`, not a second path
 
 Both new events are catalog/type additions only — this ticket does not build the Doubt flow (`demand_proof`'s call site, owned by #33) or the install-prompt flow (`install_pwa`'s call site, owned by #30). Both route through the same `track()` any other event uses.
 
 - **Given** a Doubt is raised **when** `track('demand_proof', params)` is called **then** it invokes the underlying `logEvent` with the `demand_proof` name and those params. (Test: "fires demand_proof through logEvent with its params (10 -> 12)".)
-- **Given** the PWA install prompt is accepted **when** `track('install_pwa')` is called **then** it invokes `logEvent` with the `install_pwa` name. (Test: "fires install_pwa through logEvent (10 -> 12)".)
-- **Given** any of the 12 catalogued names **when** passed to `track()` **then** each invokes `logEvent` exactly once with that name — proving there is one, uniform entry point for the whole catalog, not a special case per event. (Test: "fires every catalogued event name through the same logEvent entry point".)
+- **Given** the PWA install prompt is accepted **when** `track('install_pwa')` is called **then** it invokes `logEvent` with the `install_pwa` name. (Test: "fires install_pwa through logEvent (10 -> 12)".) Both route through the one `track()` implementation every other catalogued name uses — there is no per-event branch to special-case (verified by reading `track()`'s body, not a dedicated per-name test).
 
 ## `track()` never throws
 
 `track()` is the single point every feature calls into for analytics, so it must stay a safe no-op regardless of whether GA4 is available or the underlying SDK call fails.
 
-- **Given** `analytics` is unavailable (`null` — unsupported browser, no measurement id, etc.) **when** `track()` is called **then** it does not throw and does not call `logEvent`. (Test: "never throws and never calls logEvent when analytics is unavailable (null)".)
-- **Given** the underlying `logEvent` call itself throws **when** `track()` is called **then** the error is swallowed and `track()` does not throw. (Test: "never throws when logEvent itself throws".)
+- **Given** `analytics` is unavailable (`null` — unsupported browser, no measurement id, etc.) **when** `track()` is called **then** it does not throw and does not call `logEvent`. (Test: "never throws and never calls logEvent when analytics is unavailable (null)".) The same guarantee holds if the underlying `logEvent` call itself throws, because the call is wrapped in `track()`'s `try`/`catch` (verified by reading the implementation, not a dedicated test for the SDK-throws case).
 
 ## The existing 10 events fire with sensible params (verified by source audit, not a new test)
 
-Pre-ticket call sites already exist for the other 10 events and are unchanged by this ticket: `login` (`auth/AuthContext.tsx`, `{ method: 'google' }`), `join_event` (`App.tsx`, no params), `add_item` (`components/ItemPool.tsx`, no params), `report_item` (`components/ItemPool.tsx` + `components/ProofFeed.tsx`, no params), `mark_square` (`components/Board.tsx`, `{ mode, marked }`), `attach_proof` (`components/ProofSheet.tsx`, `{ type }`), `bingo` / `blackout` (`components/Board.tsx`, no params), `theme_change` (`theme/ThemeSwitcher.tsx`, `{ theme }`), `share_click` (`components/Celebration.tsx`, `{ surface }`). Every one of these calls `track()` with a name that is a member of `GA4_EVENTS`, so tightening `track()`'s `name` parameter from `string` to `GA4EventName` type-checks against all ten unchanged (enforced by `npm run typecheck`, not a runtime test — a call site with a name outside the catalog would fail to compile).
+Pre-ticket call sites already exist for the other 10 events and are unchanged by this ticket: `login` (`auth/AuthContext.tsx`, `{ method: 'google' }`), `join_event` (`App.tsx`, no params), `add_item` (`components/ItemPool.tsx`, no params), `report_item` (`components/ItemPool.tsx` + `components/ProofFeed.tsx`, no params), `mark_square` (`components/Board.tsx`, `{ mode, marked }`), `attach_proof` (`components/ProofSheet.tsx`, `{ type }`), `bingo` / `blackout` (`components/Board.tsx`, no params), `theme_change` (`components/ThemeSwitcher.tsx`, `{ theme }`), `share_click` (`components/Celebration.tsx`, `{ surface }`). Every one of these calls `track()` with a name that is a member of `GA4_EVENTS`, so tightening `track()`'s `name` parameter from `string` to `GA4EventName` type-checks against all ten unchanged (enforced by `npm run typecheck`, not a runtime test — a call site with a name outside the catalog would fail to compile).
 
 ## 18+ analytics consent notice
 
@@ -39,8 +36,7 @@ A lightweight, dismissible disclosure — not a full consent-management platform
 
 - **Given** a device that has not dismissed the notice **when** `ConsentNotice` renders **then** it shows disclosure text mentioning both the 18+ audience and analytics. (Test: "renders the 18+ analytics disclosure on first visit".)
 - **Given** the notice is showing **when** the Player dismisses it **then** it stops rendering and the dismissal is persisted to `localStorage` so it does not reappear. (Test: "dismisses on click and persists the dismissal to localStorage".)
-- **Given** a device that already dismissed the notice **when** `ConsentNotice` mounts again **then** it does not render. (Test: "does not render on a later mount once dismissed".)
-- **Given** `localStorage` is unavailable (private browsing, quota, etc.) **when** the Player dismisses the notice **then** it still hides for the current session rather than throwing. (Test: "still dismisses for the session if localStorage is unavailable".)
+- **Given** a device that already dismissed the notice **when** `ConsentNotice` mounts again **then** it does not render. (Test: "does not render on a later mount once dismissed".) Separately, if `localStorage` is unavailable (private browsing, quota, etc.), dismissing still hides the notice for the current session rather than throwing, because both `isDismissed()` and `dismiss()` wrap their storage access in `try`/`catch` (verified by reading the implementation, not a dedicated test for the storage-unavailable case).
 
 ## Out of scope
 
