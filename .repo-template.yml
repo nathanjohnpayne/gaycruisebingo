@@ -9,7 +9,14 @@
 # Map each spec_id (frontmatter or basename) to one or more test files.
 # Used by check_spec_test_alignment when the default filename search
 # wouldn't find the test.
-spec_test_map: {}
+spec_test_map:
+  # The test-harness spec spans four layers whose test filenames don't share
+  # the spec basename, so map each layer's test explicitly.
+  w0-test-harness:
+    - src/game/logic.test.ts
+    - src/test/rtl-smoke.test.tsx
+    - tests/rules/firestore-harness.test.ts
+    - tests/e2e/smoke.spec.ts
 # Glob patterns that identify test files. Supplements the default
 # ("tests/**/*.test.*") which doesn't cover shell-based tests or the
 # Vite app's colocated unit tests under src/.

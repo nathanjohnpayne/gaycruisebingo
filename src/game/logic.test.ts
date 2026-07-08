@@ -46,6 +46,15 @@ describe('dealBoard', () => {
     expect(ids).toHaveLength(24);
     expect(new Set(ids).size).toBe(24);
   });
+
+  it('throws when the active pool has fewer than 24 prompts', () => {
+    // Guard at logic.ts: a board needs 24 non-free prompts; a smaller pool would
+    // leave blank cells, so dealBoard must fail fast rather than persist a broken
+    // board. 23 is the boundary just under the minimum.
+    const tooFew = pool.slice(0, 23);
+    expect(tooFew).toHaveLength(23);
+    expect(() => dealBoard(tooFew, 'FREE', 1)).toThrow(/at least 24 prompts/);
+  });
 });
 
 describe('win detection', () => {
