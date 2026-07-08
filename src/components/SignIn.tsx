@@ -50,6 +50,15 @@ export function DealError({
   onRetry: () => void;
   retrying: boolean;
 }) {
+  // Recovery is deliberately MANUAL: the Retry button re-invokes the deal, and
+  // the /items Prompts tab stays reachable (the shell keeps rendering) so a
+  // Player or Admin can add Prompts, then come back and retry. An automatic
+  // pool-recovery watcher was prototyped here during review and removed by
+  // human decision (PR #66 tiebreak): three review rounds showed it needs a
+  // deliberate design (misfires on non-pool deal failures because the pool
+  // subscription starts empty; unmounts when the Player navigates to /items —
+  // the exact recovery path; wants a context-level home). Tracked as a
+  // follow-up rather than accreted onto this ticket.
   return (
     <div className="signin" role="alert">
       <h1>GAY CRUISE BINGO</h1>
