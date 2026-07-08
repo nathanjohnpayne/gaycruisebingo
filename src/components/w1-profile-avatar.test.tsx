@@ -14,7 +14,7 @@ const { docMock, setDocMock, updateDocMock } = vi.hoisted(() => ({
   // exist — the exact failure data/profile.ts now avoids by writing via a merge
   // setDoc instead. Kept mocked (rather than removed) so a regression back to
   // updateDoc fails this suite loudly instead of silently.
-  updateDocMock: vi.fn(async () => {
+  updateDocMock: vi.fn<() => Promise<void>>(async () => {
     throw Object.assign(new Error('No document to update'), { code: 'not-found' });
   }),
 }));
@@ -136,7 +136,12 @@ describe('data/profile.ts — persists to users/{uid}, reusing storage.ts', () =
   it('trims and persists the display name, caps it at 40 characters, and no-ops on blank', async () => {
     await updateDisplayName('u1', '  New Name  ');
     expect(setDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { displayName: 'New Name' }, { merge: true });
+    expect(updateDocMock).toHaveBeenCalledWith(
+      { path: 'events/test-event/players/u1' },
+      { displayName: 'New Name' },
+    );
 
+    updateDocMock.mockClear();
     setDocMock.mockClear();
     await updateDisplayName('u1', `  ${'a'.repeat(MAX_DISPLAY_NAME + 10)}  `);
     expect(setDocMock).toHaveBeenCalledWith(
@@ -144,10 +149,16 @@ describe('data/profile.ts — persists to users/{uid}, reusing storage.ts', () =
       { displayName: 'a'.repeat(MAX_DISPLAY_NAME) },
       { merge: true },
     );
+    expect(updateDocMock).toHaveBeenCalledWith(
+      { path: 'events/test-event/players/u1' },
+      { displayName: 'a'.repeat(MAX_DISPLAY_NAME) },
+    );
 
+    updateDocMock.mockClear();
     setDocMock.mockClear();
     await updateDisplayName('u1', '   ');
     expect(setDocMock).not.toHaveBeenCalled();
+    expect(updateDocMock).not.toHaveBeenCalled();
   });
 
   // Covers the fix for the Codex P2 finding on profile.ts:15 — updateDoc fails
@@ -159,7 +170,21 @@ describe('data/profile.ts — persists to users/{uid}, reusing storage.ts', () =
   it('creates users/{uid} via a merge write when the profile doc is missing (ensureUserProfile create failed)', async () => {
     await expect(updateDisplayName('u1', 'New Name')).resolves.toBeUndefined();
     expect(setDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { displayName: 'New Name' }, { merge: true });
-    expect(updateDocMock).not.toHaveBeenCalled();
+    expect(updateDocMock).toHaveBeenCalledWith(
+      { path: 'events/test-event/players/u1' },
+      { displayName: 'New Name' },
+    );
+  });
+
+  it('refreshes an existing public Player row when the saved profile changes', async () => {
+    updateDocMock.mockResolvedValueOnce(undefined);
+
+    await updateDisplayName('u1', 'New Name');
+
+    expect(updateDocMock).toHaveBeenCalledWith(
+      { path: 'events/test-event/players/u1' },
+      { displayName: 'New Name' },
+    );
   });
 
   it('reuses uploadAvatar (avatars/{uid}.jpg, image/jpeg) then flips customPhoto + photoURL', async () => {
@@ -167,6 +192,10 @@ describe('data/profile.ts — persists to users/{uid}, reusing storage.ts', () =
     expect(refMock).toHaveBeenCalledWith({}, 'avatars/u1.jpg');
     expect(uploadBytesMock).toHaveBeenCalledWith({ path: 'avatars/u1.jpg' }, expect.any(Blob), { contentType: 'image/jpeg' });
     expect(setDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { photoURL: url, customPhoto: true }, { merge: true });
+    expect(updateDocMock).toHaveBeenCalledWith(
+      { path: 'events/test-event/players/u1' },
+      { photoURL: url },
+    );
     expect(url).toBe('https://cdn.example/avatars/u1.jpg');
   });
 });
@@ -397,5 +426,11 @@ describe('ProfileEditor', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('dialog', { name: 'Edit profile' })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it('uses the profile-trigger class so CSS can lift the button above the install prompt', () => {
+    render(<ProfileEditor />);
+
+    expect(screen.getByRole('button', { name: 'Edit profile' })).toHaveClass('profile-trigger');
   });
 });

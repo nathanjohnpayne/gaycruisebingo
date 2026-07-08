@@ -7,13 +7,6 @@ import Avatar from './Avatar';
 
 const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
-// Floating trigger, fixed above the tab bar (App.tsx/Nav.tsx are frozen).
-const fabStyle = {
-  position: 'fixed', right: 14, bottom: 'calc(78px + env(safe-area-inset-bottom))', zIndex: 25,
-  background: 'var(--panel)', border: '1px solid var(--border)', borderRadius: '50%',
-  width: 44, height: 44, display: 'grid', placeItems: 'center',
-} as const;
-
 /**
  * A signed-in User's display-name + avatar editor, reachable from anywhere
  * (identity is public everywhere it appears — ADR 0002). Writes go through
@@ -128,7 +121,7 @@ function Editor({ user }: { user: User }) {
 
   return (
     <>
-      <button ref={triggerRef} type="button" className="iconbtn" style={fabStyle} title="Edit profile" aria-label="Edit profile" aria-haspopup="dialog" onClick={openEditor}>
+      <button ref={triggerRef} type="button" className="iconbtn profile-trigger" title="Edit profile" aria-label="Edit profile" aria-haspopup="dialog" onClick={openEditor}>
         ✎
       </button>
       {open && (
