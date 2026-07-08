@@ -10,6 +10,7 @@ Agent instructions are organized into focused sub-files under `docs/agents/`. Re
 4. **[Documentation Rules](docs/agents/documentation-rules.md)** --- When and what to update; which `docs/**` paths are directly editable vs generated mirrors
 5. **[Testing Requirements](docs/agents/testing-requirements.md)** --- Coverage expectations, test deletion policy
 6. **[Deployment Process](docs/agents/deployment-process.md)** --- Build/deploy flow, 1Password-backed auth
+7. **[Ticket Workflow](docs/agents/ticket-workflow.md)** --- Project #7 board discipline: claim protocol and the exact Status transitions (Ready → In progress → In review → Done)
 
 ## Repository Layout
 
