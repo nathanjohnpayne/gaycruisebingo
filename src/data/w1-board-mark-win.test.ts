@@ -150,6 +150,24 @@ describe('computeMark (win detection + stats)', () => {
     expect('firstBingoAt' in r.player).toBe(false); // omitted, not null
   });
 
+  it('CLEARS firstBingoAt even when the prior value is UNKNOWN, once no bingo stands', () => {
+    // Clearing is prior-independent: no bingo in the new state means
+    // firstBingoAt must be null regardless of what the server held. Omitting
+    // here (the round-2 behavior) left a stale server stamp crediting a
+    // non-winner (Codex P2, PR #75 round 3).
+    const r = computeMark({
+      cells: withMarked([0, 1, 2, 3, 4]), // a standing top-row BINGO
+      index: 4,
+      nextMarked: false, // unmark removes the last bingo
+      claimMode: 'honor',
+      currentFirstBingoAt: undefined, // player row still loading, nothing cached
+      now: 3000,
+    });
+    expect(r.bingo).toBe(false);
+    expect(r.player.bingoCount).toBe(0);
+    expect(r.player.firstBingoAt).toBeNull(); // written as an explicit clear
+  });
+
   it('admin_confirmed marks start pending, so they do not yet count', () => {
     const r = computeMark({
       cells: dealt(),

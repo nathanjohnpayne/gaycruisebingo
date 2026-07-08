@@ -140,18 +140,24 @@ export function computeMark(params: {
     firstBingoAt?: number | null;
   } = { squaresMarked, bingoCount, blackout };
   // firstBingoAt is the one denormalized field that depends on prior SERVER
-  // state, not purely on `next`. When that prior value is UNKNOWN — `undefined`,
-  // meaning the caller's player row has not loaded and nothing is cached (e.g. a
-  // Mark fired during the post-reload window before useMyPlayer's first
-  // snapshot) — OMIT firstBingoAt from the payload entirely, so the
-  // `{ merge: true }` write leaves the server's existing (possibly-earlier)
-  // stamp untouched rather than clobbering it with `now` (Codex P2, PR #75). A
-  // KNOWN value keeps the original rule: preserve the earlier stamp while a
-  // bingo stands, stamp `now` on a first bingo (`null ?? now`), and clear to
-  // null when unmarking removes the last bingo so the leaderboard stops
-  // crediting a non-winner.
-  if (currentFirstBingoAt !== undefined) {
-    player.firstBingoAt = bingoCount > 0 ? (currentFirstBingoAt ?? now) : null;
+  // state, not purely on `next` — but only in ONE direction. Clearing is
+  // prior-independent: whenever the new state holds NO bingo, firstBingoAt must
+  // be null no matter what the server had, so a mark that removes the last
+  // bingo always writes the clear — even when the prior value is UNKNOWN
+  // (`undefined`: the caller's player row has not loaded and nothing is
+  // cached), or a stale stamp would keep crediting a non-winner (Codex P2,
+  // PR #75 round 3). Preserving-vs-stamping is the prior-DEPENDENT direction:
+  // while a bingo stands with an UNKNOWN prior, OMIT the field so the
+  // `{ merge: true }` write keeps the server's possibly-earlier stamp instead
+  // of clobbering it with `now` (round 2) — the accepted residual is that a
+  // genuine first bingo landing in that unknown window is stamped by the next
+  // known-state write rather than this one. A KNOWN value keeps the original
+  // rule: preserve the earlier stamp while a bingo stands, stamp `now` on a
+  // first bingo (`null ?? now`), clear to null when the last bingo goes.
+  if (bingoCount === 0) {
+    player.firstBingoAt = null;
+  } else if (currentFirstBingoAt !== undefined) {
+    player.firstBingoAt = currentFirstBingoAt ?? now;
   }
 
   return {
