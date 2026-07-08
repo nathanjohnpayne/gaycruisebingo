@@ -97,6 +97,20 @@ describe('storage.rules — okImage / okAudio upload caps (ADR 0004)', () => {
     await assertFails(put(owner, audioPath, sized(13), AUDIO));
   });
 
+  it('denies an over-cap image CREATE on a brand-new path, not just an update', async () => {
+    // Reusing `photoPath` (as the tests above do) would make the denied
+    // request an update, since a 7 MB object was already put() there first.
+    // A path with no prior object isolates the cap on the first-write create
+    // that uploadProofMedia() actually performs for a new proof.
+    const owner = testEnv.authenticatedContext(OWNER);
+    await assertFails(put(owner, `proofs/${EVENT}/${OWNER}/${PROOF}-fresh.jpg`, sized(9), IMAGE));
+  });
+
+  it('denies an over-cap audio CREATE on a brand-new path, not just an update', async () => {
+    const owner = testEnv.authenticatedContext(OWNER);
+    await assertFails(put(owner, `proofs/${EVENT}/${OWNER}/${PROOF}-fresh.webm`, sized(13), AUDIO));
+  });
+
   it('denies a non-image, non-audio content type on a proof path', async () => {
     const owner = testEnv.authenticatedContext(OWNER);
     await assertFails(put(owner, photoPath, TINY, { contentType: 'application/pdf' }));
@@ -107,6 +121,11 @@ describe('storage.rules — avatars/{uid}.jpg (owner + filename pinned)', () => 
   it('allows the owner to write their own avatars/{uid}.jpg', async () => {
     const owner = testEnv.authenticatedContext(OWNER);
     await assertSucceeds(put(owner, avatarPath(OWNER), TINY, IMAGE));
+  });
+
+  it('denies an over-cap (9 MB) avatar image (okImage applies to avatars too)', async () => {
+    const owner = testEnv.authenticatedContext(OWNER);
+    await assertFails(put(owner, avatarPath(OWNER), sized(9), IMAGE));
   });
 
   it("denies writing another user's avatar filename", async () => {
@@ -147,6 +166,17 @@ describe('storage.rules — proofs/{eventId}/{uid}/{file} (owner create, owner/a
     const admin = testEnv.authenticatedContext(ADMIN);
     await assertSucceeds(deleteObject(ref(admin.storage(), photoPath)));
   });
+
+  it('denies deleting the proof object when the caller is signed in but neither the owner nor an Event admin', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await put(ctx, photoPath, TINY, IMAGE);
+      // Seed an admins list that does NOT include OTHER, so the denial proves
+      // the non-admin branch specifically, not just a missing events doc.
+      await setDoc(doc(ctx.firestore(), `events/${EVENT}`), { admins: [ADMIN] });
+    });
+    const other = testEnv.authenticatedContext(OTHER);
+    await assertFails(deleteObject(ref(other.storage(), photoPath)));
+  });
 });
 
 describe('storage.rules — /og/** inert block', () => {
@@ -158,6 +188,13 @@ describe('storage.rules — /og/** inert block', () => {
     await assertSucceeds(getMetadata(ref(anon.storage(), 'og/card.png')));
     const owner = testEnv.authenticatedContext(OWNER);
     await assertFails(put(owner, 'og/card.png', TINY, { contentType: 'image/png' }));
+  });
+
+  it('denies writing a brand-new object under og/**, not just updating an existing one', async () => {
+    // The assertion above writes to the pre-seeded `og/card.png`, so it only
+    // proves update-deny. This path is never seeded, isolating create-deny.
+    const owner = testEnv.authenticatedContext(OWNER);
+    await assertFails(put(owner, 'og/new-card.png', TINY, { contentType: 'image/png' }));
   });
 });
 
@@ -202,6 +239,26 @@ describe('Storage ↔ Firestore Proof pinning (lockstep)', () => {
       setDoc(
         doc(owner.firestore(), `events/${EVENT}/proofs/${PROOF}`),
         proofDoc('audio', audioPath, mediaURL('webm')),
+      ),
+    );
+  });
+
+  it('rejects a mismatched proof path: Storage accepts the object, but Firestore denies pinning it to a different proof', async () => {
+    // storage.rules only checks ownership + content type on the proofs path
+    // (the {file} segment is a free wildcard), so an object NOT named after
+    // the target proofId still uploads successfully. The Firestore create
+    // rule additionally pins storagePath to the exact
+    // proofs/{eventId}/{uid}/{proofId}.{ext} object, so pointing the PROOF
+    // doc at this mismatched object must be denied — proving Storage and
+    // Firestore diverge outside the canonical path, not just agree on it.
+    const owner = testEnv.authenticatedContext(OWNER);
+    const mismatchedPath = `proofs/${EVENT}/${OWNER}/not-${PROOF}.jpg`;
+    const mismatchedURL = `https://firebasestorage.googleapis.com/v0/b/demo-bucket/o/proofs%2F${EVENT}%2F${OWNER}%2Fnot-${PROOF}.jpg?alt=media&token=t`;
+    await assertSucceeds(put(owner, mismatchedPath, TINY, IMAGE));
+    await assertFails(
+      setDoc(
+        doc(owner.firestore(), `events/${EVENT}/proofs/${PROOF}`),
+        proofDoc('photo', mismatchedPath, mismatchedURL),
       ),
     );
   });
