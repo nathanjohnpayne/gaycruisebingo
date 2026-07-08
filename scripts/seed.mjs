@@ -110,8 +110,15 @@ export const ITEMS = [
 async function seed() {
   const { readFileSync, existsSync } = await import('node:fs');
   const { createHash } = await import('node:crypto');
-  const { initializeApp, cert, applicationDefault } = await import('firebase-admin/app');
-  const { getFirestore, FieldValue } = await import('firebase-admin/firestore');
+  // firebase-admin is a run-directly-only dependency (`npm i -D firebase-admin`
+  // before seeding) that is absent from the app install. The specifiers are
+  // computed + @vite-ignore so Vite (which transforms this module when the
+  // test imports the payload builders) never tries to resolve them at
+  // transform time — Node resolves them normally when the seed actually runs.
+  const adminAppModule = 'firebase-admin/app';
+  const adminFirestoreModule = 'firebase-admin/firestore';
+  const { initializeApp, cert, applicationDefault } = await import(/* @vite-ignore */ adminAppModule);
+  const { getFirestore, FieldValue } = await import(/* @vite-ignore */ adminFirestoreModule);
 
   const EVENT_ID = process.env.VITE_EVENT_ID || 'med-2026';
   const admins = adminRoster(process.env.ADMIN_UID);
