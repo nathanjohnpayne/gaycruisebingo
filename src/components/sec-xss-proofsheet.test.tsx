@@ -1,0 +1,185 @@
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import type { Cell, ProofDoc } from '../types';
+import { safeMediaUrl } from './safeMediaUrl';
+
+// sec-xss-proofsheet — CodeQL js/xss-through-dom alert #1 (severity high).
+//
+// The flagged sink is ProofSheet's photo preview <img src={photoUrl}>, fed from
+// the file input's `.files` via URL.createObjectURL. React auto-escapes JSX TEXT
+// but does NOT sanitize a `src`/`href` attribute, so the fix is a scheme allowlist
+// (`safeMediaUrl`) at every media sink in ProofSheet and ProofFeed. These tests
+// pin three things: (1) a text-callout HTML payload renders as literal, inert text
+// (React escaping, in both the sheet's textarea and the Feed's quote); (2) real
+// photo/audio capture still renders (blob:/https: pass the guard); (3) a hostile
+// `javascript:` media URL is dropped before it can become a src. `safeMediaUrl` is
+// unit-tested directly.
+
+const XSS = '<img src=x onerror=alert(1)>';
+
+const H = vi.hoisted(() => ({
+  attachProof: vi.fn(),
+  reportProof: vi.fn(),
+  deleteProof: vi.fn(),
+  track: vi.fn(),
+  proofs: [] as ProofDoc[],
+}));
+
+// ProofSheet imports attachProof + track; ProofFeed imports reportProof/
+// deleteProof + track + useProofFeed + useAuth. safeMediaUrl and Avatar stay real.
+vi.mock('../data/proofs', () => ({
+  attachProof: H.attachProof,
+  reportProof: H.reportProof,
+  deleteProof: H.deleteProof,
+}));
+vi.mock('../analytics', () => ({ track: H.track }));
+vi.mock('../hooks/useData', () => ({ useProofFeed: () => ({ proofs: H.proofs, loading: false }) }));
+vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
+
+import ProofSheet from './ProofSheet';
+import ProofFeed from './ProofFeed';
+
+function cell(over: Partial<Cell> = {}): Cell {
+  return { index: 0, itemId: 'i0', text: 'Saw a sailor in Speedos', free: false, marked: false, markedAt: null, ...over };
+}
+
+function sheetProps() {
+  return {
+    uid: 'u1',
+    displayName: 'Deck Daddy',
+    photoURL: null,
+    cells: [] as Cell[],
+    cell: cell(),
+    claimMode: 'proof_required' as const,
+    currentFirstBingoAt: null,
+    onClose: vi.fn(),
+  };
+}
+
+function proof(over: Partial<ProofDoc> & Pick<ProofDoc, 'id' | 'createdAt'>): ProofDoc {
+  return {
+    uid: `u-${over.id}`,
+    displayName: 'Someone',
+    photoURL: null,
+    type: 'text',
+    cellIndex: 0,
+    itemText: 'a prompt',
+    storagePath: null,
+    mediaURL: null,
+    thumbURL: null,
+    text: null,
+    reportCount: 0,
+    status: 'active',
+    visionFlag: null,
+    ...over,
+  } as ProofDoc;
+}
+
+beforeAll(() => {
+  // jsdom has no URL.createObjectURL; the guard must pass the blob: it returns.
+  (globalThis.URL as unknown as { createObjectURL: () => string }).createObjectURL = () => 'blob:sec-xss-mock';
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  H.proofs = [];
+  H.attachProof.mockResolvedValue(undefined);
+  H.reportProof.mockResolvedValue(undefined);
+  H.deleteProof.mockResolvedValue(undefined);
+});
+
+describe('safeMediaUrl — scheme allowlist', () => {
+  it('allows blob:, http(s):, and image/audio data URLs through unchanged', () => {
+    expect(safeMediaUrl('blob:https://app/uuid')).toBe('blob:https://app/uuid');
+    expect(safeMediaUrl('blob:sec-xss-mock')).toBe('blob:sec-xss-mock');
+    expect(safeMediaUrl('https://firebasestorage.example/p.jpg')).toBe('https://firebasestorage.example/p.jpg');
+    expect(safeMediaUrl('http://localhost:9199/a.webm')).toBe('http://localhost:9199/a.webm');
+    expect(safeMediaUrl('data:image/png;base64,AAAA')).toBe('data:image/png;base64,AAAA');
+    expect(safeMediaUrl('data:audio/webm;base64,AAAA')).toBe('data:audio/webm;base64,AAAA');
+  });
+
+  it('rejects javascript:, vbscript:, data:text/html, and malformed URLs', () => {
+    expect(safeMediaUrl('javascript:alert(1)')).toBeUndefined();
+    expect(safeMediaUrl('JavaScript:alert(1)')).toBeUndefined();
+    expect(safeMediaUrl('vbscript:msgbox(1)')).toBeUndefined();
+    expect(safeMediaUrl('data:text/html,<script>alert(1)</script>')).toBeUndefined();
+    expect(safeMediaUrl('file:///etc/passwd')).toBeUndefined();
+    expect(safeMediaUrl('not a url')).toBeUndefined();
+  });
+
+  it('rejects null, empty, and whitespace-only values', () => {
+    expect(safeMediaUrl(null)).toBeUndefined();
+    expect(safeMediaUrl(undefined)).toBeUndefined();
+    expect(safeMediaUrl('')).toBeUndefined();
+    expect(safeMediaUrl('   ')).toBeUndefined();
+  });
+});
+
+describe('ProofSheet — text callout is inert; photo preview still renders', () => {
+  it('ProofSheet: a text callout of an HTML payload renders as literal, inert text', async () => {
+    const user = userEvent.setup();
+    render(<ProofSheet {...sheetProps()} />);
+
+    await user.click(screen.getByRole('button', { name: /callout/i }));
+    const box = screen.getByRole('textbox') as HTMLTextAreaElement;
+    await user.type(box, XSS);
+
+    // The payload is the textarea's literal value — shown as text, never parsed.
+    expect(box).toHaveValue(XSS);
+    // No element was injected from the payload.
+    expect(document.querySelector('img[src="x"]')).toBeNull();
+    expect(document.querySelector('img')).toBeNull();
+  });
+
+  it('ProofSheet: a captured photo preview renders its blob: object URL as the img src', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<ProofSheet {...sheetProps()} />);
+
+    // Photo tab is the default; uploading a file sets a blob: preview URL.
+    const file = new File(['img'], 'proof.jpg', { type: 'image/jpeg' });
+    await user.upload(container.querySelector('input[type="file"]') as HTMLInputElement, file);
+
+    const img = container.querySelector('img.preview') as HTMLImageElement;
+    expect(img).toBeInTheDocument();
+    expect(img.getAttribute('src')).toBe('blob:sec-xss-mock');
+  });
+});
+
+describe('ProofFeed — text Proof is inert; media schemes are guarded', () => {
+  it('ProofFeed: a text Proof of an HTML payload renders as a literal, inert quote', () => {
+    H.proofs = [proof({ id: 't', createdAt: 1, type: 'text', text: XSS })];
+    render(<ProofFeed />);
+
+    const quote = document.querySelector('blockquote.proof-quote') as HTMLElement;
+    expect(quote).toBeInTheDocument();
+    // Visible as literal text (had it been parsed, the payload would carry no text).
+    expect(quote.textContent).toContain(XSS);
+    // No element was injected from the payload (no <img src=x>, no img at all).
+    expect(document.querySelector('img[src="x"]')).toBeNull();
+    expect(document.querySelector('img')).toBeNull();
+  });
+
+  it('ProofFeed: a photo Proof renders an https media URL and drops a javascript: media URL', () => {
+    H.proofs = [
+      proof({ id: 'safe', createdAt: 2, type: 'photo', mediaURL: 'https://x/p.jpg' }),
+      proof({ id: 'evil', createdAt: 1, type: 'photo', mediaURL: 'javascript:alert(1)' }),
+    ];
+    render(<ProofFeed />);
+
+    const imgs = document.querySelectorAll('img.proof-media');
+    expect(imgs).toHaveLength(1); // only the https photo rendered
+    expect((imgs[0] as HTMLImageElement).getAttribute('src')).toBe('https://x/p.jpg');
+    // The javascript: URL never became a src.
+    expect(document.querySelector('img[src="javascript:alert(1)"]')).toBeNull();
+  });
+
+  it('ProofFeed: an audio Proof renders an https media URL', () => {
+    H.proofs = [proof({ id: 'a', createdAt: 1, type: 'audio', mediaURL: 'https://x/a.webm' })];
+    render(<ProofFeed />);
+
+    const audio = document.querySelector('audio.proof-media') as HTMLAudioElement;
+    expect(audio).toBeInTheDocument();
+    expect(audio.getAttribute('src')).toBe('https://x/a.webm');
+  });
+});

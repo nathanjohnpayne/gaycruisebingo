@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { attachProof } from '../data/proofs';
 import { track } from '../analytics';
+import { safeMediaUrl } from './safeMediaUrl';
 import type { Cell, ClaimMode, ProofType } from '../types';
 
 interface Props {
@@ -93,6 +94,11 @@ export default function ProofSheet(props: Props) {
 
   const tabs: ProofType[] = ['photo', 'audio', 'text'];
   const label: Record<ProofType, string> = { photo: '📷 Photo', audio: '🎙 Sound', text: '✍️ Callout' };
+  // Scheme-guard the object-URL previews before they reach an <img>/<audio> src
+  // (CodeQL js/xss-through-dom #1). createObjectURL only ever yields blob:, so this
+  // is a belt-and-braces guard on the flagged sink; the Feed reuses the same guard.
+  const safePhotoSrc = safeMediaUrl(photoUrl);
+  const safeAudioSrc = safeMediaUrl(audioUrl);
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
@@ -109,7 +115,7 @@ export default function ProofSheet(props: Props) {
         {type === 'photo' && (
           <div className="proof-body">
             <input type="file" accept="image/*" capture="environment" onChange={onPhoto} />
-            {photoUrl && <img className="preview" src={photoUrl} alt="preview" />}
+            {safePhotoSrc && <img className="preview" src={safePhotoSrc} alt="preview" />}
           </div>
         )}
         {type === 'audio' && (
@@ -123,7 +129,7 @@ export default function ProofSheet(props: Props) {
                 ■ Stop
               </button>
             )}
-            {audioUrl && <audio className="preview" controls src={audioUrl} />}
+            {safeAudioSrc && <audio className="preview" controls src={safeAudioSrc} />}
           </div>
         )}
         {type === 'text' && (
