@@ -12,3 +12,7 @@ reason: Firebase Hosting config only, no runtime app surface; verified by live c
 The fix adds a catch-all `"source": "**"` rule setting `Cache-Control: no-cache`, placed *before* the existing asset- and icon-specific rules. Firebase Hosting applies later-declared rules with priority for a given header key when multiple rules match the same request, so the catch-all supplies the default (no-cache) while the more specific asset (`immutable`, one-year) and icon (`no-cache`) rules downstream still override it exactly as before — verified by diffing header behavior across a hashed JS asset, `sw.js`, and `/` pre- and post-fix.
 
 No app-code or runtime surface is touched; this is a Firebase Hosting config-only change with no unit-test layer. Verification is manual: live `curl` against the deployed domain confirming hashed assets keep their immutable long-cache, `sw.js` keeps `no-cache`, and `/` (previously `max-age=3600`) now returns `no-cache` after deploy.
+
+## Addendum: exclude `/s/**` from the catch-all
+
+Header matching happens on the pre-rewrite path, same as the bug above — so the new catch-all `**` rule also matched `/s/**`, the crawler-facing share route rewritten to the `share` Cloud Function (`functions/src/index.ts`). That function sets its own `Cache-Control: public, max-age=3600` for social-unfurl caching; the catch-all would have stamped `no-cache` over it instead. Added a `"source": "/s/**"` rule (declared after the catch-all, so it wins per Hosting's later-rule-wins precedence) restoring the function's intended 1-hour cache.
