@@ -6,7 +6,7 @@ import { uploadAvatar } from './storage';
 // writing data module keeps locally (see data/api.ts).
 const rawUser = (uid: string) => doc(db, 'users', uid);
 
-const MAX_DISPLAY_NAME = 40;
+export const MAX_DISPLAY_NAME = 40;
 
 /**
  * Persist a display-name edit to `users/{uid}` (self-write only). A blank/whitespace-only name is a no-op.

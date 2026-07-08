@@ -1,11 +1,11 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { User } from 'firebase/auth';
 import { useAuth } from '../auth/AuthContext';
 import { useMyUser } from '../hooks/useData';
-import { updateAvatar, updateDisplayName } from '../data/profile';
+import { MAX_DISPLAY_NAME, updateAvatar, updateDisplayName } from '../data/profile';
 import Avatar from './Avatar';
 
-const MAX_NAME = 40;
+const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 // Floating trigger, fixed above the tab bar (App.tsx/Nav.tsx are frozen).
 const fabStyle = {
@@ -41,12 +41,46 @@ export default function ProfileEditor() {
 function Editor({ user }: { user: User }) {
   // Fresh per uid (see the key above): `profileLoading` starts true and can
   // never be another subscription's leftover settled flag.
-  const { data: profile, loading: profileLoading } = useMyUser(user.uid);
+  const { data: profile, loading: profileLoading, hasServerData: profileConfirmed } = useMyUser(user.uid);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const titleRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    titleRef.current?.focus();
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      if (!focusable || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === titleRef.current)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      triggerRef.current?.focus();
+    };
+  }, [open]);
 
   // Wait for the live users/{uid} snapshot, not just auth, before rendering the
   // trigger: openEditor() below seeds `name` from `currentName`, and while the
@@ -54,12 +88,12 @@ function Editor({ user }: { user: User }) {
   // reads `user.displayName` (the Google name). Rendering earlier risked
   // seeding — and, on an immediate Save, persisting — the Google name over a
   // saved custom displayName that simply hadn't arrived yet.
-  if (profileLoading) return null;
+  if (profileLoading || !profileConfirmed) return null;
 
-  const currentName = profile?.displayName ?? user.displayName ?? 'Anonymous';
+  const currentName = validDisplayName(profile?.displayName) ?? validDisplayName(user.displayName) ?? 'Anonymous';
   // customPhoto flags whether photoURL currently holds a custom upload (vs.
   // the Google photo) — prefer it only when that flag is set.
-  const customSrc = profile?.customPhoto ? profile.photoURL : null;
+  const customSrc = profile?.customPhoto === true && typeof profile.photoURL === 'string' ? profile.photoURL : null;
 
   const openEditor = () => {
     setName(currentName);
@@ -94,19 +128,19 @@ function Editor({ user }: { user: User }) {
 
   return (
     <>
-      <button type="button" className="iconbtn" style={fabStyle} title="Edit profile" aria-label="Edit profile" onClick={openEditor}>
+      <button ref={triggerRef} type="button" className="iconbtn" style={fabStyle} title="Edit profile" aria-label="Edit profile" aria-haspopup="dialog" onClick={openEditor}>
         ✎
       </button>
       {open && (
         <div className="sheet-backdrop" onClick={() => setOpen(false)}>
-          <div className="sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="sheet-title">Edit profile</div>
+          <div ref={dialogRef} className="sheet" role="dialog" aria-modal="true" aria-label="Edit profile" onClick={(e) => e.stopPropagation()}>
+            <div className="sheet-title" ref={titleRef} tabIndex={-1}>Edit profile</div>
             <div className="proof-body">
               <button type="button" className="iconbtn" style={{ padding: 0 }} aria-label="Change avatar" disabled={busy} onClick={() => fileRef.current?.click()}>
                 <Avatar name={currentName} src={user.photoURL ?? null} customPhoto={customSrc} size={72} />
               </button>
               <input ref={fileRef} type="file" accept="image/*" aria-label="Upload avatar" style={{ display: 'none' }} onChange={onAvatarFile} />
-              <input className="input" maxLength={MAX_NAME} value={name} onChange={(e) => setName(e.target.value)} placeholder="Display name" aria-label="Display name" />
+              <input className="input" maxLength={MAX_DISPLAY_NAME} value={name} onChange={(e) => setName(e.target.value)} placeholder="Display name" aria-label="Display name" />
             </div>
             {error && <p className="muted" role="alert" style={{ fontSize: 12, textAlign: 'center' }}>{error}</p>}
             <div className="sheet-actions">
@@ -120,4 +154,10 @@ function Editor({ user }: { user: User }) {
       )}
     </>
   );
+}
+
+function validDisplayName(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().slice(0, MAX_DISPLAY_NAME);
+  return trimmed || null;
 }

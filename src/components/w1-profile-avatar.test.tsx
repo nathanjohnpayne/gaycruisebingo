@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import type { UserDoc } from '../types';
 import Avatar from './Avatar';
 // Real implementations of the modules under test — covers specs/w1-profile-avatar.md.
-import { updateAvatar, updateDisplayName } from '../data/profile';
+import { MAX_DISPLAY_NAME, updateAvatar, updateDisplayName } from '../data/profile';
 import ProfileEditor from './ProfileEditor';
 
 const { docMock, setDocMock, updateDocMock } = vi.hoisted(() => ({
@@ -49,12 +49,14 @@ vi.mock('../auth/AuthContext', () => ({ useAuth: () => authState.current }));
 const profileSub = vi.hoisted(() => ({
   docs: new Map<string, UserDoc | null>(),
   defer: new Set<string>(),
+  cacheOnly: new Set<string>(),
   held: new Map<string, () => void>(),
-  listeners: new Map<string, (s: { data: UserDoc | null; loading: boolean }) => void>(),
+  listeners: new Map<string, (s: { data: UserDoc | null; loading: boolean; hasServerData: boolean }) => void>(),
   renderLog: [] as Array<{ uid: string | undefined; loading: boolean }>,
   reset() {
     this.docs.clear();
     this.defer.clear();
+    this.cacheOnly.clear();
     this.held.clear();
     this.listeners.clear();
     this.renderLog = [];
@@ -64,9 +66,9 @@ const profileSub = vi.hoisted(() => ({
     this.held.delete(uid);
     deliver?.();
   },
-  push(uid: string, doc: UserDoc | null) {
+  push(uid: string, doc: UserDoc | null, hasServerData = true) {
     this.docs.set(uid, doc);
-    this.listeners.get(uid)?.({ data: doc, loading: false });
+    this.listeners.get(uid)?.({ data: doc, loading: false, hasServerData });
   },
 }));
 vi.mock('../hooks/useData', async () => {
@@ -76,15 +78,24 @@ vi.mock('../hooks/useData', async () => {
       // Mirrors useDocSub: per-instance state, initial loading:true, reset +
       // subscribe inside an effect keyed on the uid, loading:false only once
       // this uid's snapshot arrives (immediately, unless the test defers it).
-      const [state, setState] = useState<{ data: UserDoc | null; loading: boolean }>({ data: null, loading: true });
+      const [state, setState] = useState<{ data: UserDoc | null; loading: boolean; hasServerData: boolean }>({
+        data: null,
+        loading: true,
+        hasServerData: false,
+      });
       useEffect(() => {
         if (!uid) {
-          setState({ data: null, loading: false });
+          setState({ data: null, loading: false, hasServerData: false });
           return;
         }
-        setState({ data: null, loading: true });
+        setState({ data: null, loading: true, hasServerData: false });
         profileSub.listeners.set(uid, setState);
-        const deliver = () => setState({ data: profileSub.docs.get(uid) ?? null, loading: false });
+        const deliver = () =>
+          setState({
+            data: profileSub.docs.get(uid) ?? null,
+            loading: false,
+            hasServerData: !profileSub.cacheOnly.has(uid),
+          });
         if (profileSub.defer.has(uid)) profileSub.held.set(uid, deliver);
         else deliver();
         return () => {
@@ -122,9 +133,17 @@ describe('Avatar prefers a custom photo over src', () => {
 describe('data/profile.ts — persists to users/{uid}, reusing storage.ts', () => {
   beforeEach(resetMocks);
 
-  it('trims and persists the display name, no-ops on blank', async () => {
+  it('trims and persists the display name, caps it at 40 characters, and no-ops on blank', async () => {
     await updateDisplayName('u1', '  New Name  ');
     expect(setDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { displayName: 'New Name' }, { merge: true });
+
+    setDocMock.mockClear();
+    await updateDisplayName('u1', `  ${'a'.repeat(MAX_DISPLAY_NAME + 10)}  `);
+    expect(setDocMock).toHaveBeenCalledWith(
+      { path: 'users/u1' },
+      { displayName: 'a'.repeat(MAX_DISPLAY_NAME) },
+      { merge: true },
+    );
 
     setDocMock.mockClear();
     await updateDisplayName('u1', '   ');
@@ -221,6 +240,20 @@ describe('ProfileEditor', () => {
       { displayName: 'Google Name' },
       { merge: true },
     );
+  });
+
+  it('waits for a server-confirmed profile snapshot before rendering', async () => {
+    const serverDoc = { displayName: 'Server Saved', photoURL: null, customPhoto: false, createdAt: 0 };
+    profileSub.cacheOnly.add('u1');
+    profileSub.docs.set('u1', { displayName: 'Cached Google Name', photoURL: null, customPhoto: false, createdAt: 0 });
+
+    render(<ProfileEditor />);
+    expect(screen.queryByRole('button', { name: 'Edit profile' })).not.toBeInTheDocument();
+
+    act(() => profileSub.push('u1', serverDoc, true));
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Edit profile' }));
+    expect(screen.getByLabelText('Display name')).toHaveValue('Server Saved');
   });
 
   // Codex P2 finding 3542224104 (round 2, ProfileEditor.tsx:25) — the
@@ -332,5 +365,37 @@ describe('ProfileEditor', () => {
     // The live users/{uid} subscription delivers the updated doc.
     act(() => profileSub.push('u1', { displayName: 'Alex', photoURL: customUrl, customPhoto: true, createdAt: 0 }));
     expect(preview.getByRole('img')).toHaveAttribute('src', customUrl);
+  });
+
+  it('falls back to the auth name when a malformed saved displayName would otherwise crash Avatar', async () => {
+    const user = userEvent.setup();
+    profileSub.docs.set('u1', { displayName: 12345, photoURL: null, customPhoto: false, createdAt: 0 } as unknown as UserDoc);
+
+    render(<ProfileEditor />);
+    await user.click(screen.getByRole('button', { name: 'Edit profile' }));
+
+    expect(screen.getByLabelText('Display name')).toHaveValue('Google Name');
+    expect(within(screen.getByRole('button', { name: 'Change avatar' })).getByRole('img')).toHaveAttribute('src', googlePhoto);
+  });
+
+  it('contains focus inside the profile dialog and restores it on close', async () => {
+    const user = userEvent.setup();
+    render(<ProfileEditor />);
+
+    const trigger = screen.getByRole('button', { name: 'Edit profile' });
+    await user.click(trigger);
+
+    const dialog = screen.getByRole('dialog', { name: 'Edit profile' });
+    await waitFor(() => expect(within(dialog).getByText('Edit profile')).toHaveFocus());
+
+    await user.tab({ shift: true });
+    expect(within(dialog).getByRole('button', { name: 'Save name' })).toHaveFocus();
+
+    await user.tab();
+    expect(within(dialog).getByRole('button', { name: 'Change avatar' })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog', { name: 'Edit profile' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });

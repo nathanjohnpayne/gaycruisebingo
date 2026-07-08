@@ -36,6 +36,9 @@ const H = vi.hoisted(() => ({
   },
   getDoc: vi.fn(),
   getDocs: vi.fn(),
+  runTransaction: vi.fn(),
+  txGet: vi.fn(),
+  txSet: vi.fn(),
   batchSet: vi.fn(),
   batchCommit: vi.fn(async () => {}),
 }));
@@ -68,7 +71,7 @@ vi.mock('firebase/firestore', () => {
     writeBatch: () => ({ set: H.batchSet, commit: H.batchCommit }),
     addDoc: vi.fn(),
     increment: vi.fn(),
-    runTransaction: vi.fn(),
+    runTransaction: H.runTransaction,
     setDoc: vi.fn(),
     updateDoc: vi.fn(),
     deleteDoc: vi.fn(),
@@ -106,7 +109,7 @@ vi.mock('../hooks/useData', () => ({
 
 // Real modules under test — imported after the mocks are declared.
 import Board from './Board';
-import { joinAndDeal } from '../data/api';
+import { ensureUserProfile, joinAndDeal } from '../data/api';
 import { dealBoard, MIN_POOL, CENTER, type DealItem } from '../game/logic';
 import { FREE_TEXT, SEED_ITEMS } from '../data/seed';
 
@@ -150,9 +153,38 @@ beforeEach(() => {
   // mockResolvedValueOnce in joinAndDeal's read order (board, then profile).
   H.getDoc.mockResolvedValue({ exists: () => false });
   H.getDocs.mockReset();
+  H.runTransaction.mockReset();
+  H.runTransaction.mockImplementation(async (_db, fn) => fn({ get: H.txGet, set: H.txSet }));
+  H.txGet.mockReset();
+  H.txSet.mockReset();
   H.batchSet.mockReset();
   H.batchCommit.mockReset();
   H.batchCommit.mockResolvedValue(undefined);
+});
+
+describe('ensureUserProfile', () => {
+  it('creates the first users/{uid} document inside a transaction', async () => {
+    H.txGet.mockResolvedValue({ exists: () => false });
+
+    await ensureUserProfile(SIGNED_IN_WITH_PHOTO);
+
+    expect(H.runTransaction).toHaveBeenCalledWith({}, expect.any(Function));
+    expect(H.txSet).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'doc' }),
+      expect.objectContaining({
+        displayName: 'Sailor',
+        photoURL: 'https://lh3.example/google.jpg',
+      }),
+    );
+  });
+
+  it('does not rewrite an existing users/{uid} document', async () => {
+    H.txGet.mockResolvedValue({ exists: () => true });
+
+    await ensureUserProfile(SIGNED_IN_WITH_PHOTO);
+
+    expect(H.txSet).not.toHaveBeenCalled();
+  });
 });
 
 describe('Board render', () => {
