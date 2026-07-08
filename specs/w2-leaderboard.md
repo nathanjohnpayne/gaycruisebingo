@@ -9,7 +9,7 @@ The Leaderboard is the for-fun ranking of Players — bingos, then squares marke
 
 ## Carried over unchanged (verified, not rewritten)
 
-- `comparePlayers`/`sortPlayers` (`src/game/logic.ts:114-124`) — bingos desc, then squares desc, then earliest `firstBingoAt`. Untouched: this ticket adds verification tests, not new behavior, per the issue's own scope note and ADR 0001 (no server-side recompute, no tamper-proof framing).
+- `comparePlayers`/`sortPlayers` (`src/game/logic.ts:114-128`) — bingos desc, then squares desc, then earliest `firstBingoAt`. Untouched by this ticket: #35 adds verification tests, not new behavior, per the issue's own scope note and ADR 0001 (no server-side recompute, no tamper-proof framing). (Issue #93 later amended the both-null tie — see the verification finding below.)
 - `useLeaderboard` (`src/hooks/useData.ts:133-136`) — subscribes to the `players` collection and returns `sortPlayers(data)`. Untouched: filters are presentational and run over the set this hook already subscribes to, so no filter needs a scoped query (per the issue's implementation notes) and `useData.ts` is not extended.
 - The composite Firestore index (`firestore.indexes.json:4-11`, `bingoCount` DESC, `squaresMarked` DESC, `firstBingoAt` ASC) already backs `useLeaderboard`'s sort and needs no change for a client-side filter.
 
@@ -26,24 +26,25 @@ The Leaderboard is the for-fun ranking of Players — bingos, then squares marke
 - **Rank numbers renumber within the visible/filtered subset.** Each visible row's rank badge is its 1-based position among the *currently shown* rows (as the pre-ticket code already did via `players.map((p, i) => ...)`), not its position in the full unfiltered roster. This matches ordinary "leaderboard with a filter" UX (a Blackout-only view shows "1, 2, 3…" for the Blackout achievers, not their original global rank numbers) and is consistent with "filters change only the visible subset, never the order": the *relative sequence* of the remaining rows is untouched by filtering (a plain `.filter` cannot reorder), which is what "never reorder" means here — only the numeric label attached to each row is recomputed for the smaller list being shown.
 - **Filter predicates read the same fields the row already displays.** "With BINGO" reads `bingoCount` (shown as "N bingo(s)") rather than `firstBingoAt`, so the filter and the visible copy always agree about what "has a BINGO" means, even though the two fields are set/cleared together by `computeMark` (`src/data/api.ts`, out of scope for this ticket).
 
-## Verification finding: a `comparePlayers` arithmetic quirk (pre-existing, harmless, now pinned by test)
+## Verification finding: a `comparePlayers` arithmetic quirk (found during #35 verification, fixed by issue #93)
 
-While writing the exhaustive tie-break table, `comparePlayers(a, b)` for two Players who both have `firstBingoAt: null` and are otherwise tied returns `NaN`, not `0`: the tie-break falls through to `(a.firstBingoAt ?? Infinity) - (b.firstBingoAt ?? Infinity)`, and `Infinity - Infinity` is `NaN`. This is existing behavior on `main`, unrelated to this ticket's scope (`comparePlayers` is under verification, not change, per the issue and the ADR 0001 framing above) — it is recorded here and pinned honestly in `src/game/w2-leaderboard.test.ts` rather than mis-asserted as a clean `0`. It is harmless in practice: `Array.prototype.sort` (verified against this project's Node/Vitest runtime) treats a `NaN` comparator result like "equal" — no swap — so `sortPlayers` still produces a stable, sensible order for a roster with multiple no-bingo-yet Players, which is the only case that reaches this branch (two Players tied on `bingoCount` and `squaresMarked` with neither having a first bingo). No fix is proposed here; `src/game/logic.ts` stays untouched per the file boundary for this ticket.
+While writing the exhaustive tie-break table for #35, `comparePlayers(a, b)` for two Players who both have `firstBingoAt: null` and are otherwise tied turned out to return `NaN`, not `0`: the tie-break fell through to `(a.firstBingoAt ?? Infinity) - (b.firstBingoAt ?? Infinity)`, and `Infinity - Infinity` is `NaN`. A `NaN` comparator result leaves `Array.prototype.sort` formally free to order that pair however the engine likes — harmless in practice (V8 treats a `NaN` result like "equal", no swap) but engine-dependent rather than guaranteed, and the only case that reaches this branch is exactly the common one of a roster with multiple no-bingo-yet Players. #35 kept `src/game/logic.ts` untouched per its file boundary and pinned the `NaN` honestly in `src/game/w2-leaderboard.test.ts` rather than mis-asserting a clean `0`. Issue #93 then made the fix: `comparePlayers` now short-circuits the both-nullish tie to an explicit `0` before the `?? Infinity` fallback, so the comparator never returns `NaN` and the full rule is bingos desc → squares desc → earliest `firstBingoAt`, a nullish `firstBingoAt` sorting last, and two no-bingo Players tying at a stable `0`. The formerly-NaN-pinning test now asserts that `0`.
 
 ## Claim → test
 
 Every claim below maps to a real assertion against the actual `comparePlayers`/`sortPlayers`/`Leaderboard` — no vacuous coverage.
 
-### Unit — `comparePlayers`/`sortPlayers` tie-break table (bingos desc, squares desc, earliest first-bingo, null last)
+### Unit — `comparePlayers`/`sortPlayers` tie-break table (bingos desc, squares desc, earliest first-bingo, null last, both-null stable 0)
 
 Runner: `npm test` (Vitest). Test: `src/game/w2-leaderboard.test.ts`.
 
 - Higher `bingoCount` ranks first regardless of squares or `firstBingoAt`.
 - Once `bingoCount` ties, higher `squaresMarked` ranks first.
 - Once `bingoCount` AND `squaresMarked` both tie, the earlier `firstBingoAt` ranks first.
-- A `null` `firstBingoAt` sorts LAST among an equal `bingoCount`/`squaresMarked` tie — both against a small numeric value and against `Number.MAX_SAFE_INTEGER`, so there is no Infinity-adjacent surprise.
+- A `null` `firstBingoAt` sorts LAST among an equal `bingoCount`/`squaresMarked` tie — in both argument orders, both against a small numeric value and against `Number.MAX_SAFE_INTEGER`, so there is no Infinity-adjacent surprise.
+- Two Players who BOTH have a `null` `firstBingoAt` and are otherwise tied compare as exactly `0`, in both argument orders — the stable, engine-independent tie issue #93 introduced (previously `Infinity - Infinity = NaN`, pinned honestly until the fix).
 - `sortPlayers` never mutates its input array or the input's own order, and always returns a new array.
-- `sortPlayers` is a stable sort: fully-tied Players (including two Players who both have a `null` `firstBingoAt`, the `NaN`-comparator case above) keep their original relative order regardless of input order.
+- `sortPlayers` is a stable sort: fully-tied Players (including two Players who both have a `null` `firstBingoAt`, the explicit-`0` tie above) keep their original relative order regardless of input order.
 - A seven-Player roster, shuffled on input, recovers the full canonical order through every tie-break level in one pass: most bingos; then the `bingoCount`-1 tier ordered by squares, then by earliest `firstBingoAt`, with the `null`-`firstBingoAt` Player in that same tier sorting after both numeric ones; then the `bingoCount`-0 tier ordered by squares.
 
 ### RTL — the pin tracks earliest-bingo (not rank), the BLACKOUT suffix, and the filters
@@ -71,5 +72,5 @@ Runner: `npm test` (Vitest, jsdom). Test: `src/components/w2-leaderboard.test.ts
 ## Out of scope
 
 - No new Firestore query or index: filters are entirely client-side over `useLeaderboard`'s existing subscription.
-- No change to `comparePlayers`/`sortPlayers` behavior, and no server-side stat recompute — the `comparePlayers` `NaN`-on-double-null quirk above is documented and pinned, not fixed, because fixing it is a behavior change to a function this ticket's scope keeps "under verification, not change."
+- No server-side stat recompute — and #35 itself changed no `comparePlayers`/`sortPlayers` behavior: its `NaN`-on-double-null finding was documented and pinned rather than fixed, because fixing it was a behavior change to a function that ticket's scope kept "under verification, not change." Issue #93 has since made exactly that fix — the both-nullish tie is now an explicit stable `0` (see the verification finding above).
 - Board, ProofSheet, ProofFeed, ItemPool, and the write paths in `src/data/**` are untouched; this ticket is read/presentation-only on top of Player-written stats.
