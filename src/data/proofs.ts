@@ -23,8 +23,36 @@ export interface AttachProofArgs {
 }
 
 /**
- * Mark a square and attach a playful proof. In admin_confirmed mode the square
- * goes pending (doesn't count) and a claim is created for an admin/peer to confirm.
+ * Mark a square and attach a playful proof (ADR 0002: the Proof IS the Feed
+ * entry — a bare Mark posts nothing, an attached Proof posts here). In
+ * admin_confirmed mode the square goes pending (doesn't count) and a claim is
+ * created for an admin/peer to confirm. A Proof is flavour, never enforcement
+ * (ADR 0001): it enriches the Feed, it does not make the Mark more trustworthy.
+ *
+ * Online-only, by design AND by rule (ADR 0006) — unlike a bare honor Mark
+ * (`setMark`), attachProof does NOT queue offline:
+ *   - it runs in a `runTransaction`, which needs a server round-trip and REJECTS
+ *     offline (the read-modify-write folds onto the LIVE board/player so a
+ *     concurrent admin resolve / another of the owner's tabs isn't clobbered),
+ *     and
+ *   - a photo/audio proof is unwritable before its media exists: firestore.rules
+ *     pins `storagePath`/`mediaURL` to the EXACT uploaded Storage object, and a
+ *     Storage upload needs signal — so a media proof doc can't be queued ahead of
+ *     its upload. (A text proof carries no media, but still rides the same
+ *     rejecting transaction.)
+ * The offline-durable path is therefore the bare honor Mark; the Proof and its
+ * media attach when connectivity returns (ADR 0006: "marks queue, proof media
+ * doesn't"). Capture-then-retry lives in `ProofSheet`: a failed submit keeps the
+ * captured blob/text in component state so the Player retries without
+ * re-capturing — durable for the session, NOT across a reload (only the honor
+ * Mark survives a reload).
+ *
+ * The proof→cell link is authoritative in the proof DOC (`uid` + `cellIndex`),
+ * which this writes; `cells[i].proofId` is only a denormalized projection a
+ * queued bare-Mark drain can wholesale-replace and drop
+ * (specs/w1-board-mark-win.md § cross-writer). The Feed renders from the proof
+ * doc, so a dropped `proofId` never removes a Proof from the Feed; `deleteProof`
+ * resolves the backing cell by `cellIndex` for the same reason.
  */
 export async function attachProof(args: AttachProofArgs): Promise<void> {
   const { uid, displayName, photoURL, cells, cellIndex, itemText, claimMode, currentFirstBingoAt, proof } =
@@ -125,11 +153,23 @@ export async function deleteProof(id: string, storagePath?: string | null): Prom
       const playerRef = rawPlayer(proof.uid);
       const boardSnap = await tx.get(boardRef);
       const cells = boardSnap.data()?.cells as Cell[] | undefined;
-      if (cells?.some((c) => c.proofId === id)) {
+      // Resolve the backing cell from the proof's OWN cellIndex — the
+      // authoritative proof→cell link (specs/w1-board-mark-win.md § cross-writer).
+      // `cells[i].proofId` is only a denormalized projection of that link: a
+      // queued bare-Mark drain does a whole-array { merge:true } replace of
+      // `cells` and can drop the `proofId`, so a `cells.some(c => c.proofId ===
+      // id)` scan would miss the backing cell after a clobber. Indexing by the
+      // proof doc's `cellIndex` is clobber-resilient. We still gate the unmark on
+      // `proofId === id` so we never fight a bare Mark that has since taken the
+      // cell over — if the projection was dropped, the drained bare Mark owns the
+      // cell and deleteProof leaves it (accepted residual, ADR 0001) rather than
+      // un-marking a live Mark.
+      const backing = cells?.find((c) => c.index === proof.cellIndex);
+      if (cells && backing?.proofId === id) {
         const playerSnap = await tx.get(playerRef);
         const existingFirst = (playerSnap.data()?.firstBingoAt as number | null | undefined) ?? null;
         const next: Cell[] = cells.map((c) =>
-          c.proofId === id
+          c.index === proof.cellIndex
             ? { ...c, marked: false, markedAt: null, proofId: null, status: 'confirmed' }
             : c,
         );
