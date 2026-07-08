@@ -2,7 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard } from '../hooks/useData';
 import { setMark, resolveDisplayName } from '../data/api';
-import { broadcastBingo, broadcastBlackout, broadcastFirstBingo } from '../data/moments';
+import {
+  broadcastBingo,
+  broadcastBlackout,
+  broadcastFirstBingo,
+  hasPriorBingoWitness,
+} from '../data/moments';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
 import { track } from '../analytics';
 import Celebration from './Celebration';
@@ -154,25 +159,57 @@ export default function Board() {
   // gates: identity-known gates ALL three broadcasts — never stamp a returning
   // Player's stale auth/Google name into an IMMUTABLE Moment, the same window in
   // which setMark passes `undefined` (finding 1); a server-confirmed roster
-  // additionally gates first_bingo (finding 2). The deterministic Moment doc id
-  // keeps a held-then-fired broadcast idempotent. Reset per-uid below (finding 5).
+  // additionally gates first_bingo (finding 2). A held flag is NOT a promise to
+  // fire: it is dropped if the win no longer stands when the gate opens (round 2
+  // finding A — falling-edge clearing below plus fire-time revalidation in
+  // flushPending). The deterministic Moment doc id keeps a held-then-fired
+  // broadcast idempotent. Reset per-uid synchronously in render (finding 5 +
+  // round 2 finding B).
   const pending = useRef<{ bingo: boolean; blackout: boolean; firstBingo: boolean }>({
     bingo: false,
     blackout: false,
     firstBingo: false,
   });
 
-  const cells: Cell[] = board?.cells ?? [];
+  // Account switch (finding 5, hardened by round 2 finding B): the edge state is
+  // per-uid, and the reset must happen BEFORE any effect of the uid-switch render
+  // runs — an effect-based reset raced the still-stale subscription rows (useBoard/
+  // useMyPlayer return the PREVIOUS uid's data for the render(s) before their
+  // keyed effects clear it), letting the cells effect seed the baseline from the
+  // OLD board. React's adjust-during-render pattern: compare the uid the edge
+  // state belongs to during render and restore the uninitialized baseline
+  // synchronously on a mismatch. Idempotent per uid (StrictMode-safe), and the
+  // attribution gate below keeps the stale board from being seeded even in this
+  // same render's effects.
+  const edgeStateUid = useRef(uid);
+  if (edgeStateUid.current !== uid) {
+    edgeStateUid.current = uid;
+    initialized.current = false;
+    wasBingo.current = false;
+    wasBlackout.current = false;
+    pending.current = { bingo: false, blackout: false, firstBingo: false };
+  }
 
-  // The latest identity + roster + gate signals for Moment broadcasts, stored in a
-  // ref so the edge effect and `flushPending` can READ them without DEPENDING on
-  // them — the edge effect must fire only on a genuine board transition (`[cells]`),
-  // never when the resolved name or the roster merely re-renders. Written every
-  // render (store-latest-value ref). photoURL mirrors ProofSheet: a loaded player
-  // row's null photo wins over the stale auth photo. The name is the SAME resolved
-  // public identity the Tally + Proof carry; moments.ts bounds it to the rules' ≤100
-  // contract. `identityKnown`/`rosterConfirmed` travel here too so `flushPending`
-  // always reads the CURRENT gate state, never a stale render's closure.
+  const cells: Cell[] = board?.cells ?? [];
+  // Attribution gate (round 2 finding B): board data is usable for edge state only
+  // when the doc actually belongs to the CURRENT uid. During an account switch the
+  // subscription still returns the previous uid's board for a render, and the
+  // render-time reset above cannot stop this render's cells effect from seeding it
+  // — this gate does. BoardDoc carries its owner's uid, so the check is direct.
+  const cellsAttributable = board != null && board.uid === uid;
+
+  // The latest identity + roster + gate signals + CURRENT cells for Moment
+  // broadcasts, stored in a ref so the edge effect and `flushPending` can READ
+  // them without DEPENDING on them — the edge effect must fire only on a genuine
+  // board transition, never when the resolved name or the roster merely
+  // re-renders. Written every render (store-latest-value ref). photoURL mirrors
+  // ProofSheet: a loaded player row's null photo wins over the stale auth photo.
+  // The name is the SAME resolved public identity the Tally + Proof carry;
+  // moments.ts bounds it to the rules' ≤100 contract. `identityKnown`/
+  // `rosterConfirmed` travel here too so `flushPending` always reads the CURRENT
+  // gate state, never a stale render's closure — and `cells` (attribution-gated:
+  // another uid's board contributes NOTHING) so a held broadcast is revalidated
+  // against the board as it stands at FIRE time (round 2 finding A).
   const feedCtx = useRef<{
     uid: string | undefined;
     displayName: string;
@@ -180,6 +217,7 @@ export default function Board() {
     players: PlayerDoc[];
     identityKnown: boolean;
     rosterConfirmed: boolean;
+    cells: Cell[];
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -187,6 +225,7 @@ export default function Board() {
     players: [],
     identityKnown: false,
     rosterConfirmed: false,
+    cells: [],
   });
   feedCtx.current = {
     uid,
@@ -195,13 +234,19 @@ export default function Board() {
     players,
     identityKnown,
     rosterConfirmed,
+    cells: cellsAttributable ? cells : [],
   };
 
   // Fire any HELD broadcast whose gate is now open, reading the LATEST identity +
-  // roster from feedCtx (never a stale closure). All three broadcasts need a KNOWN
-  // identity; first_bingo additionally needs a SERVER-CONFIRMED roster and is
-  // re-decided against it here. Each fired kind clears its flag so a later flush
-  // can't re-fire it (the deterministic doc id is the structural backstop besides).
+  // roster + cells from feedCtx (never a stale closure). All three broadcasts need
+  // a KNOWN identity; first_bingo additionally needs a SERVER-CONFIRMED roster and
+  // is re-decided against it here. Every kind REVALIDATES against the board as it
+  // stands NOW (round 2 finding A): a flag queued while a gate was closed is a
+  // candidate, not a promise — if the player unmarked and the win no longer
+  // stands, the stale flag is DROPPED, never fired. (The falling-edge clearing in
+  // the cells effect handles the common case; this fire-time recheck is the
+  // invariant.) Each fired-or-dropped kind clears its flag so a later flush can't
+  // re-fire it (the deterministic doc id is the structural backstop besides).
   // Stable (reads only refs), so the effects below list it without churn.
   const flushPending = useCallback(() => {
     const {
@@ -211,47 +256,65 @@ export default function Board() {
       players: roster,
       identityKnown: idKnown,
       rosterConfirmed: rosterOk,
+      cells: cellsNow,
     } = feedCtx.current;
     // Identity gate (finding 1): with no KNOWN saved identity, HOLD every broadcast
     // rather than stamp the possibly-stale auth name into an immutable Moment doc.
     if (!cUid || !idKnown) return;
     const actor = { uid: cUid, displayName: cName, photoURL: cPhoto };
+    // Fire-time revalidation (round 2 finding A) — recomputed from the CURRENT
+    // attributable cells; an empty/missing/other-uid board means nothing stands.
+    const bingoNow = hasBingo(cellsNow);
+    const blackoutNow = isBlackout(cellsNow);
     if (pending.current.bingo) {
-      broadcastBingo(actor);
-      pending.current.bingo = false;
+      if (bingoNow) broadcastBingo(actor);
+      pending.current.bingo = false; // fired, or dropped: the win no longer stands
     }
     if (pending.current.blackout) {
-      broadcastBlackout(actor);
+      if (blackoutNow) broadcastBlackout(actor);
       pending.current.blackout = false;
     }
     if (pending.current.firstBingo) {
-      // Roster gate (finding 2): claim First-to-BINGO only against a SERVER-CONFIRMED
-      // roster — an unloaded/cache-only empty roster is not proof nobody has bingoed;
-      // hold until it is server-backed rather than guess.
-      if (!rosterOk) return;
-      // Ceremonial + self-reported (ADR 0001): claim it only when, as far as this
-      // client's CONFIRMED known-players view shows, no OTHER Player has bingoed yet.
-      // The race (two clients briefly both believing they are first) resolves to one
-      // Moment per Event via the singleton doc id.
-      const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
-      if (!othersBingoed) broadcastFirstBingo(actor);
-      pending.current.firstBingo = false;
+      if (!bingoNow) {
+        // No standing bingo → no ceremonial claim (round 2 finding A): drop it.
+        pending.current.firstBingo = false;
+      } else if (rosterOk) {
+        // Roster gate (finding 2): claim First-to-BINGO only against a SERVER-
+        // CONFIRMED roster — an unloaded/cache-only empty roster is not proof
+        // nobody has bingoed. While unconfirmed the flag stays HELD (not cleared).
+        // Ceremonial + self-reported (ADR 0001): claim it only when, as far as this
+        // client's CONFIRMED known-players view shows, no OTHER Player has bingoed
+        // yet. The race (two clients briefly both believing they are first)
+        // resolves to one Moment per Event via the singleton doc id.
+        const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
+        if (!othersBingoed) broadcastFirstBingo(actor);
+        pending.current.firstBingo = false;
+      }
     }
   }, []);
 
-  // Account switch (finding 5): the edge refs + pending broadcasts are per-uid.
-  // When the signed-in uid changes while Board stays mounted, restore the
-  // uninitialized baseline BEFORE the cells effect below re-runs, so the new
-  // account's first snapshot with a standing bingo re-establishes init (no fire)
-  // instead of inheriting the previous account's wasBingo/wasBlackout and firing a
-  // spurious edge. Declared before the cells effect so it runs first in any commit
-  // where both `uid` and `cells` changed.
-  useEffect(() => {
-    initialized.current = false;
-    wasBingo.current = false;
-    wasBlackout.current = false;
-    pending.current = { bingo: false, blackout: false, firstBingo: false };
-  }, [uid]);
+  // Queue the ceremonial First-to-BINGO candidate for a just-crossed bingo edge —
+  // but only after the durable-witness check (round 2 finding D). `firstBingoAt`
+  // is BY DESIGN volatile (computeMark clears it when the last line falls), so a
+  // player who had a line, unmarked it, and regains one later would otherwise mint
+  // the event singleton despite not being first EVER. The player's own immutable
+  // `${uid}-bingo` Moment doc is the durable witness a prior win existed: if the
+  // local cache holds it, the ceremonial candidate is SUPPRESSED (their regained
+  // line still posts the plain bingo Moment — a denied duplicate create, which is
+  // fine). On a cache miss (fresh device) the check resolves false and the
+  // existing roster gate is the fallback — the narrowed residual is documented in
+  // the spec. The uid recheck guards an account switch during the async check:
+  // the pending state it would write belongs to the OLD uid and must not leak.
+  const queueFirstBingo = useCallback(() => {
+    const cUid = feedCtx.current.uid;
+    if (!cUid) return;
+    void hasPriorBingoWitness(cUid).then((witnessed) => {
+      if (witnessed) return;
+      if (feedCtx.current.uid !== cUid) return;
+      pending.current.firstBingo = true;
+      flushPending();
+    });
+  }, [flushPending]);
 
   // When a gate OPENS — identity resolves, or the roster becomes server-confirmed —
   // fire any broadcast held while it was closed (findings 1 + 2).
@@ -260,17 +323,43 @@ export default function Board() {
   }, [identityKnown, rosterConfirmed, flushPending]);
 
   useEffect(() => {
-    if (!cells.length) return;
+    // Attribution gate (round 2 finding B): during an account switch this effect
+    // can run one render with the PREVIOUS uid's board still in the subscription;
+    // that data must neither seed the new uid's baseline nor read as an edge.
+    if (!cellsAttributable || !cells.length) return;
     const bingo = hasBingo(cells);
     const black = isBlackout(cells);
-    if (!initialized.current) {
+    // Baseline vs detection (round 2 finding C): under the ADR 0006 persistent
+    // cache the FIRST snapshot(s) can be cache-only, and a stale cache that lacks
+    // a bingo the server already has would make the server confirmation read as a
+    // live transition — a Moment for a win that already stood. So while the board
+    // is NOT server-confirmed, EVERY snapshot is baseline: keep re-seeding
+    // wasBingo/wasBlackout and never fire edges (initialized stays false). The
+    // FIRST server-confirmed snapshot is baseline too (init-without-firing — a
+    // standing win it reveals already stood server-side); only after it does edge
+    // DETECTION run. Local optimistic Marks still fire: `hasServerData` is a
+    // latch — once true it never un-sets — and latency compensation delivers the
+    // local write as the next snapshot under a confirmed board.
+    if (!boardConfirmed || !initialized.current) {
       wasBingo.current = bingo;
       wasBlackout.current = black;
-      initialized.current = true;
+      initialized.current = boardConfirmed;
       return;
     }
     const bingoEdge = bingo && !wasBingo.current;
     const blackoutEdge = black && !wasBlackout.current;
+    // Falling edges (round 2 finding A): a win LOST while its broadcast was still
+    // held (gates closed) clears the held flag — the queued Moment described a
+    // board state that no longer exists. A later re-gain crosses a fresh rising
+    // edge and legitimately re-queues. flushPending's fire-time revalidation is
+    // the backstop for any path that skips this effect.
+    if (!bingo && wasBingo.current) {
+      pending.current.bingo = false;
+      pending.current.firstBingo = false;
+    }
+    if (!black && wasBlackout.current) {
+      pending.current.blackout = false;
+    }
     // Celebration UI (unchanged): a Blackout takes visual priority over a plain
     // BINGO, and only one animation shows at a time. This is LOCAL UI, fired on the
     // edge itself and never held — only the Moment write is gated below.
@@ -288,12 +377,14 @@ export default function Board() {
     // updates are denied — and is rejected). On a real 5×5 board the first-line
     // (BINGO) edge always precedes the full-card (Blackout) edge, so a Blackout never
     // suppresses the earlier first-BINGO broadcast. A bare Mark that completes no line
-    // crosses NO edge here, so it broadcasts nothing. A bingo edge enqueues BOTH the
-    // per-Player bingo AND the ceremonial first_bingo candidate; flushPending fires
-    // each once its gate is open — holding, never dropping, whatever is still gated.
+    // crosses NO edge here, so it broadcasts nothing. A bingo edge enqueues the
+    // per-Player bingo directly and the ceremonial first_bingo candidate through the
+    // durable-witness check (round 2 finding D, queueFirstBingo above); flushPending
+    // fires each once its gate is open — holding whatever is still gated, and
+    // dropping (finding A) whatever no longer stands.
     if (bingoEdge) {
       pending.current.bingo = true;
-      pending.current.firstBingo = true;
+      queueFirstBingo();
     }
     if (blackoutEdge) {
       pending.current.blackout = true;
@@ -301,7 +392,7 @@ export default function Board() {
     flushPending();
     wasBingo.current = bingo;
     wasBlackout.current = black;
-  }, [cells, flushPending]);
+  }, [cells, cellsAttributable, boardConfirmed, flushPending, queueFirstBingo]);
 
   if (!uid) return null;
   if (!board) {

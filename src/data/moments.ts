@@ -1,4 +1,4 @@
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, getDocFromCache, setDoc } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
 import { markerDisplayName } from './attribution';
 import type { MomentDoc, MomentKind } from '../types';
@@ -85,6 +85,33 @@ function broadcast(id: string, kind: MomentKind, who: MomentActor): void {
     // `update` rule. Either way it must not vanish silently; log with context.
     console.error('[moments] broadcast rejected', { id, kind, uid: who.uid }, err);
   });
+}
+
+/**
+ * Whether THIS device holds a durable witness that `uid` already won a BINGO in
+ * this Event: the player's own immutable `${uid}-bingo` Moment doc, read from the
+ * LOCAL persistent cache (ADR 0006). `firstBingoAt` on the player row is BY DESIGN
+ * volatile (computeMark clears it when the last line falls), and the schema
+ * deliberately has no durable first-win field — but the Moment collection is its
+ * own memory: the bingo Moment is create-only and immutable, so its presence
+ * proves a prior win even after the line was unmarked. Board consults this before
+ * queueing a ceremonial First-to-BINGO candidate on a bingo edge (Codex P2, PR #99
+ * round 2 finding D): a regained line must not mint the event singleton.
+ *
+ * Cache-only ON PURPOSE: `getDocFromCache` never touches the network, so the check
+ * is instant and offline-safe, and a same-session broadcast is visible immediately
+ * via latency compensation. It resolves `false` on a cache miss (fresh device /
+ * cold cache — getDocFromCache rejects when the doc is not cached) and NEVER
+ * rejects; the caller then falls back to the roster check, an accepted narrowed
+ * residual documented in specs/w2-feed-moments.md.
+ */
+export async function hasPriorBingoWitness(uid: string): Promise<boolean> {
+  try {
+    const snap = await getDocFromCache(rawMoment(`${uid}-bingo`));
+    return snap.exists();
+  } catch {
+    return false; // not in the local cache — no witness on this device
+  }
 }
 
 /**

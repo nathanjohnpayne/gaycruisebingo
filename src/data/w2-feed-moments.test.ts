@@ -20,7 +20,10 @@ const EVENT_ID = 'med-2026'; // src/firebase.ts default when VITE_EVENT_ID is un
 // Plain vi.fn() so `.mock.calls` stays loosely typed (indexable) like the sibling
 // tally suite; the resolved Promise (moments.ts does `setDoc(...).catch(...)`) is
 // set in beforeEach so a re-broadcast's .catch has something to attach to.
-const { setDocSpy } = vi.hoisted(() => ({ setDocSpy: vi.fn() }));
+const { setDocSpy, getDocFromCacheSpy } = vi.hoisted(() => ({
+  setDocSpy: vi.fn(),
+  getDocFromCacheSpy: vi.fn(),
+}));
 
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'med-2026' }));
 vi.mock('firebase/firestore', async (importOriginal) => {
@@ -29,12 +32,19 @@ vi.mock('firebase/firestore', async (importOriginal) => {
     ...actual,
     doc: (_db: unknown, ...segments: string[]) => ({ path: segments.join('/') }),
     setDoc: setDocSpy,
+    getDocFromCache: getDocFromCacheSpy,
     addDoc: vi.fn(),
     runTransaction: vi.fn(),
   };
 });
 
-import { broadcastBingo, broadcastBlackout, broadcastFirstBingo, FIRST_BINGO_MOMENT_ID } from './moments';
+import {
+  broadcastBingo,
+  broadcastBlackout,
+  broadcastFirstBingo,
+  hasPriorBingoWitness,
+  FIRST_BINGO_MOMENT_ID,
+} from './moments';
 import { mergeFeed } from '../hooks/useData';
 import { addDoc, runTransaction } from 'firebase/firestore';
 
@@ -94,6 +104,30 @@ describe('moments broadcasts — the Feed beat writer (specs/w2-feed-moments.md)
     expect(setDocSpy).toHaveBeenCalledTimes(1);
     expect(addDoc).not.toHaveBeenCalled();
     expect(runTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('hasPriorBingoWitness — the durable prior-win witness (PR #99 round 2 finding D)', () => {
+  it('reads the player’s OWN bingo Moment doc from the LOCAL cache only', async () => {
+    getDocFromCacheSpy.mockResolvedValue({ exists: () => true });
+    await expect(hasPriorBingoWitness('u1')).resolves.toBe(true);
+    // The witness is the per-Player `${uid}-bingo` doc — the same immutable Moment
+    // broadcastBingo writes — so the Moment collection is its own memory.
+    expect(getDocFromCacheSpy).toHaveBeenCalledTimes(1);
+    expect(getDocFromCacheSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-bingo`);
+  });
+
+  it('resolves false when the cached doc does not exist', async () => {
+    getDocFromCacheSpy.mockResolvedValue({ exists: () => false });
+    await expect(hasPriorBingoWitness('u1')).resolves.toBe(false);
+  });
+
+  it('resolves false — NEVER rejects — on a cache miss (fresh device / cold cache)', async () => {
+    // getDocFromCache rejects when the doc is not in the local cache; the caller
+    // (Board) then falls back to the roster check — the narrowed residual the
+    // spec documents.
+    getDocFromCacheSpy.mockRejectedValue(new Error('unavailable'));
+    await expect(hasPriorBingoWitness('u1')).resolves.toBe(false);
   });
 });
 

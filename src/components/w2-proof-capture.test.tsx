@@ -43,10 +43,13 @@ vi.mock('../hooks/useData', () => ({
 // so none fires, and mocking the module also keeps Board's real
 // src/data/moments.ts (which imports the prod ../firebase singleton) from loading
 // getAuth() into this suite, which does not stub ../firebase.
+// hasPriorBingoWitness (the finding-D durable-witness check) is stubbed to the
+// no-witness default for the same reason; with no edge crossed it is never called.
 vi.mock('../data/moments', () => ({
   broadcastBingo: vi.fn(),
   broadcastBlackout: vi.fn(),
   broadcastFirstBingo: vi.fn(),
+  hasPriorBingoWitness: vi.fn(() => Promise.resolve(false)),
 }));
 // Board resolves the caller's display name via resolveDisplayName (fed the player
 // row) for BOTH the Tally marker and ProofSheet (#31/#78). Stub it here to mirror
