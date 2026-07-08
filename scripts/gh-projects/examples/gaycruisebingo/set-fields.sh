@@ -68,6 +68,8 @@ w4-infra-blaze-budget|infra|1|4|S|-|Backlog
 x-e2e-happy-path|launch|hardening|3|M|0006|Backlog
 x-launch-checklist|launch|hardening|4|M|-|Backlog
 x-multi-event-schema|schema|hardening|4|S|0003|Backlog
+sec-xss-proofsheet|security|0|0|S|0002|Ready
+sec-clear-text-logging-seed|security|0|0|S|-|Ready
 TSV
 printf '%s\n' "$FIELDS" > "$WORK/fields.tsv"
 
