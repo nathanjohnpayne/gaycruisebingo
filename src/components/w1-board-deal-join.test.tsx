@@ -101,11 +101,18 @@ vi.mock('../hooks/useData', () => ({
     hasServerData: H.data.boardServer,
   }),
   useMyPlayer: () => ({ data: H.data.player, loading: false, hasServerData: true }),
+  // Board reads the saved users/{uid} profile to attribute the Tally marker (#31);
+  // a null profile falls back to the auth name, which these fixtures don't assert.
+  useMyUser: () => ({ data: null, loading: false, hasServerData: true }),
   useEventDoc: () => ({ data: H.data.event, loading: false }),
   useItems: (enabled?: boolean) => {
     H.useItemsSpy(enabled);
     return { items: H.data.items, loading: H.data.poolLoading, hasServerData: H.data.poolServer };
   },
+  // The per-Prompt Tally count badge (#31) only mounts on marked, non-free
+  // Squares — a freshly dealt card has none, so useTally is not exercised here,
+  // but the mock must export it so Board's module resolves.
+  useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
 }));
 
 // Real modules under test — imported after the mocks are declared.

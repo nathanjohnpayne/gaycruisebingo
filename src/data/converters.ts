@@ -12,6 +12,7 @@ import type {
   UserDoc,
   ProofDoc,
   ClaimDoc,
+  TallyEntry,
 } from '../types';
 
 function passthrough<T>(): FirestoreDataConverter<T> {
@@ -70,5 +71,18 @@ export const claimConverter: FirestoreDataConverter<ClaimDoc> = {
   fromFirestore: (snap: QueryDocumentSnapshot) => ({
     ...(snap.data() as Omit<ClaimDoc, 'id'>),
     id: snap.id,
+  }),
+};
+
+// A per-Prompt Tally marker (ADR 0002): one Player's attributed entry in a
+// Prompt's Tally, read from events/{EVENT_ID}/tally/{itemId}/markers/{uid}. The
+// doc id IS the marker's uid (firestore.rules keys the self-write on it — a
+// forgery-deniable attribution), so pin `uid` to `snap.id` rather than trusting
+// the stored field. This is the read side of the count + tap-to-see-who list.
+export const tallyMarkerConverter: FirestoreDataConverter<TallyEntry> = {
+  toFirestore: (data) => data as DocumentData,
+  fromFirestore: (snap: QueryDocumentSnapshot) => ({
+    ...(snap.data() as Omit<TallyEntry, 'uid'>),
+    uid: snap.id,
   }),
 };

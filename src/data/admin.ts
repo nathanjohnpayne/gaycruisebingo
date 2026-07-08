@@ -9,6 +9,9 @@ const proof = (id: string) => doc(db, 'events', EVENT_ID, 'proofs', id);
 const claim = (id: string) => doc(db, 'events', EVENT_ID, 'claims', id);
 const board = (uid: string) => doc(db, 'events', EVENT_ID, 'boards', uid);
 const player = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
+// A per-Prompt Tally marker (ADR 0002): the same path setMark/attachProof write.
+const marker = (itemId: string, uid: string) =>
+  doc(db, 'events', EVENT_ID, 'tally', itemId, 'markers', uid);
 
 export const hideItem = (id: string) => updateDoc(item(id), { status: 'hidden' });
 export const restoreItem = (id: string) => updateDoc(item(id), { status: 'active' });
@@ -43,6 +46,23 @@ async function resolve(
 
     tx.set(board(c.uid), { cells: next }, { merge: true });
     tx.set(player(c.uid), { squaresMarked: squares, bingoCount, blackout, firstBingoAt }, { merge: true });
+    // Tally symmetry (ADR 0002): wherever a write flips a cell marked→unmarked it
+    // must delete that cell's per-Prompt Tally marker, and wherever it flips
+    // →marked it must ensure the marker (setMark and attachProof do). Rejecting a
+    // claim unmarks the claim's cell via the transform above, so diff old→new and
+    // delete the marker for exactly the cells that lost their mark — the SAME
+    // conditionality as the flip itself; without this, a rejected admin_confirmed
+    // claim would reverse the board + stats but leave the player in the Prompt's
+    // public count/who-list (Codex P2, PR #87). The transform is a positional map,
+    // so old/new align by index; the free centre (null itemId) never has a marker;
+    // confirming never unmarks, so this is a no-op for confirmClaim. tx.delete is
+    // a write, so the reads-before-writes transaction contract holds unchanged.
+    next.forEach((after, i) => {
+      const before = cells[i];
+      if (before.marked && !after.marked && before.itemId) {
+        tx.delete(marker(before.itemId, c.uid));
+      }
+    });
     tx.set(claim(c.id), { status, resolvedBy: adminUid }, { merge: true });
     // Confirming an admin-confirmed claim publishes its proof, which was created 'pending'
     // (admin-only readable) so it stayed hidden from the public feed until now. A

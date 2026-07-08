@@ -435,6 +435,31 @@ a {
   padding: 0;
 }
 
+/* ---------- per-Prompt tally ---------- */
+/* The count badge sits bottom-RIGHT of a marked Square — clear of the ✓
+   (top-right) and the proof ＋ (bottom-left). Tapping opens the who-list, so it
+   is a real button that stops the tap from also toggling the Square. */
+.tally-badge {
+  position: absolute;
+  bottom: 2px;
+  right: 4px;
+  z-index: 3;
+  border: none;
+  background: rgba(0, 0, 0, 0.4);
+  color: #fff;
+  border-radius: 20px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  line-height: 18px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.tally-empty {
+  text-align: center;
+  padding: 12px 0;
+}
+
 /* ---------- proof feed ---------- */
 .proof {
   background: var(--panel);

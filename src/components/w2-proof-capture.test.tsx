@@ -31,8 +31,27 @@ vi.mock('../hooks/useData', () => ({
   useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
+  // Board renders the per-Prompt TallyBadge on a marked, non-free Square (ADR
+  // 0002, #31), so a test that marks a Square exercises useTally; an empty Tally
+  // keeps these gating tests focused on the mark flow, not the count.
+  useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
 }));
-vi.mock('../data/api', () => ({ setMark: H.setMark }));
+// Board resolves the caller's display name via resolveDisplayName (fed the player
+// row) for BOTH the Tally marker and ProofSheet (#31/#78). Stub it here to mirror
+// the real resolver for the mark flow; its validated behaviour is unit-tested in
+// src/data/w2-tally.test.ts and against the rules in tests/rules/w2-tally.test.ts.
+vi.mock('../data/api', () => ({
+  setMark: H.setMark,
+  resolveDisplayName: (
+    profile: { displayName?: unknown } | null | undefined,
+    fallback: string | null | undefined,
+  ) =>
+    typeof profile?.displayName === 'string' &&
+    profile.displayName.trim().length > 0 &&
+    profile.displayName.length <= 100
+      ? profile.displayName
+      : (fallback ?? 'Anonymous'),
+}));
 vi.mock('../data/proofs', () => ({ attachProof: H.attachProof }));
 vi.mock('../analytics', () => ({ track: H.track }));
 vi.mock('../auth/AuthContext', () => ({

@@ -76,6 +76,7 @@ function dealt(): Cell[] {
 let boardState: { cells: Cell[] } | undefined;
 let playerState: Record<string, unknown> | undefined;
 let proofState: Record<string, unknown> | undefined;
+let markerState: Record<string, unknown> | undefined; // an existing Tally marker, if any
 
 // The tx.set payload written to the first ref whose path contains `frag`.
 function setPayload(frag: string): Record<string, unknown> | undefined {
@@ -90,6 +91,7 @@ beforeEach(() => {
   boardState = { cells: dealt() };
   playerState = { firstBingoAt: null };
   proofState = undefined;
+  markerState = undefined;
   uploadSpy.mockResolvedValue({
     path: `proofs/${EVENT_ID}/u1/UPLOADED.jpg`,
     url: `https://firebasestorage.googleapis.com/v0/b/b/o/proofs%2F${EVENT_ID}%2Fu1%2FUPLOADED.jpg?alt=media`,
@@ -101,6 +103,7 @@ beforeEach(() => {
     if (ref.path.includes('/boards/')) return Promise.resolve({ data: () => boardState });
     if (ref.path.includes('/players/')) return Promise.resolve({ data: () => playerState });
     if (ref.path.includes('/proofs/')) return Promise.resolve({ data: () => proofState });
+    if (ref.path.includes('/tally/')) return Promise.resolve({ data: () => markerState });
     return Promise.resolve({ data: () => undefined });
   });
 });
@@ -111,6 +114,7 @@ const baseArgs = {
   photoURL: null as string | null,
   cells: dealt(),
   cellIndex: 5,
+  itemId: 'i5' as string | null, // the Prompt cell 5 tallies (dealt()[5].itemId)
   itemText: 'Saw a sailor in Speedos',
   currentFirstBingoAt: null as number | null,
 };
@@ -239,6 +243,7 @@ describe('attachProof — posts an active Proof to the Feed and marks the cell (
       ...baseArgs,
       cells: dealt(), // stale: does not know about index 3
       cellIndex: 7,
+      itemId: 'i7', // marker follows the marked cell (dealt()[7].itemId)
       claimMode: 'proof_required',
       proof: { type: 'text', text: 'both' },
     });
@@ -283,6 +288,107 @@ describe('attachProof — ONLINE-only: it rejects offline rather than queuing (A
   });
 });
 
+describe('per-Prompt Tally marker — every proofed Mark publishes too (ADR 0002, specs/w2-tally.md)', () => {
+  // #31 AC 3 + ADR 0002: a Mark is private on the Board but PUBLIC as an attributed
+  // per-Prompt Tally; EVERY Mark — proofed or not — publishes a marker. setMark does
+  // it for a bare honor Mark; attachProof must do it for a proofed Mark, in the SAME
+  // transaction as the proof + board + player. Path/shape mirror setMark:
+  // events/{EVENT_ID}/tally/{itemId}/markers/{uid} == { uid, displayName, markedAt },
+  // doc id IS the uid (forgery-deniable), name bounded to the rule's non-empty ≤100.
+  const markerSet = () => txSet.mock.calls.find((c) => (c[0] as Ref).path.includes('/tally/'));
+
+  it('proof_required: writes the attributed marker in the SAME transaction as the proof + board + player', async () => {
+    await attachProof({
+      ...baseArgs, // uid u1, cellIndex 5, itemId i5, displayName 'Deck Daddy'
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'saw it' },
+    });
+
+    // One transaction — the marker is not a second write path (no extra runTx).
+    expect(runTx).toHaveBeenCalledTimes(1);
+    const call = markerSet();
+    expect(call).toBeDefined();
+    expect((call![0] as Ref).path).toBe(`events/${EVENT_ID}/tally/i5/markers/u1`);
+    // The exact rules-valid shape: uid == doc id, non-empty ≤100 name, numeric stamp.
+    // No marker existed (fresh mark), so markedAt is stamped `now` (1000).
+    expect(call![1]).toEqual({ uid: 'u1', displayName: 'Deck Daddy', markedAt: 1000 });
+    // A Firestore transaction requires ALL reads before ANY write, and the marker
+    // read (for the preserve-markedAt rule below) must obey it: pin that every
+    // tx.get in the transaction ran before its first tx.set.
+    expect(Math.max(...txGet.mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...txSet.mock.invocationCallOrder),
+    );
+  });
+
+  it('admin_confirmed: still publishes the marker — the pending cell is marked immediately, so it tallies like setMark', async () => {
+    // The cell is set marked:true (status 'pending') in this same txn, so it
+    // publishes exactly as setMark writes the marker on a pending Mark. If an admin
+    // later REJECTS the claim and unmarks it, rejectClaim (src/data/admin.ts)
+    // deletes this marker in ITS transaction — the marked→unmarked ↔ marker-delete
+    // symmetry, pinned in src/data/w2-tally.test.ts.
+    await attachProof({
+      ...baseArgs,
+      claimMode: 'admin_confirmed',
+      proof: { type: 'text', text: 'confirm me' },
+    });
+
+    const call = markerSet();
+    expect(call).toBeDefined();
+    expect((call![0] as Ref).path).toBe(`events/${EVENT_ID}/tally/i5/markers/u1`);
+    expect(call![1]).toEqual({ uid: 'u1', displayName: 'Deck Daddy', markedAt: 1000 });
+  });
+
+  it('preserves an existing marker’s original markedAt and refreshes its attribution (proof on an already-marked square)', async () => {
+    // The Player marked this square earlier (bare Mark at t=111, under an older
+    // name) and now attaches a Proof to it. Re-stamping markedAt with `now` would
+    // reorder the chronological who-list by proof-attach time (Codex P2, PR #87):
+    // the original stamp must survive, while uid/displayName refresh is fine.
+    markerState = { uid: 'u1', displayName: 'Old Salt', markedAt: 111 };
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 111, status: 'confirmed' };
+    boardState = { cells: board };
+
+    await attachProof({
+      ...baseArgs, // displayName 'Deck Daddy'
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'told you' },
+    });
+
+    const call = markerSet();
+    expect(call![1]).toEqual({ uid: 'u1', displayName: 'Deck Daddy', markedAt: 111 });
+    // The preserve requires reading the marker — and that read still precedes
+    // every write, per the transaction contract.
+    expect(Math.max(...txGet.mock.invocationCallOrder)).toBeLessThan(
+      Math.min(...txSet.mock.invocationCallOrder),
+    );
+  });
+
+  it('bounds an over-long attributed name to the marker rule’s 100-char cap', async () => {
+    await attachProof({
+      ...baseArgs,
+      displayName: 'x'.repeat(140),
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'long name' },
+    });
+
+    expect((markerSet()![1].displayName as string).length).toBe(100);
+  });
+
+  it('the free centre (null itemId) never writes a Tally marker', async () => {
+    await attachProof({
+      ...baseArgs,
+      cellIndex: 12,
+      itemId: null, // the free centre carries no Prompt
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'free' },
+    });
+
+    // The proof + board + player still write, but there is NO Tally marker.
+    expect(setPayload('/proofs/')).toBeDefined();
+    expect(markerSet()).toBeUndefined();
+  });
+});
+
 describe('deleteProof — resolves the backing cell by the proof doc cellIndex (PR #75)', () => {
   it('deletes the storage object + doc and unmarks the cell the proof backs (found via cellIndex)', async () => {
     proofState = { uid: 'u1', cellIndex: 5, storagePath: `proofs/${EVENT_ID}/u1/P.jpg` };
@@ -299,9 +405,14 @@ describe('deleteProof — resolves the backing cell by the proof doc cellIndex (
     const written = setPayload('/boards/') as { cells: Cell[] };
     expect(written.cells[5]).toMatchObject({ marked: false, markedAt: null, proofId: null });
     expect(setPayload('/players/')).toMatchObject({ squaresMarked: 0 });
-    // The proof doc itself is removed.
-    const deleted = txDelete.mock.calls[0][0] as Ref;
-    expect(deleted.path).toContain('/proofs/P');
+    // The proof doc itself is removed...
+    const proofDelete = txDelete.mock.calls.find((c) => (c[0] as Ref).path.includes('/proofs/'));
+    expect((proofDelete![0] as Ref).path).toContain('/proofs/P');
+    // ...and the owner's per-Prompt Tally marker for the backing Prompt is removed
+    // in the SAME transaction (ADR 0002: unmarking removes exactly that Player's
+    // entry) — the same marker path setMark deletes on a bare unmark.
+    const markerDelete = txDelete.mock.calls.find((c) => (c[0] as Ref).path.includes('/tally/'));
+    expect((markerDelete![0] as Ref).path).toBe(`events/${EVENT_ID}/tally/i5/markers/u1`);
   });
 
   it('after a bare-Mark drain dropped cells[i].proofId, it still deletes the proof but leaves the clobbered cell (accepted residual, ADR 0001)', async () => {
@@ -321,5 +432,8 @@ describe('deleteProof — resolves the backing cell by the proof doc cellIndex (
     expect(setPayload('/players/')).toBeUndefined();
     const deleted = txDelete.mock.calls[0][0] as Ref;
     expect(deleted.path).toContain('/proofs/P'); // the proof doc is still removed
+    // It never unmarked the cell, so it must NOT touch the Tally marker either —
+    // the drained bare Mark owns the cell and its own marker (accepted residual).
+    expect(txDelete.mock.calls.find((c) => (c[0] as Ref).path.includes('/tally/'))).toBeUndefined();
   });
 });

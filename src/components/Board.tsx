@@ -1,12 +1,82 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useEventDoc, useItems } from '../hooks/useData';
-import { setMark } from '../data/api';
+import { useBoard, useMyPlayer, useEventDoc, useItems, useTally } from '../hooks/useData';
+import { setMark, resolveDisplayName } from '../data/api';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode } from '../types';
+
+/**
+ * The per-Prompt Tally count badge on a marked Square (ADR 0002). Subscribes to
+ * the Prompt's marker subcollection and shows how many Players have marked it;
+ * tapping opens the who-list. Rendered only on marked, non-free Squares, so a
+ * freshly dealt card (only the free centre "on") surfaces no badge at all.
+ */
+function TallyBadge({ itemId, onOpen }: { itemId: string; onOpen: () => void }) {
+  const { count } = useTally(itemId);
+  if (count <= 0) return null;
+  return (
+    <button
+      className="tally-badge"
+      title="See who marked this"
+      aria-label={`${count} marked — see who`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      {count}
+    </button>
+  );
+}
+
+/**
+ * The tap-to-see-who list for a Prompt's Tally (ADR 0002): names EVERY Player who
+ * marked the Prompt — no anonymity — chronologically. Reuses the proof-capture
+ * sheet chrome. Markers carry no photo (the marker doc is just uid + displayName +
+ * markedAt), so the avatar is the name's initial.
+ */
+function TallySheet({
+  itemId,
+  itemText,
+  onClose,
+}: {
+  itemId: string;
+  itemText: string;
+  onClose: () => void;
+}) {
+  const { markers, loading } = useTally(itemId);
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-title">Who marked “{itemText}”</div>
+        {loading && markers.length === 0 ? (
+          <p className="muted tally-empty">Loading…</p>
+        ) : markers.length === 0 ? (
+          <p className="muted tally-empty">No one has marked this yet.</p>
+        ) : (
+          <div className="list">
+            {markers.map((m) => (
+              <div className="row" key={m.uid}>
+                <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
+                <div className="grow">
+                  <div className="name">{m.displayName}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="sheet-actions">
+          <button className="btn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /**
  * The caller's first-bingo state for a Mark is KNOWN only when the player row
@@ -34,6 +104,28 @@ export default function Board() {
   const uid = user?.uid;
   const { data: board, loading: boardLoading, hasServerData: boardConfirmed } = useBoard(uid);
   const { data: player, loading: playerLoading, hasServerData: playerConfirmed } = useMyPlayer(uid);
+  // ONE resolution of the caller's public display name, fed to BOTH the per-Prompt
+  // Tally marker (setMark, below) AND the new-Proof attribution (ProofSheet), so a
+  // Mark and a Proof always publish the SAME identity the leaderboard shows — never
+  // two divergent name sources (ADR 0002). It runs the saved player-row identity —
+  // the denormalized name the profile editor keeps current (data/profile.ts writes
+  // users/{uid} + the player row, #76/#78) — through `resolveDisplayName`, the same
+  // validated resolver joinAndDeal uses (trim, ≤100-char cap, else the live auth value).
+  const displayName = resolveDisplayName(player, user?.displayName);
+  // ...but that saved identity is KNOWN only under the same tri-state as
+  // knownFirstBingoAt above: while the subscription is still loading, or when a
+  // cache-only snapshot settled "absent" without server confirmation, the row is
+  // UNKNOWN — and `displayName` above has silently fallen back to the AUTH name.
+  // Stamping that onto a Tally marker would publish a returning Player's stale
+  // Google name over their customized one for any Mark tapped in the loading
+  // window (Codex P2, PR #87). So doMark passes `displayName` only when the row
+  // is known, and `undefined` otherwise — markerDisplayName then falls back to
+  // the CACHED player row (the saved name), then 'Anonymous', deliberately never
+  // the possibly-stale auth value. A loaded-null row IS known (a real "no saved
+  // row"), so the auth fallback is then legitimate. ProofSheet keeps the resolved
+  // string either way: its sheet only opens after a render with the row loaded in
+  // practice, and #78 pins auth as its explicit pre-load fallback.
+  const identityKnown = !playerLoading && (player !== null || playerConfirmed);
   const { data: event } = useEventDoc();
   // Codex P3 (PR #66): the pool only matters before a Board is dealt, so once
   // a Board exists this Player has no use for a live listener on every other
@@ -43,6 +135,7 @@ export default function Board() {
 
   const [celebrate, setCelebrate] = useState<null | 'bingo' | 'blackout'>(null);
   const [proofTarget, setProofTarget] = useState<Cell | null>(null);
+  const [tallyTarget, setTallyTarget] = useState<Cell | null>(null);
   const wasBingo = useRef(false);
   const wasBlackout = useRef(false);
   const initialized = useRef(false);
@@ -121,6 +214,7 @@ export default function Board() {
         nextMarked,
         claimMode,
         currentFirstBingoAt: knownFirstBingoAt(player, playerLoading, playerConfirmed),
+        displayName: identityKnown ? displayName : undefined,
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
@@ -188,6 +282,9 @@ export default function Board() {
                 ＋
               </button>
             )}
+            {c.marked && !c.free && c.itemId && (
+              <TallyBadge itemId={c.itemId} onOpen={() => setTallyTarget(c)} />
+            )}
           </div>
         ))}
       </div>
@@ -200,23 +297,28 @@ export default function Board() {
           uid={uid}
           // Attribute new proofs to the denormalized player identity, which the
           // profile editor keeps current (data/profile.ts writes users/{uid} +
-          // the player row). Sourcing straight from the Firebase Auth user would
-          // stamp the stale Google name/photo onto proofs a renamed player
-          // creates (#76). Auth stays the fallback only until the player row
-          // loads; a cache-only row is still the real saved identity, so —
-          // unlike the first-bingo write above — no server-confirmed gate is
-          // needed here. photoURL keys on whether `player` is loaded rather than
-          // `??`-chaining: PlayerDoc.photoURL is nullable, and a loaded row with
-          // a null photo means "no avatar" — that null must win over the stale
-          // auth photo, not be masked by it. displayName is always a set string
-          // on a loaded row, so its `??` fallback is fine.
-          displayName={player?.displayName ?? user.displayName ?? 'Anonymous'}
+          // the player row, #76). Sourcing straight from the Firebase Auth user
+          // would stamp the stale Google name onto proofs a renamed player
+          // creates. displayName reuses the single `displayName` resolved above,
+          // so a Proof and its Tally marker always carry the SAME name — one
+          // source, never two. photoURL keys on whether `player` is loaded rather
+          // than `??`-chaining: PlayerDoc.photoURL is nullable, and a loaded row
+          // with a null photo means "no avatar" — that null must win over the
+          // stale auth photo, not be masked by it.
+          displayName={displayName}
           photoURL={player ? player.photoURL : (user.photoURL ?? null)}
           cells={cells}
           cell={proofTarget}
           claimMode={claimMode}
           currentFirstBingoAt={player?.firstBingoAt ?? null}
           onClose={() => setProofTarget(null)}
+        />
+      )}
+      {tallyTarget && tallyTarget.itemId && (
+        <TallySheet
+          itemId={tallyTarget.itemId}
+          itemText={tallyTarget.text}
+          onClose={() => setTallyTarget(null)}
         />
       )}
     </>

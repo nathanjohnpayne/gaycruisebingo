@@ -1,6 +1,7 @@
 import { collection, doc, increment, runTransaction, updateDoc } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
 import { uploadProofMedia, deleteStoragePath } from './storage';
+import { markerDisplayName } from './attribution';
 import { completedLines, countMarked, isBlackout } from '../game/logic';
 import type { Cell, ClaimMode, ProofDoc, ProofType } from '../types';
 
@@ -9,6 +10,11 @@ const rawProof = (id: string) => doc(db, 'events', EVENT_ID, 'proofs', id);
 const rawClaims = () => collection(db, 'events', EVENT_ID, 'claims');
 const rawBoard = (uid: string) => doc(db, 'events', EVENT_ID, 'boards', uid);
 const rawPlayer = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
+// A per-Prompt Tally marker: events/{EVENT_ID}/tally/{itemId}/markers/{uid} (ADR
+// 0002) — the SAME path setMark's honor-Mark marker uses. Raw ref (converter-free),
+// matching the board/player/proof writes in these transactions and setMark's write.
+const rawMarker = (itemId: string, markerUid: string) =>
+  doc(db, 'events', EVENT_ID, 'tally', itemId, 'markers', markerUid);
 
 export interface AttachProofArgs {
   uid: string;
@@ -16,6 +22,10 @@ export interface AttachProofArgs {
   photoURL: string | null;
   cells: Cell[];
   cellIndex: number;
+  // The backing cell's Prompt id, for the per-Prompt Tally marker (ADR 0002).
+  // `null` for the free centre — which never opens ProofSheet, so this is
+  // defensive; a null itemId simply publishes no marker.
+  itemId: string | null;
   itemText: string;
   claimMode: ClaimMode;
   currentFirstBingoAt: number | null;
@@ -60,7 +70,7 @@ export interface AttachProofArgs {
  * drain has actually clobbered the projection.
  */
 export async function attachProof(args: AttachProofArgs): Promise<void> {
-  const { uid, displayName, photoURL, cells, cellIndex, itemText, claimMode, currentFirstBingoAt, proof } =
+  const { uid, displayName, photoURL, cells, cellIndex, itemId, itemText, claimMode, currentFirstBingoAt, proof } =
     args;
   const now = Date.now();
   const pRef = doc(rawProofs());
@@ -81,9 +91,15 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
   await runTransaction(db, async (tx) => {
     const boardRef = rawBoard(uid);
     const playerRef = rawPlayer(uid);
-    // Read board + player before any write (transactions require reads first).
+    const markerRef = itemId ? rawMarker(itemId, uid) : null;
+    // Read board + player before any write — a Firestore transaction requires ALL
+    // reads before the FIRST write. The existing Tally marker is read HERE with
+    // them (never down at its write below): attaching a Proof to an ALREADY-marked
+    // square must preserve the marker's original markedAt (Codex P2, PR #87), and
+    // that needs a read the transaction contract forbids once anything is written.
     const boardSnap = await tx.get(boardRef);
     const playerSnap = await tx.get(playerRef);
+    const markerSnap = markerRef ? await tx.get(markerRef) : null;
     const liveCells = (boardSnap.data()?.cells as Cell[] | undefined) ?? cells;
     const next: Cell[] = liveCells.map((c) =>
       c.index === cellIndex
@@ -121,6 +137,36 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
     });
     tx.set(boardRef, { cells: next }, { merge: true });
     tx.set(playerRef, { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
+    // Per-Prompt Tally (ADR 0002): a proofed Mark self-publishes the SAME attributed
+    // marker a bare honor Mark does (setMark) — EVERY Mark, proofed or not, tallies.
+    // The cell above is set marked:true in BOTH claim modes (proof_required →
+    // 'confirmed', admin_confirmed → 'pending'), so the marker publishes here under
+    // the SAME condition as the cell becoming marked — exactly as setMark writes it
+    // on `nextMarked` regardless of pending/confirmed status. The marker doc id IS
+    // the marker uid so firestore.rules keeps a forged attribution out; the name is
+    // bounded to the rule's non-empty ≤100 contract via `markerDisplayName` (shared
+    // with setMark), falling back to the live player row already read above. The free
+    // centre never opens ProofSheet (no itemId), but guard defensively. Because it
+    // rides this runTransaction, the marker is ONLINE-only like the proof itself (ADR
+    // 0006): a transaction rejects offline and never queues. The marked→unmarked
+    // symmetry is kept by every unmark path: setMark (bare unmark), deleteProof
+    // (below), and rejectClaim (src/data/admin.ts) when an admin rejects a pending
+    // claim — wherever a cell flips marked→unmarked, that cell's marker is deleted.
+    //
+    // A Proof attached to an ALREADY-marked square (the cell's proofbtn) must not
+    // re-stamp the marker: the who-list is chronological by FIRST mark, and
+    // overwriting markedAt with `now` would reorder it by proof-attach time (Codex
+    // P2, PR #87). Preserve an existing marker's original markedAt — refreshing
+    // uid/displayName is fine — and stamp `now` only when no marker exists yet (a
+    // fresh mark, or a legacy pre-Tally mark that never had one).
+    if (markerRef) {
+      const priorMarkedAt = (markerSnap?.data() as { markedAt?: unknown } | undefined)?.markedAt;
+      tx.set(markerRef, {
+        uid,
+        displayName: markerDisplayName(displayName, playerSnap.data()?.displayName),
+        markedAt: typeof priorMarkedAt === 'number' ? priorMarkedAt : now,
+      });
+    }
     if (pending) {
       tx.set(doc(rawClaims()), {
         uid,
@@ -177,7 +223,7 @@ export async function deleteProof(id: string, storagePath?: string | null): Prom
       // doc's own `uid`/`cellIndex`, never solely from `cells[i].proofId` — see
       // `ProofFeed`/`useProofFeed`.
       const backing = cells?.find((c) => c.index === proof.cellIndex);
-      if (cells && backing?.proofId === id) {
+      if (cells && backing && backing.proofId === id) {
         const playerSnap = await tx.get(playerRef);
         const existingFirst = (playerSnap.data()?.firstBingoAt as number | null | undefined) ?? null;
         const next: Cell[] = cells.map((c) =>
@@ -191,6 +237,11 @@ export async function deleteProof(id: string, storagePath?: string | null): Prom
         const firstBingoAt = bingoCount > 0 ? existingFirst : null;
         tx.set(boardRef, { cells: next }, { merge: true });
         tx.set(playerRef, { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
+        // Unmarking removes exactly that Player's per-Prompt Tally entry (ADR 0002),
+        // mirroring the cell flip — reached only when the cell is still backed by
+        // THIS proof (a genuine unmark), and only for a non-free Prompt. Same marker
+        // path setMark writes; the owner is the proof's uid.
+        if (backing.itemId) tx.delete(rawMarker(backing.itemId, proof.uid));
       }
     }
 

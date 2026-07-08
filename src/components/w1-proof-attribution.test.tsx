@@ -28,6 +28,11 @@ vi.mock('../hooks/useData', () => ({
   useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
+  // No cell in this fixture is marked-and-non-free, so Board never renders a
+  // TallyBadge and never CALLS useTally — but Board imports it, and a future
+  // fixture with a marked Square would hit an undefined hook from this factory
+  // mock before reaching any attribution assertion (Codex P2, PR #87 round 2).
+  useTally: () => ({ count: 0, markers: [], loading: false }),
 }));
 vi.mock('./ProofSheet', () => ({
   default: (props: { displayName: string; photoURL: string | null }) => {
