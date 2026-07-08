@@ -1,63 +1,58 @@
-# Gaycruisebingo
+# Gay Cruise Bingo
 
-**Reference implementation of the AI Agent Tooling Standard.**
+A live, multiplayer bingo web app (PWA) to play with your friends on a gay cruise. Sign in, get a randomized card of things that might happen on the sailing, and mark them off as they go down — with a shared leaderboard, party themes, PWA install, and printed cards as the offline fallback.
 
-The goal is to allow multiple AI coding agents and development tools to operate consistently without configuration drift. See [`BRAND.md`](BRAND.md) for the umbrella vocabulary (Playground, Cockpit, Tiebreaker, Checks) and naming history.
+**Live:** https://gaycruisebingo.web.app · **Setup & runbook:** [`docs/app/README.md`](docs/app/README.md)
 
-## For AI Agents
+## The game
 
-Read these files in order before taking any action:
+- A randomized 5×5 card dealt from a community-editable prompt pool; the free center square is always marked.
+- Honor-system marking with BINGO + blackout detection and a live leaderboard (client-sorted in Phase 0).
+- Google sign-in with an 18+ acknowledgment, eight party themes, GA4, and a static share image.
+- **Phase 1** (scaffolded, not yet deployed): a photo/audio proof system with a live feed, an admin moderation console with Cloud Vision flagging, verified-claim mode, App Check, and dynamic Playwright-rendered OG share images — designed to land as live updates during the sailing. See [`docs/app/phase-1-deploy.md`](docs/app/phase-1-deploy.md).
 
-1. `AGENTS.md` — behavioral instructions and operating rules
-2. `rules/repo_rules.md` — binding structural constraints
-3. Relevant `specs/` files — intended behavior
-4. `.ai_context.md` — supplemental system context
+## Stack
 
-## Code Review Policy
+Vite + React 18 + TypeScript (strict) · Firebase (Auth · Firestore · Storage · Hosting · Analytics) · `vite-plugin-pwa` · Cloud Functions + a Cloud Run OG renderer (Phase 1).
 
-Every change in this repository goes through the policy in `REVIEW_POLICY.md`, including a self-peer review by the authoring agent's reviewer identity and, for changes that cross the threshold or touch protected paths, automated external review via the OpenAI Codex GitHub app (Phase 4a) or a manual CLI fallback (Phase 4b).
+## Quick start
 
-## Key Files
+The full setup — env, seeding, deploy, and custom domain — lives in the **[app guide](docs/app/README.md)**. The short version:
 
-| File | Purpose |
+```bash
+cp .env.example .env.local     # fill from `firebase apps:sdkconfig WEB` — see app guide §2
+npm install
+npm run dev                    # local dev at http://localhost:5173
+npm test                       # game-logic unit tests
+npm run typecheck              # tsc --noEmit
+```
+
+Deploys go through `op-firebase-deploy` (1Password-backed service-account impersonation; never `firebase login` / `firebase deploy` directly) — see app guide §5 and [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
+## Documentation
+
+| Doc | What |
 |---|---|
-| `AGENTS.md` | Instructions for AI agents |
-| `DEPLOYMENT.md` | Build and deployment |
-| `CONTRIBUTING.md` | Development workflow |
-| `.ai_context.md` | High-level system context |
-| `BRAND.md` | Gaycruisebingo umbrella vocabulary (surfaces, reserved names, naming history) |
-| `gaycruisebingo/playground/index.html` | Gaycruisebingo Playground — tune the review policy and replay recent PRs against the draft |
-| `scripts/policy-sim.sh` | Bakes real `gh` PR data into a temp copy of the Gaycruisebingo Playground for local replay |
-| `.gaycruisebingo-sync.yml` | Propagation manifest for synced canonical, kit, and templated surfaces |
-| `.github/ISSUE_TEMPLATE/` | Synced issue-template kit; consumers may add product-specific templates |
-| `.github/pull_request_template.md` | Synced canonical pull-request template |
-| `ai_agent_tooling_standard.md` | Full repository standard (reference) |
+| [`docs/app/README.md`](docs/app/README.md) | App guide + deploy / seed / custom-domain runbook |
+| [`docs/app/phase-1-deploy.md`](docs/app/phase-1-deploy.md) | Phase-1 backend deploy (Functions, Cloud Run, App Check) |
+| [`docs/projects/gaycruisebingo/prds/gaycruisebingo.md`](docs/projects/gaycruisebingo/prds/gaycruisebingo.md) | Product requirements (PRD) |
+| [`docs/adr/`](docs/adr/) · [`docs/architecture/`](docs/architecture/) | Architecture decision records |
+| [`DEPLOYMENT.md`](DEPLOYMENT.md) | Deploy tooling + 1Password credential model |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md) | Contribution workflow · security policy |
 
-## Firebase Auth Template
+## Layout
 
-This template includes the canonical Google Cloud and Firebase helper scripts for this account:
-
-- `scripts/gcloud/gcloud` installs a local wrapper so ordinary `gcloud` commands can use 1Password-backed or explicit source credentials without a routine interactive `gcloud auth login`, while attributing quota to the resolved target project from explicit flags, the repo's `.firebaserc`, or the active `gcloud` config.
-- `scripts/firebase/op-firebase-setup` creates a per-project `firebase-deployer@{project-id}.iam.gserviceaccount.com`, grants deploy roles, and configures impersonation.
-- `scripts/firebase/op-firebase-deploy` resolves a source credential per the canonical precedence (project Firebase-vault SA key first, with shared 1Password ADC and impersonation as fallbacks) and runs `firebase deploy` with the target project stamped in as the quota project.
-
-The canonical source-credential precedence is documented in `DEPLOYMENT.md` § [Deploy credential precedence (canonical)](DEPLOYMENT.md#deploy-credential-precedence-canonical). The default day-to-day credential — interactive and CI — is the per-project Firebase-vault SA key (`op://Firebase/{project-id} — Firebase Deployer SA Key`), with the shared 1Password ADC as a fallback and an explicit `GOOGLE_APPLICATION_CREDENTIALS` as the highest-priority override.
-
-This 1Password-first deploy-auth model is intentional. Do not revert template-derived repos to deploy-key-on-disk or routine `firebase login`-based guidance unless a human explicitly requests that change.
-
-See `DEPLOYMENT.md` for the full bootstrap and deploy flow.
-
-## Directory Structure
-
-| Directory | Purpose |
+| Path | Purpose |
 |---|---|
-| `rules/` | Binding repository constraints |
-| `specs/` | Intended system behavior |
-| `plans/` | Execution and migration plans |
-| `gaycruisebingo/` | Gaycruisebingo Playground and reserved slots for future Gaycruisebingo surfaces (see `BRAND.md`) |
-| `tests/` | Automated validation |
-| `src/` | Application code |
-| `functions/` | Backend handlers |
-| `scripts/` | Build, CI, and automation tooling |
-| `docs/` | Architecture and design documentation |
-| `dist/` | Generated build artifacts (do not edit manually) |
+| `src/` | App code: game logic, Firebase init, auth, theme, hooks, components |
+| `functions/` | Phase-1 Cloud Functions (Vision moderation, authoritative stats, crawler share page) |
+| `cloud-run/og-renderer/` | Phase-1 Playwright service for dynamic OG share images |
+| `public/` | Static assets served verbatim (icons, manifest, `og-default.png`, service worker) |
+| `firestore.rules` · `storage.rules` · `firestore.indexes.json` | Security rules + indexes |
+| `scripts/` | Seed script + build / CI / deploy tooling |
+| `tests/`, `src/**/*.test.*` | Automated validation |
+| `docs/`, `specs/`, `plans/`, `rules/` | Docs, product specs, execution plans, and binding repo constraints |
+
+## Repo conventions
+
+Bootstrapped from the mergepath template, so it follows the **AI Agent Tooling Standard** — the goal is for multiple AI coding agents and dev tools to operate consistently without configuration drift. Agents should read, in order: [`AGENTS.md`](AGENTS.md) (operating rules) → [`rules/repo_rules.md`](rules/repo_rules.md) (structural constraints) → the relevant [`specs/`](specs/) → [`.ai_context.md`](.ai_context.md). Changes follow the [`REVIEW_POLICY.md`](REVIEW_POLICY.md) flow: branch + PR, a self-peer review by the authoring agent's reviewer identity, and automated external (Codex) review for changes above the size threshold or touching protected paths.
