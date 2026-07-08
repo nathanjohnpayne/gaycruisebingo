@@ -9,10 +9,9 @@ import type { BoardDoc, EventDoc, ItemDoc, PlayerDoc } from '../types';
 // `joinAndDeal` freeze-at-join semantics (deal once; re-joining never
 // re-deals; a thin pool never persists a blank Board) plus its join-time
 // preference for the saved users/{uid} identity over the raw Google one
-// (Codex P2 on PR #67, api half), the pool-recovery auto-retry on the
-// DealError surface — the panel App mounts INSTEAD of Board while dealError
-// is set (Codex P2 round 2) — and gating Board's pool listener to the
-// no-board state (Codex P3 on PR #66).
+// (Codex P2 on PR #67, api half, with validation before denormalizing), and
+// gating Board's pool listener to the no-board state (Codex P3 on PR #66).
+// Deal-failure recovery is manual by human decision (PR #66 tiebreak).
 
 // Hoisted so the vi.mock factories (Vitest lifts them above the imports) can
 // close over the same mutable fixtures and spies the test bodies drive.
@@ -96,7 +95,6 @@ vi.mock('../hooks/useData', () => ({
 
 // Real modules under test — imported after the mocks are declared.
 import Board from './Board';
-import { DealError } from './SignIn';
 import { joinAndDeal } from '../data/api';
 import { dealBoard, MIN_POOL, CENTER, type DealItem } from '../game/logic';
 import { FREE_TEXT, SEED_ITEMS } from '../data/seed';
@@ -243,82 +241,10 @@ describe('Board deal guard (ADR 0004)', () => {
   });
 });
 
-describe('DealError auto-retry after pool recovery (Codex P2, round 2)', () => {
-  // While dealError is set, App renders <DealError> INSTEAD of Board (the #61
-  // wiring), so a watcher inside Board is never mounted in the state it must
-  // observe. These tests render DealError alone — Board is absent throughout,
-  // exactly the app's state after a failed join — proving the watcher that
-  // fires the retry is genuinely active on the mounted surface.
-  const msg = 'pool below 24';
-
-  it('fires onRetry exactly once when the pool crosses MIN_POOL, then stays quiet on later snapshots', () => {
-    const onRetry = vi.fn();
-    H.data.items = activeItems(MIN_POOL - 1); // thin — matches the failed deal
-
-    const { rerender } = render(<DealError message={msg} onRetry={onRetry} retrying={false} />);
-    expect(onRetry).not.toHaveBeenCalled();
-    // The watcher subscribes to the pool itself (no Board mounted to do it).
-    expect(H.useItemsSpy).toHaveBeenCalled();
-    expect(H.useItemsSpy).not.toHaveBeenCalledWith(false);
-
-    // The pool recovers past the floor.
-    H.data.items = activeItems(MIN_POOL + 2);
-    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
-    expect(onRetry).toHaveBeenCalledTimes(1);
-
-    // Further snapshots at/above the threshold must not retry again — this is
-    // the "once per recovery, not per snapshot" guard against a retry loop.
-    H.data.items = activeItems(MIN_POOL + 5);
-    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
-    expect(onRetry).toHaveBeenCalledTimes(1);
-  });
-
-  it('does not fire while a retry is already in flight', () => {
-    const onRetry = vi.fn();
-    H.data.items = activeItems(MIN_POOL + 2); // healthy pool
-
-    render(<DealError message={msg} onRetry={onRetry} retrying={true} />);
-
-    expect(onRetry).not.toHaveBeenCalled();
-  });
-
-  it('does not fire while the pool stays below MIN_POOL', () => {
-    const onRetry = vi.fn();
-    H.data.items = activeItems(MIN_POOL - 3);
-
-    const { rerender } = render(<DealError message={msg} onRetry={onRetry} retrying={false} />);
-    // The pool grows but never crosses the floor (23 real + the Free Space
-    // item is 24 docs but still 23 toward the threshold).
-    H.data.items = [...activeItems(MIN_POOL - 1), mkItem('free', true)];
-    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
-
-    expect(onRetry).not.toHaveBeenCalled();
-  });
-
-  it('does not loop after a failed auto-retry; re-arms only on a fresh recovery', () => {
-    const onRetry = vi.fn();
-    H.data.items = activeItems(MIN_POOL - 1);
-    const { rerender } = render(<DealError message={msg} onRetry={onRetry} retrying={false} />);
-
-    H.data.items = activeItems(MIN_POOL); // crosses the floor exactly
-    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
-    expect(onRetry).toHaveBeenCalledTimes(1);
-
-    // The fired retry runs and fails — the error surface stays mounted with
-    // the pool still healthy. The latch must hold: no second auto-fire.
-    rerender(<DealError message={msg} onRetry={onRetry} retrying={true} />);
-    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
-    expect(onRetry).toHaveBeenCalledTimes(1);
-
-    // Only a genuine new recovery (pool dips below the floor, then crosses it
-    // again) re-arms the watcher.
-    H.data.items = activeItems(MIN_POOL - 1);
-    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
-    H.data.items = activeItems(MIN_POOL + 1);
-    rerender(<DealError message={msg} onRetry={onRetry} retrying={false} />);
-    expect(onRetry).toHaveBeenCalledTimes(2);
-  });
-});
+// The pool-recovery auto-retry watcher and its tests were removed by human
+// decision (PR #66 tiebreak): recovery is manual — the Retry button plus the
+// reachable /items Prompts tab. A context-level auto-retry is a tracked
+// follow-up, not review accretion on this ticket.
 
 describe('Board pool-listener gate (Codex P3)', () => {
   it('keeps the pool subscription enabled while there is no Board yet', () => {
@@ -428,6 +354,40 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
       displayName: 'Deck Daddy',
       photoURL: 'https://lh3.example/google.jpg', // live auth photo, not the stale copy
     });
+  });
+
+  it('ignores a malformed saved profile: non-string or over-cap names never reach the public row', async () => {
+    // users/{uid} is self-writable, so the saved fields must be validated
+    // before denormalizing (Codex P2, PR #66 round 3). A non-string
+    // displayName falls back to the auth name; same for a >100-char one.
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false }) // no Board yet
+      .mockResolvedValueOnce({
+        exists: () => true,
+        data: () => ({ displayName: 12345, photoURL: 777, customPhoto: true, createdAt: 0 }),
+      });
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN_WITH_PHOTO);
+
+    expect(playerWrite()).toMatchObject({
+      displayName: 'Sailor', // auth fallback — the numeric junk never flows through
+      photoURL: 'https://lh3.example/google.jpg', // non-string saved photo ignored
+    });
+  });
+
+  it('ignores a saved name longer than the 100-char cap', async () => {
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false })
+      .mockResolvedValueOnce({
+        exists: () => true,
+        data: () => ({ displayName: 'x'.repeat(101), createdAt: 0 }),
+      });
+    H.getDocs.mockResolvedValueOnce(healthyPoolDocs());
+
+    await joinAndDeal(SIGNED_IN);
+
+    expect(playerWrite()).toMatchObject({ displayName: 'Sailor' });
   });
 
   it('falls back to the auth identity when no users/{uid} profile exists', async () => {

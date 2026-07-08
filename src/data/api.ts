@@ -74,10 +74,20 @@ export async function joinAndDeal(u: User): Promise<void> {
     getDocs(query(itemsCol(), where('status', '==', 'active'))),
   ]);
   const profile = profileSnap?.exists() ? (profileSnap.data() as Partial<UserDoc>) : null;
-  const displayName = profile?.displayName || (u.displayName ?? 'Anonymous');
-  const photoURL = profile?.customPhoto
-    ? (profile.photoURL ?? u.photoURL ?? null)
-    : (u.photoURL ?? null);
+  // Validate before denormalizing (Codex P2 on PR #66 round 3): users/{uid} is
+  // self-writable, so a malformed saved profile must not flow into the public
+  // players row (nor fail the join against the rules' shape checks). A saved
+  // name counts only when it is a real, non-empty string within the 100-char
+  // cap the proof rules also use; a saved photo only when it is a string URL.
+  const savedName =
+    typeof profile?.displayName === 'string' &&
+    profile.displayName.trim().length > 0 &&
+    profile.displayName.length <= 100
+      ? profile.displayName
+      : null;
+  const savedPhoto = typeof profile?.photoURL === 'string' ? profile.photoURL : null;
+  const displayName = savedName ?? (u.displayName ?? 'Anonymous');
+  const photoURL = profile?.customPhoto ? (savedPhoto ?? u.photoURL ?? null) : (u.photoURL ?? null);
 
   const pool: DealItem[] = snap.docs
     .map((d) => d.data())

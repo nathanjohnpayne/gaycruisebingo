@@ -1,7 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useItems } from '../hooks/useData';
-import { MIN_POOL } from '../game/logic';
 
 export default function SignIn() {
   const { signIn } = useAuth();
@@ -52,31 +50,15 @@ export function DealError({
   onRetry: () => void;
   retrying: boolean;
 }) {
-  // Pool-recovery auto-retry (Codex P2, PR #66 round 2). While a deal error is
-  // up, App renders THIS panel instead of Board, so a watcher inside Board is
-  // never mounted in the state it must observe — after a failed thin-pool
-  // join, nothing would re-attempt the deal when Prompts get added. The
-  // watcher therefore lives here, on the surface that IS mounted for exactly
-  // the lifetime of the error: subscribe to the pool, and once the active
-  // non-free pool crosses MIN_POOL with no retry in flight, re-invoke the deal
-  // (App wires `onRetry` to AuthContext's retryDeal). Edge-triggered: the ref
-  // resets while the pool is below the floor and latches once fired, so a
-  // recovery retries once (not once per snapshot) and a failed auto-retry
-  // doesn't loop — the manual Retry button stays as the fallback.
-  const { items } = useItems();
-  const activePool = items.filter((i) => !i.isFreeSpace).length;
-  const retryFiredRef = useRef(false);
-  useEffect(() => {
-    if (activePool < MIN_POOL) {
-      retryFiredRef.current = false;
-      return;
-    }
-    if (!retrying && !retryFiredRef.current) {
-      retryFiredRef.current = true;
-      onRetry();
-    }
-  }, [activePool, retrying, onRetry]);
-
+  // Recovery is deliberately MANUAL: the Retry button re-invokes the deal, and
+  // the /items Prompts tab stays reachable (the shell keeps rendering) so a
+  // Player or Admin can add Prompts, then come back and retry. An automatic
+  // pool-recovery watcher was prototyped here during review and removed by
+  // human decision (PR #66 tiebreak): three review rounds showed it needs a
+  // deliberate design (misfires on non-pool deal failures because the pool
+  // subscription starts empty; unmounts when the Player navigates to /items —
+  // the exact recovery path; wants a context-level home). Tracked as a
+  // follow-up rather than accreted onto this ticket.
   return (
     <div className="signin" role="alert">
       <h1>GAY CRUISE BINGO</h1>
