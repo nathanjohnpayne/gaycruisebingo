@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Firestore } from 'firebase/firestore';
 
@@ -34,5 +35,16 @@ describe('src/firebase.ts (ADR 0006 offline persistence)', () => {
     // getFirestore(app) would leave this undefined; 'memory' would be a
     // regression to a queue that cannot survive a reload.
     expect(configuredCacheKind(db)).toBe('persistent');
+  });
+
+  it('pins the multi-tab manager in the production config (source guard)', () => {
+    // The SDK exposes no runtime handle on the configured tab manager (the
+    // cache object carries only kind + opaque component providers), so the
+    // multi-tab requirement is pinned at the source level: swapping to
+    // persistentSingleTabManager or dropping the option fails this test.
+    // (cwd-relative: under jsdom import.meta.url is http-scheme, and Vitest
+    // runs with the project root as cwd.)
+    const source = readFileSync('src/firebase.ts', 'utf8');
+    expect(source).toMatch(/tabManager:\s*persistentMultipleTabManager\(\)/);
   });
 });

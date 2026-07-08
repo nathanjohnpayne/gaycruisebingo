@@ -51,7 +51,10 @@ const EVENT_ID = 'med-2026';
 const PROJECT_ID = 'demo-offline-persistence';
 const EMAIL = 'player@offline.test';
 const PASSWORD = 'passw0rd!';
-const MARKED_CELL = 12;
+// A normal (non-free) Square: index 12 is the Free Space center, which the
+// real Board UI refuses to toggle, so marking it would be an unreachable
+// scenario — Codex round-1 finding on this suite.
+const MARKED_CELL = 7;
 // Reusing this exact name for the post-"reload" client is what re-opens the
 // same IndexedDB persistence store.
 const TAB_APP_NAME = 'gcb-offline-tab';
