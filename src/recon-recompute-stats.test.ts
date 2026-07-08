@@ -36,8 +36,13 @@ describe('recon: recomputeStats removed as anti-cheat (ADR 0001)', () => {
 
 describe('recon: phase-1-deploy.md drops the stat-locking guidance', () => {
   it('phase-1-deploy.md drops the players/{uid} stat-locking hardening block', () => {
-    expect(deployGuide).not.toMatch(/recomputeStats/);
+    // The guide may NAME recomputeStats once — the operator note explaining
+    // that the next deploy implicitly deletes an already-deployed copy (Codex
+    // finding on PR #65) — but it must never present it as guidance to keep,
+    // recreate, or harden around.
     expect(deployGuide).not.toMatch(/Optional hardening/);
+    expect(deployGuide).not.toMatch(/lock(ing|ed)? player-stat writes to admins/i);
+    expect(deployGuide).toMatch(/do not recreate the function/);
     // the removed rule snippet locked players/{uid} writes to profile-only fields
     expect(deployGuide).not.toMatch(/match \/players\/\{uid\}/);
   });

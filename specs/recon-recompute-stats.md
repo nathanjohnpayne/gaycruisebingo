@@ -24,7 +24,7 @@ The removal is surgical — the ADR-0004 Phase-1 moderation Function is untouche
 
 The "Optional hardening" block that advised tightening the `players/{uid}` rule to profile-fields-only (to make stats server-owned) is removed, because there is no server recompute to justify it and the lock would break the client stat writes.
 
-- **Given** a future operator reading the deploy guide **when** they reach the storage & rules step **then** there is no `players/{uid}` stat-locking rule block, no "Optional hardening" block, and no `recomputeStats` reference. (Test: "phase-1-deploy.md drops the players/{uid} stat-locking hardening block".)
+- **Given** a future operator reading the deploy guide **when** they reach the storage & rules step **then** there is no `players/{uid}` stat-locking rule block, no "Optional hardening" block, and no guidance to keep, recreate, or harden around `recomputeStats` — the one permitted mention is the operator note that the next functions deploy implicitly deletes an already-deployed copy ("do not recreate the function"). (Test: "phase-1-deploy.md drops the players/{uid} stat-locking hardening block".)
 
 ## `phase-1-deploy.md` documents Players as self-writable by design
 
