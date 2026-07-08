@@ -67,8 +67,9 @@ function contrastRatio(hexA: string, hexB: string): number {
 const cssPath = join(dirname(fileURLToPath(import.meta.url)), 'themes.css');
 const themeBlocks = parseThemeBlocks(readFileSync(cssPath, 'utf-8'));
 
-// Foreground/background pairs actually rendered by src/index.css — see
-// specs/w1-themes.md § WCAG AA contrast contract for the call-site inventory.
+// Foreground/background token pairs src/index.css assigns as literal color
+// values — see specs/w1-themes.md § WCAG AA contrast contract for the
+// call-site inventory.
 //
 // Every one of --ink/--dim/--primary/--secondary/--accent is used as a real
 // text fill somewhere in src/index.css (not merely a border or glow), so
@@ -79,6 +80,16 @@ const themeBlocks = parseThemeBlocks(readFileSync(cssPath, 'utf-8'));
 // binding constraint for the variable either way. Border/glow-only call
 // sites that reuse these same pairs (.btn.primary / .chip.active / .cell.free
 // borders, etc.) are covered for free since they share the checked value.
+//
+// Known bound (see specs/w1-themes.md § WCAG AA contrast contract, "Known
+// bound"): the primary/bg and secondary/bg checks below are against the flat
+// --bg token only. body's real background (src/index.css) layers
+// primary/secondary-tinted radial-gradient stops over --bg, so the
+// composited backdrop behind .brand b / the B-I-N-G-O header and .count b
+// can be more saturated than --bg near a gradient's center — verified to
+// drop as low as 3.15:1 for summer-white's --primary. This suite
+// deliberately does not chase that surface here; see the spec for why and
+// for the tracked follow-up.
 const TEXT_PAIRS: [fg: string, bg: string][] = [
   ['ink', 'bg'], // body text
   ['ink', 'panel'], // .row .name, .input text
