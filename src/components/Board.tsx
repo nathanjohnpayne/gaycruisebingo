@@ -59,9 +59,9 @@ export default function Board() {
     // board or a deal in flight, so keep the neutral state until both resolve —
     // this also avoids flashing the guard at a returning Player whose already
     // dealt board is mid-fetch when the pool has since gone thin. (The
-    // pool-recovery auto-retry does NOT live here: while dealError is set App
-    // renders <DealError> instead of Board, so its watcher — see SignIn.tsx —
-    // is the surface that is actually mounted in that state.)
+    // Pool-recovery auto-retry is deliberately deferred to #70 — recovery is
+    // manual (the DealError panel's Retry). This empty state only explains the
+    // shortage; it must not promise automatic dealing.)
     const activePool = items.filter((i) => !i.isFreeSpace);
     if (!boardLoading && !poolLoading && activePool.length < MIN_POOL) {
       return (
@@ -69,7 +69,7 @@ export default function Board() {
           <p>Not enough prompts to deal a full card yet.</p>
           <p>
             A card needs {MIN_POOL} prompts; the pool has {activePool.length}. Add prompts from the
-            Prompts tab and your card deals automatically.
+            Prompts tab, then retry dealing from the Card tab.
           </p>
         </div>
       );
