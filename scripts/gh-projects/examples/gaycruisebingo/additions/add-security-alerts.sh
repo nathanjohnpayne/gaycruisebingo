@@ -43,6 +43,7 @@ add_child(){ # slug title
 
 add_child "sec-xss-proofsheet"          "Security: fix DOM XSS in the Proof sheet (CodeQL js/xss-through-dom)"
 add_child "sec-clear-text-logging-seed" "Security: stop clear-text logging of ADMIN_UID in the seed script (CodeQL js/clear-text-logging)"
+add_child "sec-xss-proofsheet-2"        "Security: fix the second DOM XSS in the Proof sheet (CodeQL js/xss-through-dom #3)"
 
 echo "== done. slug→num map: $MAP =="
 cat "$MAP"
