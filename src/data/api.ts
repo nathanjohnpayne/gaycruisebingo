@@ -82,7 +82,19 @@ export function seedFromUid(uid: string): number {
   return h >>> 0;
 }
 
-/** Create the global user profile on first sign-in. */
+/**
+ * Create the global user profile on first sign-in — create-only, it must NEVER
+ * overwrite an existing row. The transaction's read of `users/{uid}` is part of
+ * the commit's optimistic-concurrency check: the exists-check no-ops when the doc
+ * is already there, and if a user-initiated save (data/profile.ts) writes the doc
+ * AFTER this read saw it absent, the stale read makes Firestore re-run the whole
+ * function, which then re-reads the now-existing doc and no-ops. That is what
+ * closes #77 — AuthContext publishes the User (and the app renders, so a fast
+ * profile save can race) before this settles, so the create must not clobber a
+ * save that landed first. Do NOT regress to a non-merge `setDoc`: that was the
+ * original bug — it replaced the whole row with the Google-sourced defaults.
+ * Pinned by src/data/auth-profile-race.test.ts.
+ */
 export async function ensureUserProfile(u: User): Promise<void> {
   const ref = rawUser(u.uid);
   await runTransaction(db, async (tx) => {

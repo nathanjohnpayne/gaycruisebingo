@@ -7,6 +7,12 @@ import { track } from '../analytics';
 interface AuthContextValue {
   user: User | null;
   loading: boolean;
+  // False from the moment a signed-in User is published until THAT User's
+  // ensureUserProfile bootstrap settles (#77). Unlike `loading` — which covers
+  // only the first auth callback — it re-arms on every auth change (popup
+  // sign-in, account switch), so a profile-writing consumer can gate on it and
+  // never act on `user` before the users/{uid} bootstrap has settled.
+  profileReady: boolean;
   dealError: string | null; // Player-worded deal failure, or null once the Board dealt.
   dealing: boolean; // True while a join/deal (initial or retry) is in flight.
   signIn: () => Promise<void>;
@@ -17,6 +23,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue>({
   user: null,
   loading: true,
+  profileReady: false,
   dealError: null,
   dealing: false,
   signIn: async () => {},
@@ -39,17 +46,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [dealError, setDealError] = useState<string | null>(null);
   const [dealing, setDealing] = useState(false);
+  // False from the moment a signed-in User is published until THAT User's
+  // ensureUserProfile bootstrap settles (#77) — see the interface note.
+  const [profileReady, setProfileReady] = useState(false);
   // Monotonic id of the latest deal attempt; runDeal captures it and re-checks
   // before each setState so a superseded attempt's late result is dropped (P2).
   const dealAttemptRef = useRef(0);
+  // Monotonic id of the latest auth change, captured before the awaited
+  // ensureUserProfile so a retired account's slower bootstrap can't flip
+  // profileReady true for the account that already replaced it. A SEPARATE ref
+  // from dealAttemptRef on purpose: runDeal bumps dealAttemptRef mid-sign-in,
+  // which must not read as the profile bootstrap being superseded.
+  const profileAttemptRef = useRef(0);
 
   useEffect(() => {
     return onAuthStateChanged(auth, async (u) => {
       // Auth changed: retire the previous account's in-flight deal and clear its
       // stale state so a late result can't clobber the incoming User (P2).
+      const profileAttempt = (profileAttemptRef.current += 1);
       dealAttemptRef.current += 1;
       setDealError(null);
       setDealing(false);
+      // The incoming User's profile bootstrap has not settled yet (#77).
+      setProfileReady(false);
       setUser(u);
       if (u) {
         try {
@@ -58,6 +77,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           /* profile write can retry later */
         }
       }
+      // Only the latest auth change settles profileReady: a superseded callback
+      // (a newer sign-in / sign-out already ran) leaves it to that newer one,
+      // which owns the signal now — mirrors the deal's stale-attempt guard.
+      if (profileAttemptRef.current === profileAttempt) setProfileReady(true);
       setLoading(false);
     });
   }, []);
@@ -102,7 +125,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ user, loading, dealError, dealing, signIn, signOutUser, retryDeal }}
+      value={{ user, loading, profileReady, dealError, dealing, signIn, signOutUser, retryDeal }}
     >
       {children}
     </AuthContext.Provider>
