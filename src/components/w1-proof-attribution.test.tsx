@@ -87,4 +87,15 @@ describe('Board proof attribution (#76)', () => {
 
     expect(H.proofProps).toEqual({ displayName: 'Sailor', photoURL: GOOGLE_PHOTO });
   });
+
+  it('honors a loaded player with no saved avatar (null) over the stale auth photo', () => {
+    // A resolved player row whose photoURL is genuinely null means "no avatar",
+    // and must win over the Google auth photo — the `player ? … : …` guard (not
+    // a `??` chain) is what keeps a null from falling back to user.photoURL.
+    H.player = { displayName: 'Deck Daddy', photoURL: null } as unknown as PlayerDoc;
+
+    openProof();
+
+    expect(H.proofProps).toEqual({ displayName: 'Deck Daddy', photoURL: null });
+  });
 });
