@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useEventDoc, useItems, useTally } from '../hooks/useData';
+import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard } from '../hooks/useData';
 import { setMark, resolveDisplayName } from '../data/api';
+import { broadcastBingo, broadcastBlackout, broadcastFirstBingo } from '../data/moments';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
-import type { Cell, ClaimMode } from '../types';
+import type { Cell, ClaimMode, PlayerDoc } from '../types';
 
 /**
  * The per-Prompt Tally count badge on a marked Square (ADR 0002). Subscribes to
@@ -127,6 +128,11 @@ export default function Board() {
   // practice, and #78 pins auth as its explicit pre-load fallback.
   const identityKnown = !playerLoading && (player !== null || playerConfirmed);
   const { data: event } = useEventDoc();
+  // The known-players roster — the SAME data the Leaderboard's First-to-BINGO pin
+  // reads (useLeaderboard) — used to derive whether THIS Player is first to BINGO
+  // when broadcasting the ceremonial Moment (ADR 0001). Read into a ref below so
+  // the edge effect stays keyed on `[cells]`.
+  const { players } = useLeaderboard();
   // Codex P3 (PR #66): the pool only matters before a Board is dealt, so once
   // a Board exists this Player has no use for a live listener on every other
   // Player's prompt add/report. Gate the subscription to the no-board state.
@@ -142,6 +148,26 @@ export default function Board() {
 
   const cells: Cell[] = board?.cells ?? [];
 
+  // The latest identity + roster for Moment broadcasts, stored in a ref so the
+  // edge effect can READ it without DEPENDING on it — the effect must fire only
+  // on a genuine board transition (`[cells]`), never when the resolved name or
+  // the roster merely re-renders. Written every render (store-latest-value ref).
+  // photoURL mirrors ProofSheet: a loaded player row's null photo wins over the
+  // stale auth photo. The name is the SAME resolved public identity the Tally +
+  // Proof carry; moments.ts bounds it to the rules' ≤100 contract.
+  const feedCtx = useRef<{
+    uid: string | undefined;
+    displayName: string;
+    photoURL: string | null;
+    players: PlayerDoc[];
+  }>({ uid: undefined, displayName: 'Anonymous', photoURL: null, players: [] });
+  feedCtx.current = {
+    uid,
+    displayName,
+    photoURL: player ? player.photoURL : (user?.photoURL ?? null),
+    players,
+  };
+
   useEffect(() => {
     if (!cells.length) return;
     const bingo = hasBingo(cells);
@@ -152,11 +178,38 @@ export default function Board() {
       initialized.current = true;
       return;
     }
-    if (black && !wasBlackout.current) {
+    const bingoEdge = bingo && !wasBingo.current;
+    const blackoutEdge = black && !wasBlackout.current;
+    // Celebration UI (unchanged): a Blackout takes visual priority over a plain
+    // BINGO, and only one animation shows at a time.
+    if (blackoutEdge) {
       setCelebrate('blackout');
       track('blackout');
-    } else if (bingo && !wasBingo.current) {
+    } else if (bingoEdge) {
       setCelebrate('bingo');
+    }
+    // Broadcast the matching Moment to the Feed on the SAME edges (ADR 0002),
+    // fire-and-forget and offline-queueable (src/data/moments.ts). Each fires on
+    // its OWN transition — independent of the celebration's visual priority — and
+    // once per Player (the deterministic Moment doc id makes the once-only
+    // structural: a re-fire on a lose→regain, a reload, or another tab hits the
+    // admin-only `update` rule and is denied). On a real 5×5 board the first-line
+    // (BINGO) edge always precedes the full-card (Blackout) edge, so a Blackout
+    // never suppresses the earlier first-BINGO broadcast. A bare Mark that
+    // completes no line crosses NO edge here, so it broadcasts nothing.
+    const { uid: cUid, displayName: cName, photoURL: cPhoto, players: roster } = feedCtx.current;
+    if (cUid) {
+      const actor = { uid: cUid, displayName: cName, photoURL: cPhoto };
+      if (bingoEdge) {
+        broadcastBingo(actor);
+        // First to BINGO is ceremonial + self-reported (ADR 0001): claim it only
+        // when, as far as this client's known-players view shows, no OTHER Player
+        // has bingoed yet. The race (two clients briefly both believing they are
+        // first) resolves to one Moment per Event via the singleton doc id.
+        const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
+        if (!othersBingoed) broadcastFirstBingo(actor);
+      }
+      if (blackoutEdge) broadcastBlackout(actor);
     }
     wasBingo.current = bingo;
     wasBlackout.current = black;

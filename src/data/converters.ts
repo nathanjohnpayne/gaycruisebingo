@@ -13,6 +13,7 @@ import type {
   ProofDoc,
   ClaimDoc,
   TallyEntry,
+  MomentDoc,
 } from '../types';
 
 function passthrough<T>(): FirestoreDataConverter<T> {
@@ -70,6 +71,19 @@ export const claimConverter: FirestoreDataConverter<ClaimDoc> = {
   toFirestore: (data) => data as DocumentData,
   fromFirestore: (snap: QueryDocumentSnapshot) => ({
     ...(snap.data() as Omit<ClaimDoc, 'id'>),
+    id: snap.id,
+  }),
+};
+
+// A Feed Moment (ADR 0002): a broadcast BINGO / Blackout / First-to-BINGO beat,
+// read from events/{EVENT_ID}/moments/{momentId}. Like proofs/claims it carries
+// its own doc id (the Feed keys on it), so pin `id` to `snap.id`. The write side
+// (src/data/moments.ts) never stores media or a proofId — a Moment marks *that*
+// something happened, not what it looked like.
+export const momentConverter: FirestoreDataConverter<MomentDoc> = {
+  toFirestore: (data) => data as DocumentData,
+  fromFirestore: (snap: QueryDocumentSnapshot) => ({
+    ...(snap.data() as Omit<MomentDoc, 'id'>),
     id: snap.id,
   }),
 };

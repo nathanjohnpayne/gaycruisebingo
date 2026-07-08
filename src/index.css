@@ -512,6 +512,37 @@ a {
   font-style: italic;
 }
 
+/* ---------- feed moments ---------- */
+/* A Moment is a celebratory broadcast, not evidence (ADR 0002): no media, a
+   festive tint that reads distinctly from a Proof card in the merged Feed. */
+.moment {
+  background:
+    linear-gradient(
+      120deg,
+      color-mix(in srgb, var(--primary) 14%, transparent),
+      color-mix(in srgb, var(--secondary) 12%, transparent)
+    ),
+    var(--panel);
+  border: 1px solid color-mix(in srgb, var(--primary) 45%, var(--border));
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+.moment .moment-line {
+  font-weight: 700;
+  color: var(--accent);
+}
+.moment .moment-icon {
+  font-size: 22px;
+  line-height: 1;
+  flex: none;
+}
+/* First to BINGO is the headline beat — give it the leader glow the Leaderboard
+   pin uses. */
+.moment-first_bingo {
+  border-color: var(--accent);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
 /* ---------- admin ---------- */
 .admin-section {
   margin: 8px 0 18px;

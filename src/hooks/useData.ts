@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
-import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol } from '../data/paths';
+import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol } from '../data/paths';
 import { sortPlayers } from '../game/logic';
-import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry } from '../types';
+import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, MomentDoc } from '../types';
 
 // Both subs subscribe with includeMetadataChanges so the cache→server
 // transition is always observable: with the ADR 0006 persistent cache, a cold
@@ -144,6 +144,58 @@ export function useProofFeed(max = 60) {
   );
   const proofs = data.sort((a, b) => b.createdAt - a.createdAt).slice(0, max);
   return { proofs, loading };
+}
+
+/**
+ * The Feed's Moments (ADR 0002): the broadcast BINGO / Blackout / First-to-BINGO
+ * beats. Subscribes through the SAME `useColSub` latch pattern as the proof
+ * stream (`{ includeMetadataChanges: true }`, `hasServerData` latched on the
+ * first server-backed snapshot), newest-first, capped to `max` so the Feed stays
+ * light on ship wifi. Moments are public-read; unlike proofs there is no status
+ * filter — a Moment has no lifecycle, it just happened.
+ */
+export function useMoments(max = 60) {
+  const { data, loading } = useColSub<MomentDoc>(momentsCol(), 'moments');
+  const moments = data.sort((a, b) => b.createdAt - a.createdAt).slice(0, max);
+  return { moments, loading };
+}
+
+/**
+ * One Feed entry — a Proof or a Moment — tagged so the renderer (ProofFeed) can
+ * branch, with `createdAt` hoisted so the merge sorts one flat stream. A Proof
+ * keeps its report/delete affordances; a Moment renders as a celebratory line
+ * with no media (ADR 0002).
+ */
+export type FeedEntry =
+  | { feedKind: 'proof'; createdAt: number; proof: ProofDoc }
+  | { feedKind: 'moment'; createdAt: number; moment: MomentDoc };
+
+/**
+ * Merge Proofs and Moments into ONE newest-first stream (ADR 0002), capped to
+ * `max` — the honest Feed. Pure (no Firestore, no clock) so the interleave/cap is
+ * unit-testable and shared as the single source of Feed order. Each input is
+ * already its kind's newest-`max`, so the merged newest-`max` is exact. A bare
+ * Mark writes neither a Proof nor a Moment, so it contributes nothing here.
+ */
+export function mergeFeed(proofs: ProofDoc[], moments: MomentDoc[], max = 60): FeedEntry[] {
+  const entries: FeedEntry[] = [
+    ...proofs.map((proof) => ({ feedKind: 'proof' as const, createdAt: proof.createdAt, proof })),
+    ...moments.map((moment) => ({ feedKind: 'moment' as const, createdAt: moment.createdAt, moment })),
+  ];
+  return entries.sort((a, b) => b.createdAt - a.createdAt).slice(0, max);
+}
+
+/**
+ * The combined Feed (ADR 0002): Proofs + Moments merged newest-first, capped.
+ * Composes `useProofFeed` + `useMoments` (each with its own latched subscription)
+ * and folds them through `mergeFeed`; it does not open a subscription of its own.
+ * `loading` stays true until BOTH streams have delivered a first snapshot so the
+ * empty state never flashes before one half arrives.
+ */
+export function useFeed(max = 60) {
+  const { proofs, loading: proofsLoading } = useProofFeed(max);
+  const { moments, loading: momentsLoading } = useMoments(max);
+  return { entries: mergeFeed(proofs, moments, max), loading: proofsLoading || momentsLoading };
 }
 
 export function usePendingClaims() {
