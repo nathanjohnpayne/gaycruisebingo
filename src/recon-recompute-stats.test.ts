@@ -22,9 +22,12 @@ describe('recon: recomputeStats removed as anti-cheat (ADR 0001)', () => {
   });
 
   it('drops the imports that only served recomputeStats', () => {
-    // onDocumentWritten was the trigger; ./logic supplied completedLines /
-    // countMarked / isBlackout / Cell. Both existed only for the removed export.
-    expect(functionsIndex).not.toMatch(/onDocumentWritten/);
+    // ./logic supplied completedLines / countMarked / isBlackout / Cell and
+    // existed only for the removed export (the file itself is deleted).
+    // Deliberately NOT banning onDocumentWritten wholesale: #43
+    // (w4-phase1-functions) legitimately adds document triggers for the
+    // server-authoritative hide — the guard is that no trigger recomputes
+    // player stats, which the recomputeStats assertions above pin.
     expect(functionsIndex).not.toMatch(/from '\.\/logic'/);
   });
 

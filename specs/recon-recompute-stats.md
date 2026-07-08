@@ -12,7 +12,7 @@ ADR 0001 (the honor system) makes Marks client-authoritative and `players/{uid}`
 `functions/src/index.ts` no longer exports the `recomputeStats` trigger, and the imports that existed only to serve it are dropped too, so the functions build (`tsc`) stays green with no orphaned symbols.
 
 - **Given** ADR 0001 supersedes recompute-as-anti-cheat **when** `functions/src/index.ts` is read **then** it contains no `recomputeStats` reference at all. (Test: "functions/src/index.ts no longer defines recomputeStats".)
-- **Given** `recomputeStats` was the sole consumer of the Firestore document-write trigger and the board-logic helpers **when** it is removed **then** the now-orphaned `onDocumentWritten` import and the `./logic` import (`completedLines` / `countMarked` / `isBlackout` / `Cell`) are gone. (Test: "drops the imports that only served recomputeStats".)
+- **Given** `recomputeStats` was the sole consumer of the board-logic helpers **when** it is removed **then** the `./logic` import (`completedLines` / `countMarked` / `isBlackout` / `Cell`) is gone and the file itself is deleted. The guard deliberately does not ban `onDocumentWritten` wholesale — #43 (w4-phase1-functions) legitimately adds document triggers for the server-authoritative hide; the pinned invariant is that nothing recomputes player stats. (Test: "drops the imports that only served recomputeStats".)
 
 ## `moderateProof` is kept intact
 
