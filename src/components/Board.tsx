@@ -198,8 +198,15 @@ export default function Board() {
       {proofTarget && user && (
         <ProofSheet
           uid={uid}
-          displayName={user.displayName ?? 'Anonymous'}
-          photoURL={user.photoURL ?? null}
+          // Attribute new proofs to the denormalized player identity, which the
+          // profile editor keeps current (data/profile.ts writes users/{uid} +
+          // the player row). Sourcing straight from the Firebase Auth user would
+          // stamp the stale Google name/photo onto proofs a renamed player
+          // creates (#76). Auth stays the fallback until the player row loads;
+          // a cache-only name is still the real saved identity, so — unlike the
+          // first-bingo write above — no server-confirmed gate is needed here.
+          displayName={player?.displayName ?? user.displayName ?? 'Anonymous'}
+          photoURL={player?.photoURL ?? user.photoURL ?? null}
           cells={cells}
           cell={proofTarget}
           claimMode={claimMode}

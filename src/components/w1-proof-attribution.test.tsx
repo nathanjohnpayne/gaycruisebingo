@@ -1,0 +1,90 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, fireEvent } from '@testing-library/react';
+import type { User } from 'firebase/auth';
+import type { BoardDoc, Cell, EventDoc, PlayerDoc } from '../types';
+
+// Regression for #76: a Board renders ProofSheet with the identity a NEW proof
+// is attributed to. It must prefer the denormalized player row (which the
+// profile editor keeps current) over the Firebase Auth user, so a renamed
+// player's proofs carry their saved name/avatar, not the stale Google one.
+// ProofSheet passes displayName/photoURL straight into attachProof and renders
+// neither, so we stub it to capture the props Board handed it.
+
+const H = vi.hoisted(() => ({
+  authUser: null as User | null,
+  player: null as PlayerDoc | null,
+  board: null as BoardDoc | null,
+  event: null as EventDoc | null,
+  proofProps: null as { displayName: string; photoURL: string | null } | null,
+}));
+
+vi.mock('../firebase', () => ({ db: {}, storage: {}, auth: {}, EVENT_ID: 'test-event', analytics: null }));
+vi.mock('../analytics', () => ({ track: vi.fn() }));
+vi.mock('../auth/AuthContext', () => ({
+  useAuth: () => ({ user: H.authUser, loading: false }),
+}));
+vi.mock('../hooks/useData', () => ({
+  useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
+  useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
+  useEventDoc: () => ({ data: H.event, loading: false }),
+  useItems: () => ({ items: [], loading: false, hasServerData: true }),
+}));
+vi.mock('./ProofSheet', () => ({
+  default: (props: { displayName: string; photoURL: string | null }) => {
+    H.proofProps = { displayName: props.displayName, photoURL: props.photoURL };
+    return <div data-testid="proof-sheet" />;
+  },
+}));
+
+import Board from './Board';
+
+const GOOGLE_PHOTO = 'https://lh3.example/google.jpg';
+const CUSTOM_PHOTO = 'https://cdn.example/custom.jpg';
+
+// 25 cells; the centre (12) is the marked Free Space, everything else an
+// unmarked non-free Square. Cell 0 is the one we click to raise a proof.
+function dealtCells(): Cell[] {
+  return Array.from({ length: 25 }, (_, index) => ({
+    index,
+    text: index === 12 ? 'Free Space' : `Prompt ${index}`,
+    marked: index === 12,
+    free: index === 12,
+  })) as Cell[];
+}
+
+beforeEach(() => {
+  H.authUser = { uid: 'sailor-1', displayName: 'Sailor', photoURL: GOOGLE_PHOTO } as unknown as User;
+  H.player = null;
+  H.board = { uid: 'sailor-1', seed: 1, createdAt: 0, cells: dealtCells() } as BoardDoc;
+  // proof_required so clicking an unmarked Square raises ProofSheet instead of
+  // marking it directly (honor mode would never open the sheet).
+  H.event = { claimMode: 'proof_required' } as EventDoc;
+  H.proofProps = null;
+});
+
+function openProof() {
+  const { container } = render(<Board />);
+  const square = container.querySelectorAll('.grid .cell')[0] as HTMLElement;
+  fireEvent.click(square);
+}
+
+describe('Board proof attribution (#76)', () => {
+  it('attributes a new proof to the saved player identity, not the Google auth profile', () => {
+    H.player = {
+      displayName: 'Deck Daddy',
+      photoURL: CUSTOM_PHOTO,
+    } as unknown as PlayerDoc;
+
+    openProof();
+
+    expect(H.proofProps).toEqual({ displayName: 'Deck Daddy', photoURL: CUSTOM_PHOTO });
+  });
+
+  it('falls back to the auth identity until the player row has loaded', () => {
+    H.player = null; // subscription not yet resolved
+
+    openProof();
+
+    expect(H.proofProps).toEqual({ displayName: 'Sailor', photoURL: GOOGLE_PHOTO });
+  });
+});
