@@ -5,14 +5,16 @@ Feature: Google is the only login (PRD non-goal: no non-Google login), and the c
 ## Contract
 
 - `src/auth/AuthContext.tsx` owns the post-sign-in deal. It runs `joinAndDeal` when the User becomes known, fires `track('join_event')` on success, and exposes `dealError: string | null`, `dealing: boolean`, and `retryDeal(): void`. `signIn` opens the Google popup and fires `track('login', { method: 'google' })`; Google remains the only provider.
-- A raw deal failure is translated to Player-facing copy: the pool-below-24 guard yields a "prompt pool is below the 24 a card needs" message; any other failure yields a connection-worded fallback. Both are recoverable via `retryDeal`, which re-invokes `joinAndDeal` for the current User with no full reload and clears `dealError` on success.
+- Each deal attempt is tied to the latest launch. A late result from a superseded attempt — the initial deal is still in flight when the Player signs out and a different Google account signs in — is dropped, not applied, so it can never clobber the current User's board or error surface; auth changes also clear any stale `dealError`/`dealing` so the incoming User never flashes the previous account's surface.
+- A raw deal failure is translated to Player-facing copy: the pool-below-24 guard yields a "prompt pool is below the 24 a card needs" message; any other failure yields a connection-worded fallback. Both are recoverable via `retryDeal`, which re-invokes `joinAndDeal` for the current User with no full reload. The prior error stays visible while the retry is in flight (the surface is never unmounted mid-retry, so the Player is never dropped onto a blank Board); `dealError` is replaced only when the new attempt settles — cleared on success, updated on a fresh failure.
 - `src/App.tsx` no longer swallows the deal error. Once a User is signed in, a non-null `dealError` renders `<DealError>` in place of the app shell / Board, so the failure is never hidden behind a blank Board.
 - `src/components/SignIn.tsx` exports `DealError`, the retry surface: it shows the message with `role="alert"` and a Retry button that calls `onRetry`, disabled and relabeled while `retrying`.
 
 ## Acceptance criteria
 
 - Given the active Prompt pool has fewer than 24 non-free Prompts, when a User signs in and `joinAndDeal` throws, then the Player sees a retry surface explaining the deal failed (not a blank Board).
-- Given a signed-in User whose deal failed, when the Player taps Retry, then `joinAndDeal` is re-invoked without a full reload and the surface clears once a deal succeeds.
+- Given a signed-in User whose deal failed, when the Player taps Retry, then `joinAndDeal` is re-invoked without a full reload, the retry surface stays mounted (disabled `Dealing…` button) while the retry is in flight, and the surface clears once a deal succeeds.
+- Given a deal is in flight when the Player signs out and a different Google account signs in and deals, when the original deal settles late, then its result is ignored and the new account's board / error surface is untouched.
 - Given a deal failure that is not the pool guard, when it is surfaced, then the Player sees the connection-worded fallback copy.
 - Given sign-in succeeds, when the User authenticates, then `track('login', { method: 'google' })` has fired.
 - Given a healthy pool, when the User signs in, then the Board is dealt and `track('join_event')` fires with no error surfaced.
@@ -24,6 +26,7 @@ Feature: Google is the only login (PRD non-goal: no non-Google login), and the c
 - A pool-below-24 `joinAndDeal` rejection surfaces the "24 a card needs" message; tapping Retry re-invokes `joinAndDeal` (a second call), clears the error, and fires `track('join_event')` — covering the healthy-deal path on the retry.
 - A non-guard rejection surfaces the connection-worded fallback.
 - `signIn` fires `track('login', { method: 'google' })`.
+- A deal left in flight across a sign-out and a sign-in as a different account is dropped when it rejects late (the stale-attempt guard), leaving the new account's surface untouched; and a retry keeps the error surface mounted (dealing) until it settles rather than flashing a blank Board.
 
 `src/w1-auth-google.test.tsx` (Vitest RTL-jsdom) covers the App wiring and the retry affordance:
 

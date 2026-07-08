@@ -31,14 +31,23 @@ const FAKE_USER = { uid: 'sailor-1', displayName: 'Sailor', photoURL: null };
 let emitAuth: (u: unknown) => unknown = () => {};
 
 function Harness() {
-  const { dealError, retryDeal, signIn } = useAuth();
+  const { dealError, dealing, retryDeal, signIn } = useAuth();
   return (
     <div>
       {dealError ? <p role="alert">{dealError}</p> : null}
+      <span data-testid="dealing">{dealing ? 'dealing' : 'idle'}</span>
       <button onClick={() => retryDeal()}>retry</button>
       <button onClick={() => void signIn()}>signin</button>
     </div>
   );
+}
+
+// A promise whose settlement the test drives, to hold a deal in flight (P2/P3).
+function deferred<T>() {
+  let settle!: (v: T) => void;
+  let fail!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => ((settle = res), (fail = rej)));
+  return { promise, settle, fail };
 }
 
 const mount = () => render(<AuthProvider><Harness /></AuthProvider>);
@@ -89,5 +98,47 @@ describe('AuthContext deal-error hardening', () => {
     await userEvent.click(screen.getByText('signin'));
     await waitFor(() => expect(mocks.track).toHaveBeenCalledWith('login', { method: 'google' }));
     expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AuthContext stale-attempt + retry hardening', () => {
+  it('drops a stale deal rejection from a signed-out account after a new account has dealt (P2)', async () => {
+    const stale = deferred<void>();
+    mocks.joinAndDeal.mockReturnValueOnce(stale.promise).mockResolvedValueOnce(undefined);
+    mount();
+    await act(async () => void (await emitAuth(FAKE_USER))); // account A: deal left in flight
+    await act(async () => void (await emitAuth(null))); // player signs out
+    await act(async () => void (await emitAuth({ uid: 'sailor-2', displayName: 'Other', photoURL: null }))); // account B deals
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    // Account A's late rejection must be ignored, not clobber account B's board.
+    await act(async () => {
+      stale.fail(new Error('network request failed'));
+      await stale.promise.catch(() => {});
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the retry surface mounted until the retry settles, never flashing a blank board (P3)', async () => {
+    const retry = deferred<void>();
+    mocks.joinAndDeal
+      .mockRejectedValueOnce(new Error('network request failed')) // initial deal fails
+      .mockReturnValueOnce(retry.promise); // retry stays in flight
+    mount();
+    await signInUser();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/connection/i);
+
+    await userEvent.click(screen.getByText('retry'));
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(2));
+    // Mid-retry: the error surface stays mounted (dealing), never a blank board.
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.getByTestId('dealing')).toHaveTextContent('dealing');
+
+    await act(async () => {
+      retry.settle();
+      await retry.promise;
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument(); // clears only on settle
   });
 });
