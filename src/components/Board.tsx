@@ -8,11 +8,32 @@ import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode } from '../types';
 
+/**
+ * The caller's first-bingo state for a Mark is KNOWN only when the player row
+ * genuinely resolved. While the subscription is still loading, OR when a
+ * cache-only snapshot settled as "absent" without server confirmation (an
+ * offline reload can cache the board but not the player row, and Firestore
+ * reports an uncached doc as non-existent), the prior value is UNKNOWN —
+ * `undefined` — so setMark omits the preserve-vs-stamp write instead of
+ * treating a phantom `null` as a real "no first bingo yet" and re-stamping
+ * over the server's earlier value (Codex P2, PR #75 rounds 2 + 4). A CACHED
+ * row is real knowledge either way; a loaded `null` is a known none.
+ * Exported for the unit test in `src/data/w1-board-mark-win.test.ts`.
+ */
+export function knownFirstBingoAt(
+  player: { firstBingoAt?: number | null } | null,
+  loading: boolean,
+  serverConfirmed: boolean,
+): number | null | undefined {
+  if (loading || (player === null && !serverConfirmed)) return undefined;
+  return player?.firstBingoAt ?? null;
+}
+
 export default function Board() {
   const { user } = useAuth();
   const uid = user?.uid;
   const { data: board, loading: boardLoading, hasServerData: boardConfirmed } = useBoard(uid);
-  const { data: player } = useMyPlayer(uid);
+  const { data: player, loading: playerLoading, hasServerData: playerConfirmed } = useMyPlayer(uid);
   const { data: event } = useEventDoc();
   // Codex P3 (PR #66): the pool only matters before a Board is dealt, so once
   // a Board exists this Player has no use for a live listener on every other
@@ -99,12 +120,17 @@ export default function Board() {
         index: c.index,
         nextMarked,
         claimMode,
-        currentFirstBingoAt: player?.firstBingoAt ?? null,
+        currentFirstBingoAt: knownFirstBingoAt(player, playerLoading, playerConfirmed),
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
     } catch {
-      /* offline — the live listener reconciles when back online */
+      /* Neither an offline Mark nor an online write REJECTION lands here:
+         setMark's commit is fire-and-forget. Offline it queues durably in the
+         persistent cache (ADR 0006, #20) and syncs on reconnect; an online
+         rejection is logged inside setMark and self-corrects when Firestore
+         rolls the write back and the live listener re-renders without the Mark.
+         This catch only guards a synchronous throw from setMark itself. */
     }
   };
 

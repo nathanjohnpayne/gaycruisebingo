@@ -67,6 +67,7 @@ vi.mock('firebase/firestore', () => {
     query: (...args: unknown[]) => ({ query: args }),
     where: (...args: unknown[]) => ({ where: args }),
     getDoc: H.getDoc,
+    getDocFromCache: vi.fn(),
     getDocs: H.getDocs,
     writeBatch: () => ({ set: H.batchSet, commit: H.batchCommit }),
     addDoc: vi.fn(),
@@ -99,7 +100,7 @@ vi.mock('../hooks/useData', () => ({
     loading: H.data.boardLoading,
     hasServerData: H.data.boardServer,
   }),
-  useMyPlayer: () => ({ data: H.data.player, loading: false }),
+  useMyPlayer: () => ({ data: H.data.player, loading: false, hasServerData: true }),
   useEventDoc: () => ({ data: H.data.event, loading: false }),
   useItems: (enabled?: boolean) => {
     H.useItemsSpy(enabled);
