@@ -1,13 +1,11 @@
 import { setGlobalOptions } from 'firebase-functions/v2';
 import { onObjectFinalized } from 'firebase-functions/v2/storage';
-import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { onRequest } from 'firebase-functions/v2/https';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import vision from '@google-cloud/vision';
 import sharp from 'sharp';
-import { completedLines, countMarked, isBlackout, type Cell } from './logic';
 
 initializeApp();
 setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
@@ -57,31 +55,6 @@ export const moderateProof = onObjectFinalized({ memory: '512MiB' }, async (even
   } catch {
     /* Vision optional; reporting still covers moderation */
   }
-});
-
-/**
- * Authoritative, server-side stat recomputation whenever a board changes.
- * Defense-in-depth over the Phase 0 client-written stats. (Full anti-cheat would
- * also validate individual mark transitions; out of scope for this event.)
- * Once deployed, you can lock player-stat writes to admins-only in firestore.rules.
- */
-export const recomputeStats = onDocumentWritten('events/{eventId}/boards/{uid}', async (event) => {
-  const after = event.data?.after;
-  if (!after || !after.exists) return;
-  const cells = ((after.data() as { cells?: Cell[] }).cells ?? []) as Cell[];
-  const bingoCount = completedLines(cells).length;
-  const squares = countMarked(cells);
-  const blackout = isBlackout(cells);
-
-  const { eventId, uid } = event.params as { eventId: string; uid: string };
-  const playerRef = db.doc(`events/${eventId}/players/${uid}`);
-  const snap = await playerRef.get();
-  const existingFirst = (snap.data()?.firstBingoAt as number | null) ?? null;
-  // Clear the stamp when the recomputed board has no bingo, so removing the last
-  // bingo stops the leaderboard from crediting a non-winner; keep it otherwise.
-  const firstBingoAt = bingoCount > 0 ? (existingFirst ?? Date.now()) : null;
-
-  await playerRef.set({ bingoCount, squaresMarked: squares, blackout, firstBingoAt }, { merge: true });
 });
 
 /** Escape user-supplied text before interpolating it into the HTML response. */

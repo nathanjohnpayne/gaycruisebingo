@@ -8,6 +8,8 @@ import type { ThemeId } from './types';
 import App from './App';
 import ConsentNotice from './components/ConsentNotice';
 import ProfileEditor from './components/ProfileEditor';
+import AcceptableUse from './components/AcceptableUse';
+import InstallPrompt from './components/InstallPrompt';
 import './theme/themes.css';
 import './index.css';
 
@@ -30,6 +32,11 @@ function ThemedApp() {
       <App />
       {/* Global profile editor — App.tsx/Nav.tsx are frozen, so it mounts here. */}
       <ProfileEditor />
+      {/* Acceptable-use / community-guidelines affordance in the app chrome. It
+          self-gates on the signed-in User (ADR 0005 — behind the auth wall, no
+          public page) and is mounted here rather than in the frozen tab route
+          table. */}
+      <AcceptableUse />
     </ThemeProvider>
   );
 }
@@ -40,6 +47,10 @@ createRoot(rootEl).render(
         see #17) so the 18+ analytics disclosure shows even on the signed-out
         SignIn screen, since GA4's automatic events can fire before sign-in. */}
     <ConsentNotice />
+    {/* Same stable mount point (#17, #30): offers installation even on the
+        signed-out SignIn screen, since a Player may install before ever
+        signing in. */}
+    <InstallPrompt />
     <AuthProvider>
       <BrowserRouter>
         <ThemedApp />
