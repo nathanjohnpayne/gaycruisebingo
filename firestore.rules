@@ -57,8 +57,9 @@ service cloud.firestore {
         allow delete: if isAdmin(eventId);
       }
 
-      // Membership + denormalized stats. Phase 0: client writes its own stats
-      // (honor-system game). Phase 1 moves these behind Cloud Functions.
+      // Membership + denormalized stats. The client writes its own stats in
+      // every phase — honor-system by design (ADR 0001); the old plan to move
+      // these behind Cloud Functions was dropped with recomputeStats (#40).
       match /players/{uid} {
         allow read: if signedIn();
         allow create, update: if isOwner(uid) || isAdmin(eventId);
