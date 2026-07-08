@@ -7,11 +7,18 @@ import Avatar from './Avatar';
 import { updateAvatar, updateDisplayName } from '../data/profile';
 import ProfileEditor from './ProfileEditor';
 
-const { docMock, updateDocMock } = vi.hoisted(() => ({
+const { docMock, setDocMock, updateDocMock } = vi.hoisted(() => ({
   docMock: vi.fn((_db: unknown, ...segments: string[]) => ({ path: segments.join('/') })),
-  updateDocMock: vi.fn(async () => undefined),
+  setDocMock: vi.fn(async () => undefined),
+  // Mirrors real Firestore: updateDoc rejects when the target document doesn't
+  // exist — the exact failure data/profile.ts now avoids by writing via a merge
+  // setDoc instead. Kept mocked (rather than removed) so a regression back to
+  // updateDoc fails this suite loudly instead of silently.
+  updateDocMock: vi.fn(async () => {
+    throw Object.assign(new Error('No document to update'), { code: 'not-found' });
+  }),
 }));
-vi.mock('firebase/firestore', () => ({ doc: docMock, updateDoc: updateDocMock }));
+vi.mock('firebase/firestore', () => ({ doc: docMock, setDoc: setDocMock, updateDoc: updateDocMock }));
 
 const { refMock, uploadBytesMock } = vi.hoisted(() => ({
   refMock: vi.fn((_storage: unknown, path: string) => ({ path })),
@@ -35,6 +42,7 @@ vi.mock('../hooks/useData', () => ({ useMyUser: () => userDocState.current }));
 
 function resetMocks() {
   docMock.mockClear();
+  setDocMock.mockClear();
   updateDocMock.mockClear();
   refMock.mockClear();
   uploadBytesMock.mockClear();
@@ -59,10 +67,22 @@ describe('data/profile.ts — persists to users/{uid}, reusing storage.ts', () =
 
   it('trims and persists the display name, no-ops on blank', async () => {
     await updateDisplayName('u1', '  New Name  ');
-    expect(updateDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { displayName: 'New Name' });
+    expect(setDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { displayName: 'New Name' }, { merge: true });
 
-    updateDocMock.mockClear();
+    setDocMock.mockClear();
     await updateDisplayName('u1', '   ');
+    expect(setDocMock).not.toHaveBeenCalled();
+  });
+
+  // Covers the fix for the Codex P2 finding on profile.ts:15 — updateDoc fails
+  // when users/{uid} doesn't exist, which can happen because ensureUserProfile's
+  // create (data/api.ts) has its failure swallowed on the auth side
+  // (auth/AuthContext.tsx). The mocked updateDoc above rejects exactly like real
+  // Firestore does for a missing document, so this test both proves the save
+  // succeeds today and would fail loudly if a regression reintroduced updateDoc.
+  it('creates users/{uid} via a merge write when the profile doc is missing (ensureUserProfile create failed)', async () => {
+    await expect(updateDisplayName('u1', 'New Name')).resolves.toBeUndefined();
+    expect(setDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { displayName: 'New Name' }, { merge: true });
     expect(updateDocMock).not.toHaveBeenCalled();
   });
 
@@ -70,7 +90,7 @@ describe('data/profile.ts — persists to users/{uid}, reusing storage.ts', () =
     const url = await updateAvatar('u1', new Blob(['x'], { type: 'image/png' }));
     expect(refMock).toHaveBeenCalledWith({}, 'avatars/u1.jpg');
     expect(uploadBytesMock).toHaveBeenCalledWith({ path: 'avatars/u1.jpg' }, expect.any(Blob), { contentType: 'image/jpeg' });
-    expect(updateDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { photoURL: url, customPhoto: true });
+    expect(setDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { photoURL: url, customPhoto: true }, { merge: true });
     expect(url).toBe('https://cdn.example/avatars/u1.jpg');
   });
 });
@@ -102,8 +122,50 @@ describe('ProfileEditor', () => {
     await user.click(screen.getByRole('button', { name: 'Save name' }));
 
     // saveName is async (awaits updateDisplayName before closing) — wait for it.
-    await waitFor(() => expect(updateDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { displayName: 'New Name' }));
+    await waitFor(() =>
+      expect(setDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { displayName: 'New Name' }, { merge: true }),
+    );
     await waitFor(() => expect(screen.queryByText('Edit profile')).not.toBeInTheDocument());
+  });
+
+  // Codex P2 finding on ProfileEditor.tsx:32 — the editor used to gate only on
+  // auth loading, so it could open (and, on an immediate Save, persist) the
+  // Google-name fallback while the live users/{uid} subscription was still in
+  // flight, clobbering a saved custom displayName. Simulates that delay: auth
+  // resolves first, the profile snapshot resolves later with a name that
+  // differs from the Google name, and proves the saved name always wins.
+  it('waits for the live profile snapshot before rendering, so a delayed load never clobbers a saved name', async () => {
+    const user = userEvent.setup();
+    authState.current = { user: { uid: 'u1', displayName: 'Google Name', photoURL: googlePhoto }, loading: false };
+    userDocState.current = { data: null, loading: true }; // profile subscription still in flight
+    const { rerender } = render(<ProfileEditor />);
+    expect(screen.queryByRole('button', { name: 'Edit profile' })).not.toBeInTheDocument();
+
+    // The live users/{uid} snapshot arrives with a saved name that differs
+    // from the Google name.
+    userDocState.current = {
+      data: { displayName: 'Saved Custom Name', photoURL: null, customPhoto: false, createdAt: 0 },
+      loading: false,
+    };
+    rerender(<ProfileEditor />);
+
+    await user.click(screen.getByRole('button', { name: 'Edit profile' }));
+    expect(screen.getByLabelText('Display name')).toHaveValue('Saved Custom Name');
+
+    await user.click(screen.getByRole('button', { name: 'Save name' }));
+    await waitFor(() =>
+      expect(setDocMock).toHaveBeenCalledWith(
+        { path: 'users/u1' },
+        { displayName: 'Saved Custom Name' },
+        { merge: true },
+      ),
+    );
+    // Never persisted the stale Google-name fallback while the profile was loading.
+    expect(setDocMock).not.toHaveBeenCalledWith(
+      { path: 'users/u1' },
+      { displayName: 'Google Name' },
+      { merge: true },
+    );
   });
 
   it('uploading a photo persists it, and the live update flips the previewed Avatar to it', async () => {
@@ -116,7 +178,11 @@ describe('ProfileEditor', () => {
     await user.upload(screen.getByLabelText('Upload avatar'), new File(['x'], 'me.png', { type: 'image/png' }));
     // onAvatarFile is async (awaits updateAvatar) — wait for it to settle.
     await waitFor(() =>
-      expect(updateDocMock).toHaveBeenCalledWith({ path: 'users/u1' }, { photoURL: customUrl, customPhoto: true }),
+      expect(setDocMock).toHaveBeenCalledWith(
+        { path: 'users/u1' },
+        { photoURL: customUrl, customPhoto: true },
+        { merge: true },
+      ),
     );
 
     // Simulate the live users/{uid} subscription delivering the new doc.

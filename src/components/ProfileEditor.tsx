@@ -20,14 +20,20 @@ const fabStyle = {
  */
 export default function ProfileEditor() {
   const { user, loading } = useAuth();
-  const { data: profile } = useMyUser(user?.uid);
+  const { data: profile, loading: profileLoading } = useMyUser(user?.uid);
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  if (loading || !user) return null;
+  // Wait for the live users/{uid} snapshot, not just auth, before rendering the
+  // trigger: openEditor() below seeds `name` from `currentName`, and while the
+  // profile subscription is still loading, `profile` is null so that fallback
+  // reads `user.displayName` (the Google name). Rendering earlier risked
+  // seeding — and, on an immediate Save, persisting — the Google name over a
+  // saved custom displayName that simply hadn't arrived yet.
+  if (loading || !user || profileLoading) return null;
 
   const currentName = profile?.displayName ?? user.displayName ?? 'Anonymous';
   // customPhoto flags whether photoURL currently holds a custom upload (vs.

@@ -11,6 +11,7 @@ A User's global profile (`users/{uid}`) is attributed and public everywhere the 
 
 - **Given** a signed-in User types a new display name **when** `updateDisplayName(uid, name)` is called **then** it trims the name and writes `users/{uid}.displayName`; a blank/whitespace-only name is a no-op so a cleared input can't wipe out the existing name. (Test: "trims and persists the display name, no-ops on blank".)
 - **Given** a signed-in User picks a photo **when** `updateAvatar(uid, blob)` is called **then** it calls the existing `uploadAvatar` (`storage.ts:42`, unmodified) — no new upload path — which still downscales and writes exactly `avatars/{uid}.jpg` with `image/jpeg`, and then writes both `users/{uid}.photoURL` (the returned URL) and `users/{uid}.customPhoto = true`. (Test: "reuses uploadAvatar (avatars/{uid}.jpg, image/jpeg) then flips customPhoto + photoURL".)
+- **Given** `users/{uid}` does not exist yet — `ensureUserProfile`'s create-on-sign-in write (`data/api.ts`) can fail, and that failure is swallowed in `auth/AuthContext.tsx` — **when** `updateDisplayName` or `updateAvatar` is called **then** the write still succeeds and creates the document, because both use a merge `setDoc` rather than `updateDoc` (which requires the document to already exist). (Test: "creates users/{uid} via a merge write when the profile doc is missing (ensureUserProfile create failed)".)
 
 ## `Avatar` prefers a custom photo over the passed `src`
 
@@ -22,7 +23,8 @@ Mounted globally at `src/main.tsx` (a stable, non-frozen mount point — `App.ts
 
 - **Given** the signed-in User's live profile (`useMyUser`) **when** the editor opens **then** the name field is pre-filled with the current display name, and saving an edit calls `updateDisplayName` with the trimmed value and closes the sheet. (Test: "opens pre-filled with the live display name and saves an edit to users/{uid}".)
 - **Given** the User picks a file from the hidden file input **when** the change fires **then** `updateAvatar` is called and persists it; once the live `users/{uid}` subscription reports `customPhoto: true`, the previewed Avatar switches from the signed-in User's Google photo to the custom one. (Test: "uploading a photo persists it, and the live update flips the previewed Avatar to it".)
-- **Given** no signed-in User (or auth still resolving) **when** `ProfileEditor` renders **then** it renders nothing. (Test: "renders nothing while signed out".)
+- **Given** no signed-in User, auth still resolving, or the live `users/{uid}` profile subscription (`useMyUser`) still loading **when** `ProfileEditor` renders **then** it renders nothing — the trigger only appears once a User is signed in and the profile snapshot has resolved. (Test: "renders nothing while signed out".)
+- **Given** the profile subscription resolves after auth does, with a saved `displayName` that differs from the signed-in User's Google name **when** the trigger becomes available and the User opens and saves without further edits **then** the name field seeds from — and Save persists — the saved profile name, never the Google-name fallback; the editor cannot open early enough (while `useMyUser` is still loading) to clobber a saved name with the stale Google one. (Test: "waits for the live profile snapshot before rendering, so a delayed load never clobbers a saved name".)
 
 ## Out of scope
 
