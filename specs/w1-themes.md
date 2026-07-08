@@ -11,14 +11,18 @@ Feature: eight cosmetic party-inspired Themes a Player can switch between, appli
 
 ## WCAG AA contrast contract
 
-Every `[data-theme]` block meets WCAG 2.1 AA across the foreground/background pairs actually rendered by `src/index.css`:
+Every `[data-theme]` block meets WCAG 2.1 AA across the foreground/background pairs actually rendered by `src/index.css`. Every one of `--ink`/`--dim`/`--primary`/`--secondary`/`--accent` is used as a real text fill somewhere in `src/index.css` — not only as a border or glow — so every pair meets the 4.5:1 normal-text minimum (1.4.3 Contrast (Minimum)); a looser 3:1 non-text/UI-component floor (1.4.11) does not apply to any of them because none is text-free:
 
-- Text pairs (`--ink`/`--dim` against the three surfaces they render on — `--bg`, `--panel`, `--cell`) meet the 4.5:1 normal-text minimum (1.4.3 Contrast (Minimum)).
-- Control pairs (`--primary`/`--secondary` against `--bg`, and `--accent` against `--cell` — the button borders, active-chip glow, and free-cell accent) meet the 3:1 non-text/UI-component minimum (1.4.11 Non-text Contrast).
+- `--ink`/`--dim` against the surfaces they render on: `--ink` on `--bg`, `--panel`, `--cell`; `--dim` on `--bg`, `--panel`.
+- `--primary` on `--bg` (`.brand b`; `.bingo-head span`, the B-I-N-G-O header) and on `--panel` (`.row .rank`, leaderboard rank numbers).
+- `--secondary` on `--bg` (`.count b`).
+- `--accent` on `--cell` (`.cell.free` text) and on `--panel` (`.badge`).
+
+Border- and glow-only call sites that reuse these same custom-property values (`.btn.primary` / `.chip.active` / `.seg-btn.on` borders, `.btn` border, `.cell.free` / `.row.leader` borders) are covered for free since they share the checked fg/bg pair — no separate weaker check is needed.
 
 ## Acceptance criteria
 
-- **Given** any of the 8 Themes, **when** it is applied, **then** every text and control pair above meets its WCAG AA threshold.
+- **Given** any of the 8 Themes, **when** it is applied, **then** every pair above meets the WCAG AA 4.5:1 threshold.
 - **Given** a Player picks a Theme, **when** they reload, **then** the pick persists (`localStorage['gcb.theme']`) and is not overridden by the event/player default.
 - **Given** a Player switches Themes, **when** they tap a chip, **then** `document.documentElement.dataset.theme` reflects the new Theme well under the 5s PRD budget.
 - **Given** no saved pick and no resolved event/player default yet, **when** the app first mounts, **then** Neon Playground (`neon-playground`) is the active Theme.
@@ -28,6 +32,6 @@ Every `[data-theme]` block meets WCAG 2.1 AA across the foreground/background pa
 
 `src/theme/w1-themes.test.tsx` (Vitest, jsdom project):
 
-- Parses `themes.css` at test time (no hand-transcribed color table) and asserts every `ThemeId` has a `[data-theme]` block, then computes the WCAG relative-luminance contrast ratio for each text/control pair above per Theme.
+- Parses `themes.css` at test time (no hand-transcribed color table) and asserts every `ThemeId` has a `[data-theme]` block, then computes the WCAG relative-luminance contrast ratio for each pair above per Theme.
 - Exercises `ThemeProvider`/`useTheme` through a minimal probe component: an explicit pick persists to `gcb.theme` and applies to `<html data-theme>` within the 5s budget; the initial default is never auto-saved; an async-arriving `defaultTheme` prop change (simulating the Firestore event/player default resolving after mount) is adopted when no pick was saved, and is ignored once a pick exists.
 - Asserts `THEMES[0].id === 'neon-playground'` and that no `label` matches an Atlantis mark or a trademark glyph.

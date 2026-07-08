@@ -69,21 +69,29 @@ const themeBlocks = parseThemeBlocks(readFileSync(cssPath, 'utf-8'));
 
 // Foreground/background pairs actually rendered by src/index.css — see
 // specs/w1-themes.md § WCAG AA contrast contract for the call-site inventory.
+//
+// Every one of --ink/--dim/--primary/--secondary/--accent is used as a real
+// text fill somewhere in src/index.css (not merely a border or glow), so
+// every pair below is held to the 4.5:1 normal-text floor (WCAG 1.4.3)
+// rather than the looser 3:1 non-text/UI-component floor (1.4.11):
+// --primary and --accent each drive a border/box-shadow *and* a text fill
+// with the identical custom-property value, so the stricter bar is the
+// binding constraint for the variable either way. Border/glow-only call
+// sites that reuse these same pairs (.btn.primary / .chip.active / .cell.free
+// borders, etc.) are covered for free since they share the checked value.
 const TEXT_PAIRS: [fg: string, bg: string][] = [
   ['ink', 'bg'], // body text
   ['ink', 'panel'], // .row .name, .input text
   ['ink', 'cell'], // .cell text
   ['dim', 'bg'], // .muted, .count, .ack, inactive .tab
   ['dim', 'panel'], // .row .sub
+  ['primary', 'bg'], // .brand b; .bingo-head span (the B-I-N-G-O header — normal text below ~400px viewports)
+  ['primary', 'panel'], // .row .rank (leaderboard rank numbers, 22px normal weight)
+  ['secondary', 'bg'], // .count b
+  ['accent', 'cell'], // .cell.free text ("FREE")
+  ['accent', 'panel'], // .badge ("1st BINGO")
 ];
 const TEXT_MIN = 4.5; // WCAG 1.4.3 Contrast (Minimum), normal text
-
-const CONTROL_PAIRS: [fg: string, bg: string][] = [
-  ['primary', 'bg'], // .brand b, .btn.primary / .chip.active border+glow
-  ['secondary', 'bg'], // .btn border
-  ['accent', 'cell'], // .cell.free border + text
-];
-const CONTROL_MIN = 3.0; // WCAG 1.4.11 Non-text Contrast, UI components
 
 describe('themes.css — WCAG AA contrast (specs/w1-themes.md)', () => {
   it('defines a [data-theme] block for every ThemeId', () => {
@@ -96,14 +104,8 @@ describe('themes.css — WCAG AA contrast (specs/w1-themes.md)', () => {
     const vars = themeBlocks[t.id] ?? {};
 
     for (const [fg, bg] of TEXT_PAIRS) {
-      it(`${t.id}: text --${fg} on --${bg} meets ${TEXT_MIN}:1`, () => {
+      it(`${t.id}: --${fg} on --${bg} meets ${TEXT_MIN}:1`, () => {
         expect(contrastRatio(vars[fg], vars[bg])).toBeGreaterThanOrEqual(TEXT_MIN);
-      });
-    }
-
-    for (const [fg, bg] of CONTROL_PAIRS) {
-      it(`${t.id}: control --${fg} on --${bg} meets ${CONTROL_MIN}:1`, () => {
-        expect(contrastRatio(vars[fg], vars[bg])).toBeGreaterThanOrEqual(CONTROL_MIN);
       });
     }
   }
