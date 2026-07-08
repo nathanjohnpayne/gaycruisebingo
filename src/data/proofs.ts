@@ -50,9 +50,14 @@ export interface AttachProofArgs {
  * The proof→cell link is authoritative in the proof DOC (`uid` + `cellIndex`),
  * which this writes; `cells[i].proofId` is only a denormalized projection a
  * queued bare-Mark drain can wholesale-replace and drop
- * (specs/w1-board-mark-win.md § cross-writer). The Feed renders from the proof
- * doc, so a dropped `proofId` never removes a Proof from the Feed; `deleteProof`
- * resolves the backing cell by `cellIndex` for the same reason.
+ * (specs/w1-board-mark-win.md § cross-writer). This is what discharges that
+ * constraint for proof-capture: the Feed (`ProofFeed`/`useProofFeed`) renders
+ * every entry from this doc, never from `cells`, so a dropped `proofId` never
+ * removes a Proof from the Feed. `deleteProof` looks the backing cell up by
+ * this same `cellIndex` rather than scanning for `proofId` — equivalent to the
+ * scan given `proofId`'s uniqueness, so this is a clarity change, not a new
+ * protection; see its own comment for what it does and does not do once a
+ * drain has actually clobbered the projection.
  */
 export async function attachProof(args: AttachProofArgs): Promise<void> {
   const { uid, displayName, photoURL, cells, cellIndex, itemText, claimMode, currentFirstBingoAt, proof } =
@@ -154,16 +159,23 @@ export async function deleteProof(id: string, storagePath?: string | null): Prom
       const boardSnap = await tx.get(boardRef);
       const cells = boardSnap.data()?.cells as Cell[] | undefined;
       // Resolve the backing cell from the proof's OWN cellIndex — the
-      // authoritative proof→cell link (specs/w1-board-mark-win.md § cross-writer).
-      // `cells[i].proofId` is only a denormalized projection of that link: a
-      // queued bare-Mark drain does a whole-array { merge:true } replace of
-      // `cells` and can drop the `proofId`, so a `cells.some(c => c.proofId ===
-      // id)` scan would miss the backing cell after a clobber. Indexing by the
-      // proof doc's `cellIndex` is clobber-resilient. We still gate the unmark on
-      // `proofId === id` so we never fight a bare Mark that has since taken the
-      // cell over — if the projection was dropped, the drained bare Mark owns the
-      // cell and deleteProof leaves it (accepted residual, ADR 0001) rather than
-      // un-marking a live Mark.
+      // authoritative proof→cell link (specs/w1-board-mark-win.md § cross-writer)
+      // — rather than scanning for `cells[i].proofId === id`. Given `proofId`'s
+      // uniqueness and that a proof's `cellIndex` never changes after creation,
+      // the two lookups pick out the same cell in every reachable state: this is
+      // a clarity/consistency change, not a new protection, and it does NOT
+      // recover a clobbered projection. A queued bare-Mark drain does a
+      // whole-array { merge:true } replace of `cells` and can drop the
+      // `proofId` at `cellIndex`; once that has happened, this lookup sees the
+      // same dropped value a `cells.some(c => c.proofId === id)` scan would have
+      // seen, so the guard below no-ops identically either way. We gate the
+      // unmark on `proofId === id` so we never fight a bare Mark that has since
+      // taken the cell over — if the projection was dropped, the drained bare
+      // Mark owns the cell and deleteProof leaves it (accepted residual, ADR
+      // 0001) rather than un-marking a live Mark. What DOES discharge the PR #75
+      // constraint for proof-capture is that the Feed resolves a Proof from this
+      // doc's own `uid`/`cellIndex`, never solely from `cells[i].proofId` — see
+      // `ProofFeed`/`useProofFeed`.
       const backing = cells?.find((c) => c.index === proof.cellIndex);
       if (cells && backing?.proofId === id) {
         const playerSnap = await tx.get(playerRef);
