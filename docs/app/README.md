@@ -158,7 +158,7 @@ Public app with user-generated content, so even under minimal gating: a one-time
 
 ## Phase 1 (scaffolded — see [`phase-1-deploy.md`](phase-1-deploy.md))
 
-Phase 1 is scaffolded in this same repo and wired into the client: proof system (`ProofSheet` + live Proof Feed), admin console (`/admin`), verified mode, `functions/` (Vision moderation, thumbnails, authoritative stats, crawler `share` page), `cloud-run/og-renderer/` (Playwright OG images), and an App Check hook in `src/firebase.ts`. Backend deploy steps are in [`phase-1-deploy.md`](phase-1-deploy.md).
+Phase 1 is scaffolded in this same repo and wired into the client: proof system (`ProofSheet` + live Proof Feed), admin console (`/admin`), verified mode, `functions/` (Vision moderation, thumbnails, crawler `share` page — stats stay client-authoritative, ADR 0001), `cloud-run/og-renderer/` (Playwright OG images), and an App Check hook in `src/firebase.ts`. Backend deploy steps are in [`phase-1-deploy.md`](phase-1-deploy.md).
 
 ## Verified
 
