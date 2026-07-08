@@ -1,6 +1,10 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import { getAnalytics, isSupported, type Analytics } from 'firebase/analytics';
@@ -18,7 +22,14 @@ const firebaseConfig = {
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
-export const db = getFirestore(app);
+// ADR 0006: a persistent (IndexedDB) local cache so the last-seen Board/Feed/
+// Tally render offline and Marks made in a dead zone queue durably and sync on
+// reconnect — not the default in-memory cache, which loses queued writes on
+// reload. The multi-tab manager coordinates the shared cache when a Player has
+// the PWA open in several tabs. Same `db` symbol, so no call site changes.
+export const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+});
 export const storage = getStorage(app);
 
 // App Check (abuse protection). No-op unless a reCAPTCHA Enterprise site key is set.
