@@ -61,14 +61,15 @@ export function seedFromUid(uid: string): number {
 /** Create the global user profile on first sign-in. */
 export async function ensureUserProfile(u: User): Promise<void> {
   const ref = rawUser(u.uid);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await setDoc(ref, {
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (snap.exists()) return;
+    tx.set(ref, {
       displayName: u.displayName ?? 'Anonymous',
       photoURL: u.photoURL ?? null,
       createdAt: Date.now(),
     });
-  }
+  });
 }
 
 /** Deal a frozen board + create the player row the first time a user joins. */
