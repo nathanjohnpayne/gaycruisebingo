@@ -14,8 +14,8 @@
     "test:rules": "firebase emulators:exec --only firestore,storage \"vitest run --config vitest.rules.config.ts\"",
     "test:e2e": "playwright test",
     "emulator": "firebase emulators:start --only auth,firestore,storage",
-    "deploy": "npm run build && op-firebase-deploy",
-    "deploy:hosting": "npm run build && op-firebase-deploy --only hosting",
+    "deploy": "npm run build && scripts/firebase/op-firebase-deploy",
+    "deploy:hosting": "npm run build && scripts/firebase/op-firebase-deploy --only hosting",
     "pretest:e2e": "playwright install chromium"
   },
   "dependencies": {
