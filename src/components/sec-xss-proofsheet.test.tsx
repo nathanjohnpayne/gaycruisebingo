@@ -114,6 +114,20 @@ describe('safeMediaUrl — scheme allowlist', () => {
     expect(safeMediaUrl('')).toBeUndefined();
     expect(safeMediaUrl('   ')).toBeUndefined();
   });
+
+  // Second barrier (js/xss-through-dom #3): an accepted value is stripped of HTML
+  // metacharacters before it can reach the DOM as a src. This is a no-op on every
+  // real Proof media URL (they never contain < " '), and it is the barrier CodeQL
+  // recognises so the class stops re-flagging.
+  it('never returns a value containing an HTML metacharacter (< " \')', () => {
+    // No-op on real Proof media URLs — returned byte-identical (also pinned above).
+    expect(safeMediaUrl('blob:https://app/uuid')).toBe('blob:https://app/uuid');
+    expect(safeMediaUrl('data:image/png;base64,AAAA')).toBe('data:image/png;base64,AAAA');
+    // A contrived accepted-scheme value carrying HTML metacharacters has them removed.
+    const out = safeMediaUrl('https://x/a"b\'c<d');
+    expect(out).toBeDefined();
+    expect(out).not.toMatch(/["'<]/);
+  });
 });
 
 describe('ProofSheet — text callout is inert; photo preview still renders', () => {
