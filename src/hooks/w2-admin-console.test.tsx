@@ -53,21 +53,26 @@ beforeEach(() => {
 // onSnapshot(target, options, onNext, onError).
 type SnapCb = (snap: unknown) => void;
 function capture() {
-  const cbs: { doc: SnapCb | null; query: SnapCb | null; col: SnapCb | null } = {
-    doc: null,
+  // `doc` is an ARRAY: since #108, useProofFeed AND useMoments each read the SAME
+  // event doc (threshold + bannedUids via useEventModeration), so `useFeed` opens
+  // TWO event-doc subscriptions. fireDoc must deliver the event snapshot to BOTH,
+  // not just the last-registered one — otherwise one half keeps its default
+  // (threshold undefined → no filtering) and the merged assertion drifts.
+  const cbs: { docs: SnapCb[]; query: SnapCb | null; col: SnapCb | null } = {
+    docs: [],
     query: null,
     col: null,
   };
   H.onSnapshot.mockImplementation((target: unknown, _o: unknown, onNext: SnapCb) => {
     if (target && typeof target === 'object') {
       if ('query' in (target as object)) cbs.query = onNext;
-      else if ((target as { kind?: string }).kind === 'doc') cbs.doc = onNext;
+      else if ((target as { kind?: string }).kind === 'doc') cbs.docs.push(onNext);
       else cbs.col = onNext;
     }
     return () => {};
   });
   return {
-    fireDoc: (s: unknown) => act(() => cbs.doc?.(s)),
+    fireDoc: (s: unknown) => act(() => cbs.docs.forEach((cb) => cb(s))),
     fireQuery: (s: unknown) => act(() => cbs.query?.(s)),
     fireCol: (s: unknown) => act(() => cbs.col?.(s)),
   };

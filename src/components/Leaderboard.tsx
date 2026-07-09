@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { useEventDoc, useLeaderboard } from '../hooks/useData';
+import { useEventDoc, useLeaderboard, isBanned } from '../hooks/useData';
 import { track } from '../analytics';
 import { renderLeaderboardShareCard, shareCardBlob, SHARE_CARD_APP_NAME, type LeaderboardShareRow } from './ShareCard';
 import Avatar from './Avatar';
@@ -89,6 +89,7 @@ export default function Leaderboard() {
   const warmedCard = useRef<{
     players: PlayerDoc[];
     eventName: string;
+    bannedKey: string;
     promise: Promise<Blob | null>;
   } | null>(null);
 
@@ -97,18 +98,29 @@ export default function Leaderboard() {
 
   // First to BINGO is the earliest firstBingoAt across ALL Players — a
   // ceremonial, self-reported honour (ADR 0001), not a rank. It is computed
-  // over the FULL roster (never the filtered `visible` subset below) so the
-  // pin's identity can't shift depending on which filter happens to be
-  // selected; only whether that Player's row is currently visible can change.
+  // over the FULL, RAW roster (never the filtered `visible` subset below, and
+  // never the ban-filtered roster) so the pin's identity can't shift depending
+  // on which filter is selected OR on who is banned: a ban never rewrites who
+  // was first to BINGO — that already happened (specs/w2-ban-console.md §
+  // Leaderboard). Only whether that Player's row is currently VISIBLE can change.
   const withBingo = players
     .filter((p) => p.firstBingoAt != null)
     .sort((a, b) => (a.firstBingoAt as number) - (b.firstBingoAt as number));
   const firstBingoUid = withBingo[0]?.uid;
 
-  // Filters narrow this render's visible subset of the already-ranked
-  // `players` array — a plain `.filter`, never a `.sort`, so the relative
+  // The Admin ban (#108) is PRESENTATIONAL and applied HERE, in the view only — the
+  // shared `useLeaderboard` roster stays RAW so Board's First-to-BINGO ceremony reads
+  // the true history (see the hook's comment). A banned Player is hidden from the
+  // displayed rows and the Share Card, but the pin identity above is unaffected: if
+  // the first-to-BINGO holder is banned, no visible row wins the badge (their row is
+  // simply gone) — a later Player is NEVER promoted to first.
+  const bannedUids = event?.bannedUids ?? [];
+  const roster = players.filter((p) => !isBanned(p.uid, bannedUids));
+
+  // Filters narrow this render's visible subset of the already-ranked,
+  // ban-filtered roster — a plain `.filter`, never a `.sort`, so the relative
   // order sortPlayers produced is always preserved.
-  const visible = players.filter((p) => matchesFilter(p, filter));
+  const visible = roster.filter((p) => matchesFilter(p, filter));
 
   // Warm-on-intent pre-render (Codex P2, PR #111 round 2 finding 2): start
   // rasterizing when the Player signals intent to share — pointerenter
@@ -141,22 +153,33 @@ export default function Leaderboard() {
   // before the click can land).
   const warmShareCard = (): Promise<Blob | null> => {
     const eventName = event?.name ?? SHARE_CARD_APP_NAME;
+    // The ban roster is part of the card's inputs (#108): the warmed render is
+    // reused only while the SAME banned set still applies, so a ban/unban that
+    // lands between warm-up and tap re-renders fresh rather than sharing a card
+    // that shows (or hides) the wrong Player.
+    const bannedKey = JSON.stringify(bannedUids);
     const cached = warmedCard.current;
-    if (cached && cached.players === players && cached.eventName === eventName) {
+    if (
+      cached &&
+      cached.players === players &&
+      cached.eventName === eventName &&
+      cached.bannedKey === bannedKey
+    ) {
       return cached.promise;
     }
     const promise = renderLeaderboardShareCard({
       eventName,
-      rows: buildShareStandings(players, firstBingoUid, MAX_SHARE_ROWS),
+      rows: buildShareStandings(roster, firstBingoUid, MAX_SHARE_ROWS),
     }).catch(() => null);
-    warmedCard.current = { players, eventName, promise };
+    warmedCard.current = { players, eventName, bannedKey, promise };
     return promise;
   };
 
-  // The Share Card always reflects the top standings across the FULL roster
-  // (buildShareStandings), independent of whatever filter is currently
-  // selected — mirrors the pin's own full-roster scope above, so switching
-  // filters can never change what a shared card shows.
+  // The Share Card always reflects the top standings across the full BAN-FILTERED
+  // roster (buildShareStandings over `roster`), independent of whatever filter is
+  // currently selected — mirrors the pin's own full-roster scope above, so
+  // switching filters can never change what a shared card shows, and a banned
+  // Player never appears on a shared card.
   const shareLeaderboard = async () => {
     // Reuses the warmed render when its inputs still match, else renders
     // fresh (the cold-tap path — same behavior as before the warm-up).
