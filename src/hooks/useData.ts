@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
 import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol } from '../data/paths';
+import { isReportHidden } from '../data/moderation';
 import { sortPlayers } from '../game/logic';
 import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, MomentDoc } from '../types';
 
@@ -82,6 +83,32 @@ export function useEventDoc(enabled = true) {
   return useDocSub<EventDoc>(enabled ? eventRef() : null, enabled ? 'event' : 'event:disabled');
 }
 
+// The ADR 0004 Phase 0 community auto-hide predicate lives in the Firestore-free,
+// React-free ./moderation module (imported above) so the deal path (src/data/api.ts's
+// joinAndDeal) can apply the EXACT same "is this community-hidden" test as these
+// read hooks without importing React (Codex P2, PR #107 finding 1). Re-exported here
+// so the existing importers (Admin.tsx, the hooks suite) keep importing it from
+// useData. The predicate treats only a POSITIVE threshold as active (0 / negative /
+// NaN / undefined → no filtering) — see ./moderation for the fail-open-unless-positive
+// rationale (Codex P2, PR #107 finding 2).
+export { isReportHidden };
+
+/**
+ * The Event's community auto-hide threshold (`settings.reportHideThreshold`,
+ * seeded 4 — `scripts/seed.mjs`), read from `useEventDoc()` so EVERY client
+ * computes the SAME presentational hide with no Admin online (ADR 0004 Phase 0).
+ * Returns `undefined` while the event doc is loading or when the setting is unset
+ * so callers treat it as "no filtering" (see `isReportHidden`). This is a read of
+ * shared config, not a per-client knob — the hide is bypassable by design (a
+ * client can patch its bundle to ignore it); tamper-proof server enforcement that
+ * flips `status` at the threshold is deferred to #43.
+ */
+function useReportHideThreshold(): number | undefined {
+  const { data: event } = useEventDoc();
+  const threshold = event?.settings?.reportHideThreshold;
+  return typeof threshold === 'number' ? threshold : undefined;
+}
+
 export function useItems(enabled = true) {
   // `enabled` lets Board skip this subscription once a Board is frozen (Codex
   // P3 on PR #66): the pool only matters pre-deal, so a Player who already has
@@ -89,12 +116,18 @@ export function useItems(enabled = true) {
   // prompt add/report out as a full-pool read + rerender. Toggle the key (not
   // just the query) so the effect re-subscribes if `enabled` flips back to
   // true — mirrors useEventDoc's pre-auth gate above.
+  const threshold = useReportHideThreshold();
   const { data, loading, hasServerData } = useColSub<ItemDoc>(
     enabled ? itemsCol() : null,
     enabled ? 'items' : 'items:disabled',
   );
+  // Two hides drop a Prompt from the live pool: the Admin hard-hide (`status`
+  // flipped off 'active', the Phase-0 override) and the ADR 0004 Phase 0
+  // community auto-hide once `reportCount` reaches `reportHideThreshold`.
+  // `useAllItems` (Admin) applies NEITHER, so an Admin can still reach and
+  // restore threshold-hidden Prompts. Presentational only — the doc is untouched.
   const items = data
-    .filter((i) => i.status === 'active')
+    .filter((i) => i.status === 'active' && !isReportHidden(i.reportCount, threshold))
     .sort((a, b) => a.createdAt - b.createdAt);
   return { items, loading, hasServerData };
 }
@@ -141,13 +174,26 @@ export function useLeaderboard() {
 }
 
 export function useProofFeed(max = 60) {
-  // Only 'active' proofs are readable by non-admins (see firestore.rules);
-  // hidden/flagged proofs stay admin-only rather than being filtered client-side.
+  // Two layers hide a Proof from the public Feed. (1) The Admin hard-hide: only
+  // 'active' proofs are readable by non-admins (firestore.rules), so a status
+  // flip to 'hidden' removes it server-side — the Phase-0 override. (2) The ADR
+  // 0004 Phase 0 community auto-hide, added here: a Proof whose `reportCount` has
+  // reached the event's `reportHideThreshold` self-hides on EVERY client the
+  // moment the counter crosses — a presentational emergency hide that works with
+  // no Admin awake and is bypassable by design (tamper-proof server enforcement
+  // is #43). The doc is untouched; `useReportedProofs` stays UNfiltered so an
+  // Admin can still reach a threshold-hidden Proof to restore or delete it. This
+  // one chokepoint also covers the merged Feed's proof side — `useFeed` composes
+  // `useProofFeed`, so a Moment (no `reportCount`) is never touched.
+  const threshold = useReportHideThreshold();
   const { data, loading } = useColSub<ProofDoc>(
     query(proofsCol(), where('status', '==', 'active')),
     'proofs',
   );
-  const proofs = data.sort((a, b) => b.createdAt - a.createdAt).slice(0, max);
+  const proofs = data
+    .filter((p) => !isReportHidden(p.reportCount, threshold))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, max);
   return { proofs, loading };
 }
 
@@ -225,16 +271,43 @@ export function usePendingClaims() {
   return { claims, loading };
 }
 
-/** Admin views: everything, including hidden/reported. */
+/**
+ * Admin views: everything, including hidden/reported. Deliberately applies
+ * NEITHER hide — not the `status` hard-hide, not the ADR 0004 Phase 0 threshold
+ * auto-hide — so an Admin can reach content the community auto-hide has removed
+ * from every Player's pool and restore or delete it. Sorted most-reported-first
+ * so the moderation-priority Prompts float to the top. If this view ALSO applied
+ * the threshold filter, a threshold-hidden Prompt would vanish from the console
+ * too and no Admin could ever act on it — the exact failure ADR 0004 warns of.
+ */
 export function useAllItems() {
   const { data, loading } = useColSub<ItemDoc>(itemsCol(), 'items-admin');
   return { items: data.sort((a, b) => b.reportCount - a.reportCount), loading };
 }
 
+/**
+ * The Proof moderation queue: every Proof needing admin attention, most-reported-
+ * first. Queue membership is reported (`reportCount > 0`) OR `flagged` OR
+ * hard-hidden (`status === 'hidden'`) — hidden content belongs in the queue
+ * regardless of its count. The hidden arm is load-bearing (Codex P2, PR #107
+ * round 2): unlike Prompts, whose `useAllItems` lists EVERY Prompt, there is no
+ * all-proofs admin list, so this queue is the ONLY admin surface for Proofs.
+ * Without it, an admin who Clear-reports a doubly-hidden Proof (status 'hidden'
+ * AND over the threshold) BEFORE restoring drops its reportCount to 0 and the
+ * still-hidden Proof would vanish from the console with no UI path to restore or
+ * delete it — the clear-then-restore ordering must never orphan anything.
+ * Like `useAllItems` it is UNfiltered by the ADR 0004 Phase 0 threshold — a Proof
+ * whose `reportCount` has crossed `reportHideThreshold` (and so self-hid on every
+ * Player's Feed via `useProofFeed`) still surfaces here so an Admin can reach it
+ * (any count at/over a POSITIVE threshold is > 0, so the reported arm is a strict
+ * superset of the auto-hidden set). The subscription is the one broad admin read
+ * of the whole collection (no `where()`), so the OR is a pure client-side filter —
+ * no second listener, no composite index.
+ */
 export function useReportedProofs() {
   const { data, loading } = useColSub<ProofDoc>(proofsCol(), 'proofs-admin');
   const flagged = data
-    .filter((p) => p.reportCount > 0 || p.status === 'flagged')
+    .filter((p) => p.reportCount > 0 || p.status === 'flagged' || p.status === 'hidden')
     .sort((a, b) => b.reportCount - a.reportCount);
   return { flagged, loading };
 }
