@@ -14,6 +14,7 @@ import type {
   ClaimDoc,
   TallyEntry,
   MomentDoc,
+  DoubtDoc,
 } from '../types';
 
 function passthrough<T>(): FirestoreDataConverter<T> {
@@ -98,5 +99,18 @@ export const tallyMarkerConverter: FirestoreDataConverter<TallyEntry> = {
   fromFirestore: (snap: QueryDocumentSnapshot) => ({
     ...(snap.data() as Omit<TallyEntry, 'uid'>),
     uid: snap.id,
+  }),
+};
+
+// A Doubt (ADR 0001): one Player publicly asking another to back up a marked
+// Prompt — "pics or it didn't happen", social pressure never a gate — read from
+// events/{EVENT_ID}/doubts/{doubtId}. Like proofs/claims/moments it carries its
+// own doc id (the read hook + derivation key on it), so pin `id` to `snap.id`.
+// The write side (src/data/doubts.ts) uses a raw ref and never stores `id`.
+export const doubtConverter: FirestoreDataConverter<DoubtDoc> = {
+  toFirestore: (data) => data as DocumentData,
+  fromFirestore: (snap: QueryDocumentSnapshot) => ({
+    ...(snap.data() as Omit<DoubtDoc, 'id'>),
+    id: snap.id,
   }),
 };

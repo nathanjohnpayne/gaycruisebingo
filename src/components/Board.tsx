@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard } from '../hooks/useData';
+import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useProofFeed } from '../hooks/useData';
 import { setMark, resolveDisplayName } from '../data/api';
+import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
   broadcastBingo,
   broadcastBlackout,
@@ -12,7 +13,7 @@ import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../ga
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
-import type { Cell, ClaimMode, PlayerDoc } from '../types';
+import type { Cell, ClaimMode, PlayerDoc, ProofDoc } from '../types';
 
 /**
  * The per-Prompt Tally count badge on a marked Square (ADR 0002). Subscribes to
@@ -39,39 +40,137 @@ function TallyBadge({ itemId, onOpen }: { itemId: string; onOpen: () => void }) 
 }
 
 /**
+ * The open-Doubt count on a marked Square (ADR 0001): how many "pics or it didn't
+ * happen" Doubts for this Prompt are still UNANSWERED. Mirrors `TallyBadge` — a
+ * per-cell subscription (`useDoubts`) plus the Feed's Proofs (passed down once
+ * from Board) folded through the PURE `openDoubts` derivation — but sits top-LEFT,
+ * clear of the ✓ (top-right), the proof ＋ (bottom-left), and the Tally count
+ * (bottom-right). Renders ONLY when at least one Doubt is open, so an undoubted
+ * Square shows nothing. Tapping opens the same who-list sheet, where a Doubt is
+ * actually raised against another Player's entry — a Doubt never blocks or unmarks
+ * the Square, so this is a pressure signal, never a gate.
+ */
+function DoubtBadge({
+  itemId,
+  itemText,
+  proofs,
+  onOpen,
+}: {
+  itemId: string;
+  itemText: string;
+  proofs: readonly Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>[];
+  onOpen: () => void;
+}) {
+  const { doubts } = useDoubts(itemId);
+  const open = openDoubts(doubts, itemText, proofs);
+  if (open.length <= 0) return null;
+  return (
+    <button
+      className="doubt-badge"
+      title="pics or it didn't happen"
+      aria-label={`${open.length} open doubt${open.length === 1 ? '' : 's'} — pics or it didn't happen`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen();
+      }}
+    >
+      {open.length}
+    </button>
+  );
+}
+
+/**
  * The tap-to-see-who list for a Prompt's Tally (ADR 0002): names EVERY Player who
  * marked the Prompt — no anonymity — chronologically. Reuses the proof-capture
  * sheet chrome. Markers carry no photo (the marker doc is just uid + displayName +
  * markedAt), so the avatar is the name's initial.
+ *
+ * It is also where a Doubt is RAISED (ADR 0001, #33): each OTHER Player's row
+ * carries a "pics or it didn't happen" affordance that raises a Doubt against
+ * their Mark of this Prompt; the same open-Doubt count the Square shows appears in
+ * the header. A row whose Doubt(s) have been answered by a Proof renders a
+ * distinct SATISFIED state, an open one a distinct DOUBTED state — social pressure
+ * applied then visibly cooled. A Doubt never blocks, unmarks, or discounts the
+ * Mark (never a gate), so nothing here changes the Board; the doubter's own row
+ * offers no affordance (no self-doubt), and a Doubt already raised by this Player
+ * disables the button so they can't stack duplicates.
  */
 function TallySheet({
   itemId,
   itemText,
+  cellIndex,
+  meUid,
+  meName,
+  proofs,
   onClose,
 }: {
   itemId: string;
   itemText: string;
+  cellIndex: number;
+  meUid: string;
+  meName: string | undefined;
+  proofs: readonly Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>[];
   onClose: () => void;
 }) {
   const { markers, loading } = useTally(itemId);
+  const { doubts } = useDoubts(itemId);
+  const open = openDoubts(doubts, itemText, proofs);
+  const openCount = open.length;
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>
         <div className="sheet-title">Who marked “{itemText}”</div>
+        {openCount > 0 && (
+          <p className="doubt-summary">
+            {openCount} open doubt{openCount === 1 ? '' : 's'} — pics or it didn&apos;t happen
+          </p>
+        )}
         {loading && markers.length === 0 ? (
           <p className="muted tally-empty">Loading…</p>
         ) : markers.length === 0 ? (
           <p className="muted tally-empty">No one has marked this yet.</p>
         ) : (
           <div className="list">
-            {markers.map((m) => (
-              <div className="row" key={m.uid}>
-                <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
-                <div className="grow">
-                  <div className="name">{m.displayName}</div>
+            {markers.map((m) => {
+              const status = doubtStatusFor(m.uid, doubts, itemText, proofs);
+              const isMe = m.uid === meUid;
+              const iAlreadyDoubted = open.some(
+                (d) => d.targetUid === m.uid && d.fromUid === meUid,
+              );
+              return (
+                <div className="row" key={m.uid}>
+                  <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
+                  <div className="grow">
+                    <div className="name">{m.displayName}</div>
+                    {status === 'open' && (
+                      <div className="sub doubt-open">Doubted — pics or it didn&apos;t happen</div>
+                    )}
+                    {status === 'satisfied' && (
+                      <div className="sub doubt-satisfied">Proof shown ✓</div>
+                    )}
+                  </div>
+                  {!isMe && (
+                    <button
+                      className="btn doubt-btn"
+                      title="pics or it didn't happen"
+                      disabled={iAlreadyDoubted}
+                      onClick={() =>
+                        raiseDoubt({
+                          fromUid: meUid,
+                          fromDisplayName: meName,
+                          targetUid: m.uid,
+                          targetDisplayName: m.displayName,
+                          itemId,
+                          cellIndex,
+                        })
+                      }
+                    >
+                      {iAlreadyDoubted ? 'Doubted' : 'Doubt'}
+                    </button>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
         <div className="sheet-actions">
@@ -146,6 +245,14 @@ export default function Board() {
   // a Board exists this Player has no use for a live listener on every other
   // Player's prompt add/report. Gate the subscription to the no-board state.
   const { items, loading: poolLoading, hasServerData: poolConfirmed } = useItems(!board);
+  // The Feed's active Proofs, subscribed ONCE here (never per-Square) so each
+  // marked Square's DoubtBadge + the Tally sheet can DERIVE which "pics or it
+  // didn't happen" Doubts a Proof has satisfied (src/data/doubts.ts) without
+  // opening a proof listener per cell. Satisfaction is a pure derivation over
+  // these Proofs — no write is added to the proof path, and it never gates a Mark
+  // (ADR 0001: a Doubt is social pressure, never a gate). This is an independent
+  // read; it does not touch the Moments edge machinery below.
+  const { proofs } = useProofFeed();
   const claimMode: ClaimMode = event?.claimMode ?? 'honor';
 
   const [celebrate, setCelebrate] = useState<null | 'bingo' | 'blackout'>(null);
@@ -565,6 +672,14 @@ export default function Board() {
             {c.marked && !c.free && c.itemId && (
               <TallyBadge itemId={c.itemId} onOpen={() => setTallyTarget(c)} />
             )}
+            {c.marked && !c.free && c.itemId && (
+              <DoubtBadge
+                itemId={c.itemId}
+                itemText={c.text}
+                proofs={proofs}
+                onOpen={() => setTallyTarget(c)}
+              />
+            )}
           </div>
         ))}
       </div>
@@ -598,6 +713,10 @@ export default function Board() {
         <TallySheet
           itemId={tallyTarget.itemId}
           itemText={tallyTarget.text}
+          cellIndex={tallyTarget.index}
+          meUid={uid}
+          meName={identityKnown ? displayName : undefined}
+          proofs={proofs}
           onClose={() => setTallyTarget(null)}
         />
       )}

@@ -51,6 +51,11 @@ vi.mock('../hooks/useData', () => ({
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
   useLeaderboard: () => ({ players: H.players, loading: false, hasServerData: H.rosterConfirmed }),
   useFeed: () => ({ entries: H.feedEntries, loading: false }),
+  // Board subscribes the per-Square Doubt count + the Feed's Proofs for the #33
+  // satisfied derivation. These Moment-edge fixtures never open the Tally sheet or
+  // assert a Doubt count, so empty streams keep them focused on the edge machinery.
+  useDoubts: () => ({ doubts: [], count: 0, loading: false, hasServerData: true }),
+  useProofFeed: () => ({ proofs: [], loading: false }),
 }));
 // Keep the REAL resolveDisplayName (Board feeds its resolved output to the actor);
 // stub the write path.

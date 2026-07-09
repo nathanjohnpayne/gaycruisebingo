@@ -116,6 +116,11 @@ vi.mock('../hooks/useData', () => ({
   // Board reads the roster for the First-to-BINGO Moment (#34); no fixture here
   // crosses a bingo edge, so an empty roster suffices.
   useLeaderboard: () => ({ players: [], loading: false }),
+  // Board subscribes the per-Square Doubt count + the Feed's Proofs (#33). These
+  // deal/join fixtures render only the empty/thin-pool/dealt states with no marked
+  // Square, so no DoubtBadge mounts; the factory must still export both.
+  useDoubts: () => ({ doubts: [], count: 0, loading: false, hasServerData: true }),
+  useProofFeed: () => ({ proofs: [], loading: false }),
 }));
 
 // Real modules under test — imported after the mocks are declared.

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
-import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol } from '../data/paths';
+import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol } from '../data/paths';
 import { sortPlayers } from '../game/logic';
-import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, MomentDoc } from '../types';
+import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, MomentDoc, DoubtDoc } from '../types';
 
 // Both subs subscribe with includeMetadataChanges so the cache→server
 // transition is always observable: with the ADR 0006 persistent cache, a cold
@@ -237,4 +237,26 @@ export function useReportedProofs() {
     .filter((p) => p.reportCount > 0 || p.status === 'flagged')
     .sort((a, b) => b.reportCount - a.reportCount);
   return { flagged, loading };
+}
+
+/**
+ * A Prompt's Doubts (ADR 0001): every "pics or it didn't happen" raised against
+ * `itemId`, newest-last (sorted by `createdAt` so the who-list reads
+ * chronologically, like `useTally`). Subscribes through the SAME `useColSub`
+ * latch pattern as the Tally + Feed (`{ includeMetadataChanges: true }`, the
+ * `hasServerData` latch on the first server-backed snapshot), filtered to the one
+ * Prompt so the Square badge + Tally sheet read only what they render. Pass
+ * `null`/`undefined` (e.g. the free centre Square, which never tallies or doubts)
+ * to open no subscription. Whether a given Doubt is OPEN vs SATISFIED is a PURE
+ * derivation over the Feed's Proofs (`openDoubts`/`doubtStatusFor` in
+ * src/data/doubts.ts) — this hook only streams the raw Doubts; it never gates,
+ * blocks, or mutates a Mark (a Doubt is social pressure, never a gate).
+ */
+export function useDoubts(itemId: string | null | undefined) {
+  const { data, loading, hasServerData } = useColSub<DoubtDoc>(
+    itemId ? query(doubtsCol(), where('itemId', '==', itemId)) : null,
+    itemId ? `doubts:${itemId}` : 'doubts:none',
+  );
+  const doubts = [...data].sort((a, b) => a.createdAt - b.createdAt);
+  return { doubts, count: doubts.length, loading, hasServerData };
 }
