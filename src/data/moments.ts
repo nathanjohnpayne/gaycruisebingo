@@ -1,7 +1,8 @@
 import { doc, getDocFromCache, setDoc } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
 import { markerDisplayName } from './attribution';
-import type { MomentDoc, MomentKind } from '../types';
+import { hasBingo, isBlackout } from '../game/logic';
+import type { Cell, MomentDoc, MomentKind } from '../types';
 
 // Moments (ADR 0002): a broadcast of a big social beat — a BINGO, a Blackout, or
 // the First to BINGO — posted to the Feed for everyone. Unlike a Proof, a Moment
@@ -395,4 +396,142 @@ export function broadcastBlackout(who: MomentActor): void {
  */
 export function broadcastFirstBingo(who: MomentActor): void {
   broadcast(FIRST_BINGO_MOMENT_ID, 'first_bingo', who);
+}
+
+/**
+ * The broadcast decision for a CONFIRM-PATH win (issue #41, the deferred #99
+ * finding 6). In `admin_confirmed` mode a Mark starts pending and only becomes a
+ * win when an Admin resolves the Claim — and that confirm can land while the
+ * winning Player is off the Card route (Board unmounted) or offline, so Board's
+ * live edge detection never fires. `ConfirmWinMoments` (an always-mounted,
+ * route-independent listener) watches the Player's OWN confirmed Claims and, when
+ * the confirm's board write reflects a standing win, emits the SAME Moment the
+ * live edge would have — attributed to the WINNER (the claim owner), never the
+ * confirming Admin. This pure function is that emit decision, factored out so the
+ * invariant is directly unit-testable.
+ *
+ * TRANSITION-GATED, exactly like the live mark path (Codex #116 finding 1): the
+ * live path broadcasts off a mark's `bingoTransition` / `blackoutTransition`
+ * (no-win → win), NOT off `hasBingo` on the current board. The confirm path must
+ * match, or a player who ALREADY holds a standing BINGO and has a DIFFERENT pending
+ * Claim confirmed (one that completes no NEW line) would wrongly re-post a BINGO.
+ * So we recompute the win against the board with the JUST-CONFIRMED cells forced
+ * back to their pre-confirm PENDING state (`confirmedIndexes`) and emit only what
+ * CROSSES the threshold: no bingo before → bingo after (same for blackout). A
+ * confirmed square that completes no line emits nothing.
+ *
+ * The rest MIRRORS Board's drain fire-time gates so both paths agree:
+ *   - a board must actually stand (`cells.length > 0`): `isBlackout([])` is
+ *     vacuously true, so an empty/non-attributable board emits nothing (the same
+ *     round-3-finding-B length gate Board applies);
+ *   - `firstBingo` is the ceremonial event singleton — raised only on a bingo
+ *     TRANSITION, claimed ONLY against a SERVER-CONFIRMED roster showing no OTHER
+ *     Player already has a `firstBingoAt` (PR #99 finding 2), and SUPPRESSED when
+ *     the durable prior-win witness exists (`hasPriorBingoWitness`, finding D) so a
+ *     regained line never re-mints it;
+ *   - while the roster is unconfirmed a crossed first-win is HELD, not guessed
+ *     (`firstBingoHeld`): the caller keeps the candidate and re-decides once the
+ *     roster confirms, exactly as Board holds the candidate.
+ *
+ * Exactly-once across the two emit paths is STRUCTURAL, not timing: the writers'
+ * deterministic doc ids (`${uid}-bingo` / `${uid}-blackout` / the `first_bingo`
+ * singleton) are create-only and a Moment is fully immutable, so if the live edge
+ * already posted a win this confirm-path emit is a denied/skipped no-op — never a
+ * duplicate, and NEVER a false singleton (the roster gate is the same on both
+ * paths). This preserves #110's suppressed-or-correct guarantee.
+ */
+export interface ConfirmBroadcastPlan {
+  bingo: boolean;
+  blackout: boolean;
+  firstBingo: boolean;
+  // The ceremonial first-win CROSSED but the roster is not yet server-confirmed:
+  // HOLD (do not fire, do not drop) and re-decide when the roster confirms.
+  firstBingoHeld: boolean;
+}
+
+export function planConfirmBroadcasts(params: {
+  cells: Cell[];
+  // The cell indices whose pending→confirmed flip this emit adjudicates. The win
+  // is measured as the CROSSING these flips caused: the "before" board treats them
+  // as still pending, the "after" board is `cells` as it stands now.
+  confirmedIndexes: number[];
+  uid: string;
+  roster: { uid: string; firstBingoAt: number | null }[];
+  rosterConfirmed: boolean;
+  hasPriorBingo: boolean;
+}): ConfirmBroadcastPlan {
+  const { cells, confirmedIndexes, uid, roster, rosterConfirmed, hasPriorBingo } = params;
+  const none = { bingo: false, blackout: false, firstBingo: false, firstBingoHeld: false };
+  if (cells.length === 0 || confirmedIndexes.length === 0) return none;
+
+  // "before" = the just-confirmed cells forced back to pending (their pre-confirm
+  // state: still `marked`, but excluded from the win mask). The transition is the
+  // difference THIS confirm made — never a win that already stood.
+  const flipped = new Set(confirmedIndexes);
+  const before = cells.map((c) => (flipped.has(c.index) ? { ...c, status: 'pending' as const } : c));
+  const bingoTransition = !hasBingo(before) && hasBingo(cells);
+  const blackoutTransition = !isBlackout(before) && isBlackout(cells);
+
+  // The ceremonial First-to-BINGO is a candidate only when this confirm CROSSED
+  // into a bingo the Player has no durable prior-win witness for. Then the roster
+  // decides: unconfirmed → HELD; confirmed → claim iff no other Player bingoed first.
+  const firstCandidate = bingoTransition && !hasPriorBingo;
+  const othersBingoed = roster.some((p) => p.uid !== uid && p.firstBingoAt != null);
+  const firstBingo = firstCandidate && rosterConfirmed && !othersBingoed;
+  const firstBingoHeld = firstCandidate && !rosterConfirmed;
+
+  return { bingo: bingoTransition, blackout: blackoutTransition, firstBingo, firstBingoHeld };
+}
+
+// --- Confirm-path listener state (issue #41), uid-keyed like the pending queue --
+//
+// The `ConfirmWinMoments` listener holds per-Player working state: which Claims it
+// has observed PENDING (the fresh-confirm witness — a confirm counts as fresh only
+// if this listener saw the Claim pending while mounted, so a Claim already
+// confirmed at first sight is baselined as history), which confirmed Claims it has
+// already enqueued, the confirms whose board flip has not yet landed, and a
+// first_bingo candidate parked at the roster gate. Codex #116 finding 4: this state
+// is lifted to MODULE scope keyed by uid (mirroring the pending-Moment queue above)
+// so an ACCOUNT SWITCH parks the work instead of discarding it — switching back
+// resumes a held win (including a roster-held first_bingo) for the original uid
+// rather than baselining the now-confirmed Claim away. Same reload residual as the
+// pending queue: module state is per-page-load.
+export interface ConfirmListenerState {
+  // Claim ids this listener has observed in the PENDING state — the witness that a
+  // later `confirmed` is a fresh transition, not history (Codex #116 finding 3).
+  seenPending: Set<string>;
+  // Confirmed Claim ids already enqueued for emit, so a repeat snapshot never
+  // re-enqueues one.
+  handled: Set<string>;
+  // Enqueued confirms whose board flip has not yet been adjudicated: claimId → the
+  // Claim's cellIndex + proofId. The proofId makes board reflection claim-SPECIFIC
+  // (Codex #116 R4 finding 2): `confirmClaim` resolves the cell by proofId, so a
+  // DIFFERENT claim's confirm at the same index must not count as this one's.
+  awaiting: Map<string, { cellIndex: number; proofId: string | null }>;
+  // A first_bingo candidate parked at the roster gate, with its winner actor
+  // captured; its prior-win eligibility was fixed at detection (never re-read).
+  heldCeremony: MomentActor | null;
+  // A witness read is in flight — serializes the async decision and drives the
+  // drain-until-empty loop (Codex #116 finding 2).
+  inFlight: boolean;
+}
+
+const confirmStates = new Map<string, ConfirmListenerState>();
+
+/** The per-uid confirm-listener state (created empty on first access), keyed the
+ *  SAME way as the pending-Moment queue so the two never cross identities. */
+export function getConfirmState(uid: string): ConfirmListenerState {
+  const key = pendingKey(uid);
+  let state = confirmStates.get(key);
+  if (!state) {
+    state = { seenPending: new Set(), handled: new Set(), awaiting: new Map(), heldCeremony: null, inFlight: false };
+    confirmStates.set(key, state);
+  }
+  return state;
+}
+
+/** Drop all confirm-listener state. Exported for test isolation only (module state
+ *  persists across unmounts by design); not used by app code. */
+export function resetConfirmStates(): void {
+  confirmStates.clear();
 }

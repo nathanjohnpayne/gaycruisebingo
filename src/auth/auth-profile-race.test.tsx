@@ -24,6 +24,9 @@ vi.mock('firebase/auth', () => ({
   GoogleAuthProvider: class {},
 }));
 vi.mock('../firebase', () => ({ auth: {}, googleProvider: {} }));
+// AuthProvider now mounts the confirm-path listener (#41) beside the attestation
+// gate; stub it — this suite exercises the profile-bootstrap signal, not the listener.
+vi.mock('../components/ConfirmWinMoments', () => ({ default: () => null }));
 vi.mock('../data/api', () => ({
   ensureUserProfile: mocks.ensureUserProfile,
   attestAdult: mocks.attestAdult,

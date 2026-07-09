@@ -110,8 +110,8 @@ service cloud.firestore {
           && request.resource.data.createdAt is number
           && request.resource.data.createdAt <= request.time.toMillis() + 60000
           && request.resource.data.createdAt >= request.time.toMillis() - 86400000
-          // Verified-mode proofs start 'pending' (admin-only readable per the read
-          // rule) until an admin confirms the claim; honor/proof_required proofs
+          // admin_confirmed-mode proofs start 'pending' (admin-only readable per the
+          // read rule) until an admin confirms the claim; honor/proof_required proofs
           // start 'active'. A 'pending' proof is never publicly visible.
           && request.resource.data.status in ['active', 'pending']
           && request.resource.data.reportCount == 0
@@ -152,7 +152,7 @@ service cloud.firestore {
         allow delete: if isOwner(resource.data.uid) || isAdmin(eventId);
       }
 
-      // Verified-mode claims: a player creates a claim for their own square;
+      // admin_confirmed-mode claims: a player creates a claim for their own square;
       // admins read the queue and resolve (confirm/reject) them.
       match /claims/{claimId} {
         allow read: if isAdmin(eventId) || isOwner(resource.data.uid);

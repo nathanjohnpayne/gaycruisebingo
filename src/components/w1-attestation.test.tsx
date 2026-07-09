@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   readAdultAttestation: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
+  // Records a render of the confirm-path listener (#41) so a test can assert it
+  // stays mounted behind the attestation gate (Codex #116 R3 finding 2).
+  confirmMounted: vi.fn(),
   // Mutable Firebase auth double: attest() reads auth.currentUser.uid.
   auth: { currentUser: null as unknown },
 }));
@@ -34,6 +37,15 @@ vi.mock('../data/api', () => ({
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));
+// The confirm-path listener (#41) mounts inside AuthProvider now; stub it to a
+// mount-recording spy so its real Firestore subscriptions do not run here, and so
+// the R3-finding-2 test can assert it survives the attestation gate.
+vi.mock('./ConfirmWinMoments', () => ({
+  default: () => {
+    mocks.confirmMounted();
+    return null;
+  },
+}));
 
 const FAKE_USER = { uid: 'sailor-1', displayName: 'Sailor', photoURL: null };
 
@@ -126,6 +138,20 @@ describe('18+ attestation re-prompt gate (#23)', () => {
 
     expect(rePrompted()).toBe(true);
     expect(boardShown()).toBe(false);
+  });
+
+  it('keeps the confirm-path listener MOUNTED behind the attestation gate (Codex #116 R3 finding 2)', async () => {
+    // A returning player with a pending admin_confirmed Claim sits on the attestation
+    // prompt. The listener must stay mounted BESIDE the gate — not inside the gated
+    // children — so an admin confirming during this window is still observed. The
+    // pre-fix mount lived in App (the gated children) and unmounted here.
+    mocks.readAdultAttestation.mockResolvedValue(null); // settled: no stamp → gate up
+    mount();
+    await signIn(FAKE_USER);
+
+    expect(rePrompted()).toBe(true); // the gate is up
+    expect(boardShown()).toBe(false); // children (the Board) are NOT rendered
+    expect(mocks.confirmMounted).toHaveBeenCalled(); // …yet the listener is mounted
   });
 
   it('lets an already-attested User pass straight through to the Board', async () => {

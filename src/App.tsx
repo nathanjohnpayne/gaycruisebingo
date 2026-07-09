@@ -43,6 +43,8 @@ export default function App() {
 
   return (
     <div className="app">
+      {/* The confirm-path Moment emitter (#41) is mounted in AuthProvider so it
+          survives the attestation gate (Codex #116 R3 finding 2), not here. */}
       <Nav />
       <Routes>
         {TABS.map((tab) => (
