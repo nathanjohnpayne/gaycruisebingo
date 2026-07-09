@@ -35,6 +35,17 @@ describe('w1-event-seed: seeded settings (ADR 0004)', () => {
   it('never seeds a literal value for blackoutEnabled — the seed source references it only as the delete target', () => {
     expect(seedSource).not.toMatch(/blackoutEnabled:\s*(true|false)/);
   });
+
+  it('does NOT write bannedUids — a reseed must never clobber a live ban list (#113)', () => {
+    // The event write is { merge: true } and the seed is safe to re-run, so writing
+    // bannedUids here would reset a populated ban roster (#108) back to [] on every
+    // reseed — silent data loss. It is deliberately absent from both the static seed
+    // payload and the merge write; a fresh event reads [] via eventConverter's
+    // missing-field default instead (asserted in src/data/w0-type-contract.test.ts).
+    expect(EVENT_SEED).not.toHaveProperty('bannedUids');
+    expect(eventWritePayload([])).not.toHaveProperty('bannedUids');
+    expect(eventWritePayload(['nathan-seed-uid'])).not.toHaveProperty('bannedUids');
+  });
 });
 
 describe('w1-event-seed: claim mode (ADR 0001)', () => {

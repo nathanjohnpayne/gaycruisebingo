@@ -44,7 +44,15 @@ export const eventConverter: FirestoreDataConverter<EventDoc> = {
   toFirestore: (data) => data as DocumentData,
   fromFirestore: (snap: QueryDocumentSnapshot) => {
     const data = snap.data() as EventDoc;
-    return { ...data, claimMode: migrateClaimMode(data.claimMode) };
+    return {
+      ...data,
+      claimMode: migrateClaimMode(data.claimMode),
+      // Event docs seeded/written before #113 carry no `bannedUids`; default a
+      // missing (or malformed non-array) field to [] so consumers read the
+      // presentational hide/mute roster (ADR 0004 Phase 0) as [] rather than
+      // undefined. Writes only ever emit a real array.
+      bannedUids: Array.isArray(data.bannedUids) ? data.bannedUids : [],
+    };
   },
 };
 export const boardConverter = passthrough<BoardDoc>();

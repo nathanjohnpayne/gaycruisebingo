@@ -28,14 +28,42 @@ service cloud.firestore {
     match /events/{eventId} {
       allow read: if signedIn();
       // Only admins can change event config (theme default, claimMode, admins,
-      // settings). `settings.reportHideThreshold` is load-bearing (ADR 0004): when
-      // the write carries `settings`, its `reportHideThreshold` must be a number.
-      // `blackoutEnabled` was dropped as dead config (ADR 0004) and is intentionally
-      // NOT reintroduced to the schema here. Delete is split out so it never has to
-      // satisfy the settings shape check.
+      // settings, bannedUids). `settings.reportHideThreshold` is load-bearing
+      // (ADR 0004): when the write carries `settings`, its `reportHideThreshold`
+      // must be a number. `blackoutEnabled` was dropped as dead config (ADR 0004)
+      // and is intentionally NOT reintroduced to the schema here.
+      //
+      // `bannedUids` is the ban surface (#113): a presentational, event-scoped
+      // hide/mute roster (ADR 0004 Phase 0), NOT hard access revocation —
+      // server-authoritative enforcement is #43/#44. It lives HERE, on the
+      // already-admin-writable event doc, rather than opening any write path into
+      // owner-only users/{uid} (which stays owner-only — the anti-schema-smuggling
+      // guarantee). When a write touches `bannedUids` it must be:
+      //   - a LIST (a scalar/map ban field is rejected);
+      //   - SIZE-CAPPED at 1000 — a sane ceiling far above any real event roster
+      //     that still bounds the single event doc well under Firestore's 1 MiB
+      //     limit and keeps every admin config write cheap to validate. banUser
+      //     (#108) appends one uid at a time, so the cap is a runaway/abuse guard,
+      //     not an expected-size limit;
+      //   - DISJOINT from `admins` — a banned uid must never also be an admin
+      //     (`!bannedUids.hasAny(admins)`), so a ban cannot silently target a
+      //     co-admin. `admins` here is the RESULTING roster in the same write.
+      // We validate the RESULTING `bannedUids` state (not the diff), so an
+      // arrayUnion/arrayRemove partial update — what banUser/unbanUser (#108) will
+      // use so a ban write never clobbers other event config — is accepted without
+      // requiring the whole doc be rewritten; other config fields stay protected by
+      // the isAdmin gate (non-admins are denied outright). Residual: rules can't
+      // iterate a list, so per-element string-typing of bannedUids is not
+      // expressible here — the #108 writer supplies real uids and the disjoint +
+      // list + cap checks bound the abuse surface. Delete is split out so it never
+      // has to satisfy the settings/bannedUids shape checks.
       allow create, update: if isAdmin(eventId)
         && (!('settings' in request.resource.data)
-            || request.resource.data.settings.reportHideThreshold is number);
+            || request.resource.data.settings.reportHideThreshold is number)
+        && (!('bannedUids' in request.resource.data)
+            || (request.resource.data.bannedUids is list
+                && request.resource.data.bannedUids.size() <= 1000
+                && !request.resource.data.bannedUids.hasAny(request.resource.data.admins)));
       allow delete: if isAdmin(eventId);
 
       // Community-editable prompt pool.
