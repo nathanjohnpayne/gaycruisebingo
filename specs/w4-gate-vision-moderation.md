@@ -35,7 +35,7 @@ An `undefined` export is not a deployable CloudFunction, so Firebase's Functions
 
 ## When on, `moderateProof` is byte-behavior-identical to before the gate
 
-The gate changes only WHETHER `moderateProof` is exported, never its behavior. When `VISION_ENABLED` is `true`, the export is the same `onObjectFinalized({ memory: '512MiB' }, …)` CloudFunction as before #126 — the handler body (thumbnail via sharp, SafeSearch flagging that flags only extreme/violent content and never raciness, the flag write-back to `events/${eventId}/proofs/${proofId}`), the `us-central1` region, and the trigger options are unchanged. The prior inline handler was extracted verbatim into a named `moderateProofHandler` function so both branches of the conditional read cleanly; nothing in the Vision or flagging logic was touched.
+The gate changes only WHETHER `moderateProof` is exported, never its behavior. When `VISION_ENABLED` is `true`, the export keeps the same CloudFunction behavior as before #126 — the handler body (thumbnail via sharp, SafeSearch flagging that flags only extreme/violent content and never raciness, the flag write-back to `events/${eventId}/proofs/${proofId}`) is unchanged — except the trigger is now pinned to `region: 'us-east1'`: `onObjectFinalized({ memory: '512MiB', region: 'us-east1' }, …)`. That pin resolves the deploy-plan region mismatch (see "Region pinning" below); the global default stays `us-central1` for the Firestore-triggered notifiers. The prior inline handler was extracted verbatim into a named `moderateProofHandler` function so both branches of the conditional read cleanly; nothing in the Vision or flagging logic was touched.
 
 - **Given** the flag resolves on **when** the module is loaded **then** `moderateProof` is a defined CloudFunction — a `function` carrying the `__endpoint` manifest object that Firebase's export discovery checks for. (Test: "is a defined CloudFunction when the flag is \"true\"".)
 
@@ -45,11 +45,17 @@ The gate scopes `moderateProof` alone. `notifyProofModeration` and `notifyItemMo
 
 - **Given** either flag state **when** the module is loaded **then** both `notifyProofModeration` and `notifyItemModeration` are still exported functions. (Test: "leaves the #101 notifiers exported and unaffected regardless of the flag".)
 
+## Region pinning (resolves the deploy-plan mismatch)
+
+`moderateProof` is a Storage trigger on the project's default bucket, which is `us-east1`. A Cloud Function cannot listen to a bucket in another region, so the export is pinned to `region: 'us-east1'`, overriding the module's `us-central1` global default (which the Firestore-triggered notifiers keep). This is what lets the enabled export pass Firebase's deploy-plan region validation instead of failing it. The pin is inert while the gate is off — the export is `undefined` and never registered — so it lands safely ahead of the Cloud Vision cutover.
+
+- **Given** the flag is on **when** the module is loaded **then** `moderateProof.__endpoint.region` includes `us-east1`. (Test: the region assertion in "is a defined CloudFunction when the flag is \"true\"".)
+
 ## Deferred deploy path
 
-Cloud Vision stays gated off until two independent blockers are cleared, in this order: (1) enable the Cloud Vision API on the project; (2) resolve the region mismatch — `moderateProof` must run in the bucket's region, `us-east1`, not `us-central1`; (3) set `ENABLE_VISION_MODERATION=true` in `functions/.env.<projectId>`; (4) redeploy `--only functions`. Because the gate is honored at discovery (previous section), step 3 genuinely enables the export. The region fix (step 2) itself is deferred to the real Cloud Vision cutover and is documented in `functions/.env.example` and `docs/app/phase-1-deploy.md`, not applied here — this ticket changes only whether `moderateProof` is exported.
+With the region pin in place, Cloud Vision stays gated off until the remaining blockers are cleared, in order: (1) enable the Cloud Vision API on the project; (2) set `ENABLE_VISION_MODERATION=true` in `functions/.env.<projectId>`; (3) redeploy `--only functions`. Because the gate is honored at discovery (previous section), step 2 genuinely enables the export, and the region pin (above) makes the enabled deploy pass region validation. Enabling the API, flipping the flag, and the end-to-end verification remain tracked in #132.
 
 ## Acceptance criteria
 
 - **Given** the merged gate, **when** `npm run test:functions` runs, **then** `tests/functions/w4-gate-vision-moderation.test.ts` passes: the `visionModerationEnabled` gate is OFF by default and only `'true'` (via `process.env` at runtime, or `functions/.env[.<projectId>]` at discovery) turns it on; `moderateProof` is `undefined` when off and a defined `__endpoint`-bearing CloudFunction when on; and the two notifiers stay exported in both states.
-- **Given** the flag is on, **when** `moderateProof` is compared to its pre-#126 definition, **then** its handler logic, region (`us-central1`), and `onObjectFinalized` options are unchanged.
+- **Given** the flag is on, **when** `moderateProof` is inspected, **then** its handler logic is unchanged from its pre-gate definition and its trigger is pinned to `region: 'us-east1'` to match the default Storage bucket (`__endpoint.region` includes `us-east1`).

@@ -28,10 +28,9 @@ const { getApps, deleteApp } = functionsRequire('firebase-admin/app') as typeof 
 //      (runtime) and the discovery .env-file path.
 //   2. The real module export: with the gate on, moderateProof is a CloudFunction
 //      (an __endpoint-bearing function — exactly what firebase-functions'
-//      loader.js extractStack() registers); off, it is undefined (an undefined
-//      export is skipped by discovery, never validated for the us-central1 vs
-//      us-east1 bucket-region mismatch, never deployed). The notifiers are
-//      always exported.
+//      loader.js extractStack() registers) pinned to region us-east1 to match
+//      the default bucket; off, it is undefined (skipped by discovery, never
+//      deployed). The notifiers are always exported.
 
 describe('visionModerationEnabled gate (#126)', () => {
   it('honors process.env.ENABLE_VISION_MODERATION (runtime path): only the literal "true" enables', () => {
@@ -119,11 +118,11 @@ const importIndex = async () => {
 };
 
 describe('moderateProof export gating (#126)', () => {
-  // onObjectFinalized({ memory: '512MiB' }, ...) (no explicit bucket, unchanged
-  // by this gate) resolves the default bucket from FIREBASE_CONFIG, exactly as
-  // the real firebase CLI sets it during deploy-plan discovery. Fixed here so
-  // the enabled cases can actually construct the trigger. Also drive the gate
-  // via process.env (the runtime seam), which the module reads first.
+  // onObjectFinalized({ memory: '512MiB', region: 'us-east1' }, ...) (no explicit
+  // bucket) resolves the default bucket from FIREBASE_CONFIG, exactly as the real
+  // firebase CLI sets it during deploy-plan discovery. Fixed here so the enabled
+  // cases can actually construct the trigger. Also drive the gate via process.env
+  // (the runtime seam), which the module reads first.
   process.env.FIREBASE_CONFIG = JSON.stringify({
     storageBucket: 'gaycruisebingo-test.appspot.com',
     projectId: 'gaycruisebingo-test',
@@ -155,6 +154,9 @@ describe('moderateProof export gating (#126)', () => {
     // marker — the exact thing loader.js's extractStack() checks for.
     expect(mod.moderateProof).toHaveProperty('__endpoint');
     expect(typeof mod.moderateProof.__endpoint).toBe('object');
+    // Pinned to us-east1 to match the default Storage bucket (#132): a
+    // us-central1 trigger on a us-east1 bucket fails deploy-plan validation.
+    expect(mod.moderateProof.__endpoint.region).toContain('us-east1');
   });
 
   it('leaves the #101 notifiers exported and unaffected regardless of the flag', async () => {

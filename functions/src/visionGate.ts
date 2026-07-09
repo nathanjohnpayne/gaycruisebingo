@@ -4,11 +4,14 @@ import { join } from 'node:path';
 /**
  * The Cloud Vision gate for the `moderateProof` export (#126).
  *
- * `moderateProof` is a `us-central1` Storage trigger on the `us-east1` default
- * bucket — an invalid region pairing that fails Firebase's deploy-plan
- * validation and blocks the whole `functions` deploy (including the #101
- * notifiers). So the export is gated OFF by default; it must be a deployed
- * CloudFunction only when Cloud Vision is deliberately enabled.
+ * Cloud Vision is deferred by default: the export is gated OFF until an operator
+ * deliberately enables it, so a proof scanner is not deployed before it is
+ * wanted (and before the Cloud Vision API is turned on). When enabled, the
+ * export is pinned to `region: 'us-east1'` (in index.ts) to match the default
+ * Storage bucket, so it deploys cleanly — a `us-central1` trigger on the
+ * `us-east1` bucket was an invalid region pairing that failed Firebase's
+ * deploy-plan validation and blocked the whole `functions` deploy (including
+ * the #101 notifiers).
  *
  * The subtle part is WHERE the flag can be read so the gate actually flips at
  * DEPLOY. Firebase resolves the set of deployed functions during "trigger
