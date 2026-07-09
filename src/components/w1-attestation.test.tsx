@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   ensureUserProfile: vi.fn(),
   attestAdult: vi.fn(),
   readAdultAttestation: vi.fn(),
+  readAdultAttestationFromCache: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
   // Records a render of the confirm-path listener (#41) so a test can assert it
@@ -34,6 +35,7 @@ vi.mock('../data/api', () => ({
   ensureUserProfile: mocks.ensureUserProfile,
   attestAdult: mocks.attestAdult,
   readAdultAttestation: mocks.readAdultAttestation,
+  readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));
@@ -125,6 +127,10 @@ beforeEach(() => {
   });
   mocks.ensureUserProfile.mockResolvedValue(undefined);
   mocks.attestAdult.mockResolvedValue(undefined);
+  // These suites run ONLINE (jsdom navigator.onLine is true), where the bootstrap
+  // reads the server, not the cache (#115). The cache reader is stubbed as a MISS
+  // so any offline-path call would simply fall through to the authoritative read.
+  mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
   mocks.joinAndDeal.mockResolvedValue(undefined);
   mocks.signInWithPopup.mockResolvedValue({});
   mocks.signOut.mockResolvedValue(undefined);

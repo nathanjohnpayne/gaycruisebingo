@@ -2,12 +2,13 @@ import { render, screen, act, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AuthProvider, useAuth } from './AuthContext';
 
-// Covers specs/x-offline-cold-boot.md — the app must cold-boot from the
-// persistent cache while OFFLINE (#115): publish the signed-in User and settle
-// `loading: false` immediately, run the network-bound bootstrap OFF the render
-// path, settle the 18+ gate cache-first without ever failing it open, and recover
-// deterministically on reconnect. Mocks the Firebase + data-layer boundary so the
-// REAL AuthProvider runs under jsdom and the tests drive connectivity by hand.
+// Covers specs/x-offline-cold-boot.md — the connectivity/attestation state
+// machine (#115). The cache lifts the 18+ gate PROVISIONALLY offline so the app
+// cold-boots from the persistent cache without awaiting the network; the server
+// read is AUTHORITATIVE when it arrives (online sessions stay gated until it
+// settles, and it downgrades a stale cache lift); and the deferred deal fires on
+// reconnect. Mocks the Firebase + data-layer boundary so the REAL AuthProvider
+// runs under jsdom, with connectivity driven by hand.
 const mocks = vi.hoisted(() => ({
   onAuthStateChanged: vi.fn(),
   signInWithPopup: vi.fn(),
@@ -18,8 +19,8 @@ const mocks = vi.hoisted(() => ({
   readAdultAttestationFromCache: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
-  // Mutable so the reconnect handler's `auth.currentUser` read resolves the
-  // signed-in User (Firebase restores the persisted User offline).
+  // Mutable so the reconnect handler / attest() read the signed-in User (Firebase
+  // restores the persisted User offline).
   auth: { currentUser: null as unknown },
 }));
 
@@ -47,15 +48,24 @@ let emitAuth: (u: unknown) => unknown = () => {};
 
 // Never settles — models a Firestore TRANSACTION offline: ensureUserProfile does
 // not queue, so awaiting it on the render path is what stuck the old app on
-// "Loading…" forever. If the fix touched it on the critical path, the mount would
-// hang here.
+// "Loading…" forever.
 const NEVER = new Promise<void>(() => {});
 
-// Children render only when the re-prompt gate is DOWN (needsAttestation false);
-// when it is up, AuthProvider renders <SignIn/> in their place (its re-prompt
-// copy is asserted directly). So `board` present ⇔ the Board would render.
+function deferred<T>() {
+  let settle!: (v: T) => void;
+  const promise = new Promise<T>((res) => (settle = res));
+  return { promise, settle };
+}
+
+// `loading` is App.tsx's Board gate (App renders "Loading…" while loading is true,
+// the Board only once it is false), so a unit test can read it as the proxy for
+// "would the Board render?". `board` renders only when the re-prompt gate is DOWN;
+// when it is up, AuthProvider renders <SignIn/> in its place. signIn/attest are
+// captured to drive the same-session optimistic-attest path (#112 Finding 3).
+let ctxSignIn: () => Promise<void> = async () => {};
 function Probe() {
-  const { user, loading } = useAuth();
+  const { user, loading, signIn } = useAuth();
+  ctxSignIn = signIn;
   return (
     <div>
       <span data-testid="loading">{loading ? 'loading' : 'ready'}</span>
@@ -76,10 +86,9 @@ const mount = () =>
     </AuthProvider>,
   );
 
-// Fire the auth callback and flush its SYNCHRONOUS publish (user + loading:false)
-// WITHOUT awaiting the fire-and-forget bootstrap — mirroring Firebase, which
-// ignores an onAuthStateChanged callback's return value. Tests that need the
-// bootstrap to have progressed use waitFor.
+// Fire the auth callback and flush its SYNCHRONOUS publish WITHOUT awaiting the
+// fire-and-forget bootstrap — mirroring Firebase, which ignores the callback's
+// return value. Tests that need the bootstrap to have progressed use waitFor.
 const coldBoot = (u: unknown) =>
   act(async () => {
     mocks.auth.currentUser = u;
@@ -99,6 +108,7 @@ const rePromptShown = () => screen.queryByText(/One quick thing/i) !== null;
 beforeEach(() => {
   vi.clearAllMocks();
   emitAuth = () => {};
+  ctxSignIn = async () => {};
   mocks.auth.currentUser = null;
   setOnline(true);
   mocks.onAuthStateChanged.mockImplementation((_a: unknown, cb: (u: unknown) => unknown) => {
@@ -118,8 +128,8 @@ afterEach(() => setOnline(true));
 
 describe('offline cold boot (#115)', () => {
   it('publishes the User and settles loading:false without awaiting the network transaction', async () => {
-    // Offline: ensureUserProfile (a transaction) would never resolve. The cached
-    // stamp is present so the returning User is attested.
+    // Offline: ensureUserProfile (a transaction) would never resolve; the cached
+    // stamp settles the returning User attested.
     setOnline(false);
     mocks.ensureUserProfile.mockReturnValue(NEVER);
     mocks.readAdultAttestationFromCache.mockResolvedValue(1);
@@ -135,67 +145,132 @@ describe('offline cold boot (#115)', () => {
     expect(mocks.ensureUserProfile).not.toHaveBeenCalled();
     // A deal is a network-bound create path; it must not fire offline.
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+    expect(rePromptShown()).toBe(false);
   });
 
-  it("settles the 18+ gate offline from a cached attestation, and cache-first never fails it open on the server's word", async () => {
-    setOnline(false);
-    mocks.ensureUserProfile.mockReturnValue(NEVER);
-    mocks.readAdultAttestationFromCache.mockResolvedValue(1); // cached: attested
+  it('finding B: an ONLINE un-attested session stays gated on Loading until the server read settles, THEN re-prompts', async () => {
+    // Online: the authoritative read is held in flight.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    const read = deferred<number | null>();
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestation.mockReturnValue(read.promise);
 
     mount();
     await coldBoot(RETURNING_USER);
 
-    // Gate DOWN offline: the Board renders, no re-prompt, and the deal is deferred
-    // (returning boarded User needs none).
-    await waitFor(() => expect(screen.getByTestId('board')).toBeInTheDocument());
+    // While the read is in flight the app is GATED: App would show "Loading…",
+    // NOT the Board (loading still true), and no re-prompt has flashed.
+    expect(screen.getByTestId('loading')).toHaveTextContent('loading');
     expect(rePromptShown()).toBe(false);
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
 
-    // Prove the CACHE settled attestation TRUE (not merely UNKNOWN): reconnect
-    // with a server read that (contrived) reports NO stamp. Because the cache
-    // already settled `true`, the optimistic value wins — still no re-prompt. Had
-    // the cache left it UNKNOWN, the server `null` would drop the re-prompt gate.
+    // The server says NO stamp → the gate resolves to a re-prompt, loading released.
+    await act(async () => {
+      read.settle(null);
+      await read.promise;
+    });
+    // The re-prompt appearing (needsAttestation requires profileReady) implies the
+    // gate settled and loading was released; the Probe is now unmounted behind it.
+    await waitFor(() => expect(rePromptShown()).toBe(true));
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+  });
+
+  it('finding B (offline half): a cache-attested returning User renders the cached Board immediately offline', async () => {
+    setOnline(false);
+    mocks.readAdultAttestationFromCache.mockResolvedValue(1); // cached: attested
+    mocks.ensureUserProfile.mockReturnValue(NEVER);
+
+    mount();
+    await coldBoot(RETURNING_USER);
+
+    // Rendered immediately from cache — loading released, no gate, no deal offline.
+    await waitFor(() => expect(screen.getByTestId('board')).toBeInTheDocument());
+    expect(screen.getByTestId('loading')).toHaveTextContent('ready');
+    expect(rePromptShown()).toBe(false);
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+  });
+
+  it('finding C: a cache-attested User with no board for the Event defers the deal offline and fires it exactly once on reconnect', async () => {
+    // Offline cold boot: attested from cache, but this is a FRESH Event so
+    // joinAndDeal has real work (boards are per-Event). It must not run offline.
+    setOnline(false);
+    mocks.readAdultAttestationFromCache.mockResolvedValue(1);
     mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestation.mockResolvedValue(1); // server confirms on reconnect
+
+    mount();
+    await coldBoot(RETURNING_USER);
+
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+    expect(rePromptShown()).toBe(false);
+
+    // Reconnect: the deferred deal fires exactly once (the online state flip
+    // re-runs the gated deal effect), and never before.
+    await reconnect();
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+  });
+
+  it('finding D: an authoritative server read with NO stamp downgrades a stale cache lift to a re-prompt on reconnect', async () => {
+    // Offline: a STALE cached stamp provisionally lifts the gate.
+    setOnline(false);
+    mocks.readAdultAttestationFromCache.mockResolvedValue(1);
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    expect(rePromptShown()).toBe(false); // provisionally attested offline
+
+    // Reconnect: the server row now has NO stamp (owner deleted/recreated it).
+    // The authoritative read DOWNGRADES the provisional lift → re-prompt.
     mocks.readAdultAttestation.mockResolvedValue(null);
     await reconnect();
 
-    await waitFor(() => expect(mocks.ensureUserProfile).toHaveBeenCalled());
-    expect(rePromptShown()).toBe(false);
-    expect(screen.getByTestId('board')).toBeInTheDocument();
-    // Still a returning User — reconnect deals nothing (no undefined→true edge).
+    await waitFor(() => expect(rePromptShown()).toBe(true));
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
   });
 
-  it('leaves attestation UNKNOWN with no cached stamp — the gate holds, the deal defers, and reconnect recovers deterministically', async () => {
+  it('finding D: an authoritative server read that CONFIRMS the stamp keeps the User attested', async () => {
     setOnline(false);
-    mocks.ensureUserProfile.mockReturnValue(NEVER);
-    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.readAdultAttestationFromCache.mockResolvedValue(1);
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
 
     mount();
     await coldBoot(RETURNING_USER);
 
-    // UNKNOWN offline: the Board still renders (no blocking), but the gate holds —
-    // no re-prompt flash, and the deal does not fire (attestation not settled true,
-    // and offline anyway).
-    expect(screen.getByTestId('board')).toBeInTheDocument();
-    expect(rePromptShown()).toBe(false);
-    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
-
-    // Reconnect: the DEFERRED bootstrap runs exactly once, the server settles the
-    // attestation true, and the deferred deal fires — deterministic recovery, no
-    // pending transaction left racing the supersede logic.
-    mocks.ensureUserProfile.mockResolvedValue(undefined);
-    mocks.readAdultAttestation.mockResolvedValue(1);
+    mocks.readAdultAttestation.mockResolvedValue(1); // server confirms
     await reconnect();
 
-    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalled());
+    expect(rePromptShown()).toBe(false);
+    expect(screen.getByTestId('board')).toBeInTheDocument();
+  });
+
+  it('#112 preserved: a same-session optimistic attest stays sticky even when the server read returns no stamp', async () => {
+    // A first-time sign-in this session records the uid in attestedUidsRef and
+    // flips attested true optimistically; a later auth callback whose server read
+    // does not yet see the write must NOT downgrade it.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestation.mockResolvedValue(null); // stale: attest txn not visible yet
+
+    mount();
+    mocks.auth.currentUser = RETURNING_USER;
+    await act(async () => {
+      await ctxSignIn(); // signInWithPopup → attest(): sticky + optimistic true
+    });
+    await coldBoot(RETURNING_USER);
+
+    // The stale server null does NOT re-prompt — the same-session attest is sticky.
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalled());
     expect(rePromptShown()).toBe(false);
   });
 
-  it('does NOT fail the age gate open offline: with no attestation anywhere, reconnect settles the re-prompt and never deals', async () => {
+  it('does NOT fail the age gate open offline: no attestation anywhere means UNKNOWN, held, and never a deal', async () => {
     setOnline(false);
-    mocks.ensureUserProfile.mockReturnValue(NEVER);
     mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockReturnValue(NEVER);
 
     mount();
     await coldBoot(RETURNING_USER);
@@ -205,7 +280,7 @@ describe('offline cold boot (#115)', () => {
     expect(rePromptShown()).toBe(false);
 
     // Reconnect with a server that reports a genuinely UN-attested profile: the
-    // gate now HOLDS as a definite re-prompt (never a fail-open deal).
+    // gate HOLDS as a definite re-prompt, never a fail-open deal.
     mocks.ensureUserProfile.mockResolvedValue(undefined);
     mocks.readAdultAttestation.mockResolvedValue(null);
     await reconnect();
