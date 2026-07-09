@@ -13,10 +13,10 @@ import { contrastRatio, hexToRgb, parseThemeBlocks } from './contrast';
 // switch-latency metric, and the "no Atlantis marks" non-goal.
 //
 // The WCAG 2.1 luminance/contrast helpers and the themes.css block parser live
-// in ./contrast (shared with src/theme/a11y-badge-contrast.test.tsx) so the
-// suite computes from one implementation and never hand-transcribes a color
-// table. Ratios are still computed over [data-theme] blocks parsed straight out
-// of themes.css, so this test can never drift from the CSS it polices.
+// in ./contrast (shared with the badge and theme-on-color suites) so the suite
+// computes from one implementation and never hand-transcribes a color table.
+// Ratios are still computed over [data-theme] blocks parsed straight out of
+// themes.css, so this test can never drift from the CSS it polices.
 
 // `join(dirname(fileURLToPath(import.meta.url)), ...)` rather than
 // `new URL('./themes.css', import.meta.url)`: Vite statically rewrites the
@@ -29,34 +29,33 @@ const themeBlocks = parseThemeBlocks(readFileSync(cssPath, 'utf-8'));
 // values — see specs/w1-themes.md § WCAG AA contrast contract for the
 // call-site inventory.
 //
-// Every one of --ink/--dim/--primary/--secondary/--accent is used as a real
-// text fill somewhere in src/index.css (not merely a border or glow), so
-// every pair below is held to the 4.5:1 normal-text floor (WCAG 1.4.3)
-// rather than the looser 3:1 non-text/UI-component floor (1.4.11):
-// --primary and --accent each drive a border/box-shadow *and* a text fill
-// with the identical custom-property value, so the stricter bar is the
-// binding constraint for the variable either way. Border/glow-only call
-// sites that reuse these same pairs (.btn.primary / .chip.active / .cell.free
-// borders, etc.) are covered for free since they share the checked value.
+// Every one of --ink/--dim/--accent is used as a real text fill somewhere in
+// src/index.css (not merely a border or glow), so every pair below is held
+// to the 4.5:1 normal-text floor (WCAG 1.4.3) rather than the looser 3:1
+// non-text/UI-component floor (1.4.11): --accent drives a border/box-shadow
+// *and* a text fill with the identical custom-property value, so the
+// stricter bar is the binding constraint for the variable either way.
+// Border/glow-only call sites that reuse these same pairs (.cell.free
+// border, etc.) are covered for free since they share the checked value.
 //
-// Known bound (see specs/w1-themes.md § WCAG AA contrast contract, "Known
-// bound"): the primary/bg and secondary/bg checks below are against the flat
-// --bg token only. body's real background (src/index.css) layers
-// primary/secondary-tinted radial-gradient stops over --bg, so the
-// composited backdrop behind .brand b / the B-I-N-G-O header and .count b
-// can be more saturated than --bg near a gradient's center — verified to
-// drop as low as 3.15:1 for summer-white's --primary. This suite
-// deliberately does not chase that surface here; see the spec for why and
-// for the tracked follow-up.
+// primary/bg and secondary/bg (issue #72, specs/theme-on-color-contrast.md):
+// retired as *text* pairs here. .brand b / .bingo-head span (the B-I-N-G-O
+// header) and .count b used to fill text with --primary/--secondary
+// directly on body's gradient-tinted background — the former "Known bound"
+// this suite deliberately didn't chase (verified to drop as low as 3.15:1
+// for summer-white's --primary against its own tint) — and now use --ink
+// instead; see theme-on-color-contrast.test.tsx for that fix's coverage.
+// --primary/--secondary still back border/box-shadow-only call sites
+// (.btn.primary, .chip.active, .row .rank text on --panel, etc.) at the
+// looser 3:1 UI-component floor or on --panel, not --bg, so no pair below
+// is needed to cover them.
 const TEXT_PAIRS: [fg: string, bg: string][] = [
-  ['ink', 'bg'], // body text
+  ['ink', 'bg'], // body text; .signin h1; .celebrate .big (flat-bg floor — see theme-on-color-contrast.test.tsx for the composited-backdrop checks)
   ['ink', 'panel'], // .row .name, .input text
   ['ink', 'cell'], // .cell text
   ['dim', 'bg'], // .muted, .count, .ack, inactive .tab
   ['dim', 'panel'], // .row .sub
-  ['primary', 'bg'], // .brand b; .bingo-head span (the B-I-N-G-O header — normal text below ~400px viewports)
   ['primary', 'panel'], // .row .rank (leaderboard rank numbers, 22px normal weight)
-  ['secondary', 'bg'], // .count b
   ['accent', 'cell'], // .cell.free text ("FREE")
   ['accent', 'panel'], // .badge ("1st BINGO")
 ];

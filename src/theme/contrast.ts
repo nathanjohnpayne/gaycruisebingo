@@ -1,9 +1,11 @@
 /* WCAG 2.1 contrast + sRGB compositing helpers, plus a themes.css token-block
  * parser. Extracted here so every contrast check in the suite computes from one
  * implementation instead of hand-transcribing a color table:
- *   - src/theme/w1-themes.test.tsx      — token pairs (--ink/--primary/… on their surfaces)
- *   - src/theme/a11y-badge-contrast.test.tsx — the composited .doubt-badge / .tally-badge overlays
- * See specs/w1-themes.md and specs/a11y-badge-contrast.md. */
+ *   - src/theme/w1-themes.test.tsx
+ *   - src/theme/a11y-badge-contrast.test.tsx
+ *   - src/theme/theme-on-color-contrast.test.tsx
+ * See specs/w1-themes.md, specs/a11y-badge-contrast.md, and
+ * specs/theme-on-color-contrast.md. */
 
 export type Rgb = [r: number, g: number, b: number];
 export type ThemeVars = Record<string, string>;
