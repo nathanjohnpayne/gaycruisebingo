@@ -324,7 +324,11 @@ export async function joinAndDeal(u: User): Promise<boolean> {
         !isReportHidden(it.reportCount, threshold) &&
         !isBanned(it.createdBy, bannedUids),
     )
-    .map((it) => ({ id: it.id, text: it.text, spicy: it.spicy }));
+    // spicy is coerced to a strict boolean (CodeRabbit, PR #135): a legacy or
+    // malformed item doc missing the field, or carrying a truthy non-boolean
+    // like the string 'false', must read as tame rather than skew the
+    // stratified deal.
+    .map((it) => ({ id: it.id, text: it.text, spicy: it.spicy === true }));
 
   // The target spicy share for stratified composition (w1-seed-and-composition),
   // read defensively from the same already-fetched event doc as `threshold` above

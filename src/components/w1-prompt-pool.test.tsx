@@ -79,6 +79,20 @@ describe('adding a Prompt', () => {
     await waitFor(() => expect(input).toHaveValue(''));
   });
 
+  it('calls addItem with spicy: true when the 🔞 toggle is checked, and resets the toggle after a successful add', async () => {
+    const user = userEvent.setup();
+    signIn('add-spicy-uid');
+
+    render(<ItemPool />);
+    await user.type(screen.getByPlaceholderText(/add a prompt/i), 'Suite orgy');
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: 'Add' }));
+
+    await waitFor(() => expect(addItemMock).toHaveBeenCalledTimes(1));
+    expect(addItemMock).toHaveBeenCalledWith('add-spicy-uid', 'Suite orgy', true);
+    await waitFor(() => expect(screen.getByRole('checkbox')).not.toBeChecked());
+  });
+
   it('does nothing for blank/whitespace-only text (the Add button stays disabled)', async () => {
     const user = userEvent.setup();
     signIn('add-blank-uid');

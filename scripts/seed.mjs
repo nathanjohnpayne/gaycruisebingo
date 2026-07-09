@@ -205,20 +205,23 @@ async function seed() {
 
   const col = eventRef.collection('items');
 
-  // Replace semantics, not append (w1-seed-and-composition): every existing
+  // Replace semantics, not append (w1-seed-and-composition): every SEED-OWNED
   // item doc is deleted and the current ITEMS are (re)written in ONE atomic
   // batch (Codex P2, PR #135) — not a delete batch committed separately from
-  // the write batch, which would leave events/{id}/items genuinely empty
-  // (and joinAndDeal unable to deal a board) if the process died or the
-  // write batch failed between the two commits. A doc whose id is unchanged
-  // across reseeds (same text) gets a delete followed by a set within the
-  // same batch; Firestore applies per-document batch ops in order, so the
-  // set is what lands. 87 deletes + 87 sets is 174 ops, comfortably under a
-  // single batch's 500-op limit.
+  // the write batch, which would leave events/{id}/items with no seed prompts
+  // (and joinAndDeal short of MIN_POOL) if the process died or the write
+  // batch failed between the two commits. A doc whose id is unchanged across
+  // reseeds (same text) gets a delete followed by a set within the same
+  // batch; Firestore applies per-document batch ops in order, so the set is
+  // what lands. The delete pass is scoped to `createdBy === 'seed'`
+  // (CodeRabbit Major, PR #135) — addItem writes live Player-submitted
+  // prompts into this SAME collection with their own uid as createdBy, so an
+  // unscoped delete-everything would erase user content on every reseed.
   const existing = await col.get();
+  const seedOwnedDocs = existing.docs.filter((doc) => doc.data().createdBy === 'seed');
   const now = Date.now();
   const batch = db.batch();
-  for (const doc of existing.docs) batch.delete(doc.ref);
+  for (const doc of seedOwnedDocs) batch.delete(doc.ref);
   for (const { text, spicy } of ITEMS) {
     // Deterministic doc id (content hash of the text only) so re-running the
     // seed upserts the same prompt docs instead of creating duplicates

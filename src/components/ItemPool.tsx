@@ -99,7 +99,7 @@ export default function ItemPool() {
           Add
         </button>
         <label style={{ fontSize: 12 }}>
-          <input type="checkbox" checked={spicy} onChange={(e) => setSpicy(e.target.checked)} /> 🔞
+          <input type="checkbox" checked={spicy} onChange={(e) => setSpicy(e.target.checked)} /> 🔞 Spicy
         </label>
       </div>
       <p className="muted" style={{ fontSize: 12 }}>
