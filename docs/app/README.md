@@ -76,7 +76,15 @@ ADMIN_UID=<admin-uid> GOOGLE_CLOUD_PROJECT=gaycruisebingo node scripts/seed.mjs
 rm -f serviceAccountKey.json             # don't leave the key on disk
 ```
 
-This creates `events/med-2026` (honor claim-mode, `neon-playground` default theme, the admin uid) and the 32 starter prompts. It is idempotent — deterministic doc ids + merge, so it is safe to re-run (e.g. to add a new admin or refresh prompts). The free center ("Complain about Circuit Music") is synthetic and not stored as an item. See the header of `scripts/seed.mjs` for details.
+This creates `events/med-2026` (honor claim-mode, `neon-playground` default theme, the admin uid) and the canonical **87-prompt pool** (24 spicy / 63 tame — see `specs/seed-and-composition.md`). It is idempotent and uses **replace semantics**: deterministic content-hash doc ids, and every seed-owned prompt the current pool no longer contains is deleted (player-submitted prompts, `createdBy !== 'seed'`, are preserved). So it is safe — and expected — to re-run to refresh prompts or add a new admin. The free center ("Complain about circuit music") is synthetic and not stored as an item. On success the seed **self-verifies** the live pool against the canonical list. See the header of `scripts/seed.mjs` for details.
+
+> **⚠️ The prompt pool lives in Firestore, not in the deployed JS bundle** — the app renders `events/{id}/items`, which only this seed writes. Changing the pool in `src/data/seed.ts` / `scripts/seed.mjs` and deploying the app does **not** reach players: you must re-run the seed against the live project. A frontend change (e.g. the 🔞-toggle) ships with `npm run deploy:hosting`; a **pool** change additionally requires a reseed. This is exactly how the #129 87-prompt update reached players' cards late — the code merged and the bundle deployed, but the reseed was skipped. Whenever `ITEMS` changes, reseed, then confirm with the drift check:
+>
+> ```bash
+> npm run verify:seed    # = node scripts/seed.mjs --verify (read-only; exit 1 on drift)
+> ```
+>
+> Run `verify:seed` as the last step of any deploy that touched the pool (and any time you suspect players are on a stale pool). It reads the live `events/{id}/items`, compares the seed-owned docs to the canonical `ITEMS`, and fails loudly — listing what is missing / stale — instead of the drift going unnoticed.
 
 ## 5. Deploy
 

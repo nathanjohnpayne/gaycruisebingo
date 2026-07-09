@@ -15,6 +15,8 @@
     "test:functions": "npm --prefix functions install && vitest run --config vitest.functions.config.ts",
     "test:e2e": "scripts/test-e2e.sh",
     "emulator": "firebase emulators:start --only auth,firestore,storage",
+    "seed": "node scripts/seed.mjs",
+    "verify:seed": "node scripts/seed.mjs --verify",
     "deploy": "npm run build && scripts/firebase/op-firebase-deploy",
     "deploy:hosting": "npm run build && scripts/firebase/op-firebase-deploy --only hosting",
     "pretest:e2e": "playwright install chromium"

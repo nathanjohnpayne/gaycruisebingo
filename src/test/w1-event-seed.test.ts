@@ -5,7 +5,21 @@ import { resolve } from 'node:path';
 // declarations (tsconfig sets no allowJs); Vitest resolves and executes it natively,
 // and importing it is side-effect-free because seeding only runs when the script is
 // the entry module. Asserts specs/w1-event-seed.md.
-import { EVENT_SEED, ITEMS, adminRoster, eventWritePayload } from '../../scripts/seed.mjs';
+import { EVENT_SEED, ITEMS, adminRoster, eventWritePayload, seedItemDocId, verifySeedPool } from '../../scripts/seed.mjs';
+
+type SeedItem = { text: string; spicy: boolean };
+type LiveDoc = { id: string; text: string; createdBy: string; spicy: boolean };
+
+// Build the live `events/{id}/items` shape a correct, in-sync seed run leaves
+// behind: every canonical prompt as a seed-owned doc with the content-hash id.
+function liveFromCanonical(pool: SeedItem[] = ITEMS as SeedItem[]): LiveDoc[] {
+  return pool.map(({ text, spicy }) => ({
+    id: seedItemDocId(text),
+    text,
+    createdBy: 'seed',
+    spicy,
+  }));
+}
 
 // Vitest runs with cwd at the repo root; jsdom's import.meta.url is not a file: URL.
 const seedSource = readFileSync(resolve(process.cwd(), 'scripts/seed.mjs'), 'utf8');
@@ -108,5 +122,88 @@ describe('w1-event-seed: prompt pool density (ADR 0003)', () => {
       expect(it.text.trim().length).toBeGreaterThan(0);
       expect(typeof it.spicy).toBe('boolean');
     }
+  });
+});
+
+// #129 reopened: the app renders the pool from Firestore, not the JS bundle, so a
+// merged-and-deployed pool change still leaves players on the OLD pool until the
+// seed is re-run against the live project — exactly what happened after #135
+// (87-prompt pool shipped, but events/{id}/items still held the pre-#135 32).
+// `verifySeedPool` is the drift check that turns that silent gap into a loud
+// failure (`node scripts/seed.mjs --verify`, post-deploy). These pin its verdicts.
+describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
+  it('reports ok for a live pool that matches the canonical ITEMS exactly', () => {
+    const report = verifySeedPool(liveFromCanonical());
+    expect(report.ok).toBe(true);
+    expect(report.expected).toBe(87);
+    expect(report.seedOwned).toBe(87);
+    expect(report.missing).toEqual([]);
+    expect(report.stale).toEqual([]);
+    expect(report.mismatched).toEqual([]);
+  });
+
+  it('ignores player-submitted prompts — they are not canonical and never count as drift', () => {
+    const live: LiveDoc[] = [
+      ...liveFromCanonical(),
+      { id: 'player-abc', text: 'A player prompt', createdBy: 'player-1', spicy: true },
+    ];
+    const report = verifySeedPool(live);
+    expect(report.ok).toBe(true);
+    expect(report.playerOwned).toBe(1);
+    expect(report.stale).toEqual([]);
+  });
+
+  it('flags a canonical prompt that was never seeded as missing', () => {
+    const live = liveFromCanonical().filter((d) => d.text !== 'Scabies');
+    const report = verifySeedPool(live);
+    expect(report.ok).toBe(false);
+    expect(report.missing.map((m: { text: string }) => m.text)).toEqual(['Scabies']);
+    expect(report.stale).toEqual([]);
+  });
+
+  it('flags a seed-owned prompt the canonical pool no longer contains as stale', () => {
+    const live: LiveDoc[] = [
+      ...liveFromCanonical(),
+      { id: seedItemDocId('A retired prompt'), text: 'A retired prompt', createdBy: 'seed', spicy: false },
+    ];
+    const report = verifySeedPool(live);
+    expect(report.ok).toBe(false);
+    expect(report.stale.map((s: { text: string }) => s.text)).toEqual(['A retired prompt']);
+    expect(report.missing).toEqual([]);
+  });
+
+  it('flags a spicy-flag drift (same prompt text, flag flipped without a reseed) as mismatched', () => {
+    const live = liveFromCanonical().map((d) =>
+      d.text === 'Threesome' ? { ...d, spicy: false } : d,
+    );
+    const report = verifySeedPool(live);
+    expect(report.ok).toBe(false);
+    expect(report.mismatched).toHaveLength(1);
+    expect(report.mismatched[0]).toMatchObject({
+      text: 'Threesome',
+      expectedSpicy: true,
+      actualSpicy: false,
+    });
+  });
+
+  // The exact production condition: the live pool is still the OLD (pre-#135)
+  // seed set — a couple of prompts that survived into the new pool, plus retired
+  // ones — and none of the ~86 new entries. verifySeedPool must catch it as both
+  // missing (new entries absent) AND stale (retired entries lingering).
+  it('reproduces the #129 incident: an un-reseeded OLD pool drifts on both axes', () => {
+    const oldLive: LiveDoc[] = [
+      // Survived unchanged into the new pool.
+      { id: seedItemDocId('Threesome'), text: 'Threesome', createdBy: 'seed', spicy: true },
+      // Retired / renamed by #135 — should have been deleted on reseed.
+      { id: seedItemDocId('Make out with Patti LuPone'), text: 'Make out with Patti LuPone', createdBy: 'seed', spicy: true },
+      { id: seedItemDocId('Dance-floor blowjob'), text: 'Dance-floor blowjob', createdBy: 'seed', spicy: true },
+      { id: seedItemDocId('3 loads in one day'), text: '3 loads in one day', createdBy: 'seed', spicy: true },
+    ];
+    const report = verifySeedPool(oldLive);
+    expect(report.ok).toBe(false);
+    expect(report.missing.length).toBe(86); // every new-pool entry except 'Threesome'
+    expect(report.stale.map((s: { text: string }) => s.text).sort()).toEqual(
+      ['3 loads in one day', 'Dance-floor blowjob', 'Make out with Patti LuPone'].sort(),
+    );
   });
 });

@@ -13,7 +13,7 @@ import {
 } from 'firebase/firestore';
 // @ts-expect-error — scripts/seed.mjs is a plain-JS node script with no type
 // declarations. The exported payload helpers are import-safe and side-effect-free.
-import { adminRoster, eventWritePayload, seedItemMutations } from '../../scripts/seed.mjs';
+import { ITEMS, adminRoster, eventWritePayload, seedItemDocId, seedItemMutations, verifySeedPool } from '../../scripts/seed.mjs';
 
 const RULES_PATH = fileURLToPath(new URL('../../firestore.rules', import.meta.url));
 const EVENT = 'seed-composition';
@@ -111,6 +111,70 @@ describe('scripts/seed.mjs — emulator-backed seed-owned replace semantics', ()
       expect(byId.has('stale-seed')).toBe(false);
       expect(byId.get('player-prompt')?.text).toBe('player prompt');
       expect(byId.get('player-prompt')?.createdBy).toBe('player-1');
+    });
+  });
+});
+
+async function readPool(db: Firestore) {
+  const snap = await getDocs(collection(db, 'events', EVENT, 'items'));
+  return snap.docs.map((d) => ({
+    id: d.id,
+    text: d.data().text,
+    createdBy: d.data().createdBy,
+    spicy: d.data().spicy,
+  }));
+}
+
+// #129 reopened: a merged + deployed pool change still leaves players on the OLD
+// pool until the seed is re-run against the live project. `verifySeedPool` is the
+// drift check that catches that gap; these run it against a real (emulator)
+// Firestore end-to-end — the seed writes, then the check reads the same docs back.
+describe('scripts/seed.mjs — verifySeedPool against a live (emulator) Firestore', () => {
+  it('a fresh seed leaves the live pool matching the canonical ITEMS (verify ok)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      await applySeed(db);
+      const report = verifySeedPool(await readPool(db), ITEMS);
+      expect(report.ok).toBe(true);
+      expect(report.seedOwned).toBe(87);
+      expect(report.missing).toEqual([]);
+      expect(report.stale).toEqual([]);
+    });
+  });
+
+  it('catches an un-reseeded OLD pool as drift, then confirms the seed reconciles it', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const db = ctx.firestore();
+      // Simulate the exact production state after #135 merged/deployed but the
+      // reseed was skipped: the live pool is still the pre-#135 seed set.
+      const oldPool = [
+        { text: 'Threesome', spicy: true }, // survived into the new pool
+        { text: 'Make out with Patti LuPone', spicy: true }, // retired by #135
+        { text: 'Dance-floor blowjob', spicy: true }, // retired by #135
+        { text: '3 loads in one day', spicy: true }, // retired by #135
+      ];
+      for (const { text, spicy } of oldPool) {
+        await setDoc(doc(db, 'events', EVENT, 'items', seedItemDocId(text)), {
+          text,
+          createdBy: 'seed',
+          createdAt: 1,
+          isFreeSpace: false,
+          status: 'active',
+          reportCount: 0,
+          spicy,
+        });
+      }
+
+      const before = verifySeedPool(await readPool(db), ITEMS);
+      expect(before.ok).toBe(false);
+      expect(before.missing.length).toBe(86); // every new entry except 'Threesome'
+      expect(before.stale.length).toBe(3); // the retired entries
+
+      // Running the seed (what was skipped in prod) reconciles the pool.
+      await applySeed(db);
+      const after = verifySeedPool(await readPool(db), ITEMS);
+      expect(after.ok).toBe(true);
+      expect(after.seedOwned).toBe(87);
     });
   });
 });
