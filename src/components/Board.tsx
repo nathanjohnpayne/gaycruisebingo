@@ -852,7 +852,15 @@ export default function Board() {
           <span key={l}>{l}</span>
         ))}
       </div>
-      <div className="grid">
+      {/* `data-server-confirmed` mirrors useBoard's `hasServerData` latch — the
+          first SERVER-backed board snapshot (vs the latency-compensated cache
+          echo that can arrive first). It carries no styling; it is the
+          deterministic signal the e2e suite waits on before tapping a winning
+          line, so a BINGO that lands while the board is still cache-only (which
+          the Celebration baseline above would swallow as an initial state, not
+          an animated edge) cannot flake the BINGO! assertion (Codex P2 on
+          PR #114 round 3). */}
+      <div className="grid" data-server-confirmed={boardConfirmed ? 'true' : 'false'}>
         {cells.map((c) => (
           <div
             key={c.index}
