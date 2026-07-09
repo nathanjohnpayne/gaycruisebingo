@@ -108,7 +108,7 @@ function DoubtBadge({
  * blocks, unmarks, or discounts the Mark (never a gate), so nothing here changes
  * the Board; the doubter's own row offers no affordance (no self-doubt).
  *
- * Three review-hardening details (Codex P2, PR #106):
+ * Review-hardening details (Codex P2, PR #106 rounds 1–2):
  *  - Dormant-when-unmarked (finding 2): the open-Doubt header counts ONLY Doubts
  *    whose target is a CURRENT marker. A Doubt doc is never deleted when its target
  *    unmarks (no cross-writer cleanup); instead it goes dormant and reappears in
@@ -121,6 +121,17 @@ function DoubtBadge({
  *  - Item-scoped proofs (finding 4): satisfaction for the markers listed here reads
  *    the active Proofs for THIS Prompt only (`useProofsForItemText`, mounted with
  *    the sheet), not a Board-wide proof stream.
+ *  - Once-only per target (round 2 finding 2): a marker this Player has ALREADY
+ *    doubted — open OR satisfied — keeps the affordance disabled ("Doubted"): the
+ *    deterministic doubt slot makes a re-raise in place structurally denied, so
+ *    the button never offers a write the rules would reject. A fresh demand after
+ *    a satisfying Proof is a retract-then-re-raise flow (the doubter's delete is
+ *    already allowed by the rules), deliberately not surfaced here.
+ *  - Identity-gated accusation (round 2 finding 3): the raise affordance is
+ *    DISABLED until the viewer's saved identity is KNOWN (the same `identityKnown`
+ *    tri-state setMark and the Moment broadcasts gate on) — a Doubt stores the
+ *    accuser's name PERMANENTLY, so waiting beats stamping 'Anonymous'; the
+ *    data layer's cached-row fallback (raiseDoubt) is the defense-in-depth.
  */
 function TallySheet({
   itemId,
@@ -128,6 +139,7 @@ function TallySheet({
   cellIndex,
   meUid,
   meName,
+  identityKnown,
   onClose,
 }: {
   itemId: string;
@@ -135,6 +147,7 @@ function TallySheet({
   cellIndex: number;
   meUid: string;
   meName: string | undefined;
+  identityKnown: boolean;
   onClose: () => void;
 }) {
   const { markers, loading } = useTally(itemId);
@@ -198,7 +211,10 @@ function TallySheet({
             {markers.map((m) => {
               const status = doubtStatusFor(m.uid, doubts, itemText, proofs);
               const isMe = m.uid === meUid;
-              const iAlreadyDoubted = open.some(
+              // ANY Doubt of mine against this marker — open OR satisfied —
+              // disables the affordance (round 2 finding 2): the deterministic
+              // slot is once-only, so a re-raise in place would only be denied.
+              const iAlreadyDoubted = doubts.some(
                 (d) => d.targetUid === m.uid && d.fromUid === meUid,
               );
               const isPending = inFlight.current.has(m.uid);
@@ -218,7 +234,10 @@ function TallySheet({
                     <button
                       className="btn doubt-btn"
                       title="pics or it didn't happen"
-                      disabled={iAlreadyDoubted || isPending}
+                      // !identityKnown: never let a public, permanent accusation
+                      // publish while the accuser's saved name is still unknown
+                      // (round 2 finding 3) — the gate opens when the row loads.
+                      disabled={iAlreadyDoubted || isPending || !identityKnown}
                       onClick={() => doDoubt(m)}
                     >
                       {iAlreadyDoubted ? 'Doubted' : isPending ? 'Doubting…' : 'Doubt'}
@@ -776,6 +795,7 @@ export default function Board() {
           cellIndex={tallyTarget.index}
           meUid={uid}
           meName={identityKnown ? displayName : undefined}
+          identityKnown={identityKnown}
           onClose={() => setTallyTarget(null)}
         />
       )}

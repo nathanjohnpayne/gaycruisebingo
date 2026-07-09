@@ -14,19 +14,28 @@ import type { BoardDoc, Cell, DoubtDoc, PlayerDoc, ProofDoc, TallyEntry } from '
 //      ADR 0002) must never bleed onto an un-doubted Player's own Square;
 //   2. a Doubt is RAISED from another Player's Tally-sheet entry (never one's own);
 //   3. an answered Doubt renders a DISTINCT satisfied state vs an open one.
-// Plus the four Codex P2 fixes on PR #106:
+// Plus the Codex P2 fixes on PR #106 (rounds 1–2):
 //   - finding 1: a rapid double-tap raises EXACTLY one Doubt, the affordance
 //     disables synchronously on the first tap, and re-enables when a non-persisting
 //     write settles;
 //   - finding 2: the header's open-Doubt count drops a Doubt whose target is no
 //     longer a current marker and restores it when they re-mark;
 //   - finding 4: Board opens the VIEWER-scoped own-proofs query and the sheet the
-//     ITEM-scoped one — never the Board-wide proof feed.
+//     ITEM-scoped one — never the Board-wide proof feed;
+//   - round 2 finding 2: a marker this Player has ALREADY doubted — open OR
+//     satisfied — keeps the affordance disabled (the deterministic doubt slot is
+//     once-only; a re-raise in place would only be denied);
+//   - round 2 finding 3: the raise affordance is identity-gated — disabled while
+//     the player row is loading (a Doubt stores the accuser's name PERMANENTLY),
+//     enabled with the SAVED name once identity resolves.
 
 const H = vi.hoisted(() => ({
   user: null as User | null,
   board: null as BoardDoc | null,
   player: null as PlayerDoc | null,
+  // Drives Board's identityKnown tri-state: true models the player-row loading
+  // window in which a raise must be gated (round 2 finding 3).
+  playerLoading: false,
   markers: [] as TallyEntry[],
   doubts: [] as DoubtDoc[],
   // The viewer's OWN active Proofs (useMyProofs → the DoubtBadge, finding 4).
@@ -47,7 +56,7 @@ vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user, loading: false }) }));
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
-  useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
+  useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: true }),
   // honor mode so a tap marks straight through (no ProofSheet detour).
   useEventDoc: () => ({ data: { claimMode: 'honor' }, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
@@ -120,6 +129,7 @@ beforeEach(() => {
   H.user = { uid: 'u1', displayName: 'Me', photoURL: null } as unknown as User;
   H.board = { uid: 'u1', seed: 1, createdAt: 0, cells: dealt() };
   H.player = { uid: 'u1', displayName: 'Me', photoURL: null } as unknown as PlayerDoc;
+  H.playerLoading = false;
   H.markers = [];
   H.doubts = [];
   H.myProofs = [];
@@ -226,6 +236,16 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
     // The header summary is the Prompt-wide total (unlike the per-target Square
     // badge) — Carol's is the only Doubt still open.
     expect(container.querySelector('.doubt-summary')!.textContent).toContain('1 open doubt');
+    // Once-only per target (round 2 finding 2): I already doubted BOTH rows — one
+    // open, one satisfied — so both affordances stay disabled ("Doubted"): the
+    // deterministic doubt slot makes a re-raise in place structurally denied, and
+    // the button never offers a write the rules would reject.
+    const rowButtons = container.querySelectorAll('.doubt-btn');
+    expect(rowButtons.length).toBe(2); // bob + carol (my own row offers none)
+    rowButtons.forEach((b) => {
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+      expect(b.textContent).toBe('Doubted');
+    });
   });
 
   // ---- PR #106 finding 1: a rapid double-tap must not mint duplicate Doubts ----
@@ -320,5 +340,58 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
     fireEvent.click(container.querySelector('.tally-badge')!);
     expect(H.useProofsForItemText).toHaveBeenCalledWith('p0');
     expect(H.useProofFeed).not.toHaveBeenCalled();
+  });
+
+  // ---- PR #106 round 2 finding 3: no anonymous accusation window ----
+
+  it('gates the raise affordance on a KNOWN identity — disabled while the player row loads, enabled with the saved name after (round 2 finding 3)', () => {
+    H.markers = [
+      { uid: 'u1', displayName: 'Me', markedAt: 1 },
+      { uid: 'bob', displayName: 'Bob', markedAt: 2 },
+    ];
+    // The loading window: identityKnown is false, so a tap here would have stored
+    // fromDisplayName 'Anonymous' PERMANENTLY — the affordance must be disabled.
+    H.playerLoading = true;
+
+    const { container, rerender } = render(<Board />);
+    fireEvent.click(container.querySelector('.tally-badge')!);
+    expect((container.querySelector('.doubt-btn') as HTMLButtonElement).disabled).toBe(true);
+
+    // The saved row resolves — the gate opens, and the raise carries the SAVED
+    // public name (the same resolved identity the Tally marker + Moment carry).
+    H.playerLoading = false;
+    rerender(<Board />);
+    const btn = container.querySelector('.doubt-btn') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    fireEvent.click(btn);
+    expect(H.raiseDoubt).toHaveBeenCalledTimes(1);
+    expect(H.raiseDoubt.mock.calls[0][0]).toMatchObject({
+      fromUid: 'u1',
+      fromDisplayName: 'Me',
+      targetUid: 'bob',
+    });
+  });
+
+  // ---- PR #106 round 2 finding 2: once-only per (doubter, target, Prompt) ----
+
+  it('keeps the affordance disabled for a marker I already doubted even after their Proof satisfies it (round 2 finding 2)', () => {
+    H.markers = [
+      { uid: 'u1', displayName: 'Me', markedAt: 1 },
+      { uid: 'bob', displayName: 'Bob', markedAt: 2 },
+    ];
+    // My Doubt of Bob, ANSWERED by his later Proof: the row reads satisfied, and
+    // the once-only slot means re-raising in place is structurally denied — so the
+    // affordance stays "Doubted" (settled) instead of offering a doomed write.
+    H.doubts = [mkDoubt({ id: 'd1', fromUid: 'u1', targetUid: 'bob', createdAt: 100 })];
+    H.proofs = [{ uid: 'bob', itemText: 'p0', createdAt: 150 }];
+
+    const { container } = render(<Board />);
+    fireEvent.click(container.querySelector('.tally-badge')!);
+    expect(container.querySelector('.doubt-satisfied')).not.toBeNull(); // answered
+    const btn = container.querySelector('.doubt-btn') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.textContent).toBe('Doubted');
+    fireEvent.click(btn);
+    expect(H.raiseDoubt).not.toHaveBeenCalled(); // no doomed duplicate write
   });
 });

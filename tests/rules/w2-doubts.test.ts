@@ -11,10 +11,21 @@ import { deleteDoc, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
 // specs/w2-doubts.md — the Doubts rules contract (ADR 0001). A Doubt is one Player
 // publicly asking ANOTHER to back up a marked Prompt ("pics or it didn't happen"):
-// social pressure, never a gate. Pinned against the block that ships from #16/#18:
+// social pressure, never a gate. Pinned against the block from #16/#18 as TIGHTENED
+// on PR #106 (Codex P2): createdAt is bounded near request.time (finding 3), and
+// the doc id is BOUND to the payload triple `${fromUid}_${targetUid}_${itemId}`
+// (round 2 finding 2 — the deterministic once-only slot raiseDoubt writes;
+// mirroring the moments id↔kind binding #103/#105 so no one can squat another
+// doubter's slot):
 //   - create: raised BY the caller (own fromUid), ON someone else (targetUid is a
 //     string ≠ the caller — no self-doubt), with a string itemId + numeric
-//     cellIndex + createdAt. A forged fromUid or a self-doubt is denied.
+//     cellIndex + a near-now createdAt, AT the bound slot id. A forged fromUid, a
+//     self-doubt, an unbound id, and a squat of another doubter's slot are each
+//     denied.
+//   - once-only: a second create on an existing slot is a doc-exists UPDATE,
+//     denied for the doubter — the cross-client duplicate backstop; counts cannot
+//     inflate. The doubter's own retract (delete) + fresh create is the structural
+//     re-raise escape the settled semantic keeps.
 //   - read: public (the group sees the social heat).
 //   - update: the doubted Player (or an admin) may set ONLY satisfiedAt/
 //     satisfiedProofId — the social "answered" resolution — nothing else.
@@ -35,6 +46,10 @@ let testEnv: RulesTestEnvironment;
 const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
 const at = (p: string) => `events/${EVENT}/${p}`;
 const doubtPath = (id: string) => at(`doubts/${id}`);
+// The deterministic once-only slot raiseDoubt writes (src/data/doubts.ts
+// doubtDocId) — the create rule binds the doc id to exactly this triple.
+const slot = (fromUid: string, targetUid: string, itemId: string = ITEM) =>
+  doubtPath(`${fromUid}_${targetUid}_${itemId}`);
 // The Doubt shape raiseDoubt writes (src/data/doubts.ts): the rules require
 // fromUid/targetUid/itemId/cellIndex/createdAt; the display names ride along.
 const doubt = (fromUid: string, targetUid: string, over: Record<string, unknown> = {}) => ({
@@ -62,8 +77,8 @@ afterAll(async () => {
 });
 
 // Each test starts clean with a canonical Event, a Prompt, and a foreign Doubt
-// (Carol doubting Bob) so the public-read + target-satisfies + doubter-deletes
-// invariants have something to act on.
+// (Carol doubting Bob, at its canonical slot) so the public-read + target-satisfies
+// + doubter-deletes + retract-then-re-raise invariants have something to act on.
 beforeEach(async () => {
   await testEnv.clearFirestore();
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
@@ -77,31 +92,70 @@ beforeEach(async () => {
       text: 'Saw a drag show', createdBy: ALICE, createdAt: NOW(), isFreeSpace: false,
       status: 'active', reportCount: 0,
     });
-    await setDoc(doc(s, doubtPath('seed')), doubt(CAROL, BOB));
+    await setDoc(doc(s, slot(CAROL, BOB)), doubt(CAROL, BOB));
   });
 });
 
 describe('firestore.rules — Doubts (specs/w2-doubts.md)', () => {
-  it('a signed-in Player may raise a Doubt against ANOTHER Player’s marked Prompt', async () => {
-    await assertSucceeds(setDoc(doc(db(ALICE), doubtPath('d1')), doubt(ALICE, BOB)));
+  it('a signed-in Player may raise a Doubt against ANOTHER Player’s marked Prompt (at its bound slot)', async () => {
+    await assertSucceeds(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB)));
   });
 
   it('denies a forged fromUid — a Player cannot raise a Doubt as someone else', async () => {
-    // fromUid must equal the caller (request.auth.uid).
-    await assertFails(setDoc(doc(db(ALICE), doubtPath('forged')), doubt(BOB, CAROL)));
+    // fromUid must equal the caller (request.auth.uid) — denied twice over here:
+    // the payload forges fromUid AND the slot id embeds a uid that is not Alice's.
+    await assertFails(setDoc(doc(db(ALICE), slot(BOB, CAROL)), doubt(BOB, CAROL)));
   });
 
   it('denies a self-doubt — targetUid must be another Player (ADR 0001)', async () => {
-    await assertFails(setDoc(doc(db(ALICE), doubtPath('self')), doubt(ALICE, ALICE)));
+    await assertFails(setDoc(doc(db(ALICE), slot(ALICE, ALICE)), doubt(ALICE, ALICE)));
   });
 
   it('enforces the shape — string itemId + numeric cellIndex + createdAt, string targetUid', async () => {
-    const p = (id: string) => doc(db(ALICE), doubtPath(id));
-    await assertFails(setDoc(p('bad-item'), doubt(ALICE, BOB, { itemId: 5 }))); // itemId not a string
-    await assertFails(setDoc(p('bad-cell'), doubt(ALICE, BOB, { cellIndex: 'x' }))); // cellIndex not a number
-    await assertFails(setDoc(p('bad-time'), doubt(ALICE, BOB, { createdAt: 'now' }))); // createdAt not a number
-    await assertFails(setDoc(p('bad-target'), doubt(ALICE, BOB, { targetUid: 42 }))); // targetUid not a string
-    await assertSucceeds(setDoc(p('ok'), doubt(ALICE, BOB))); // the well-formed Doubt
+    // Each malformed write targets the slot its VALID fields would bind to, so the
+    // denial turns on the shape check under test. (For a non-string itemId or
+    // targetUid the id binding itself cannot even be evaluated — string + number
+    // concatenation is a rules evaluation error — which also denies; either way
+    // the malformed Doubt never lands.)
+    await assertFails(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB, { itemId: 5 }))); // itemId not a string
+    await assertFails(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB, { cellIndex: 'x' }))); // cellIndex not a number
+    await assertFails(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB, { createdAt: 'now' }))); // createdAt not a number
+    await assertFails(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB, { targetUid: 42 }))); // targetUid not a string
+    await assertSucceeds(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB))); // the well-formed Doubt
+  });
+
+  it('binds the doc id to the (doubter, target, Prompt) triple — an unbound id and a slot squat are denied (PR #106 round 2 finding 2)', async () => {
+    // A well-formed payload at an arbitrary (auto-id style) doc id: denied — the
+    // id must be the deterministic slot raiseDoubt writes.
+    await assertFails(setDoc(doc(db(ALICE), doubtPath('d1')), doubt(ALICE, BOB)));
+    // A well-formed OWN payload parked at ANOTHER doubter's slot: denied. Without
+    // the binding this squat would permanently deny Carol's own raise (her create
+    // would land on the doc-exists update rule) — the same denial-of-service shape
+    // the moments id↔kind binding closed (#103/#105).
+    await assertFails(
+      setDoc(doc(db(ALICE), slot(CAROL, BOB, 'item2')), doubt(ALICE, BOB, { itemId: 'item2' })),
+    );
+    // The same payload at its OWN slot: allowed.
+    await assertSucceeds(
+      setDoc(doc(db(ALICE), slot(ALICE, BOB, 'item2')), doubt(ALICE, BOB, { itemId: 'item2' })),
+    );
+  });
+
+  it('a second raise on the same slot is a doc-exists update — denied for the doubter (the cross-client duplicate backstop, round 2 finding 2)', async () => {
+    await assertSucceeds(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB))); // the first tab wins
+    // The second tab/device (same triple, fresh createdAt): doc-exists → update →
+    // the doubter is neither the target nor an admin → denied. The open count can
+    // never inflate, and a satisfied Doubt cannot be re-stamped open in place.
+    await assertFails(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB, { createdAt: NOW() + 1 })));
+  });
+
+  it('the doubter may retract (delete) and re-raise the same slot — the structural re-raise escape', async () => {
+    // The settled semantic (round 2 finding 2): once raised — and once satisfied —
+    // the slot cannot be re-stamped in place. A FRESH demand is retract + re-raise,
+    // both already allowed: the doubter deletes their own Doubt, then a create on
+    // the now-empty slot is a plain create and lands with a fresh createdAt.
+    await assertSucceeds(deleteDoc(doc(db(CAROL), slot(CAROL, BOB)))); // Carol retracts her seeded Doubt
+    await assertSucceeds(setDoc(doc(db(CAROL), slot(CAROL, BOB)), doubt(CAROL, BOB))); // and raises it anew
   });
 
   it('bounds createdAt near request.time like proofs/moments — near-now accepted, far-future and far-past denied (PR #106 finding 3)', async () => {
@@ -110,12 +164,14 @@ describe('firestore.rules — Doubts (specs/w2-doubts.md)', () => {
     // instant; the create rule now requires the SAME +60s / -24h window of
     // request.time that proofs + moments use. The client writes Date.now() (in
     // bounds by construction); a >24h offline queue trips the lower bound on drain
-    // (accepted residual — see specs/w2-doubts.md).
-    const p = (id: string) => doc(db(ALICE), doubtPath(id));
+    // (accepted residual — see specs/w2-doubts.md). Three DISTINCT slots, so the
+    // once-only doc-exists denial can never mask the bound under test.
     const now = Date.now();
-    await assertSucceeds(setDoc(p('ts-now'), doubt(ALICE, BOB, { createdAt: now }))); // near-now: accepted
-    await assertFails(setDoc(p('ts-future'), doubt(ALICE, BOB, { createdAt: now + 3600000 }))); // +1h > +60s: denied
-    await assertFails(setDoc(p('ts-past'), doubt(ALICE, BOB, { createdAt: now - 172800000 }))); // -2d < -24h: denied
+    await assertSucceeds(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB, { createdAt: now }))); // near-now: accepted
+    await assertFails(setDoc(doc(db(ALICE), slot(ALICE, CAROL)), doubt(ALICE, CAROL, { createdAt: now + 3600000 }))); // +1h > +60s: denied
+    await assertFails(
+      setDoc(doc(db(ALICE), slot(ALICE, BOB, 'item2')), doubt(ALICE, BOB, { itemId: 'item2', createdAt: now - 172800000 })),
+    ); // -2d < -24h: denied
   });
 
   it('a Doubt write never mutates the target’s board or player — isolation (ADR 0001)', async () => {
@@ -123,7 +179,7 @@ describe('firestore.rules — Doubts (specs/w2-doubts.md)', () => {
     // reach NEITHER the target's PRIVATE board (owner/admin-only) NOR their
     // self-writable player row (cross-Player writes denied by isOwner) — so a Doubt
     // structurally cannot block, unmark, or discount the Mark, nor touch stats.
-    await assertSucceeds(setDoc(doc(db(ALICE), doubtPath('d-iso')), doubt(ALICE, BOB))); // the Doubt lands
+    await assertSucceeds(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB))); // the Doubt lands
     await assertFails(
       setDoc(doc(db(ALICE), at(`boards/${BOB}`)), { uid: BOB, seed: 1, createdAt: NOW(), cells: [] }),
     ); // cannot touch the target's Board
@@ -131,27 +187,27 @@ describe('firestore.rules — Doubts (specs/w2-doubts.md)', () => {
   });
 
   it('Doubt reads are public — the group sees the social heat (ADR 0001)', async () => {
-    await assertSucceeds(getDoc(doc(db(ALICE), doubtPath('seed')))); // Alice reads Carol’s Doubt of Bob
+    await assertSucceeds(getDoc(doc(db(ALICE), slot(CAROL, BOB)))); // Alice reads Carol’s Doubt of Bob
   });
 
   it('the doubted Player (or an admin) marks it satisfied via satisfiedAt/satisfiedProofId ONLY', async () => {
     // Bob is the target of the seeded Doubt: he answers it by attaching a Proof,
     // recorded as a satisfied* update — the social resolution, not a gate.
     await assertSucceeds(
-      updateDoc(doc(db(BOB), doubtPath('seed')), { satisfiedAt: NOW(), satisfiedProofId: 'p1' }),
+      updateDoc(doc(db(BOB), slot(CAROL, BOB)), { satisfiedAt: NOW(), satisfiedProofId: 'p1' }),
     );
     // A non-target Player cannot mark someone else's Doubt satisfied.
-    await assertFails(updateDoc(doc(db(ALICE), doubtPath('seed')), { satisfiedAt: NOW() }));
+    await assertFails(updateDoc(doc(db(ALICE), slot(CAROL, BOB)), { satisfiedAt: NOW() }));
     // Even the target may change ONLY the satisfied* keys — not the Doubt's content.
-    await assertFails(updateDoc(doc(db(BOB), doubtPath('seed')), { itemId: 'other' }));
+    await assertFails(updateDoc(doc(db(BOB), slot(CAROL, BOB)), { itemId: 'other' }));
   });
 
   it('the doubter (fromUid) or an admin may delete; the target may not', async () => {
-    await assertFails(deleteDoc(doc(db(BOB), doubtPath('seed')))); // the target is not the doubter
-    await assertSucceeds(deleteDoc(doc(db(CAROL), doubtPath('seed')))); // Carol raised it — she may retract
+    await assertFails(deleteDoc(doc(db(BOB), slot(CAROL, BOB)))); // the target is not the doubter
+    await assertSucceeds(deleteDoc(doc(db(CAROL), slot(CAROL, BOB)))); // Carol raised it — she may retract
   });
 
   it('an admin may delete any Doubt (moderation)', async () => {
-    await assertSucceeds(deleteDoc(doc(db(ADMIN), doubtPath('seed'))));
+    await assertSucceeds(deleteDoc(doc(db(ADMIN), slot(CAROL, BOB))));
   });
 });

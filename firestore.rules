@@ -207,6 +207,18 @@ service cloud.firestore {
           && request.resource.data.targetUid is string
           && request.resource.data.targetUid != request.auth.uid
           && request.resource.data.itemId is string
+          // Bind the doc id to the payload triple — `${fromUid}_${targetUid}_
+          // ${itemId}` (fromUid == auth.uid above) — because raiseDoubt writes
+          // this DETERMINISTIC id as its cross-client duplicate backstop (Codex
+          // P2, PR #106 round 2): one slot per (doubter, target, Prompt), so a
+          // second raise of the same triple is a doc-exists update, denied below
+          // for the doubter. WITHOUT the binding any signed-in Player could
+          // pre-create ANOTHER doubter's slot (the id was unconstrained; the
+          // payload their own, valid) and permanently deny that Player's raise —
+          // the same denial-of-service shape the moments id↔kind binding closed
+          // (#103/#105). `_` joins the triple: it appears in no Firebase-minted
+          // uid or Firestore auto-id, and the id is constructed, never parsed.
+          && doubtId == request.auth.uid + '_' + request.resource.data.targetUid + '_' + request.resource.data.itemId
           && request.resource.data.cellIndex is number
           // createdAt is client-set and is the satisfaction CUTOFF the derivation
           // compares Proof timestamps against (src/data/doubts.ts isDoubtSatisfied):
