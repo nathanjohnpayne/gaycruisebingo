@@ -1,9 +1,10 @@
 name: app-ci
 
 # Runs the app test harness on every PR and on pushes to main: typecheck, the
-# jsdom unit/component suite, the production build, and the Firestore/Storage
-# security-rules suite against the emulators. The Playwright e2e layer is a
-# local smoke runner (`npm run test:e2e`) and is intentionally not run here.
+# jsdom unit/component suite, the production build, the Cloud Functions notifier
+# suite (tests/functions/), and the Firestore/Storage security-rules suite
+# against the emulators. The Playwright e2e layer is a local smoke runner
+# (`npm run test:e2e`) and is intentionally not run here.
 
 on:
   pull_request:
@@ -39,6 +40,13 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # The Cloud Functions notifier suite (tests/functions/) imports
+      # functions/src, whose resend / firebase-admin deps live only in
+      # functions/package.json. `test:functions` runs `npm --prefix functions
+      # install` first, so it is self-contained on a clean runner (no emulator).
+      - name: Functions notifier tests
+        run: npm run test:functions
 
       # The Firestore emulator is a Java process; rules tests boot it via
       # `firebase emulators:exec`. Java comes from setup-java; the Firebase
