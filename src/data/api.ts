@@ -85,6 +85,21 @@ export function seedFromUid(uid: string): number {
 }
 
 /**
+ * The create-only bootstrap payload for a `users/{uid}` profile row: the
+ * Google-sourced identity defaults `ensureUserProfile` writes on first sign-in.
+ * Extracted as the ONE source of truth for the bootstrap shape so the attestation
+ * transaction can write the SAME payload when it wins the create race on an absent
+ * row (Codex P2, PR #112) — no duplicated shape to drift out of sync.
+ */
+function bootstrapProfile(u: User, now: number = Date.now()) {
+  return {
+    displayName: u.displayName ?? 'Anonymous',
+    photoURL: u.photoURL ?? null,
+    createdAt: now,
+  };
+}
+
+/**
  * Create the global user profile on first sign-in — create-only, it must NEVER
  * overwrite an existing row. The transaction's read of `users/{uid}` is part of
  * the commit's optimistic-concurrency check: the exists-check no-ops when the doc
@@ -102,12 +117,64 @@ export async function ensureUserProfile(u: User): Promise<void> {
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (snap.exists()) return;
-    tx.set(ref, {
-      displayName: u.displayName ?? 'Anonymous',
-      photoURL: u.photoURL ?? null,
-      createdAt: Date.now(),
-    });
+    tx.set(ref, bootstrapProfile(u));
   });
+}
+
+/**
+ * Persist the honor-system 18+ self-attestation (ADR 0001) for a User: stamp
+ * `users/{uid}.attestedAdultAt` with the ms-epoch time of their FIRST attestation.
+ * This records the User's OWN statement — not identity verification — and is
+ * covered by the EXISTING `users/{uid}` owner self-write (firestore.rules already
+ * shape-checks `attestedAdultAt` as a number), so it ships with NO rules change.
+ *
+ * Create-only for the field, inside a transaction like `ensureUserProfile`: an
+ * existing EARLIER stamp is NEVER overwritten, so re-attesting — a fresh sign-in
+ * after a prior one, or the returning-User re-prompt — keeps the first timestamp
+ * (the no-overwrite case in specs/w1-attestation.md).
+ *
+ * The row may be ABSENT: during first-time sign-in this transaction can win the
+ * create race with `ensureUserProfile` on the not-yet-written `users/{uid}` row.
+ * Writing ONLY `attestedAdultAt` then would leave a PARTIAL profile — the
+ * create-only `ensureUserProfile` retry sees `exists()` and no-ops, so
+ * displayName/photoURL/createdAt would be missing forever (Codex P2, PR #112). So
+ * on an absent row we write the FULL `bootstrapProfile` payload `ensureUserProfile`
+ * would have written PLUS the stamp (one create, the shared bootstrap shape); on a
+ * PRESENT row we merge ONLY the stamp so no other field is clobbered. The
+ * transaction's read makes this race-safe: a concurrent `ensureUserProfile` create
+ * invalidates this attempt's read set and Firestore re-runs onto the now-present
+ * row, which then takes the merge-only branch.
+ */
+export async function attestAdult(u: User, now: number = Date.now()): Promise<void> {
+  const ref = rawUser(u.uid);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) {
+      // Won the create race on an absent row — write the complete profile, not a
+      // stamp-only stub, so the create-only bootstrap retry cannot strand it.
+      tx.set(ref, { ...bootstrapProfile(u, now), attestedAdultAt: now });
+      return;
+    }
+    const existing = (snap.data() as Partial<UserDoc>).attestedAdultAt;
+    if (typeof existing === 'number') return; // keep the FIRST attestation, never overwrite
+    tx.set(ref, { attestedAdultAt: now }, { merge: true });
+  });
+}
+
+/**
+ * Read a User's settled 18+ attestation for the re-prompt gate (#23): the
+ * ms-epoch `attestedAdultAt` when present, else `null` for a profile that is
+ * DEFINITIVELY without one (missing doc or missing field). A single point read of
+ * `users/{uid}`; AuthContext calls it once per auth change AFTER `ensureUserProfile`
+ * has settled the row, and treats a THROWN read (offline / permission) as UNKNOWN
+ * — never a re-prompt — so only a definite `null` gates a signed-in User. An
+ * UNKNOWN is not a silent stall either: AuthContext surfaces the failure through
+ * its retryable deal-error panel, whose Retry re-runs this read (#112 round 2).
+ */
+export async function readAdultAttestation(uid: string): Promise<number | null> {
+  const snap = await getDoc(rawUser(uid));
+  const v = snap.exists() ? (snap.data() as Partial<UserDoc>).attestedAdultAt : undefined;
+  return typeof v === 'number' ? v : null;
 }
 
 /** Deal a frozen board + create the player row the first time a user joins. */
