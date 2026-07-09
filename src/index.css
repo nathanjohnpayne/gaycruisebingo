@@ -398,20 +398,36 @@ a {
   place-items: center;
   text-align: center;
   padding: 20px;
-  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--primary) 34%, transparent), color-mix(in srgb, var(--bg) 92%, transparent));
-  backdrop-filter: blur(3px);
+  /* OPAQUE backdrop (issue #72 Codex P2, PR #123 comment 3553469597). The
+     celebration renders position:fixed over the live Board, so the earlier
+     translucent overlay — color-mix(..., transparent) stops plus a
+     backdrop-filter blur — let the marked-cell colors underneath bleed
+     through behind the hero text. Over a marked summer-white cell (a dark-gold
+     --primary/--secondary gradient), the 34% --primary overlay composited on
+     that gradient left --ink at ~3.2:1, under AA. Making this backdrop opaque
+     — a --primary-tinted-into-bg radial fading to solid --bg, no transparent
+     stops — covers the Board entirely, so the hero text, subtitle, and buttons
+     sit on a known Theme surface (this rule's own tokens) rather than on
+     whatever Square happens to be underneath. The old backdrop-filter blur is
+     dropped with it: an opaque background has nothing behind it left to blur.
+     Contrast for --ink over the hottest point of this surface (its center,
+     color-mix(--primary 34%, --bg)) is pinned across all 8 Themes in
+     src/theme/theme-on-color-contrast.test.tsx. */
+  background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--primary) 34%, var(--bg)), var(--bg));
 }
 .celebrate .big {
   font-family: 'Bebas Neue', sans-serif;
   font-size: clamp(64px, 22vw, 150px);
   line-height: 0.9;
   /* --ink, not #fff (issue #72, specs/theme-on-color-contrast.md): #fff
-     washed out on summer-white's light backdrop (1.78:1 against the
-     composited celebrate surface). --ink clears 4.5:1 against that
-     composite in every theme (7.3:1-11.5:1). The #fff glow in the
-     text-shadow below is decoration layered around the fill, not the fill
-     itself, so it does not count toward contrast (same treatment as
-     .signin h1's glow) and is left alone. */
+     washed out on summer-white's light backdrop. Now that .celebrate's
+     backdrop is OPAQUE (see above), the real surface behind this text is
+     exactly color-mix(--primary 34%, --bg) at the radial's center — no board
+     cell can bleed through — and --ink clears 4.5:1 against it in every theme
+     (worst 7.26:1, get-sporty). The #fff glow in the text-shadow below is
+     decoration layered around the fill, not the fill itself, so it does not
+     count toward contrast (same treatment as .signin h1's glow) and is left
+     alone. */
   color: var(--ink);
   text-shadow: 0 0 14px #fff, 0 0 40px var(--primary), 0 0 80px var(--secondary);
   animation: pulse 0.8s ease-in-out infinite;
