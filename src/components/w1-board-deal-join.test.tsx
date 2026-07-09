@@ -120,7 +120,10 @@ vi.mock('../hooks/useData', () => ({
   // deal/join fixtures render only the empty/thin-pool/dealt states with no marked
   // Square, so no DoubtBadge mounts; the factory must still export both.
   useDoubts: () => ({ doubts: [], count: 0, loading: false, hasServerData: true }),
-  useProofFeed: () => ({ proofs: [], loading: false }),
+  // Board reads its viewer-scoped own Proofs for the DoubtBadge (#106 finding 4);
+  // these deal/join states have no marked Square, so none mounts.
+  useMyProofs: () => ({ proofs: [], loading: false, hasServerData: true }),
+  useProofsForItemText: () => ({ proofs: [], loading: false, hasServerData: true }),
 }));
 
 // Real modules under test — imported after the mocks are declared.

@@ -104,6 +104,20 @@ describe('firestore.rules — Doubts (specs/w2-doubts.md)', () => {
     await assertSucceeds(setDoc(p('ok'), doubt(ALICE, BOB))); // the well-formed Doubt
   });
 
+  it('bounds createdAt near request.time like proofs/moments — near-now accepted, far-future and far-past denied (PR #106 finding 3)', async () => {
+    // An unbounded createdAt let a fast doubter clock stamp a far-future Doubt that
+    // a Proof (proof.createdAt >= doubt.createdAt) can never satisfy until that
+    // instant; the create rule now requires the SAME +60s / -24h window of
+    // request.time that proofs + moments use. The client writes Date.now() (in
+    // bounds by construction); a >24h offline queue trips the lower bound on drain
+    // (accepted residual — see specs/w2-doubts.md).
+    const p = (id: string) => doc(db(ALICE), doubtPath(id));
+    const now = Date.now();
+    await assertSucceeds(setDoc(p('ts-now'), doubt(ALICE, BOB, { createdAt: now }))); // near-now: accepted
+    await assertFails(setDoc(p('ts-future'), doubt(ALICE, BOB, { createdAt: now + 3600000 }))); // +1h > +60s: denied
+    await assertFails(setDoc(p('ts-past'), doubt(ALICE, BOB, { createdAt: now - 172800000 }))); // -2d < -24h: denied
+  });
+
   it('a Doubt write never mutates the target’s board or player — isolation (ADR 0001)', async () => {
     // Raising a Doubt is a write to the doubts collection ONLY. The doubter can
     // reach NEITHER the target's PRIVATE board (owner/admin-only) NOR their

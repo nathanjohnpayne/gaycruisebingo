@@ -40,7 +40,10 @@ vi.mock('../hooks/useData', () => ({
   // here is marked-and-non-free, so no DoubtBadge mounts, but the factory must
   // export both so Board's module resolves.
   useDoubts: () => ({ doubts: [], count: 0, loading: false, hasServerData: true }),
-  useProofFeed: () => ({ proofs: [], loading: false }),
+  // Board reads its viewer-scoped own Proofs for the DoubtBadge (#106 finding 4);
+  // no marked-and-non-free cell here mounts one, and the sheet is never opened.
+  useMyProofs: () => ({ proofs: [], loading: false, hasServerData: true }),
+  useProofsForItemText: () => ({ proofs: [], loading: false, hasServerData: true }),
 }));
 vi.mock('./ProofSheet', () => ({
   default: (props: { displayName: string; photoURL: string | null }) => {

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useProofFeed } from '../hooks/useData';
+import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText } from '../hooks/useData';
 import { setMark, resolveDisplayName } from '../data/api';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
@@ -13,7 +13,7 @@ import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../ga
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
-import type { Cell, ClaimMode, PlayerDoc, ProofDoc } from '../types';
+import type { Cell, ClaimMode, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 
 /**
  * The per-Prompt Tally count badge on a marked Square (ADR 0002). Subscribes to
@@ -49,8 +49,10 @@ function TallyBadge({ itemId, onOpen }: { itemId: string; onOpen: () => void }) 
  * Mark, not ambient per-Prompt noise — an un-doubted Player must never see a badge
  * on their own Square just because someone ELSE who also marked this Prompt is
  * being doubted (verifier finding, #33). Mirrors `TallyBadge` — a per-cell
- * subscription (`useDoubts`) plus the Feed's Proofs (passed down once from Board)
- * folded through the PURE `openDoubts` derivation — but sits top-LEFT, clear of the
+ * subscription (`useDoubts`) plus the VIEWER'S OWN active Proofs (passed down once
+ * from Board — the viewer-scoped `useMyProofs`, #106 finding 4, since a Doubt
+ * against the viewer is answered only by the viewer's own Proof) folded through the
+ * PURE `openDoubts` derivation — but sits top-LEFT, clear of the
  * ✓ (top-right), the proof ＋ (bottom-left), and the Tally count (bottom-right).
  * Renders ONLY when at least one Doubt against `targetUid` is open. Tapping opens
  * the same who-list sheet, where a Doubt is actually raised against another
@@ -97,16 +99,28 @@ function DoubtBadge({
  *
  * It is also where a Doubt is RAISED (ADR 0001, #33): each OTHER Player's row
  * carries a "pics or it didn't happen" affordance that raises a Doubt against
- * their Mark of this Prompt; the header summarizes the Prompt-wide open-Doubt
- * total across every marker listed below (deliberately UN-scoped, unlike the
- * per-target Square badge — this sheet already lists everyone by name, so an
- * aggregate here is a heat summary, not a personal accusation). A row whose
- * Doubt(s) have been answered by a Proof renders a distinct SATISFIED state, an
- * open one a distinct DOUBTED state — social pressure applied then visibly
- * cooled. A Doubt never blocks, unmarks, or discounts the
- * Mark (never a gate), so nothing here changes the Board; the doubter's own row
- * offers no affordance (no self-doubt), and a Doubt already raised by this Player
- * disables the button so they can't stack duplicates.
+ * their Mark of this Prompt; the header summarizes the open-Doubt total across the
+ * markers listed below (deliberately UN-scoped per target, unlike the per-target
+ * Square badge — this sheet already lists everyone by name, so an aggregate here is
+ * a heat summary, not a personal accusation). A row whose Doubt(s) have been
+ * answered by a Proof renders a distinct SATISFIED state, an open one a distinct
+ * DOUBTED state — social pressure applied then visibly cooled. A Doubt never
+ * blocks, unmarks, or discounts the Mark (never a gate), so nothing here changes
+ * the Board; the doubter's own row offers no affordance (no self-doubt).
+ *
+ * Three review-hardening details (Codex P2, PR #106):
+ *  - Dormant-when-unmarked (finding 2): the open-Doubt header counts ONLY Doubts
+ *    whose target is a CURRENT marker. A Doubt doc is never deleted when its target
+ *    unmarks (no cross-writer cleanup); instead it goes dormant and reappears in
+ *    the count if they re-mark — the accusation targets a standing Mark.
+ *  - No double-raise (finding 1): the raise button disables SYNCHRONOUSLY on the
+ *    first tap (a per-target in-flight ref, so a rapid second tap in the same tick
+ *    is inert), cleared when the write settles; the echoed Doubt keeps it "Doubted"
+ *    meanwhile, and `raiseDoubt` is passed the open set so a duplicate that slips
+ *    through post-echo is also skipped at the data layer.
+ *  - Item-scoped proofs (finding 4): satisfaction for the markers listed here reads
+ *    the active Proofs for THIS Prompt only (`useProofsForItemText`, mounted with
+ *    the sheet), not a Board-wide proof stream.
  */
 function TallySheet({
   itemId,
@@ -114,7 +128,6 @@ function TallySheet({
   cellIndex,
   meUid,
   meName,
-  proofs,
   onClose,
 }: {
   itemId: string;
@@ -122,13 +135,51 @@ function TallySheet({
   cellIndex: number;
   meUid: string;
   meName: string | undefined;
-  proofs: readonly Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>[];
   onClose: () => void;
 }) {
   const { markers, loading } = useTally(itemId);
   const { doubts } = useDoubts(itemId);
-  const open = openDoubts(doubts, itemText, proofs);
+  // The active Proofs for THIS Prompt (finding 4) — joined by itemText, the same
+  // (uid, itemText) key the derivation uses (ProofDoc carries no itemId). Mounted
+  // only while this sheet is, so no Board-wide proof listener is opened.
+  const { proofs } = useProofsForItemText(itemText);
+  // Only Doubts against a CURRENT marker count in the header (finding 2): a Doubt
+  // against a Player who has since unmarked is dormant (its target left the list),
+  // reappearing if they re-mark. Doubt docs are never deleted here (no cross-writer
+  // cleanup). The per-row status below is inherently scoped — a row IS a current
+  // marker — so this one filter covers the only aggregate.
+  const markedUids = new Set(markers.map((m) => m.uid));
+  const open = openDoubts(doubts, itemText, proofs).filter((d) => markedUids.has(d.targetUid));
   const openCount = open.length;
+  // Per-target in-flight guard (finding 1): held in a ref so a rapid double-tap in
+  // ONE tick reads the mutation the first tap made (a render-closure boolean would
+  // not update until the next render, so both taps would fire). The bump reducer
+  // re-renders so the disabled affordance shows immediately; the guard clears when
+  // the raise settles — meanwhile the echoed Doubt flips `iAlreadyDoubted` true and
+  // keeps the button "Doubted", and a failed write both settles here and rolls the
+  // echo back, re-enabling the row.
+  const inFlight = useRef<Set<string>>(new Set());
+  const [, bumpInFlight] = useReducer((n: number) => n + 1, 0);
+  const doDoubt = (m: TallyEntry) => {
+    if (inFlight.current.has(m.uid)) return;
+    inFlight.current.add(m.uid);
+    bumpInFlight();
+    const clear = () => {
+      inFlight.current.delete(m.uid);
+      bumpInFlight();
+    };
+    // `.then(clear, clear)` clears on either settle path; raiseDoubt already logs
+    // and swallows an online rejection, so this never sees an unhandled rejection.
+    void raiseDoubt({
+      fromUid: meUid,
+      fromDisplayName: meName,
+      targetUid: m.uid,
+      targetDisplayName: m.displayName,
+      itemId,
+      cellIndex,
+      currentlyOpen: open,
+    }).then(clear, clear);
+  };
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>
@@ -150,6 +201,7 @@ function TallySheet({
               const iAlreadyDoubted = open.some(
                 (d) => d.targetUid === m.uid && d.fromUid === meUid,
               );
+              const isPending = inFlight.current.has(m.uid);
               return (
                 <div className="row" key={m.uid}>
                   <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
@@ -166,19 +218,10 @@ function TallySheet({
                     <button
                       className="btn doubt-btn"
                       title="pics or it didn't happen"
-                      disabled={iAlreadyDoubted}
-                      onClick={() =>
-                        raiseDoubt({
-                          fromUid: meUid,
-                          fromDisplayName: meName,
-                          targetUid: m.uid,
-                          targetDisplayName: m.displayName,
-                          itemId,
-                          cellIndex,
-                        })
-                      }
+                      disabled={iAlreadyDoubted || isPending}
+                      onClick={() => doDoubt(m)}
                     >
-                      {iAlreadyDoubted ? 'Doubted' : 'Doubt'}
+                      {iAlreadyDoubted ? 'Doubted' : isPending ? 'Doubting…' : 'Doubt'}
                     </button>
                   )}
                 </div>
@@ -258,14 +301,17 @@ export default function Board() {
   // a Board exists this Player has no use for a live listener on every other
   // Player's prompt add/report. Gate the subscription to the no-board state.
   const { items, loading: poolLoading, hasServerData: poolConfirmed } = useItems(!board);
-  // The Feed's active Proofs, subscribed ONCE here (never per-Square) so each
-  // marked Square's DoubtBadge + the Tally sheet can DERIVE which "pics or it
-  // didn't happen" Doubts a Proof has satisfied (src/data/doubts.ts) without
-  // opening a proof listener per cell. Satisfaction is a pure derivation over
-  // these Proofs — no write is added to the proof path, and it never gates a Mark
-  // (ADR 0001: a Doubt is social pressure, never a gate). This is an independent
-  // read; it does not touch the Moments edge machinery below.
-  const { proofs } = useProofFeed();
+  // The VIEWER'S OWN active Proofs (Codex P2, PR #106 finding 4): the ONLY Proofs a
+  // viewer-scoped DoubtBadge needs to tell whether a Doubt AGAINST THE VIEWER is
+  // answered. A `where('uid','==',uid)` + `where('status','==','active')` query
+  // (both equality — no composite index), subscribed ONCE here and threaded to
+  // every Square's badge — replacing the Board-wide `useProofFeed` that pulled
+  // every active Proof from every Player into every Card mount. The Tally sheet's
+  // per-marker status needs OTHER Players' Proofs too, so it subscribes its own
+  // item-scoped query WHILE OPEN (useProofsForItemText) rather than a global
+  // stream. Satisfaction stays a pure derivation (src/data/doubts.ts); this read
+  // never gates a Mark (ADR 0001) and does not touch the Moments machinery below.
+  const { proofs: myProofs } = useMyProofs(uid);
   const claimMode: ClaimMode = event?.claimMode ?? 'honor';
 
   const [celebrate, setCelebrate] = useState<null | 'bingo' | 'blackout'>(null);
@@ -690,7 +736,7 @@ export default function Board() {
                 itemId={c.itemId}
                 itemText={c.text}
                 targetUid={uid}
-                proofs={proofs}
+                proofs={myProofs}
                 onOpen={() => setTallyTarget(c)}
               />
             )}
@@ -730,7 +776,6 @@ export default function Board() {
           cellIndex={tallyTarget.index}
           meUid={uid}
           meName={identityKnown ? displayName : undefined}
-          proofs={proofs}
           onClose={() => setTallyTarget(null)}
         />
       )}

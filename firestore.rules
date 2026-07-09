@@ -208,7 +208,19 @@ service cloud.firestore {
           && request.resource.data.targetUid != request.auth.uid
           && request.resource.data.itemId is string
           && request.resource.data.cellIndex is number
-          && request.resource.data.createdAt is number;
+          // createdAt is client-set and is the satisfaction CUTOFF the derivation
+          // compares Proof timestamps against (src/data/doubts.ts isDoubtSatisfied):
+          // a Proof answers a Doubt only when proof.createdAt >= doubt.createdAt.
+          // Bound it to the SAME +60s / -24h window of request.time that proofs +
+          // moments use, so a bad clock or a forged far-future stamp can't make a
+          // Doubt permanently UNANSWERABLE until that future instant (Codex P2,
+          // PR #106 finding 3). The client writes Date.now() (in bounds by
+          // construction); an offline Doubt drains with its ORIGINAL stamp, so a
+          // >24h offline queue trips the lower bound (accepted residual — see
+          // specs/w2-doubts.md, mirroring the moments offline-drain note).
+          && request.resource.data.createdAt is number
+          && request.resource.data.createdAt <= request.time.toMillis() + 60000
+          && request.resource.data.createdAt >= request.time.toMillis() - 86400000;
         // The doubted Player (or an admin) marks it satisfied by attaching a Proof —
         // a social resolution recorded in `satisfied*`, not a gate on play (ADR 0001).
         allow update: if isAdmin(eventId)

@@ -63,13 +63,41 @@ export interface RaiseDoubtArgs {
   // target's own cellIndex is private to their Board (firestore.rules), so a
   // cross-board index match is neither available nor needed.
   cellIndex: number;
+  // Belt-and-braces duplicate guard (Codex P2, PR #106 finding 1): the caller may
+  // pass the Prompt's currently-OPEN Doubts (the same set the Tally sheet already
+  // derives). If one from THIS doubter against THIS target for THIS Prompt is
+  // already present, the raise is a no-op — no duplicate doc, no second
+  // `demand_proof`. This backstops the UI's synchronous per-target pending guard
+  // for a duplicate that slips through only AFTER the first Doubt has echoed into
+  // the subscription; the immediate double-tap is stopped in the component.
+  currentlyOpen?: readonly Pick<DoubtDoc, 'fromUid' | 'targetUid' | 'itemId'>[];
 }
 
-export function raiseDoubt(args: RaiseDoubtArgs): void {
-  const { fromUid, targetUid, itemId, cellIndex } = args;
+/**
+ * Returns the settle promise of the underlying `setDoc` — already `.catch`-logged,
+ * so it RESOLVES even on an online rejection and never rejects — so the caller can
+ * clear its per-target pending state when the write settles (Codex P2, PR #106
+ * finding 1); a no-op raise (self-doubt or an existing open duplicate) returns an
+ * already-resolved promise. Still fire-and-forget: the caller does not await it, so
+ * raising never blocks the UI.
+ */
+export function raiseDoubt(args: RaiseDoubtArgs): Promise<void> {
+  const { fromUid, targetUid, itemId, cellIndex, currentlyOpen } = args;
   // No self-doubt (ADR 0001 + rules `targetUid != auth.uid`): a no-op, so neither
   // a write nor the analytics event fires for a nonsensical raise.
-  if (fromUid === targetUid) return;
+  if (fromUid === targetUid) return Promise.resolve();
+  // Idempotence backstop (finding 1): an OPEN Doubt by this doubter against this
+  // target for this Prompt already exists — raising again would only stack a
+  // duplicate open Doubt, so skip both the write and the analytics event. (A
+  // SATISFIED past Doubt is intentionally re-raisable, matching the sheet's own
+  // open-scoped button-disable — so re-doubting after a Proof still works.)
+  if (
+    currentlyOpen?.some(
+      (d) => d.fromUid === fromUid && d.targetUid === targetUid && d.itemId === itemId,
+    )
+  ) {
+    return Promise.resolve();
+  }
 
   const ref = doc(rawDoubts());
   const payload: Omit<DoubtDoc, 'id'> = {
@@ -82,7 +110,7 @@ export function raiseDoubt(args: RaiseDoubtArgs): void {
     createdAt: Date.now(),
   };
 
-  void setDoc(ref, payload).catch((err: unknown) => {
+  const settled = setDoc(ref, payload).catch((err: unknown) => {
     // Not the offline case: offline the write PENDS in the persistent cache and
     // drains on reconnect (ADR 0006). A rejection is a genuine online failure
     // (permission/auth, or a rules-rejected shape). It must not vanish silently
@@ -93,6 +121,7 @@ export function raiseDoubt(args: RaiseDoubtArgs): void {
 
   // The Doubt-flow GA4/PostHog event (#33), fired at the single raise call site.
   track('demand_proof', { itemId });
+  return settled;
 }
 
 // ---- Satisfied-by-Proof: PURE DERIVATION (ADR 0001) ----
@@ -117,16 +146,24 @@ export function raiseDoubt(args: RaiseDoubtArgs): void {
 /**
  * Whether `doubt` has been answered by one of `proofs`: the doubted Player
  * (`targetUid`) has a Proof for the same Prompt (`itemText`) created at or after
- * the Doubt. Pure — no Firestore, no clock — so the truth table is unit-testable
- * and the count/status derivations below share one definition of "answered".
+ * the Doubt. The "at or after" cutoff is CLAMPED to no-later-than `now` (Codex P2,
+ * PR #106 finding 3): the rules bound a Doubt's `createdAt` near request.time, but
+ * as defense-in-depth a Doubt that somehow carries a far-future stamp (a doc
+ * written before that bound shipped, or the >24h offline-drain residual) must not
+ * be rendered permanently UNANSWERABLE — any Proof from `now` onward answers it. A
+ * normal past-dated Doubt is unaffected (`min` is its own stamp). `now` is
+ * injected (defaulting to the wall clock) purely so the truth table stays
+ * deterministic; the derivations below share this one definition of "answered".
  */
 export function isDoubtSatisfied(
   doubt: Pick<DoubtDoc, 'targetUid' | 'createdAt'>,
   itemText: string,
   proofs: readonly Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>[],
+  now: number = Date.now(),
 ): boolean {
+  const cutoff = Math.min(doubt.createdAt, now);
   return proofs.some(
-    (p) => p.uid === doubt.targetUid && p.itemText === itemText && p.createdAt >= doubt.createdAt,
+    (p) => p.uid === doubt.targetUid && p.itemText === itemText && p.createdAt >= cutoff,
   );
 }
 

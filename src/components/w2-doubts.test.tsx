@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+import { render, fireEvent, act } from '@testing-library/react';
 import type { User } from 'firebase/auth';
 import type { BoardDoc, Cell, DoubtDoc, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 
 // specs/w2-doubts.md, Board wiring layer (RTL-jsdom). Drives the REAL Board with
 // the REAL Doubt derivation (isDoubtSatisfied/openDoubts/doubtStatusFor); only the
 // SDK/data boundaries are mocked (useData subscriptions, the raiseDoubt write, and
-// setMark). Pins the four surfaces #33 adds (ADR 0001 — a Doubt is social pressure,
+// setMark). Pins the four #33 surfaces (ADR 0001 — a Doubt is social pressure,
 // never a gate, so none of this blocks/unmarks the Square):
 //   1. the open-Doubt COUNT renders on a marked, non-free Square (the DoubtBadge),
 //      scoped to Doubts AGAINST that Square's own marker only — a Doubt against a
@@ -14,6 +14,14 @@ import type { BoardDoc, Cell, DoubtDoc, PlayerDoc, ProofDoc, TallyEntry } from '
 //      ADR 0002) must never bleed onto an un-doubted Player's own Square;
 //   2. a Doubt is RAISED from another Player's Tally-sheet entry (never one's own);
 //   3. an answered Doubt renders a DISTINCT satisfied state vs an open one.
+// Plus the four Codex P2 fixes on PR #106:
+//   - finding 1: a rapid double-tap raises EXACTLY one Doubt, the affordance
+//     disables synchronously on the first tap, and re-enables when a non-persisting
+//     write settles;
+//   - finding 2: the header's open-Doubt count drops a Doubt whose target is no
+//     longer a current marker and restores it when they re-mark;
+//   - finding 4: Board opens the VIEWER-scoped own-proofs query and the sheet the
+//     ITEM-scoped one — never the Board-wide proof feed.
 
 const H = vi.hoisted(() => ({
   user: null as User | null,
@@ -21,9 +29,17 @@ const H = vi.hoisted(() => ({
   player: null as PlayerDoc | null,
   markers: [] as TallyEntry[],
   doubts: [] as DoubtDoc[],
+  // The viewer's OWN active Proofs (useMyProofs → the DoubtBadge, finding 4).
+  myProofs: [] as Array<Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>>,
+  // The active Proofs for the open sheet's Prompt (useProofsForItemText, finding 4).
   proofs: [] as Array<Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>>,
   raiseDoubt: vi.fn(),
   setMark: vi.fn(),
+  // Spies so the finding-4 proof scoping is assertable: Board must open useMyProofs,
+  // the sheet useProofsForItemText, and NEITHER the Board-wide useProofFeed.
+  useMyProofs: vi.fn(),
+  useProofsForItemText: vi.fn(),
+  useProofFeed: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
@@ -38,7 +54,21 @@ vi.mock('../hooks/useData', () => ({
   useTally: () => ({ markers: H.markers, count: H.markers.length, loading: false, hasServerData: true }),
   useLeaderboard: () => ({ players: [], loading: false }),
   useDoubts: () => ({ doubts: H.doubts, count: H.doubts.length, loading: false, hasServerData: true }),
-  useProofFeed: () => ({ proofs: H.proofs, loading: false }),
+  // finding 4: the viewer-scoped badge query, the item-scoped sheet query, and the
+  // Board-wide feed Board must NO LONGER open — each routed through a spy so the
+  // call (and non-call) is assertable, returning the matching fixture stream.
+  useMyProofs: (uid?: string) => {
+    H.useMyProofs(uid);
+    return { proofs: H.myProofs, loading: false, hasServerData: true };
+  },
+  useProofsForItemText: (itemText?: string) => {
+    H.useProofsForItemText(itemText);
+    return { proofs: H.proofs, loading: false, hasServerData: true };
+  },
+  useProofFeed: () => {
+    H.useProofFeed();
+    return { proofs: [], loading: false };
+  },
 }));
 // Keep the REAL resolveDisplayName (Board feeds its output as the doubter's name);
 // stub only the write.
@@ -83,11 +113,16 @@ const mkDoubt = (over: Partial<DoubtDoc>): DoubtDoc => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // A raise settles to a resolved promise by default (Board `.then(clear, clear)`s
+  // it to release its per-target pending state); tests that need a controllable
+  // settle override this locally.
+  H.raiseDoubt.mockImplementation(() => Promise.resolve());
   H.user = { uid: 'u1', displayName: 'Me', photoURL: null } as unknown as User;
   H.board = { uid: 'u1', seed: 1, createdAt: 0, cells: dealt() };
   H.player = { uid: 'u1', displayName: 'Me', photoURL: null } as unknown as PlayerDoc;
   H.markers = [];
   H.doubts = [];
+  H.myProofs = [];
   H.proofs = [];
 });
 
@@ -99,7 +134,6 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
       mkDoubt({ id: 'd1', fromUid: 'bob', targetUid: 'u1', createdAt: 100 }),
       mkDoubt({ id: 'd2', fromUid: 'carol', targetUid: 'u1', createdAt: 100 }),
     ];
-    H.proofs = [];
 
     const { container } = render(<Board />);
     const badge = container.querySelector('.doubt-badge');
@@ -115,18 +149,17 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
       mkDoubt({ id: 'd1', fromUid: 'u1', targetUid: 'bob', createdAt: 100 }),
       mkDoubt({ id: 'd2', fromUid: 'u1', targetUid: 'carol', createdAt: 100 }),
     ];
-    H.proofs = [];
 
     const { container } = render(<Board />);
     expect(container.querySelector('.doubt-badge')).toBeNull();
   });
 
-  it('does not render a Doubt count when every Doubt against me is answered by a Proof', () => {
+  it('does not render a Doubt count when every Doubt against me is answered by my own Proof', () => {
     // The one Doubt (against me) is answered — I proofed the Prompt after it was
-    // raised — → 0 open → no badge, even though the badge WOULD render (it targets
-    // me) if not for the satisfaction derivation.
+    // raised — → 0 open → no badge. The answering Proof is MY OWN, which is exactly
+    // the viewer-scoped set the badge now reads (finding 4).
     H.doubts = [mkDoubt({ id: 'd1', fromUid: 'bob', targetUid: 'u1', createdAt: 100 })];
-    H.proofs = [{ uid: 'u1', itemText: 'p0', createdAt: 150 }];
+    H.myProofs = [{ uid: 'u1', itemText: 'p0', createdAt: 150 }];
 
     const { container } = render(<Board />);
     expect(container.querySelector('.doubt-badge')).toBeNull();
@@ -138,8 +171,6 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
       { uid: 'u1', displayName: 'Me', markedAt: 1 },
       { uid: 'bob', displayName: 'Bob', markedAt: 2 },
     ];
-    H.doubts = [];
-    H.proofs = [];
 
     const { container } = render(<Board />);
     // Open the who-list sheet via the Tally count badge (no open Doubts yet, so no
@@ -152,6 +183,8 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
 
     fireEvent.click(doubtButtons[0]);
     expect(H.raiseDoubt).toHaveBeenCalledTimes(1);
+    // The open-Doubt set is threaded to raiseDoubt as the idempotence backstop
+    // (finding 1) — empty here since no Doubt has been raised yet.
     expect(H.raiseDoubt).toHaveBeenCalledWith({
       fromUid: 'u1',
       fromDisplayName: 'Me',
@@ -159,6 +192,7 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
       targetDisplayName: 'Bob',
       itemId: 'i0',
       cellIndex: 0,
+      currentlyOpen: [],
     });
   });
 
@@ -169,10 +203,10 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
       { uid: 'carol', displayName: 'Carol', markedAt: 3 },
     ];
     // Bob's Doubt is answered by his Proof (createdAt 150 ≥ 100); Carol's is open.
-    // Neither targets ME, so my own Square shows no badge (verifier finding: the
-    // Square badge is scoped to Doubts against its own marker) — open the sheet
-    // via the Tally count instead, exactly as a Player with no Doubts of their own
-    // would to go look at who else is being doubted for this Prompt.
+    // Neither targets ME, so my own Square shows no badge (the Square badge is
+    // scoped to Doubts against its own marker) — open the sheet via the Tally count
+    // instead. The sheet's per-marker status reads the item-scoped Proofs (finding
+    // 4): Bob's Proof for this Prompt lives there.
     H.doubts = [
       mkDoubt({ id: 'd1', fromUid: 'u1', targetUid: 'bob', createdAt: 100 }),
       mkDoubt({ id: 'd2', fromUid: 'u1', targetUid: 'carol', createdAt: 100 }),
@@ -192,5 +226,99 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
     // The header summary is the Prompt-wide total (unlike the per-target Square
     // badge) — Carol's is the only Doubt still open.
     expect(container.querySelector('.doubt-summary')!.textContent).toContain('1 open doubt');
+  });
+
+  // ---- PR #106 finding 1: a rapid double-tap must not mint duplicate Doubts ----
+
+  it('raises EXACTLY one Doubt on a rapid double-tap and disables the affordance on the first tap (finding 1)', () => {
+    H.markers = [
+      { uid: 'u1', displayName: 'Me', markedAt: 1 },
+      { uid: 'bob', displayName: 'Bob', markedAt: 2 },
+    ];
+    // A never-settling raise freezes the in-flight guard so the disabled state is
+    // observable (a real raise clears it on settle).
+    H.raiseDoubt.mockImplementation(() => new Promise<void>(() => {}));
+
+    const { container } = render(<Board />);
+    fireEvent.click(container.querySelector('.tally-badge')!);
+    const btn = container.querySelector('.doubt-btn') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+
+    fireEvent.click(btn);
+    fireEvent.click(btn); // second, rapid tap
+
+    expect(H.raiseDoubt).toHaveBeenCalledTimes(1); // one write, not two
+    expect(btn.disabled).toBe(true); // disabled synchronously on the first tap
+  });
+
+  it('re-enables the raise affordance when the write settles without persisting (finding 1)', async () => {
+    H.markers = [
+      { uid: 'u1', displayName: 'Me', markedAt: 1 },
+      { uid: 'bob', displayName: 'Bob', markedAt: 2 },
+    ];
+    // The Doubt never echoes into the subscription (H.doubts stays empty), modelling
+    // a write that did not persist; raiseDoubt still SETTLES (it resolves even on an
+    // online rejection), which must release the pending state.
+    let settle: () => void = () => {};
+    H.raiseDoubt.mockImplementation(
+      () =>
+        new Promise<void>((res) => {
+          settle = () => res();
+        }),
+    );
+
+    const { container } = render(<Board />);
+    fireEvent.click(container.querySelector('.tally-badge')!);
+    const btn = container.querySelector('.doubt-btn') as HTMLButtonElement;
+
+    fireEvent.click(btn);
+    expect(btn.disabled).toBe(true); // engaged on the tap
+
+    await act(async () => {
+      settle();
+    });
+    expect(btn.disabled).toBe(false); // pending cleared; no echoed Doubt → re-enabled
+  });
+
+  // ---- PR #106 finding 2: a Doubt against an unmarked target goes dormant ----
+
+  it('drops an open Doubt from the header count when its target unmarks, and restores it when they re-mark (finding 2)', () => {
+    // Bob has an OPEN Doubt against him, but he is NOT a current marker (he unmarked
+    // — his Tally marker is gone, the Doubt doc lingers, never deleted here).
+    H.doubts = [mkDoubt({ id: 'd1', fromUid: 'u1', targetUid: 'bob', createdAt: 100 })];
+    H.markers = [{ uid: 'u1', displayName: 'Me', markedAt: 1 }]; // only me; Bob unmarked
+
+    const { container, rerender } = render(<Board />);
+    fireEvent.click(container.querySelector('.tally-badge')!);
+    // Bob's Doubt is dormant — the header shows no open-doubt summary.
+    expect(container.querySelector('.doubt-summary')).toBeNull();
+
+    // Bob re-marks: his Tally marker returns, so the dormant Doubt reappears.
+    H.markers = [
+      { uid: 'u1', displayName: 'Me', markedAt: 1 },
+      { uid: 'bob', displayName: 'Bob', markedAt: 2 },
+    ];
+    rerender(<Board />);
+    expect(container.querySelector('.doubt-summary')!.textContent).toContain('1 open doubt');
+  });
+
+  // ---- PR #106 finding 4: scoped proof reads, never the Board-wide feed ----
+
+  it('opens the viewer-scoped own-proofs query on mount and the item-scoped one only with the sheet — never the Board-wide feed (finding 4)', () => {
+    H.markers = [
+      { uid: 'u1', displayName: 'Me', markedAt: 1 },
+      { uid: 'bob', displayName: 'Bob', markedAt: 2 },
+    ];
+
+    const { container } = render(<Board />);
+    // Board mounts the viewer-scoped own-proofs query, never the all-Players feed.
+    expect(H.useMyProofs).toHaveBeenCalledWith('u1');
+    expect(H.useProofFeed).not.toHaveBeenCalled();
+    // The item-scoped sheet query is not opened until the sheet is.
+    expect(H.useProofsForItemText).not.toHaveBeenCalled();
+
+    fireEvent.click(container.querySelector('.tally-badge')!);
+    expect(H.useProofsForItemText).toHaveBeenCalledWith('p0');
+    expect(H.useProofFeed).not.toHaveBeenCalled();
   });
 });

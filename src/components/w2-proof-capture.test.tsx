@@ -41,7 +41,10 @@ vi.mock('../hooks/useData', () => ({
   // Board subscribes the per-Square Doubt count + the Feed's Proofs (#33); these
   // proof-gating tests never assert a Doubt, so empty streams suffice.
   useDoubts: () => ({ doubts: [], count: 0, loading: false, hasServerData: true }),
-  useProofFeed: () => ({ proofs: [], loading: false }),
+  // Board reads its viewer-scoped own Proofs for the DoubtBadge (#106 finding 4)
+  // rather than the Board-wide feed; these proof-gating tests never assert a Doubt.
+  useMyProofs: () => ({ proofs: [], loading: false, hasServerData: true }),
+  useProofsForItemText: () => ({ proofs: [], loading: false, hasServerData: true }),
 }));
 // Stub the Moment broadcasts (#34): these tests never cross a bingo/blackout edge
 // so none fires, and mocking the module also keeps Board's real

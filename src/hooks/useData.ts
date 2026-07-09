@@ -260,3 +260,45 @@ export function useDoubts(itemId: string | null | undefined) {
   const doubts = [...data].sort((a, b) => a.createdAt - b.createdAt);
   return { doubts, count: doubts.length, loading, hasServerData };
 }
+
+/**
+ * The signed-in viewer's OWN active Proofs (Codex P2 finding 4, #106). This is the
+ * ONLY set a viewer-scoped `DoubtBadge` needs: a Doubt AGAINST THE VIEWER is
+ * answered exactly when the viewer has a Proof for the doubted Prompt (by itemText)
+ * at or after it, so the badge only ever consults the viewer's own Proofs. A
+ * `where('uid','==',uid)` + `where('status','==','active')` query — BOTH equality
+ * clauses, so it rides the existing single-field indexes and needs NO composite
+ * index (firestore.indexes.json is untouched). The `status == 'active'` clause is
+ * also required for the read to be ALLOWED (the proofs read rule gates non-admins
+ * to active proofs, so an unfiltered own-proofs query would be rejected). Replaces
+ * the Board-wide `useProofFeed` the badge used to consume — a Card mount no longer
+ * opens an all-Players proof stream. Pass `null`/`undefined` (signed-out) to open
+ * no subscription.
+ */
+export function useMyProofs(uid: string | null | undefined) {
+  const { data, loading, hasServerData } = useColSub<ProofDoc>(
+    uid ? query(proofsCol(), where('uid', '==', uid), where('status', '==', 'active')) : null,
+    uid ? `proofs:mine:${uid}` : 'proofs:mine:none',
+  );
+  return { proofs: data, loading, hasServerData };
+}
+
+/**
+ * The active Proofs for ONE Prompt (Codex P2 finding 4, #106), for the Tally
+ * sheet's per-marker Doubt status. Joined by `itemText` — the SAME (uid, itemText)
+ * key the Doubt derivation uses, because a ProofDoc carries no itemId (see
+ * specs/w2-doubts.md) — via a `where('itemText','==',itemText)` +
+ * `where('status','==','active')` query, BOTH equality, so NO composite index is
+ * required. Mounted only WHILE the sheet is open (the sheet renders this hook), so
+ * no proof listener exists per-cell or Board-wide. Pass `null`/`undefined` to open
+ * no subscription.
+ */
+export function useProofsForItemText(itemText: string | null | undefined) {
+  const { data, loading, hasServerData } = useColSub<ProofDoc>(
+    itemText
+      ? query(proofsCol(), where('itemText', '==', itemText), where('status', '==', 'active'))
+      : null,
+    itemText ? `proofs:item:${itemText}` : 'proofs:item:none',
+  );
+  return { proofs: data, loading, hasServerData };
+}

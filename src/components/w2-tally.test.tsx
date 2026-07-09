@@ -44,7 +44,10 @@ vi.mock('../hooks/useData', () => ({
   // is stubbed) so no DoubtBadge mounts; the factory must still export both so
   // Board's module resolves.
   useDoubts: () => ({ doubts: [], count: 0, loading: false, hasServerData: true }),
-  useProofFeed: () => ({ proofs: [], loading: false }),
+  // Board reads its viewer-scoped own Proofs for the DoubtBadge (#106 finding 4);
+  // the item-scoped sheet query only mounts with the Tally sheet, unopened here.
+  useMyProofs: () => ({ proofs: [], loading: false, hasServerData: true }),
+  useProofsForItemText: () => ({ proofs: [], loading: false, hasServerData: true }),
 }));
 // Keep the REAL resolveDisplayName (the validated resolver under test feeds the
 // prop) and stub only the write.

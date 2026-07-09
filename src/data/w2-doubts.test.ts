@@ -140,6 +140,22 @@ describe('satisfied-by-Proof — pure derivation truth table (specs/w2-doubts.md
     expect(isDoubtSatisfied(doubt(), TEXT, [proof({ itemText: 'Other' })])).toBe(false); // another Prompt
   });
 
+  it('clamps the satisfaction cutoff to no-later-than now — a future-dated Doubt is answerable immediately (PR #106 finding 3)', () => {
+    const now = 1_000_000;
+    // A Doubt stamped an hour ahead of eval time (a fast doubter clock, or a doc
+    // written before the rules bound shipped). WITHOUT the clamp, proof.createdAt >=
+    // doubt.createdAt is unsatisfiable until that future instant; clamped to `now`,
+    // any Proof from now onward answers it (defense-in-depth behind the rules bound).
+    const future = doubt({ createdAt: now + 3_600_000 });
+    expect(isDoubtSatisfied(future, TEXT, [proof({ createdAt: now })], now)).toBe(true);
+    // A Proof strictly BEFORE now still does not answer it (the cutoff is now).
+    expect(isDoubtSatisfied(future, TEXT, [proof({ createdAt: now - 1 })], now)).toBe(false);
+    // A normal past-dated Doubt is unaffected by the clamp (min is its own stamp).
+    const past = doubt({ createdAt: 100 });
+    expect(isDoubtSatisfied(past, TEXT, [proof({ createdAt: 150 })], now)).toBe(true);
+    expect(isDoubtSatisfied(past, TEXT, [proof({ createdAt: 50 })], now)).toBe(false);
+  });
+
   it('openDoubts keeps only the unanswered Doubts (the per-Prompt open count)', () => {
     const answered = doubt({ targetUid: 'bob', createdAt: 100 }); // bob's Proof@150 answers it
     const stillOpen = doubt({ targetUid: 'carol', createdAt: 100 }); // carol never proofs
