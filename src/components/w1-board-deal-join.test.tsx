@@ -404,6 +404,93 @@ describe('joinAndDeal freeze-at-join', () => {
   });
 });
 
+describe('joinAndDeal community auto-hide at the deal path (specs/w2-admin-console.md, Codex P2 PR #107 finding 1)', () => {
+  // joinAndDeal reads the event doc (the 3rd getDoc call: board, profile, event)
+  // for reportHideThreshold and drops community-hidden Prompts from the deal pool,
+  // the SAME predicate useItems applies to the live pool — a new Player's frozen
+  // card must not contain a Prompt that is hidden everywhere else.
+  const eventThreshold = (threshold: number) => ({
+    exists: () => true,
+    data: () => ({ settings: { reportHideThreshold: threshold } }),
+  });
+
+  it('excludes at/over-threshold Prompts so a frozen card never holds community-hidden content', async () => {
+    // 24 clean Prompts + 2 heavily-reported ones (9 over, 4 AT the threshold of 4):
+    // both hidden Prompts must be dropped, leaving exactly the 24 clean ones.
+    const clean = activeItems(24); // reportCount 0
+    const hidden = [
+      { ...mkItem('hot-1'), reportCount: 9 }, // over → hidden
+      { ...mkItem('hot-2'), reportCount: 4 }, // AT → hidden
+    ];
+    const docs = [...clean, ...hidden].map((it) => ({ data: () => it }));
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false }) // no Board yet
+      .mockResolvedValueOnce({ exists: () => false }) // no saved profile
+      .mockResolvedValueOnce(eventThreshold(4)); // event doc → threshold 4
+    H.getDocs.mockResolvedValueOnce({ docs });
+
+    await joinAndDeal(SIGNED_IN);
+
+    const boardWrite = H.batchSet.mock.calls[0][1] as BoardDoc;
+    const dealtIds = boardWrite.cells.filter((c) => !c.free).map((c) => c.itemId);
+    expect(dealtIds).toHaveLength(24);
+    expect(dealtIds).not.toContain('hot-1');
+    expect(dealtIds).not.toContain('hot-2');
+  });
+
+  it('counts only the community-visible pool against MIN_POOL — reported Prompts do not pad the deal floor', async () => {
+    // 23 clean + 5 reported = 28 active rows, but only 23 are community-visible, so
+    // the deal must throw exactly like a 23-Prompt pool: the filtered count drives
+    // the guard, so a card never deals with squares that hide the moment it renders.
+    const clean = activeItems(MIN_POOL - 1); // 23, reportCount 0
+    const hidden = Array.from({ length: 5 }, (_, i) => ({ ...mkItem(`hot-${i}`), reportCount: 9 }));
+    const docs = [...clean, ...hidden].map((it) => ({ data: () => it }));
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false })
+      .mockResolvedValueOnce({ exists: () => false })
+      .mockResolvedValueOnce(eventThreshold(4));
+    H.getDocs.mockResolvedValueOnce({ docs });
+
+    await expect(joinAndDeal(SIGNED_IN)).rejects.toThrow(/at least 24 prompts/);
+    expect(H.batchCommit).not.toHaveBeenCalled(); // no card dealt from a thin visible pool
+  });
+
+  it('with a NON-POSITIVE threshold, deals the full pool — a 0 typo does not empty the board (finding 2)', async () => {
+    // Threshold 0 must not hide everything: all 24 Prompts (each reportCount 3)
+    // still deal, because a non-positive threshold is inactive.
+    const docs = activeItems(24).map((it) => ({ data: () => ({ ...it, reportCount: 3 }) }));
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false })
+      .mockResolvedValueOnce({ exists: () => false })
+      .mockResolvedValueOnce(eventThreshold(0)); // non-positive → inactive
+    H.getDocs.mockResolvedValueOnce({ docs });
+
+    await joinAndDeal(SIGNED_IN);
+
+    const boardWrite = H.batchSet.mock.calls[0][1] as BoardDoc;
+    expect(boardWrite.cells.filter((c) => !c.free)).toHaveLength(24); // full deal
+    expect(H.batchCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls open when the event doc is unreadable — the deal proceeds unfiltered', async () => {
+    // The event read fails (offline / permission race). joinAndDeal must fall open
+    // to no threshold filtering rather than blocking the deal, exactly like a
+    // missing profile falls back to the auth identity.
+    const docs = activeItems(24).map((it) => ({ data: () => ({ ...it, reportCount: 50 }) }));
+    H.getDoc
+      .mockResolvedValueOnce({ exists: () => false }) // no Board yet
+      .mockResolvedValueOnce({ exists: () => false }) // no saved profile
+      .mockRejectedValueOnce(new Error('offline')); // event read fails — caught, falls open
+    H.getDocs.mockResolvedValueOnce({ docs });
+
+    await joinAndDeal(SIGNED_IN);
+
+    const boardWrite = H.batchSet.mock.calls[0][1] as BoardDoc;
+    expect(boardWrite.cells.filter((c) => !c.free)).toHaveLength(24); // still deals
+    expect(H.batchCommit).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', () => {
   // joinAndDeal denormalizes an identity into the public players/{uid} row.
   // It must prefer the Player's SAVED users/{uid} profile — read order in
