@@ -10,6 +10,7 @@ import {
   claimConverter,
   tallyMarkerConverter,
   momentConverter,
+  doubtConverter,
 } from './converters';
 
 // Typed, converter-attached references for reads.
@@ -44,3 +45,12 @@ export const momentsCol = () =>
   collection(db, 'events', EVENT_ID, 'moments').withConverter(momentConverter);
 export const momentRef = (id: string) =>
   doc(db, 'events', EVENT_ID, 'moments', id).withConverter(momentConverter);
+// Doubts: events/{EVENT_ID}/doubts (ADR 0001) — a Player publicly asking another
+// to back up a marked Prompt ("pics or it didn't happen"). Mirrors the proofs/
+// moments helpers; the read hook (useDoubts) filters by itemId, and the write
+// path (src/data/doubts.ts) uses a raw ref. Satisfaction is DERIVED from Proofs,
+// never gated (ADR 0001) — a Doubt never blocks, unmarks, or discounts a Mark.
+export const doubtsCol = () =>
+  collection(db, 'events', EVENT_ID, 'doubts').withConverter(doubtConverter);
+export const doubtRef = (id: string) =>
+  doc(db, 'events', EVENT_ID, 'doubts', id).withConverter(doubtConverter);

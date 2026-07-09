@@ -128,9 +128,14 @@ describe('firestore.rules — honor-system invariants', () => {
   });
 
   it('ADR 0001: Doubts are social pressure — own-attributed, public, never a gate', async () => {
-    const doubt = (over = {}) => ({ itemId: 'item1', cellIndex: 5, fromUid: ALICE, fromDisplayName: 'Alice', targetUid: BOB, targetDisplayName: 'Bob', createdAt: NOW(), ...over });
-    await assertSucceeds(setDoc(doc(db(ALICE), at('doubts/d1')), doubt())); // raised on another's Mark
-    await assertFails(setDoc(doc(db(ALICE), at('doubts/d2')), doubt({ fromUid: BOB, targetUid: CAROL }))); // forged fromUid
+    const doubt = (over = {}) => ({ itemId: 'item1', cellIndex: 5, fromUid: ALICE, fromDisplayName: 'Alice', targetUid: CAROL, targetDisplayName: 'Carol', createdAt: NOW(), ...over });
+    // Canonical `${fromUid}_${targetUid}_${itemId}` slots so these turn on
+    // ownership, not the #106 id↔triple binding (mirroring the moments ids below),
+    // and the target is CAROL — this file's seeded tally/item1 marker — because
+    // the create rule requires the target's STANDING Mark (#106 round 3). Both
+    // bindings are pinned in tests/rules/w2-doubts.test.ts.
+    await assertSucceeds(setDoc(doc(db(ALICE), at(`doubts/${ALICE}_${CAROL}_item1`)), doubt())); // raised on another's standing Mark
+    await assertFails(setDoc(doc(db(ALICE), at(`doubts/${BOB}_${CAROL}_item1`)), doubt({ fromUid: BOB }))); // forged fromUid
     await assertSucceeds(getDoc(doc(db(ALICE), at('doubts/seed')))); // public read
   });
 

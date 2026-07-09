@@ -39,6 +39,15 @@ vi.mock('../hooks/useData', () => ({
   // Board reads the roster to derive the First-to-BINGO Moment (#34); this suite's
   // single non-winning tap never crosses a bingo edge, so an empty roster suffices.
   useLeaderboard: () => ({ players: [], loading: false }),
+  // Board subscribes the Doubt count per marked Square + the Feed's Proofs for the
+  // satisfied-by-Proof derivation (#33). This suite never marks a Square (setMark
+  // is stubbed) so no DoubtBadge mounts; the factory must still export both so
+  // Board's module resolves.
+  useDoubts: () => ({ doubts: [], count: 0, loading: false, hasServerData: true }),
+  // Board reads its viewer-scoped own Proofs for the DoubtBadge (#106 finding 4);
+  // the item-scoped sheet query only mounts with the Tally sheet, unopened here.
+  useMyProofs: () => ({ proofs: [], loading: false, hasServerData: true }),
+  useProofsForItemText: () => ({ proofs: [], loading: false, hasServerData: true }),
 }));
 // Keep the REAL resolveDisplayName (the validated resolver under test feeds the
 // prop) and stub only the write.

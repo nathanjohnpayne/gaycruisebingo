@@ -488,6 +488,52 @@ a {
   padding: 12px 0;
 }
 
+/* ---------- doubts ("pics or it didn't happen") ---------- */
+/* The open-Doubt count sits top-LEFT of a marked Square — clear of the ✓
+   (top-right), the proof ＋ (bottom-left), and the Tally count (bottom-right).
+   A distinct warm tone reads as social heat, separate from the neutral Tally
+   count. Tapping opens the who-list sheet where a Doubt is raised; a Doubt never
+   blocks or unmarks the Square (ADR 0001), so this is a pressure signal only. */
+.doubt-badge {
+  position: absolute;
+  top: 2px;
+  left: 4px;
+  z-index: 3;
+  border: none;
+  background: color-mix(in srgb, var(--secondary) 78%, #000);
+  color: #fff;
+  border-radius: 20px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  line-height: 18px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.doubt-summary {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--secondary);
+}
+.doubt-btn {
+  flex: none;
+  padding: 7px 12px;
+  font-size: 12px;
+}
+.doubt-btn:disabled {
+  opacity: 0.55;
+}
+.doubt-open {
+  color: var(--secondary);
+  font-weight: 600;
+}
+.doubt-satisfied {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ---------- proof feed ---------- */
 .proof {
   background: var(--panel);

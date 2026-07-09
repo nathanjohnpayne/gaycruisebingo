@@ -207,8 +207,47 @@ service cloud.firestore {
           && request.resource.data.targetUid is string
           && request.resource.data.targetUid != request.auth.uid
           && request.resource.data.itemId is string
+          // Bind the doc id to the payload triple — `${fromUid}_${targetUid}_
+          // ${itemId}` (fromUid == auth.uid above) — because raiseDoubt writes
+          // this DETERMINISTIC id as its cross-client duplicate backstop (Codex
+          // P2, PR #106 round 2): one slot per (doubter, target, Prompt), so a
+          // second raise of the same triple is a doc-exists update, denied below
+          // for the doubter. WITHOUT the binding any signed-in Player could
+          // pre-create ANOTHER doubter's slot (the id was unconstrained; the
+          // payload their own, valid) and permanently deny that Player's raise —
+          // the same denial-of-service shape the moments id↔kind binding closed
+          // (#103/#105). `_` joins the triple: it appears in no Firebase-minted
+          // uid or Firestore auto-id, and the id is constructed, never parsed.
+          && doubtId == request.auth.uid + '_' + request.resource.data.targetUid + '_' + request.resource.data.itemId
+          // The target must have a STANDING Mark on the Prompt: their attributed
+          // Tally marker (tally/{itemId}/markers/{targetUid} — the PUBLIC half of
+          // the Mark, ADR 0002, doc id == marker uid so this lookup is exact) must
+          // exist at raise time (Codex P2, PR #106 round 3). A Doubt is an
+          // accusation against a standing Mark — the spec's social model — so a
+          // direct-write client can no longer pre-seed Doubts against (target,
+          // Prompt) pairs the target never marked and ambush their badge the
+          // moment they later mark that Prompt. Residual (accepted): this gates
+          // CREATE only — a Doubt legitimately raised and then unmarked-away
+          // survives as a doc (its marker deleted; rules never cascade), which
+          // the display layer's dormant/reappear semantics already handle
+          // (specs/w2-doubts.md finding 2); and an offline-queued raise whose
+          // target unmarks before the queue drains is denied at drain time (the
+          // client logs it as the benign once-only/denied path).
+          && exists(/databases/$(database)/documents/events/$(eventId)/tally/$(request.resource.data.itemId)/markers/$(request.resource.data.targetUid))
           && request.resource.data.cellIndex is number
-          && request.resource.data.createdAt is number;
+          // createdAt is client-set and is the satisfaction CUTOFF the derivation
+          // compares Proof timestamps against (src/data/doubts.ts isDoubtSatisfied):
+          // a Proof answers a Doubt only when proof.createdAt >= doubt.createdAt.
+          // Bound it to the SAME +60s / -24h window of request.time that proofs +
+          // moments use, so a bad clock or a forged far-future stamp can't make a
+          // Doubt permanently UNANSWERABLE until that future instant (Codex P2,
+          // PR #106 finding 3). The client writes Date.now() (in bounds by
+          // construction); an offline Doubt drains with its ORIGINAL stamp, so a
+          // >24h offline queue trips the lower bound (accepted residual — see
+          // specs/w2-doubts.md, mirroring the moments offline-drain note).
+          && request.resource.data.createdAt is number
+          && request.resource.data.createdAt <= request.time.toMillis() + 60000
+          && request.resource.data.createdAt >= request.time.toMillis() - 86400000;
         // The doubted Player (or an admin) marks it satisfied by attaching a Proof —
         // a social resolution recorded in `satisfied*`, not a gate on play (ADR 0001).
         allow update: if isAdmin(eventId)

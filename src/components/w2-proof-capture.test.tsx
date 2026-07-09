@@ -38,6 +38,13 @@ vi.mock('../hooks/useData', () => ({
   // Board reads the roster for the First-to-BINGO Moment (#34); these gating
   // tests never cross a bingo edge, so an empty roster suffices.
   useLeaderboard: () => ({ players: [], loading: false }),
+  // Board subscribes the per-Square Doubt count + the Feed's Proofs (#33); these
+  // proof-gating tests never assert a Doubt, so empty streams suffice.
+  useDoubts: () => ({ doubts: [], count: 0, loading: false, hasServerData: true }),
+  // Board reads its viewer-scoped own Proofs for the DoubtBadge (#106 finding 4)
+  // rather than the Board-wide feed; these proof-gating tests never assert a Doubt.
+  useMyProofs: () => ({ proofs: [], loading: false, hasServerData: true }),
+  useProofsForItemText: () => ({ proofs: [], loading: false, hasServerData: true }),
 }));
 // Stub the Moment broadcasts (#34): these tests never cross a bingo/blackout edge
 // so none fires, and mocking the module also keeps Board's real
@@ -64,6 +71,16 @@ vi.mock('../data/moments', () => ({
   dropPendingWins: vi.fn(),
   pendingActionGeneration: vi.fn(() => 0),
   firstBingoCandidateCurrent: vi.fn(() => false),
+}));
+// Board imports the Doubt derivation (#33), whose real module pulls the prod
+// ../firebase singleton (like ../data/moments above). This suite does NOT stub
+// ../firebase, so stub ../data/doubts to keep getAuth() from loading. No Doubt is
+// exercised here (useDoubts is empty and the Tally sheet never opens), so the
+// derivation stubs just need to yield "no open Doubts".
+vi.mock('../data/doubts', () => ({
+  raiseDoubt: vi.fn(),
+  openDoubts: () => [],
+  doubtStatusFor: () => 'none',
 }));
 // Board resolves the caller's display name via resolveDisplayName (fed the player
 // row) for BOTH the Tally marker and ProofSheet (#31/#78). Stub it here to mirror
