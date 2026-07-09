@@ -36,6 +36,14 @@ vi.mock('../hooks/useData', () => ({
   // Board reads the roster for the First-to-BINGO Moment (#34); this fixture
   // never crosses a bingo edge, so an empty roster suffices.
   useLeaderboard: () => ({ players: [], loading: false }),
+  // Board subscribes the per-Square Doubt count + the Feed's Proofs (#33); no cell
+  // here is marked-and-non-free, so no DoubtBadge mounts, but the factory must
+  // export both so Board's module resolves.
+  useDoubts: () => ({ doubts: [], count: 0, loading: false, hasServerData: true }),
+  // Board reads its viewer-scoped own Proofs for the DoubtBadge (#106 finding 4);
+  // no marked-and-non-free cell here mounts one, and the sheet is never opened.
+  useMyProofs: () => ({ proofs: [], loading: false, hasServerData: true }),
+  useProofsForItemText: () => ({ proofs: [], loading: false, hasServerData: true }),
 }));
 vi.mock('./ProofSheet', () => ({
   default: (props: { displayName: string; photoURL: string | null }) => {
