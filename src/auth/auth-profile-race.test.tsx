@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   signInWithPopup: vi.fn(),
   signOut: vi.fn(),
   ensureUserProfile: vi.fn(),
+  attestAdult: vi.fn(),
+  readAdultAttestation: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
 }));
@@ -22,7 +24,12 @@ vi.mock('firebase/auth', () => ({
   GoogleAuthProvider: class {},
 }));
 vi.mock('../firebase', () => ({ auth: {}, googleProvider: {} }));
-vi.mock('../data/api', () => ({ ensureUserProfile: mocks.ensureUserProfile, joinAndDeal: mocks.joinAndDeal }));
+vi.mock('../data/api', () => ({
+  ensureUserProfile: mocks.ensureUserProfile,
+  attestAdult: mocks.attestAdult,
+  readAdultAttestation: mocks.readAdultAttestation,
+  joinAndDeal: mocks.joinAndDeal,
+}));
 vi.mock('../analytics', () => ({ track: mocks.track }));
 
 const FAKE_USER = { uid: 'sailor-1', displayName: 'Sailor', photoURL: null };
@@ -77,6 +84,10 @@ beforeEach(() => {
     return () => {};
   });
   mocks.ensureUserProfile.mockResolvedValue(undefined);
+  // profileReady is the subject here, not attestation — read the User as already
+  // attested so the #23 re-prompt gate never intercepts the Probe / GatedSaver.
+  mocks.readAdultAttestation.mockResolvedValue(1);
+  mocks.attestAdult.mockResolvedValue(undefined);
   mocks.joinAndDeal.mockResolvedValue(undefined);
   mocks.signInWithPopup.mockResolvedValue({});
   mocks.signOut.mockResolvedValue(undefined);
