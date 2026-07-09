@@ -290,24 +290,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // BOTH transitions supersede any in-flight bootstrap (bump profileAttemptRef)
     // and re-run bootstrapUser for the current connectivity, so loading is never
-    // stranded on a bootstrap owned by the wrong connectivity (finding C).
+    // stranded on a bootstrap owned by the wrong connectivity (finding C). A
+    // superseder OWNS resetting the flags the superseded attempt would otherwise
+    // have settled: it clears `dealing` so a retry invalidated by the bump can
+    // never strand the "Dealing…" spinner (Codex #117 round 5, finding B) — the
+    // in-flight retry's late resolution returns early on the attempt mismatch and
+    // never clears `dealing` itself.
     const goOnline = () => {
       setOnline(true);
       const u = auth.currentUser;
+      if (!u) return;
+      setDealing(false); // supersede: don't strand an invalidated retry's spinner
       // Finish the deferred authoritative work; `online` flipping true also re-runs
-      // the deal effect so a confirmed-attested User who booted offline deals once.
-      if (u) void bootstrapUser(u, (profileAttemptRef.current += 1));
+      // the deal effect so a confirmed-attested User who booted offline deals once
+      // — but only AFTER this fresh read re-confirms authority (see goOffline).
+      void bootstrapUser(u, (profileAttemptRef.current += 1));
     };
     const goOffline = () => {
       setOnline(false);
-      // A mid-bootstrap connectivity LOSS must SUPERSEDE the in-flight ONLINE
-      // bootstrap (whose ensureUserProfile transaction may never settle offline and
-      // would otherwise strand "Loading…") and switch to the cache-first path:
-      // release to the cached Board if proof-of-18+ is cached, else hold on the
-      // offline-unknown state (finding B). Bumping profileAttemptRef drops the
-      // superseded online attempt's late resolution so it cannot clobber this.
       const u = auth.currentUser;
-      if (u) void bootstrapUser(u, (profileAttemptRef.current += 1));
+      if (!u) return;
+      setDealing(false); // supersede: clear an invalidated retry's spinner (finding B)
+      // A pre-offline authoritative read must NOT survive the dead zone as a
+      // license to deal on reconnect (Codex #117 round 5, finding A): the stamp
+      // could be deleted server-side while offline, and the reconnect handler flips
+      // `online` before the fresh read finishes, so a stale `attestedAuthoritative`
+      // would let the deal effect create rows during the reconnect window. Re-arm
+      // it false so the reconnect deal waits for the FRESH server read — UNLESS a
+      // same-session optimistic attest proves it (#112: its transaction succeeded
+      // THIS session, durable authority, not a stale cross-offline read).
+      if (!attestedUidsRef.current.has(u.uid)) setAttestedAuthoritative(false);
+      // A mid-bootstrap connectivity LOSS SUPERSEDES the in-flight ONLINE bootstrap
+      // (whose ensureUserProfile transaction may never settle offline and would
+      // otherwise strand "Loading…") and switches to the cache-first path: release
+      // to the cached Board if proof-of-18+ is cached, else hold (finding B/C).
+      void bootstrapUser(u, (profileAttemptRef.current += 1));
     };
     window.addEventListener('online', goOnline);
     window.addEventListener('offline', goOffline);

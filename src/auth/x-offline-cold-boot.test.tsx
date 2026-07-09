@@ -39,6 +39,11 @@ vi.mock('../data/api', () => ({
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));
+// AuthProvider renders <ConfirmWinMoments/> for a signed-in User (#116); it reads
+// the Firestore `db` this suite deliberately does not wire, so stub it out — this
+// suite is about the auth/attestation state machine, not the win-moment surface
+// (mirrors the sibling AuthContext / auth-profile-race suites).
+vi.mock('../components/ConfirmWinMoments', () => ({ default: () => null }));
 
 const RETURNING_USER = { uid: 'sailor-1', displayName: 'Sailor', photoURL: null };
 
@@ -65,13 +70,14 @@ function deferred<T>() {
 let ctxSignIn: () => Promise<void> = async () => {};
 let ctxRetryDeal: () => void = () => {};
 function Probe() {
-  const { user, loading, dealError, signIn, retryDeal } = useAuth();
+  const { user, loading, dealError, dealing, signIn, retryDeal } = useAuth();
   ctxSignIn = signIn;
   ctxRetryDeal = retryDeal;
   return (
     <div>
       <span data-testid="loading">{loading ? 'loading' : 'ready'}</span>
       <span data-testid="uid">{user?.uid ?? 'none'}</span>
+      <span data-testid="dealing">{dealing ? 'dealing' : 'idle'}</span>
       {dealError ? <p role="alert">{dealError}</p> : null}
       <span data-testid="board">board</span>
     </div>
@@ -85,6 +91,9 @@ const boardRendered = () => screen.getByTestId('loading').textContent === 'ready
 // App.tsx renders the DealError panel over the Board whenever dealError is set, so
 // a stale error observed here means the Board would NOT render (round 4).
 const dealErrorShown = () => screen.queryByRole('alert') !== null;
+// `dealing` drives the DealError Retry button's disabled/"Dealing…" state — stuck
+// true would leave Retry unusable through a supersede (round 5, finding B).
+const dealingActive = () => screen.getByTestId('dealing').textContent === 'dealing';
 
 function setOnline(value: boolean) {
   Object.defineProperty(navigator, 'onLine', { configurable: true, value });
@@ -403,6 +412,101 @@ describe('offline cold boot (#115)', () => {
     // Reconnect settles authoritatively (server confirms) and the deal fires once.
     await reconnect();
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+  });
+
+  it('finding A (round 5): a PRE-offline authoritative read does not license a reconnect deal — the deal waits for the FRESH read; a server-NULL downgrades with NO rows created', async () => {
+    // Online: authoritatively attested, but the deal FAILS so no board exists and
+    // attestedAuthoritative is true. This is the state that, on the buggy code,
+    // deals again on reconnect on the stale authority.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestation.mockResolvedValue(1); // server: attested (authoritative)
+    mocks.joinAndDeal.mockRejectedValueOnce(new Error('network request failed')); // deal fails, no board
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1)); // online deal fired + failed
+
+    // Dead zone: the users/{uid} stamp is deleted server-side while offline.
+    await goOffline();
+
+    // Reconnect with the FRESH read HELD in flight so the reconnect window is
+    // observable; joinAndDeal would now "succeed" (create rows) if it fired.
+    const read = deferred<number | null>();
+    mocks.readAdultAttestation.mockReturnValue(read.promise);
+    mocks.joinAndDeal.mockResolvedValue(undefined);
+    await reconnect();
+    // The pre-offline authority must NOT license a deal in the reconnect window.
+    expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1);
+
+    // The fresh read returns NO stamp → downgrade to re-prompt, still no new deal
+    // (no board/player rows created for the server-downgraded User).
+    await act(async () => {
+      read.settle(null);
+      await read.promise;
+    });
+    await waitFor(() => expect(rePromptShown()).toBe(true));
+    expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1);
+  });
+
+  it('finding A (round 5): a same-session optimistic attest keeps authority across the offline transition and DEALS on reconnect', async () => {
+    // Sign in this session (attest → sticky + authoritative), no board yet.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestation.mockResolvedValue(1);
+    mocks.joinAndDeal.mockRejectedValueOnce(new Error('network request failed')); // first deal fails, no board
+
+    mount();
+    mocks.auth.currentUser = RETURNING_USER;
+    await act(async () => {
+      await ctxSignIn(); // attest(): attestedUidsRef + authoritative
+    });
+    await coldBoot(RETURNING_USER);
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+
+    // Offline then reconnect: the SAME-SESSION attest is durable authority, so the
+    // deal fires again on reconnect (its second call succeeds, creating the board).
+    mocks.joinAndDeal.mockResolvedValue(undefined);
+    await goOffline();
+    await reconnect();
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(2));
+    expect(rePromptShown()).toBe(false);
+  });
+
+  it('finding B (round 5): a retry invalidated by a mid-flight connectivity drop does not strand dealing — Retry stays usable', async () => {
+    // Online bootstrap FAILS → dealError set, attestation UNKNOWN, so retryDeal
+    // routes to retryBootstrap (the transaction path), which sets dealing true.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockRejectedValueOnce(new Error('network request failed'));
+    mocks.readAdultAttestation.mockResolvedValue(null);
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    await waitFor(() => expect(dealErrorShown()).toBe(true));
+    expect(dealingActive()).toBe(false);
+
+    // Tap Retry — retryBootstrap sets dealing true and holds on ensureUserProfile.
+    const ensure = deferred<void>();
+    mocks.ensureUserProfile.mockReturnValue(ensure.promise);
+    await act(async () => {
+      ctxRetryDeal();
+    });
+    expect(dealingActive()).toBe(true); // retry in flight
+
+    // Connectivity drops mid-retry: the offline supersede (bumps profileAttemptRef)
+    // must CLEAR dealing so the Retry button is not stuck disabled in "Dealing…".
+    await goOffline();
+    expect(dealingActive()).toBe(false);
+
+    // The invalidated retry's LATE resolution must not un-clear or clobber dealing.
+    await act(async () => {
+      ensure.settle();
+      await ensure.promise;
+    });
+    expect(dealingActive()).toBe(false);
   });
 
   it('online: a genuinely-new attested User still deals', async () => {
