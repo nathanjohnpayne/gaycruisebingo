@@ -6,59 +6,17 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { THEMES } from './themes';
 import { ThemeProvider, useTheme } from './ThemeContext';
+import { contrastRatio, hexToRgb, parseThemeBlocks } from './contrast';
 
 // Covers specs/w1-themes.md: WCAG AA contrast across all 8 [data-theme]
 // blocks, ThemeContext's persistence + async-default invariants, the <5s PRD
 // switch-latency metric, and the "no Atlantis marks" non-goal.
-
-// ---------------------------------------------------------------------------
-// Contrast utilities — WCAG 2.1 relative luminance + contrast ratio, computed
-// over [data-theme] blocks parsed straight out of themes.css so this test can
-// never drift from the CSS it polices (no hand-transcribed color table).
-// ---------------------------------------------------------------------------
-
-type ThemeVars = Record<string, string>;
-
-function parseThemeBlocks(source: string): Record<string, ThemeVars> {
-  const blocks: Record<string, ThemeVars> = {};
-  // Matches ":root, [data-theme='x']" or a bare "[data-theme='x']" (optionally
-  // comma-chained with more theme selectors) followed by its declaration body.
-  const blockRe =
-    /((?:\[data-theme='[\w-]+'\]|:root)(?:\s*,\s*\[data-theme='[\w-]+'\])*)\s*\{([^}]*)\}/g;
-  for (const match of source.matchAll(blockRe)) {
-    const ids = [...match[1].matchAll(/data-theme='([\w-]+)'/g)].map((m) => m[1]);
-    const vars: ThemeVars = {};
-    for (const decl of match[2].matchAll(/--([\w-]+):\s*([^;]+);/g)) {
-      vars[decl[1]] = decl[2].trim();
-    }
-    for (const id of ids) blocks[id] = { ...(blocks[id] ?? {}), ...vars };
-  }
-  return blocks;
-}
-
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.trim().replace('#', '');
-  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
-  const num = parseInt(full, 16);
-  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
-}
-
-/** WCAG 2.1 relative luminance of an sRGB color. https://www.w3.org/TR/WCAG21/#dfn-relative-luminance */
-function relativeLuminance([r, g, b]: [number, number, number]): number {
-  const [R, G, B] = [r, g, b].map((c) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  });
-  return 0.2126 * R + 0.7152 * G + 0.0722 * B;
-}
-
-/** WCAG 2.1 contrast ratio between two sRGB hex colors. https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio */
-function contrastRatio(hexA: string, hexB: string): number {
-  const lA = relativeLuminance(hexToRgb(hexA));
-  const lB = relativeLuminance(hexToRgb(hexB));
-  const [lighter, darker] = lA >= lB ? [lA, lB] : [lB, lA];
-  return (lighter + 0.05) / (darker + 0.05);
-}
+//
+// The WCAG 2.1 luminance/contrast helpers and the themes.css block parser live
+// in ./contrast (shared with src/theme/a11y-badge-contrast.test.tsx) so the
+// suite computes from one implementation and never hand-transcribes a color
+// table. Ratios are still computed over [data-theme] blocks parsed straight out
+// of themes.css, so this test can never drift from the CSS it polices.
 
 // `join(dirname(fileURLToPath(import.meta.url)), ...)` rather than
 // `new URL('./themes.css', import.meta.url)`: Vite statically rewrites the
@@ -116,7 +74,7 @@ describe('themes.css — WCAG AA contrast (specs/w1-themes.md)', () => {
 
     for (const [fg, bg] of TEXT_PAIRS) {
       it(`${t.id}: --${fg} on --${bg} meets ${TEXT_MIN}:1`, () => {
-        expect(contrastRatio(vars[fg], vars[bg])).toBeGreaterThanOrEqual(TEXT_MIN);
+        expect(contrastRatio(hexToRgb(vars[fg]), hexToRgb(vars[bg]))).toBeGreaterThanOrEqual(TEXT_MIN);
       });
     }
   }
