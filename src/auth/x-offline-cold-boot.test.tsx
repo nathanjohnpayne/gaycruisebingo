@@ -63,9 +63,11 @@ function deferred<T>() {
 // when it is up, AuthProvider renders <SignIn/> in its place. signIn/attest are
 // captured to drive the same-session optimistic-attest path (#112 Finding 3).
 let ctxSignIn: () => Promise<void> = async () => {};
+let ctxRetryDeal: () => void = () => {};
 function Probe() {
-  const { user, loading, signIn } = useAuth();
+  const { user, loading, signIn, retryDeal } = useAuth();
   ctxSignIn = signIn;
+  ctxRetryDeal = retryDeal;
   return (
     <div>
       <span data-testid="loading">{loading ? 'loading' : 'ready'}</span>
@@ -75,9 +77,22 @@ function Probe() {
   );
 }
 
+// Held on the App "Loading…" gate ⇔ the Board would NOT render (App.tsx returns
+// "Loading…" while `loading`). The offline-unknown state (finding B).
+const boardHeld = () => screen.getByTestId('loading').textContent === 'loading';
+const boardRendered = () => screen.getByTestId('loading').textContent === 'ready';
+
 function setOnline(value: boolean) {
   Object.defineProperty(navigator, 'onLine', { configurable: true, value });
 }
+
+// Simulate a mid-bootstrap connectivity LOSS: flip the probe and dispatch the
+// browser 'offline' event AuthProvider listens on.
+const goOffline = () =>
+  act(async () => {
+    setOnline(false);
+    window.dispatchEvent(new Event('offline'));
+  });
 
 const mount = () =>
   render(
@@ -271,7 +286,7 @@ describe('offline cold boot (#115)', () => {
     expect(rePromptShown()).toBe(false);
   });
 
-  it('does NOT fail the age gate open offline: no attestation anywhere means UNKNOWN, held, and never a deal', async () => {
+  it('finding B: offline cold boot with NO cached attestation does NOT render the Board — it HOLDS (never fail-open), then reconnect settles a definite re-prompt with no deal', async () => {
     setOnline(false);
     mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
     mocks.ensureUserProfile.mockReturnValue(NEVER);
@@ -279,18 +294,84 @@ describe('offline cold boot (#115)', () => {
     mount();
     await coldBoot(RETURNING_USER);
 
-    // Offline it never assumes attested — no deal, no re-prompt (UNKNOWN, held).
+    // No proof of 18+ (cache miss) → the Board is HELD behind the App Loading gate,
+    // NOT rendered; and it never assumes attested — no deal, no re-prompt offline.
+    expect(boardHeld()).toBe(true);
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
     expect(rePromptShown()).toBe(false);
 
     // Reconnect with a server that reports a genuinely UN-attested profile: the
-    // gate HOLDS as a definite re-prompt, never a fail-open deal.
+    // gate HOLDS as a definite re-prompt, never a fail-open deal, loading released.
     mocks.ensureUserProfile.mockResolvedValue(undefined);
     mocks.readAdultAttestation.mockResolvedValue(null);
     await reconnect();
 
     await waitFor(() => expect(rePromptShown()).toBe(true));
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+  });
+
+  it('finding A: a retry OFFLINE or on a PROVISIONAL cache attestation re-bootstraps and never deals; a retry ONLINE + authoritative deals', async () => {
+    // Offline cold boot, cache-attested: attested is provisionally true, but NOT
+    // authoritative. A retry here must NOT joinAndDeal — it must re-run bootstrap.
+    setOnline(false);
+    mocks.readAdultAttestationFromCache.mockResolvedValue(1);
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestation.mockResolvedValue(1);
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    expect(boardRendered()).toBe(true); // cache-attested → Board renders offline
+
+    await act(async () => {
+      ctxRetryDeal();
+    });
+    // Offline / provisional → routed to the bootstrap, never a deal.
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+    expect(mocks.ensureUserProfile).toHaveBeenCalled(); // re-bootstrapped instead
+
+    // Reconnect: the authoritative read confirms → attested becomes authoritative,
+    // and the deferred deal fires once. NOW a retry deals (online + authoritative).
+    await reconnect();
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      ctxRetryDeal();
+    });
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(2));
+  });
+
+  it('finding C: an ONLINE bootstrap that loses connectivity mid-flight is SUPERSEDED — loading releases via the cache path (not stranded), and the late online resolution cannot clobber it', async () => {
+    // Online boot with the authoritative bootstrap held in flight, so loading is
+    // gated. The User has a cached stamp, so the offline takeover can render.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockResolvedValue(1);
+    const ensure = deferred<void>();
+    mocks.ensureUserProfile.mockReturnValue(ensure.promise); // in flight → loading gated
+    mocks.readAdultAttestation.mockResolvedValue(1);
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    expect(boardHeld()).toBe(true); // gated on Loading while the online read is in flight
+
+    // Connectivity drops mid-bootstrap: the offline handler supersedes the pending
+    // online attempt and releases loading via the cache-first path (cache-attested
+    // → Board), rather than stranding on the transaction that may never settle.
+    await goOffline();
+    await waitFor(() => expect(boardRendered()).toBe(true));
+    expect(rePromptShown()).toBe(false);
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled(); // offline never deals
+
+    // The superseded ONLINE bootstrap resolves LATE — it must not clobber the
+    // newer offline state (no re-prompt, no downgrade, still rendered).
+    await act(async () => {
+      ensure.settle();
+      await ensure.promise;
+    });
+    expect(boardRendered()).toBe(true);
+    expect(rePromptShown()).toBe(false);
+
+    // Reconnect settles authoritatively (server confirms) and the deal fires once.
+    await reconnect();
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
   });
 
   it('online: a genuinely-new attested User still deals', async () => {
