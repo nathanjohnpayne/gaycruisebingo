@@ -191,59 +191,63 @@ describe('offline cold boot (#115)', () => {
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
   });
 
-  it('finding C: a cache-attested User with no board for the Event defers the deal offline and fires it exactly once on reconnect', async () => {
+  it('finding C + round-2 P1: no deal fires on the PROVISIONAL cache attestation during the reconnect window; deals exactly once after the authoritative read CONFIRMS', async () => {
     // Offline cold boot: attested from cache, but this is a FRESH Event so
-    // joinAndDeal has real work (boards are per-Event). It must not run offline.
+    // joinAndDeal has real work (boards are per-Event). The authoritative read is
+    // HELD in flight across the reconnect so the online-flip deal effect runs
+    // while `attested` is still the provisional cache value — the exact window the
+    // round-2 P1 closes. On the buggy code the deal fires here (only online was
+    // gated); with the authority gate it must not.
     setOnline(false);
     mocks.readAdultAttestationFromCache.mockResolvedValue(1);
     mocks.ensureUserProfile.mockResolvedValue(undefined);
-    mocks.readAdultAttestation.mockResolvedValue(1); // server confirms on reconnect
+    const read = deferred<number | null>();
+    mocks.readAdultAttestation.mockReturnValue(read.promise);
 
     mount();
     await coldBoot(RETURNING_USER);
-
-    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled(); // offline never deals
     expect(rePromptShown()).toBe(false);
 
-    // Reconnect: the deferred deal fires exactly once (the online state flip
-    // re-runs the gated deal effect), and never before.
+    // Reconnect: `online` flips true but the authoritative read is STILL pending —
+    // the deal must NOT fire on the provisional attestation.
     await reconnect();
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+
+    // The authoritative read CONFIRMS the stamp → the deferred deal fires once.
+    await act(async () => {
+      read.settle(1);
+      await read.promise;
+    });
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
   });
 
-  it('finding D: an authoritative server read with NO stamp downgrades a stale cache lift to a re-prompt on reconnect', async () => {
-    // Offline: a STALE cached stamp provisionally lifts the gate.
+  it('finding D + round-2 P1: a HELD authoritative read that returns NO stamp downgrades the stale cache lift to a re-prompt, and never deals — not even in the reconnect window', async () => {
+    // Offline: a STALE cached stamp provisionally lifts the gate. The server row
+    // now has NO stamp (owner deleted/recreated it). The read is held in flight so
+    // the online-flip effect runs on the provisional value: no deal must fire
+    // (round-2 P1), and the settled null must downgrade to a re-prompt.
     setOnline(false);
     mocks.readAdultAttestationFromCache.mockResolvedValue(1);
     mocks.ensureUserProfile.mockResolvedValue(undefined);
+    const read = deferred<number | null>();
+    mocks.readAdultAttestation.mockReturnValue(read.promise);
 
     mount();
     await coldBoot(RETURNING_USER);
     expect(rePromptShown()).toBe(false); // provisionally attested offline
 
-    // Reconnect: the server row now has NO stamp (owner deleted/recreated it).
-    // The authoritative read DOWNGRADES the provisional lift → re-prompt.
-    mocks.readAdultAttestation.mockResolvedValue(null);
     await reconnect();
+    // In the window before the authoritative read settles, NO durable rows are
+    // created for this (server-)un-attested User.
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
 
+    await act(async () => {
+      read.settle(null);
+      await read.promise;
+    });
     await waitFor(() => expect(rePromptShown()).toBe(true));
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
-  });
-
-  it('finding D: an authoritative server read that CONFIRMS the stamp keeps the User attested', async () => {
-    setOnline(false);
-    mocks.readAdultAttestationFromCache.mockResolvedValue(1);
-    mocks.ensureUserProfile.mockResolvedValue(undefined);
-
-    mount();
-    await coldBoot(RETURNING_USER);
-
-    mocks.readAdultAttestation.mockResolvedValue(1); // server confirms
-    await reconnect();
-
-    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalled());
-    expect(rePromptShown()).toBe(false);
-    expect(screen.getByTestId('board')).toBeInTheDocument();
   });
 
   it('#112 preserved: a same-session optimistic attest stays sticky even when the server read returns no stamp', async () => {

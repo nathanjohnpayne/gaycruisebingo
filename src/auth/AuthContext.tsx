@@ -97,6 +97,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // cache but must not deal until online — and the deferred deal has to FIRE on
   // reconnect, which only happens if `online` flipping true re-runs that effect.
   const [online, setOnline] = useState(isOnline());
+  // Whether `attested === true` is AUTHORITATIVE (server-settled or a same-session
+  // optimistic attest) vs merely PROVISIONAL (the offline cache lift). Distinct
+  // from `attested` so the offline cache lift can settle the gate for RENDER —
+  // the cached Board paints offline (#115) — while the network-write DEAL waits
+  // for authority (Codex #117 finding, round 2). A cache-attested User who
+  // cold-boots offline onto a fresh Event holds `attested === true` provisionally;
+  // on reconnect `online` flips true BEFORE the authoritative read finishes, so
+  // gating the deal on `online` alone would let joinAndDeal create board/player
+  // rows for a User whose server read may then return NO stamp and downgrade to a
+  // re-prompt — creating durable rows for an un-attested User. This flag holds the
+  // deal until the authoritative read confirms the stamp. Re-armed false per auth
+  // change; never set true offline (the cache lift is provisional).
+  const [attestedAuthoritative, setAttestedAuthoritative] = useState(false);
   // Monotonic id of the latest deal attempt; runDeal captures it and re-checks
   // before each setState so a superseded attempt's late result is dropped (P2).
   const dealAttemptRef = useRef(0);
@@ -175,16 +188,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (profileAttemptRef.current !== attempt) return;
     const attestedSticky = attestedUidsRef.current.has(u.uid);
     if (bootstrapFailure) {
-      // Not authoritative — keep the same-session optimistic attest if any, else
-      // surface the retryable error and leave attestation UNKNOWN (no downgrade on
-      // a mere network blip). The Retry re-runs this whole bootstrap.
-      if (attestedSticky) setAttested(true);
-      else setDealError(dealErrorMessage(bootstrapFailure.err));
+      // Not authoritative — keep the same-session optimistic attest if any (its
+      // own transaction succeeded THIS session, so it IS authoritative and may
+      // deal), else surface the retryable error and leave attestation UNKNOWN /
+      // provisional (no downgrade, and no deal, on a mere network blip). The Retry
+      // re-runs this whole bootstrap.
+      if (attestedSticky) {
+        setAttested(true);
+        setAttestedAuthoritative(true);
+      } else {
+        setDealError(dealErrorMessage(bootstrapFailure.err));
+      }
     } else {
       // Authoritative: a same-session optimistic attest wins (its transaction
       // succeeded), otherwise the server value is definitive — INCLUDING
-      // downgrading a stale cache lift to a re-prompt (finding D).
+      // downgrading a stale cache lift to a re-prompt (finding D). The read
+      // SETTLED, so the deal may now fire for a confirmed-attested User (round 2).
       setAttested(attestedSticky ? true : attestedRead);
+      setAttestedAuthoritative(true);
     }
     setProfileReady(true);
     // Online gate resolved — release the "Loading…" hold and render (finding B).
@@ -200,9 +221,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setDealError(null);
       setDealing(false);
       // The incoming User's profile bootstrap has not settled yet (#77), so the
-      // 18+ attestation is UNKNOWN — never `false` — until it does (#23).
+      // 18+ attestation is UNKNOWN — never `false` — until it does (#23), and its
+      // authority is un-established until an authoritative read/attest settles it.
       setProfileReady(false);
       setAttested(undefined);
+      setAttestedAuthoritative(false);
       setUser(u);
       if (!u) {
         // Signed out → App renders SignIn, never "Loading…".
@@ -283,18 +306,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // signed-in attest flow settles true. The dealAttempt guard + joinAndDeal's
   // board-exists early-return keep the flip from double-dealing.
   //
-  // ALSO gated on connectivity (#115): a deal is a network-bound CREATE path
-  // (joinAndDeal writes a new board/player row), so it must not fire offline. It
-  // gates on the reactive `online` STATE (not the `isOnline()` probe) so the deps
-  // change on reconnect: a globally-attested User who cold-boots OFFLINE onto a
-  // fresh Event settles `attested === true` from cache but has no board yet — the
-  // deal is skipped offline and then FIRES exactly once when `online` flips true
-  // (finding C). A returning boarded User re-runs joinAndDeal on that flip too, but
-  // its board-exists early-return makes it a no-op; the dealAttempt guard keeps any
-  // reconnect re-run from clobbering state. Offline it never fires.
+  // ALSO gated on connectivity (#115) AND on attestation AUTHORITY (Codex #117
+  // round 2): a deal is a network-bound CREATE path (joinAndDeal writes a new
+  // board/player row), so it must not fire offline, and must NEVER fire on a
+  // PROVISIONAL (cache-derived) attestation. It gates on the reactive `online`
+  // STATE (not the `isOnline()` probe) so the deps change on reconnect, and on
+  // `attestedAuthoritative` so a cache-attested User who cold-boots OFFLINE onto a
+  // fresh Event does NOT deal until the authoritative read confirms the stamp: on
+  // reconnect `online` flips true first, but the deal waits for the server read to
+  // settle `attestedAuthoritative` true — a server NULL downgrades to a re-prompt
+  // WITHOUT ever dealing (no rows created for an un-attested User). The deal then
+  // FIRES exactly once for a confirmed-attested User who lacks a board (finding C);
+  // a same-session optimistic attest is authoritative too (its transaction
+  // succeeded), so that User deals on reconnect. A returning boarded User re-runs
+  // joinAndDeal on that flip but its board-exists early-return makes it a no-op;
+  // the dealAttempt guard keeps any reconnect re-run from clobbering state.
   useEffect(() => {
-    if (user && attested === true && online) void runDeal(user);
-  }, [user, attested, online, runDeal]);
+    if (user && attested === true && attestedAuthoritative && online) void runDeal(user);
+  }, [user, attested, attestedAuthoritative, online, runDeal]);
 
   // Re-attempt a FAILED attestation bootstrap (#112 round 2): re-runs
   // ensureUserProfile + readAdultAttestation under profileAttemptRef — the same
@@ -316,7 +345,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const attestedSticky = attestedUidsRef.current.has(u.uid);
       // Authoritative settle (finding D): the server read is definitive — only a
       // same-session optimistic attest is sticky, never a prior provisional value.
+      // The read SETTLED, so this settle is authoritative and may fire the deal.
       setAttested(attestedSticky ? true : read);
+      setAttestedAuthoritative(true);
       if (!read && !attestedSticky) {
         setDealError(null);
         setDealing(false);
@@ -351,6 +382,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // the COMPLETE profile, not just the stamp (Finding 2).
     attestedUidsRef.current.add(u.uid);
     setAttested(true);
+    // A same-session attest IS authoritative (the User asserted 18+ this session
+    // and its transaction is the source of truth), so it may fire the deal — the
+    // deal effect gates on `attestedAuthoritative`, and this is the immediate-
+    // deal-after-attest path (Codex #117 round 2). The `online` gate still keeps a
+    // just-attested User from dealing until connected.
+    setAttestedAuthoritative(true);
     try {
       await attestAdult(u);
     } catch {
