@@ -151,6 +151,7 @@ function TallySheet({
   meUid,
   meName,
   identityKnown,
+  isSourceLive,
   onClose,
 }: {
   itemId: string;
@@ -159,6 +160,12 @@ function TallySheet({
   meUid: string;
   meName: string | undefined;
   identityKnown: boolean;
+  // Board's write-time source revalidation (Codex P2, PR #106 round 6): true only
+  // while the CURRENT account's board still holds (cellIndex, itemId) as a marked,
+  // non-free Square. This sheet's own props are exactly what goes stale when the
+  // account switches (or the source unmarks in another tab) under an open sheet,
+  // so the raise consults Board's latest knowledge instead of trusting them.
+  isSourceLive: (cellIndex: number, itemId: string) => boolean;
   onClose: () => void;
 }) {
   const { markers, loading } = useTally(itemId);
@@ -185,6 +192,17 @@ function TallySheet({
   const inFlight = useRef<Set<string>>(new Set());
   const [, bumpInFlight] = useReducer((n: number) => n + 1, 0);
   const doDoubt = (m: TallyEntry) => {
+    // Write-time source revalidation (Codex P2, PR #106 round 6), SYNCHRONOUS with
+    // the write decision — a Doubt is a permanent once-only slot, so a stale
+    // source must be caught at the moment of the raise, not by an effect that can
+    // race the tap by a commit. Board's render-time close (the tallySourceLive
+    // adjust) normally unmounts this sheet first; this is the belt-and-braces
+    // write layer for the tap that lands in the race window. Dead source → close
+    // the sheet, write nothing, count nothing.
+    if (!isSourceLive(cellIndex, itemId)) {
+      onClose();
+      return;
+    }
     if (inFlight.current.has(m.uid)) return;
     inFlight.current.add(m.uid);
     bumpInFlight();
@@ -387,6 +405,25 @@ export default function Board() {
   // — this gate does. BoardDoc carries its owner's uid, so the check is direct.
   const cellsAttributable = board != null && board.uid === uid;
 
+  // A Tally sheet's SOURCE Square is live only while the CURRENT account's board
+  // still holds that cell marked, non-free, and carrying the SAME Prompt (Codex
+  // P2, PR #106 round 6 — the #110 attribution-guard class applied to the Doubt
+  // write path). `cellsAttributable` folds the account-identity half: another
+  // uid's board validates nothing.
+  const tallySourceLive = (target: Cell): boolean => {
+    if (!cellsAttributable) return false;
+    const cell = cells.find((c) => c.index === target.index);
+    return cell != null && !cell.free && cell.marked && cell.itemId === target.itemId;
+  };
+  // Close a DANGLING sheet the moment its source dies — the account switched under
+  // it, or the source Square unmarked in another tab — using the same
+  // adjust-during-render pattern as the per-uid reset above (an effect could race
+  // a tap by one commit; this runs before anything renders). Clearing the STATE
+  // (not just gating the render) also stops a later re-mark from resurrecting a
+  // sheet the Player already saw close. Idempotent: the very next render sees
+  // tallyTarget null.
+  if (tallyTarget && !tallySourceLive(tallyTarget)) setTallyTarget(null);
+
   // The latest identity + roster + gate signals + CURRENT attributable cells for
   // Moment broadcasts, stored in a ref so `drainMoments` (a stable callback)
   // always reads the CURRENT actor, gate state, and board, never a stale render's
@@ -425,6 +462,21 @@ export default function Board() {
     rosterConfirmed,
     cells: cellsAttributable ? cells : [],
   };
+
+  // Write-time twin of `tallySourceLive` for the Doubt raise (Codex P2, PR #106
+  // round 6): TallySheet calls this SYNCHRONOUSLY with the raise decision, so the
+  // check reads the LATEST rendered board through feedCtx (already
+  // attribution-gated — a foreign board contributes NO cells) rather than the
+  // sheet's own captured props, which are exactly what goes stale when the account
+  // switches or the source Square unmarks under an open sheet. A Doubt is a
+  // PERMANENT once-only slot, so the wrong-source write must be stopped at the
+  // moment of the write — the render-time close above is the UI layer, this is
+  // the write layer (the same belt-and-braces split as toggle + doMark, #110
+  // finding 2). Stable ([] deps): reads only the ref.
+  const isDoubtSourceLive = useCallback((index: number, itemId: string): boolean => {
+    const cell = feedCtx.current.cells.find((c) => c.index === index);
+    return cell != null && !cell.free && cell.marked && cell.itemId === itemId;
+  }, []);
 
   // Drain the module-scope pending queue (src/data/moments.ts): fire every held
   // Moment whose gate is now open, reading the LATEST actor + gates from feedCtx
@@ -848,7 +900,13 @@ export default function Board() {
                 itemText={c.text}
                 targetUid={uid}
                 proofs={myProofs}
-                onOpen={() => setTallyTarget(c)}
+                onOpen={() => {
+                  // The same attribution guard as the TallyBadge open above (the
+                  // #110 finding-C sweep — this open was missed; round 6 closes it):
+                  // a stale render must not open the who-list against another
+                  // account's board.
+                  if (cellsAttributable) setTallyTarget(c);
+                }}
               />
             )}
           </div>
@@ -917,6 +975,7 @@ export default function Board() {
           meUid={uid}
           meName={identityKnown ? displayName : undefined}
           identityKnown={identityKnown}
+          isSourceLive={isDoubtSourceLive}
           onClose={() => setTallyTarget(null)}
         />
       )}

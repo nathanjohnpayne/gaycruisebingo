@@ -27,7 +27,11 @@ import type { BoardDoc, Cell, DoubtDoc, PlayerDoc, ProofDoc, TallyEntry } from '
 //     once-only; a re-raise in place would only be denied);
 //   - round 2 finding 3: the raise affordance is identity-gated — disabled while
 //     the player row is loading (a Doubt stores the accuser's name PERMANENTLY),
-//     enabled with the SAVED name once identity resolves.
+//     enabled with the SAVED name once identity resolves;
+//   - round 6: a Tally sheet whose SOURCE dies under it — the account switches or
+//     the source Square unmarks in another tab — closes instead of dangling, and
+//     the stale surface never reaches raiseDoubt (the #110 attribution-guard
+//     class applied to the permanent Doubt write path).
 
 const H = vi.hoisted(() => ({
   user: null as User | null,
@@ -393,5 +397,56 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
     expect(btn.textContent).toBe('Doubted');
     fireEvent.click(btn);
     expect(H.raiseDoubt).not.toHaveBeenCalled(); // no doomed duplicate write
+  });
+
+  // ---- PR #106 round 6: a stale Tally source must never raise a Doubt ----
+
+  it('closes the sheet when its source Square unmarks under it — a raise from a live source works, a stale one never fires (round 6)', () => {
+    H.markers = [
+      { uid: 'u1', displayName: 'Me', markedAt: 1 },
+      { uid: 'bob', displayName: 'Bob', markedAt: 2 },
+    ];
+
+    const { container, rerender } = render(<Board />);
+    fireEvent.click(container.querySelector('.tally-badge')!);
+    // Positive pin: the source is LIVE (cell 0 marked on my own board) — the
+    // guard does not block a valid raise.
+    fireEvent.click(container.querySelector('.doubt-btn')!);
+    expect(H.raiseDoubt).toHaveBeenCalledTimes(1);
+
+    // The source Square unmarks in another tab: the snapshot re-renders Board and
+    // the sheet must CLOSE (never dangle over a dead source), adding no raise. On
+    // 5ac5a49 the sheet stayed open with its stale itemId/cellIndex.
+    H.board = {
+      uid: 'u1',
+      seed: 1,
+      createdAt: 0,
+      cells: dealt().map((c) => (c.index === 0 ? { ...c, marked: false, markedAt: null } : c)),
+    };
+    rerender(<Board />);
+    expect(container.querySelector('.sheet-backdrop')).toBeNull(); // closed
+    expect(H.raiseDoubt).toHaveBeenCalledTimes(1); // the stale surface added nothing
+  });
+
+  it('closes the sheet on an account switch — the new account can never publish a Doubt from the old account’s sheet (round 6)', () => {
+    H.markers = [
+      { uid: 'u1', displayName: 'Me', markedAt: 1 },
+      { uid: 'bob', displayName: 'Bob', markedAt: 2 },
+    ];
+
+    const { container, rerender } = render(<Board />);
+    fireEvent.click(container.querySelector('.tally-badge')!);
+    expect(container.querySelector('.sheet-backdrop')).not.toBeNull(); // open as u1
+
+    // The account switches while the sheet is open; the subscription still lags
+    // with u1's board for this render (the #110 hazard window). A Doubt is a
+    // PERMANENT once-only slot, so u2 must never publish one for a Prompt/cell
+    // captured from u1's board: the sheet closes on the switch render, and the
+    // write-time isSourceLive guard backstops any tap that races the close.
+    H.user = { uid: 'u2', displayName: 'Other', photoURL: null } as unknown as User;
+    H.player = { uid: 'u2', displayName: 'Other', photoURL: null } as unknown as PlayerDoc;
+    rerender(<Board />);
+    expect(container.querySelector('.sheet-backdrop')).toBeNull(); // closed
+    expect(H.raiseDoubt).not.toHaveBeenCalled();
   });
 });
