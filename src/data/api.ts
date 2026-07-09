@@ -108,6 +108,44 @@ export async function ensureUserProfile(u: User): Promise<void> {
   });
 }
 
+/**
+ * Persist the honor-system 18+ self-attestation (ADR 0001) for a User: stamp
+ * `users/{uid}.attestedAdultAt` with the ms-epoch time of their FIRST attestation.
+ * This records the User's OWN statement — not identity verification — and is
+ * covered by the EXISTING `users/{uid}` owner self-write (firestore.rules already
+ * shape-checks `attestedAdultAt` as a number), so it ships with NO rules change.
+ *
+ * Create-only for the field, inside a transaction like `ensureUserProfile`: an
+ * existing EARLIER stamp is NEVER overwritten, so re-attesting — a fresh sign-in
+ * after a prior one, or the returning-User re-prompt — keeps the first timestamp
+ * (the no-overwrite case in specs/w1-attestation.md). The stamp merges into the
+ * profile row without disturbing its other fields; if the row is somehow absent
+ * the merge creates a minimal one the owner may write.
+ */
+export async function attestAdult(uid: string, now: number = Date.now()): Promise<void> {
+  const ref = rawUser(uid);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    const existing = snap.exists() ? (snap.data() as Partial<UserDoc>).attestedAdultAt : undefined;
+    if (typeof existing === 'number') return; // keep the FIRST attestation, never overwrite
+    tx.set(ref, { attestedAdultAt: now }, { merge: true });
+  });
+}
+
+/**
+ * Read a User's settled 18+ attestation for the re-prompt gate (#23): the
+ * ms-epoch `attestedAdultAt` when present, else `null` for a profile that is
+ * DEFINITIVELY without one (missing doc or missing field). A single point read of
+ * `users/{uid}`; AuthContext calls it once per auth change AFTER `ensureUserProfile`
+ * has settled the row, and treats a THROWN read (offline / permission) as UNKNOWN
+ * — never a re-prompt — so only a definite `null` gates a signed-in User.
+ */
+export async function readAdultAttestation(uid: string): Promise<number | null> {
+  const snap = await getDoc(rawUser(uid));
+  const v = snap.exists() ? (snap.data() as Partial<UserDoc>).attestedAdultAt : undefined;
+  return typeof v === 'number' ? v : null;
+}
+
 /** Deal a frozen board + create the player row the first time a user joins. */
 export async function joinAndDeal(u: User): Promise<void> {
   const existing = await getDoc(rawBoard(u.uid));

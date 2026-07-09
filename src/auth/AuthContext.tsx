@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
-import { ensureUserProfile, joinAndDeal } from '../data/api';
+import { attestAdult, ensureUserProfile, joinAndDeal, readAdultAttestation } from '../data/api';
 import { track } from '../analytics';
+import SignIn from '../components/SignIn';
 
 interface AuthContextValue {
   user: User | null;
@@ -13,10 +14,17 @@ interface AuthContextValue {
   // sign-in, account switch), so a profile-writing consumer can gate on it and
   // never act on `user` before the users/{uid} bootstrap has settled.
   profileReady: boolean;
+  // True when a signed-in User's SETTLED profile lacks the honor-system 18+
+  // attestation (ADR 0001), so the re-prompt gate stands before the Board (#23).
+  // Never true mid-bootstrap: it is gated on profileReady, so an attestation that
+  // is still UNKNOWN during load can't flash the prompt.
+  needsAttestation: boolean;
   dealError: string | null; // Player-worded deal failure, or null once the Board dealt.
   dealing: boolean; // True while a join/deal (initial or retry) is in flight.
   signIn: () => Promise<void>;
   signOutUser: () => Promise<void>;
+  // Persist the current User's 18+ self-attestation (ADR 0001) and lift the gate.
+  attest: () => Promise<void>;
   retryDeal: () => void; // Re-run joinAndDeal for the current User, no reload.
 }
 
@@ -24,10 +32,12 @@ const AuthContext = createContext<AuthContextValue>({
   user: null,
   loading: true,
   profileReady: false,
+  needsAttestation: false,
   dealError: null,
   dealing: false,
   signIn: async () => {},
   signOutUser: async () => {},
+  attest: async () => {},
   retryDeal: () => {},
 });
 
@@ -49,6 +59,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // False from the moment a signed-in User is published until THAT User's
   // ensureUserProfile bootstrap settles (#77) — see the interface note.
   const [profileReady, setProfileReady] = useState(false);
+  // Tri-state 18+ attestation for the current User (#23): `undefined` = UNKNOWN
+  // (bootstrap unsettled, or an indeterminate read); `true` = attested; `false` =
+  // a SETTLED profile with no stamp → re-prompt. A missing stamp during load is
+  // UNKNOWN, not absent — the knownFirstBingoAt tri-state discipline — so it never
+  // flashes the gate.
+  const [attested, setAttested] = useState<boolean | undefined>(undefined);
   // Monotonic id of the latest deal attempt; runDeal captures it and re-checks
   // before each setState so a superseded attempt's late result is dropped (P2).
   const dealAttemptRef = useRef(0);
@@ -67,20 +83,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       dealAttemptRef.current += 1;
       setDealError(null);
       setDealing(false);
-      // The incoming User's profile bootstrap has not settled yet (#77).
+      // The incoming User's profile bootstrap has not settled yet (#77), so the
+      // 18+ attestation is UNKNOWN — never `false` — until it does (#23).
       setProfileReady(false);
+      setAttested(undefined);
       setUser(u);
+      let attestedRead: boolean | undefined;
       if (u) {
         try {
           await ensureUserProfile(u);
+          // Read the SETTLED row (create-or-existing) so the gate sees a definite
+          // present/absent, not the pre-create absence; a thrown read stays
+          // UNKNOWN below (no re-prompt), so only a definite miss gates.
+          attestedRead = (await readAdultAttestation(u.uid)) !== null;
         } catch {
-          /* profile write can retry later */
+          /* profile bootstrap can retry later; attestation stays UNKNOWN */
         }
       }
-      // Only the latest auth change settles profileReady: a superseded callback
+      // Only the latest auth change settles this bootstrap: a superseded callback
       // (a newer sign-in / sign-out already ran) leaves it to that newer one,
       // which owns the signal now — mirrors the deal's stale-attempt guard.
-      if (profileAttemptRef.current === profileAttempt) setProfileReady(true);
+      if (profileAttemptRef.current === profileAttempt) {
+        // Never downgrade an attestation the User just made optimistically via
+        // `attest()` (its slow write may still be in flight) back to a re-prompt.
+        setAttested((prev) => (prev === true ? true : attestedRead));
+        setProfileReady(true);
+      }
       setLoading(false);
     });
   }, []);
@@ -114,20 +142,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user) void runDeal(user);
   }, [user, runDeal]);
 
+  // Persist the current User's honor-system 18+ self-attestation (ADR 0001) and
+  // lift the re-prompt gate at once. Optimistic: the local flag flips before the
+  // write acks, so a slow write never re-shows the prompt the User just satisfied;
+  // a failed write stays optimistically attested for the session and re-attempts
+  // on the next sign-in (honor-system self-statement, never a hard gate).
+  const attest = useCallback(async () => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+    setAttested(true);
+    try {
+      await attestAdult(uid);
+    } catch {
+      /* keep the session optimistically attested; the write retries next sign-in */
+    }
+  }, []);
+
   const signIn = async () => {
     await signInWithPopup(auth, googleProvider);
     track('login', { method: 'google' });
+    // The 18+ checkbox gated this sign-in (SignIn.tsx), so signing in IS the
+    // attestation — persist it now that we have a uid, so a first-time User is not
+    // re-prompted for the box they just ticked (#23).
+    await attest();
   };
 
   const signOutUser = async () => {
     await signOut(auth);
   };
 
+  // Re-prompt a signed-in User whose SETTLED profile lacks the 18+ attestation,
+  // before they reach the Board (#23) — full-screen, mirroring the signed-out
+  // SignIn gate App renders on `!user`. Gated on profileReady so a still-loading
+  // bootstrap (attestation UNKNOWN) never flashes the prompt. `SignIn` reads
+  // `user` from context to render its re-prompt mode.
+  const needsAttestation = user != null && profileReady && attested === false;
+
   return (
     <AuthContext.Provider
-      value={{ user, loading, profileReady, dealError, dealing, signIn, signOutUser, retryDeal }}
+      value={{
+        user,
+        loading,
+        profileReady,
+        needsAttestation,
+        dealError,
+        dealing,
+        signIn,
+        signOutUser,
+        attest,
+        retryDeal,
+      }}
     >
-      {children}
+      {needsAttestation ? <SignIn /> : children}
     </AuthContext.Provider>
   );
 }

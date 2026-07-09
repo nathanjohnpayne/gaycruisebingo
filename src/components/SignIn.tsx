@@ -1,15 +1,26 @@
 import { useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 
+// One 18+ acknowledgement, two entry points (#23):
+//   • signed OUT → the sign-in gate App renders on `!user`: the checkbox gates
+//     Google sign-in, which PERSISTS the attestation after the popup
+//     (AuthContext.signIn → attest).
+//   • signed IN but un-attested → the re-prompt gate AuthProvider renders when a
+//     SETTLED profile lacks `attestedAdultAt`: the checkbox records the persisted
+//     self-attestation before the Board.
+// Either way the checkbox now drives a PERSISTED write, not just ephemeral local
+// state — an honor-system self-statement, never identity verification (ADR 0001).
 export default function SignIn() {
-  const { signIn } = useAuth();
+  const { user, signIn, attest } = useAuth();
+  const reprompt = user != null;
   const [ack, setAck] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const go = async () => {
     setBusy(true);
     try {
-      await signIn();
+      if (reprompt) await attest();
+      else await signIn();
     } catch {
       setBusy(false);
     }
@@ -19,7 +30,9 @@ export default function SignIn() {
     <div className="signin">
       <h1>GAY CRUISE BINGO</h1>
       <p className="muted">
-        Trieste → Barcelona · July 2026. Sign in, get your card, mark it if you see it.
+        {reprompt
+          ? 'One quick thing before you get your card: confirm you’re 18 or older.'
+          : 'Trieste → Barcelona · July 2026. Sign in, get your card, mark it if you see it.'}
       </p>
       <label className="ack">
         <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
@@ -29,7 +42,13 @@ export default function SignIn() {
         </span>
       </label>
       <button className="btn primary block" disabled={!ack || busy} onClick={go}>
-        {busy ? 'Signing in…' : 'Continue with Google'}
+        {busy
+          ? reprompt
+            ? 'Saving…'
+            : 'Signing in…'
+          : reprompt
+            ? 'Enter the event'
+            : 'Continue with Google'}
       </button>
       <p className="muted" style={{ fontSize: 11 }}>
         Lost signal at sea? The printed cards and PDF still work.
