@@ -22,18 +22,21 @@ vi.mock('html-to-image', () => ({ toBlob: toBlobMock }));
 const { track } = vi.hoisted(() => ({ track: vi.fn() }));
 vi.mock('../analytics', () => ({ track }));
 
-// data/api.ts (Celebration's resolveDisplayName import) only needs a real
-// Firestore CONNECTION for its read/write functions, none of which this
-// suite calls — but it imports `../firebase` at module scope, so that alone
-// needs a safe stand-in (mirrors the w2-feed-moments.test.tsx precedent).
+// Defensive stand-in kept for any transitive `../firebase` module-scope
+// import in this suite's graph (mirrors the w2-feed-moments.test.tsx
+// precedent) — nothing here calls Firestore.
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
 
 type AuthUser = { uid: string; displayName: string | null; photoURL: string | null } | null;
 
 const H = vi.hoisted(() => ({
-  // Celebration's hooks.
+  // The auth user is a REGRESSION TRAP, not data Celebration should read:
+  // its displayName is the STALE Google name a returning Player has since
+  // customized away. Celebration takes the resolved name as a `playerName`
+  // prop (Codex P2, PR #111 round 2 finding 1) and must never fall back to
+  // this value — the stale-name test below asserts it never leaks onto a
+  // card.
   user: null as AuthUser,
-  player: null as PlayerDoc | null,
   event: null as EventDoc | null,
   // Leaderboard's hook.
   players: [] as PlayerDoc[],
@@ -42,15 +45,17 @@ const H = vi.hoisted(() => ({
 
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user, loading: false }) }));
 vi.mock('../hooks/useData', () => ({
-  // Celebration no longer calls useBoard (Codex P2, PR #111 finding 1) — it
-  // takes `cells` as a prop instead, fed straight into every render below.
-  // This stub permanently reports NO data (never `H`-configurable) so that
-  // if a future change reintroduces a `useBoard(uid)` read inside
-  // Celebration, the empty-card race this fixed comes back immediately and
-  // loudly in the "fast-tap" regression test below, instead of silently
-  // passing because the mock happened to have real board data queued.
+  // Celebration no longer calls useBoard OR useMyPlayer — it takes `cells`
+  // (Codex P2, PR #111 finding 1) and `playerName` (round 2 finding 1) as
+  // props instead, fed straight into every render below. Both stubs
+  // permanently report NO data (never `H`-configurable) so that if a future
+  // change reintroduces either listener inside Celebration, the empty-card
+  // race / stale-auth-name race this fixed comes back immediately and
+  // loudly in the regression tests below (the board renders zero cells; the
+  // name resolves to H.user's stale Google fallback), instead of silently
+  // passing because the mock happened to have real data queued.
   useBoard: () => ({ data: null, loading: true, hasServerData: false }),
-  useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
+  useMyPlayer: () => ({ data: null, loading: true, hasServerData: false }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   useLeaderboard: () => ({ players: H.players, loading: H.leaderboardLoading }),
 }));
@@ -101,7 +106,6 @@ beforeEach(() => {
   toBlobMock.mockResolvedValue(new Blob(['fake-png-bytes'], { type: 'image/png' }));
   track.mockReset();
   H.user = null;
-  H.player = null;
   H.event = null;
   H.players = [];
   H.leaderboardLoading = false;
@@ -419,6 +423,29 @@ describe('shareCardBlob — native share sheet + fallback chain', () => {
     expect(clipboardMock).not.toHaveBeenCalled();
   });
 
+  // Codex P2, PR #111 round 2 finding 2 — the NotAllowedError decision,
+  // pinned: STOP the chain, same as AbortError. NotAllowedError is
+  // ambiguous (user dismissal on some platforms; an expired user-activation
+  // window on others), but the eager pre-render removed the main
+  // activation-expiry cause, so it is treated as a dismissal — a rare
+  // do-nothing tap beats a clipboard write right after the Player declined.
+  it('stops the chain (no clipboard write) when the text/URL share rejects NotAllowedError', async () => {
+    const shareMock = vi.fn().mockRejectedValue(Object.assign(new Error('denied'), { name: 'NotAllowedError' }));
+    const clipboardMock = vi.fn();
+    stubNavigator({ share: shareMock, clipboard: { writeText: clipboardMock } }); // no canShare -> text leg
+
+    const outcome = await shareCardBlob({
+      blob,
+      filename: 'card.png',
+      title: 'T',
+      text: 'body',
+      url: 'https://x.test',
+    });
+
+    expect(outcome).toBe('cancelled');
+    expect(clipboardMock).not.toHaveBeenCalled();
+  });
+
   it('falls through to the clipboard when the text/URL share fails for a reason other than cancellation', async () => {
     const shareMock = vi.fn().mockRejectedValue(new Error('some genuine failure'));
     const clipboardMock = vi.fn().mockResolvedValue(undefined);
@@ -477,22 +504,16 @@ describe('shareCardBlob — native share sheet + fallback chain', () => {
 // ---------------------------------------------------------------------------
 
 describe('Celebration — image share + fallback', () => {
-  // Board.tsx's own `cells` at the moment it opens the modal (Codex P2, PR
-  // #111 finding 1) — passed straight in as a prop below, exactly like
-  // Board.tsx now does, rather than resolved through a listener.
+  // Board.tsx's own `cells` and resolved `playerName` at the moment it
+  // opens the modal (Codex P2, PR #111 finding 1 + round 2 finding 1) —
+  // passed straight in as props below, exactly like Board.tsx now does,
+  // rather than resolved through Celebration-local listeners.
   const cells = makeCells([0, 1, 2]);
 
   beforeEach(() => {
+    // The STALE auth fallback a returning Player has customized away — a
+    // poisoned value the card must never show (round 2 finding 1).
     H.user = { uid: 'u1', displayName: 'Google Name', photoURL: null };
-    H.player = {
-      uid: 'u1',
-      displayName: 'Deck Daddy',
-      photoURL: null,
-      joinedAt: 0,
-      bingoCount: 1,
-      squaresMarked: 3,
-      firstBingoAt: 1000,
-    };
     H.event = { name: 'Allure of the Seas' } as EventDoc;
   });
 
@@ -502,7 +523,7 @@ describe('Celebration — image share + fallback', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const user = userEvent.setup();
 
-    render(<Celebration kind="bingo" cells={cells} onClose={vi.fn()} />);
+    render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Share' }));
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
@@ -510,8 +531,8 @@ describe('Celebration — image share + fallback', () => {
     expect(shareArg.files).toHaveLength(1);
 
     // The node handed to html-to-image is ShareCard's REAL output (this
-    // suite never mocks ./ShareCard), carrying the Player/Event name
-    // resolved from the mocked player/event/auth hooks above.
+    // suite never mocks ./ShareCard), carrying the `playerName`/`cells`
+    // props Board.tsx hands down plus the mocked event hook's name.
     const node = toBlobNode();
     expect(node.textContent).toContain('Deck Daddy');
     expect(node.textContent).toContain('Allure of the Seas');
@@ -535,7 +556,7 @@ describe('Celebration — image share + fallback', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const user = userEvent.setup();
 
-    render(<Celebration kind="bingo" cells={cells} onClose={vi.fn()} />);
+    render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Share' }));
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
@@ -543,8 +564,104 @@ describe('Celebration — image share + fallback', () => {
     expect(shareMock.mock.calls[0][0].files).toHaveLength(1);
   });
 
+  // Codex P2, PR #111 round 2 finding 1 (regression — the identity twin of
+  // the cells race above): Celebration used to run its own useMyPlayer(uid)
+  // listener + resolveDisplayName(player, user?.displayName), which starts
+  // `data: null` on mount — an immediate Share tap resolved the STALE auth
+  // name ('Google Name' here) for a returning Player whose saved custom
+  // name is 'Deck Daddy'. The ../hooks/useData mock above stubs useMyPlayer
+  // permanently empty and H.user carries the poisoned auth fallback, so if
+  // that listener path ever comes back, this card renders 'Google Name'
+  // and both assertions below fail. With the name threaded down as Board's
+  // resolved prop, the saved name is on the card synchronously from the
+  // very first render.
+  it('renders the SAVED name from the playerName prop on an immediate tap — never the auth fallback — with useMyPlayer stubbed empty', async () => {
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
+    const user = userEvent.setup();
+
+    render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
+    await user.click(screen.getByRole('button', { name: 'Share' }));
+
+    await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
+    const node = toBlobNode();
+    expect(node.querySelector('.share-card-player')?.textContent).toBe('Deck Daddy');
+    expect(node.textContent).not.toContain('Google Name');
+  });
+
+  // Codex P2, PR #111 round 2 finding 1: the reachable identity-unknown
+  // window (an offline reload whose cache holds the board but not the
+  // player row — Board passes playerName={null} there) disables the Share
+  // affordance instead of ever stamping the stale auth fallback onto a
+  // card, mirroring how Board's doMark withholds the name from Tally
+  // markers and the Moment broadcasts HOLD in that same window.
+  it('disables Share (and pre-renders nothing) while the identity is not yet known', () => {
+    const shareMock = vi.fn();
+    Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
+
+    render(<Celebration kind="bingo" cells={cells} playerName={null} onClose={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: 'Share' })).toBeDisabled();
+    expect(toBlobMock).not.toHaveBeenCalled();
+    expect(shareMock).not.toHaveBeenCalled();
+    expect(track).not.toHaveBeenCalled();
+  });
+
+  // Codex P2, PR #111 round 2 finding 2: rasterization starts at MOUNT (the
+  // card data is fixed by then), so the tap's await picks up an
+  // already-settled promise and navigator.share runs within the browser's
+  // transient user-activation window — a tap-time render could outlive it
+  // and reject NotAllowedError, making the tap do nothing.
+  it('pre-renders the card at mount and the tap reuses it — exactly one rasterization', async () => {
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
+    const user = userEvent.setup();
+
+    render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
+    // Eager: the render was already underway BEFORE any tap.
+    expect(toBlobMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: 'Share' }));
+
+    await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
+    expect(toBlobMock).toHaveBeenCalledTimes(1); // reused the mount-time render — no second rasterize
+    expect(shareMock.mock.calls[0][0].files).toHaveLength(1);
+  });
+
+  // Codex P2, PR #111 round 2 finding 2: the slow-rasterize shape itself —
+  // the tap lands while the mount-time rasterization is STILL in flight.
+  // The share handler awaits the pre-started promise (never starts a second
+  // render) and shares the moment it settles; before this fix the render
+  // would only have STARTED at the tap, burning the activation window.
+  it('a tap that lands mid-rasterization still shares the pre-started render', async () => {
+    let resolveRaster!: (b: Blob | null) => void;
+    toBlobMock.mockReset();
+    toBlobMock.mockImplementation(
+      () => new Promise<Blob | null>((res) => (resolveRaster = res)),
+    );
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
+    const user = userEvent.setup();
+
+    render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
+    expect(toBlobMock).toHaveBeenCalledTimes(1); // pre-render started at mount
+
+    await user.click(screen.getByRole('button', { name: 'Share' }));
+    expect(shareMock).not.toHaveBeenCalled(); // still rasterizing — share waits, chain untouched
+
+    resolveRaster(new Blob(['late-png'], { type: 'image/png' }));
+    await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
+    expect(toBlobMock).toHaveBeenCalledTimes(1); // the tap awaited the cached render, no re-render
+    expect(shareMock.mock.calls[0][0].files).toHaveLength(1);
+  });
+
   // Codex P2, PR #111 finding 1: the renderer's validity gate is the
-  // backstop for any other way an incomplete board could reach Celebration.
+  // backstop for any other way an incomplete board could reach Celebration
+  // — it refuses at the mount-time pre-render too, so not even the eager
+  // path can rasterize an empty grid.
   it('falls back to a text/URL share — never attempts an image share — when handed an invalid (non-25-cell) board', async () => {
     const shareMock = vi.fn().mockResolvedValue(undefined);
     // canShare would greenlight a FILE share if a blob existed — proves the
@@ -554,7 +671,7 @@ describe('Celebration — image share + fallback', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const user = userEvent.setup();
 
-    render(<Celebration kind="bingo" cells={[]} onClose={vi.fn()} />);
+    render(<Celebration kind="bingo" cells={[]} playerName="Deck Daddy" onClose={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Share' }));
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
@@ -571,7 +688,7 @@ describe('Celebration — image share + fallback', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true }); // no canShare
     const user = userEvent.setup();
 
-    render(<Celebration kind="blackout" cells={cells} onClose={vi.fn()} />);
+    render(<Celebration kind="blackout" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Share' }));
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
@@ -585,12 +702,14 @@ describe('Celebration — image share + fallback', () => {
   });
 
   it('fires share_click exactly once, and still falls back to a text/URL share, when the on-device render itself fails', async () => {
+    // The mount-time pre-render consumes this rejection (the cached promise
+    // resolves null); the tap then degrades to the text/URL leg.
     toBlobMock.mockRejectedValueOnce(new Error('rasterize failed'));
     const shareMock = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const user = userEvent.setup();
 
-    render(<Celebration kind="bingo" cells={cells} onClose={vi.fn()} />);
+    render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Share' }));
 
     await waitFor(() => expect(track).toHaveBeenCalledTimes(1));
@@ -604,7 +723,7 @@ describe('Celebration — image share + fallback', () => {
     Object.defineProperty(window.navigator, 'share', { value: vi.fn().mockResolvedValue(undefined), configurable: true });
     const user = userEvent.setup();
 
-    render(<Celebration kind="bingo" cells={cells} onClose={vi.fn()} />);
+    render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Share' }));
 
     await waitFor(() => expect(toBlobMock).toHaveBeenCalledTimes(1));
@@ -615,18 +734,21 @@ describe('Celebration — image share + fallback', () => {
     expect(toBlobNode().querySelector('.share-card-event')?.textContent).toBe(SHARE_CARD_APP_NAME);
   });
 
-  it('"Keep playing" closes without generating or sharing a card', async () => {
+  it('"Keep playing" closes without sharing — the eager pre-render never leaves the device', async () => {
     const shareMock = vi.fn();
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const onClose = vi.fn();
     const user = userEvent.setup();
 
-    render(<Celebration kind="bingo" cells={cells} onClose={onClose} />);
+    render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={onClose} />);
     await user.click(screen.getByRole('button', { name: 'Keep playing' }));
 
     expect(onClose).toHaveBeenCalledTimes(1);
+    // The card IS pre-rendered at mount (round 2 finding 2 — deliberate),
+    // but closing without tapping Share must neither share nor count a
+    // share_click: the blob stays on-device and unobserved (ADR 0005).
+    expect(toBlobMock).toHaveBeenCalledTimes(1);
     expect(shareMock).not.toHaveBeenCalled();
-    expect(toBlobMock).not.toHaveBeenCalled();
     expect(track).not.toHaveBeenCalled();
   });
 });
@@ -683,6 +805,32 @@ describe('Leaderboard — share affordance', () => {
 
     await waitFor(() => expect(track).toHaveBeenCalledWith('share_click', { surface: 'leaderboard' }));
     expect(track).toHaveBeenCalledTimes(1);
+  });
+
+  // Codex P2, PR #111 round 2 finding 2 — the Leaderboard's warm-on-intent
+  // pre-render (deliberately NOT mount-eager: this component re-renders on
+  // every roster snapshot, so rasterizing per snapshot would burn CPU for a
+  // card that is rarely shared). Hover/focus/press on the Share button
+  // starts the render; the tap's await then reuses the warmed promise —
+  // exactly one rasterization — so navigator.share runs within the
+  // activation window instead of waiting out a tap-time render.
+  it('warms the card render on hover so the tap reuses it — exactly one rasterization', async () => {
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
+    const user = userEvent.setup();
+
+    render(<Leaderboard />);
+    expect(toBlobMock).not.toHaveBeenCalled(); // no mount-eager render here (deliberate)
+
+    await user.hover(screen.getByRole('button', { name: 'Share leaderboard' }));
+    expect(toBlobMock).toHaveBeenCalledTimes(1); // warm-up started on intent
+
+    await user.click(screen.getByRole('button', { name: 'Share leaderboard' }));
+
+    await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
+    expect(toBlobMock).toHaveBeenCalledTimes(1); // the tap reused the warmed render
+    expect(shareMock.mock.calls[0][0].files).toHaveLength(1);
   });
 
   it('includes the First to BINGO Player on the card even when their rank falls outside the top 8', async () => {

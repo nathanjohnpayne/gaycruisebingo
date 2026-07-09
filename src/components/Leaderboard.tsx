@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useEventDoc, useLeaderboard } from '../hooks/useData';
 import { track } from '../analytics';
 import { renderLeaderboardShareCard, shareCardBlob, SHARE_CARD_APP_NAME, type LeaderboardShareRow } from './ShareCard';
@@ -82,6 +82,15 @@ export default function Leaderboard() {
   const { players, loading } = useLeaderboard();
   const { data: event } = useEventDoc();
   const [filter, setFilter] = useState<LeaderboardFilter>('all');
+  // The most recent warmed-up card render, keyed by the inputs it was built
+  // from (the roster array's identity + the resolved event name) so a tap
+  // reuses it only while it still depicts the CURRENT standings — see
+  // warmShareCard below (Codex P2, PR #111 round 2 finding 2).
+  const warmedCard = useRef<{
+    players: PlayerDoc[];
+    eventName: string;
+    promise: Promise<Blob | null>;
+  } | null>(null);
 
   if (loading) return <div className="center muted">Loading…</div>;
   if (!players.length) return <div className="center muted">No players yet. Be the first.</div>;
@@ -101,20 +110,47 @@ export default function Leaderboard() {
   // order sortPlayers produced is always preserved.
   const visible = players.filter((p) => matchesFilter(p, filter));
 
+  // Warm-on-intent pre-render (Codex P2, PR #111 round 2 finding 2): start
+  // rasterizing when the Player signals intent to share — pointerenter
+  // (mouse hover), focus (keyboard), or pointerdown (touch press) on the
+  // Share button — so the tap's own `await` picks up an in-flight or
+  // already-settled render and `navigator.share` runs within the browser's
+  // transient user-activation window instead of expiring it mid-rasterize.
+  // Deliberately NOT mount-eager like Celebration's card: this component
+  // re-renders on every roster snapshot (any Player's Mark updates a player
+  // row), so rasterizing per snapshot would burn phone CPU/battery for a
+  // card that is rarely shared; Celebration's inputs are fixed for the
+  // lifetime of a short-lived win modal, so mount-eager is cheap there. The
+  // warmed promise is reused ONLY while its inputs (the roster array's
+  // identity + event name) still match — a roster that moved between
+  // warm-up and tap re-renders fresh at tap time so the card never shows
+  // stale standings, accepting the (rare, slow-device) residual activation
+  // risk on that path. `.catch(() => null)` lives inside the cached
+  // promise: a render failure resolves null (shareCardBlob degrades to the
+  // text/URL leg) and can never surface as an unhandled rejection from a
+  // hover that was never followed by a tap.
+  const warmShareCard = (): Promise<Blob | null> => {
+    const eventName = event?.name ?? SHARE_CARD_APP_NAME;
+    const cached = warmedCard.current;
+    if (cached && cached.players === players && cached.eventName === eventName) {
+      return cached.promise;
+    }
+    const promise = renderLeaderboardShareCard({
+      eventName,
+      rows: buildShareStandings(players, firstBingoUid, MAX_SHARE_ROWS),
+    }).catch(() => null);
+    warmedCard.current = { players, eventName, promise };
+    return promise;
+  };
+
   // The Share Card always reflects the top standings across the FULL roster
   // (buildShareStandings), independent of whatever filter is currently
   // selected — mirrors the pin's own full-roster scope above, so switching
   // filters can never change what a shared card shows.
   const shareLeaderboard = async () => {
-    let blob: Blob | null = null;
-    try {
-      blob = await renderLeaderboardShareCard({
-        eventName: event?.name ?? SHARE_CARD_APP_NAME,
-        rows: buildShareStandings(players, firstBingoUid, MAX_SHARE_ROWS),
-      });
-    } catch {
-      /* on-device render failed — fall through with blob: null */
-    }
+    // Reuses the warmed render when its inputs still match, else renders
+    // fresh (the cold-tap path — same behavior as before the warm-up).
+    const blob = await warmShareCard();
     try {
       await shareCardBlob({
         blob,
@@ -134,7 +170,14 @@ export default function Leaderboard() {
   return (
     <>
       <div className="lb-actions">
-        <button type="button" className="btn" onClick={shareLeaderboard}>
+        <button
+          type="button"
+          className="btn"
+          onClick={shareLeaderboard}
+          onPointerEnter={() => void warmShareCard()}
+          onFocus={() => void warmShareCard()}
+          onPointerDown={() => void warmShareCard()}
+        >
           Share leaderboard
         </button>
       </div>

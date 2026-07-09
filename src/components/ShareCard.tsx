@@ -189,11 +189,22 @@ function downloadBlob(blob: Blob, filename: string): void {
  * Whether a caught Web Share API rejection reflects the Player's OWN choice
  * to dismiss the OS share sheet, rather than the API genuinely failing
  * (Codex P2, PR #111 finding 3). `AbortError` is the spec-mandated name for
- * a user-cancelled `navigator.share()`; `NotAllowedError` covers browsers
- * that report a declined permission/dismissal that way instead. Duck-typed
- * on `.name` rather than `instanceof Error` because a real rejection here is
- * a `DOMException`, which is not guaranteed to be `instanceof Error` in
- * every environment.
+ * a user-cancelled `navigator.share()` — unambiguous, always a stop.
+ * `NotAllowedError` is AMBIGUOUS (round 2 finding 2): some platforms report
+ * a user dismissal / declined permission that way, but it is ALSO what
+ * `navigator.share` rejects when the transient user-activation window
+ * expired before the call ran — e.g. a tap that awaited a slow tap-time
+ * rasterization. The decision, revisited with the round-2 eager pre-render
+ * in place: KEEP treating it as a cancellation and stop the chain. The
+ * pre-render (Celebration rasterizes at mount; Leaderboard warms on
+ * hover/focus/press) removed the main non-dismissal cause — a full
+ * rasterization inside the activation window — so a NotAllowedError here is
+ * now predominantly a real dismissal, and the residual (a rare do-nothing
+ * tap on a slow device whose warmed render was cold or stale) is a better
+ * failure mode than clobbering the clipboard right after a Player declined
+ * to share. Duck-typed on `.name` rather than `instanceof Error` because a
+ * real rejection here is a `DOMException`, which is not guaranteed to be
+ * `instanceof Error` in every environment.
  */
 function isUserCancelledShare(err: unknown): boolean {
   if (typeof err !== 'object' || err === null || !('name' in err)) return false;

@@ -577,8 +577,21 @@ export default function Board() {
           arrived. Board already has the loaded `cells` right here
           (guaranteed by the `!board` early-return above), so handing them
           down as a prop removes the race instead of letting Celebration
-          re-fetch what this component already has. */}
-      {celebrate && <Celebration kind={celebrate} cells={cells} onClose={() => setCelebrate(null)} />}
+          re-fetch what this component already has. `playerName` is the
+          identity twin (round 2 finding 1): the SAME resolved public name
+          the Tally/Proof/Moment paths carry, gated by the SAME identityKnown
+          tri-state — null while the saved row is unknown, so Celebration
+          disables Share instead of ever stamping the stale auth fallback
+          onto a card (mirrors doMark's `identityKnown ? displayName :
+          undefined`). */}
+      {celebrate && (
+        <Celebration
+          kind={celebrate}
+          cells={cells}
+          playerName={identityKnown ? displayName : null}
+          onClose={() => setCelebrate(null)}
+        />
+      )}
       {proofTarget && user && (
         <ProofSheet
           uid={uid}
