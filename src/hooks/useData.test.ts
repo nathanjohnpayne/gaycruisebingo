@@ -78,27 +78,37 @@ const docSnap = (fromCache: boolean) => ({
 });
 
 describe('useItems enabled gate (Codex P3)', () => {
+  // useItems now also reads the ADR 0004 threshold from useEventDoc(), which
+  // opens a SEPARATE subscription on the event DOC. The P3 gate is specifically
+  // about the heavy POOL listener (the items COLLECTION) — the one that fans
+  // every Player's prompt add/report out as a full-pool read + rerender — so the
+  // gate is asserted on collection subscriptions, not the raw call count. The
+  // tiny event-doc read Board already makes anyway is not what P3 guards against.
+  const poolSubCount = () =>
+    H.onSnapshot.mock.calls.filter((c) => (c[0] as { kind?: string } | null)?.kind === 'collection')
+      .length;
+
   it('subscribes to the pool by default (no Board yet)', () => {
     renderHook(() => useItems());
 
-    expect(H.onSnapshot).toHaveBeenCalledTimes(1);
+    expect(poolSubCount()).toBe(1);
   });
 
   it('opens no pool listener when disabled — a Player with a frozen Board', () => {
     renderHook(() => useItems(false));
 
-    expect(H.onSnapshot).not.toHaveBeenCalled();
+    expect(poolSubCount()).toBe(0);
   });
 
   it('subscribes once more if `enabled` flips back to true', () => {
     const { rerender } = renderHook(({ enabled }) => useItems(enabled), {
       initialProps: { enabled: false },
     });
-    expect(H.onSnapshot).not.toHaveBeenCalled();
+    expect(poolSubCount()).toBe(0);
 
     rerender({ enabled: true });
 
-    expect(H.onSnapshot).toHaveBeenCalledTimes(1);
+    expect(poolSubCount()).toBe(1);
   });
 });
 
