@@ -119,6 +119,13 @@ describe('firestore.rules — Feed Moments (specs/w2-feed-moments.md)', () => {
     await assertFails(setDoc(p(`${ALICE}-bingo`), moment(ALICE, { kind: 'blackout' })));
     // The matching per-Player create (the deterministic id the writer uses) is ALLOWED.
     await assertSucceeds(setDoc(p(`${ALICE}-blackout`), moment(ALICE, { kind: 'blackout' })));
+    // The documented HARMLESS ORPHAN (specs/w2-feed-moments.md): `${uid}-first_bingo`
+    // satisfies the per-Player binding (uid + '-' + kind), so the rules ALLOW the
+    // create — the writer never targets it and hasCanonicalMomentId keeps it out of
+    // every Feed (first_bingo renders only from the literal singleton id). Pinned so
+    // a future edit cannot silently tighten or loosen this documented allowance
+    // (CodeRabbit nitpick, PR #105).
+    await assertSucceeds(setDoc(p(`${ALICE}-first_bingo`), moment(ALICE, { kind: 'first_bingo' })));
   });
 
   it('enforces the shape — valid kind, non-empty ≤100 displayName, numeric createdAt', async () => {
