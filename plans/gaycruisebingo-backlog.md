@@ -161,7 +161,7 @@ Epic [#131](https://github.com/nathanjohnpayne/gaycruisebingo/issues/131). The p
 
 **p2-vision-moderation** *(needs-phase-4, phase-2)* — The **consumer** half: promote an extreme/illegal `visionFlag` to a server-authoritative `status:'hidden'`. The shipped report-count auto-hide (`functions/src/autohide.ts`, #43) is *active-only* and deliberately leaves `flagged` docs alone, so today nothing auto-hides a Vision flag. Add the Vision-flag → hide path without regressing that invariant, and mark Vision-flagged items in the moderation queue (reason + restore). Files: `functions/src/autohide.ts` (or sibling), `firestore.rules`, `components/Admin.tsx`, `hooks/useData.ts`, `specs/cloud-vision-moderation.md`.
 
-**p2-archive** — The PRD "remember the winners" end state: after the sailing, freeze the Event to read-only and persist the final Leaderboard + First-to-BINGO hall of fame. `EventDoc.status` already types `'archived'` (`src/types.ts:28`) but nothing sets or reacts to it. Files: `src/types.ts` (`archivedAt` + snapshot), `firestore.rules` (deny gameplay writes when archived; admin-only toggle), `components/Leaderboard.tsx`, `data/admin.ts`, `specs/post-sailing-archive.md`.
+**p2-archive** *(needs-phase-4 — touches `firestore.rules`)* — The PRD "remember the winners" end state: after the sailing, freeze the Event to read-only and persist the final Leaderboard + First-to-BINGO hall of fame. `EventDoc.status` already types `'archived'` (`src/types.ts:28`) but nothing sets or reacts to it. Files: `src/types.ts` (`archivedAt` + snapshot), `firestore.rules` (deny gameplay writes when archived; admin-only toggle), `components/Leaderboard.tsx`, `data/admin.ts`, `specs/post-sailing-archive.md`.
 
 ### Cross-cutting / launch
 
@@ -183,7 +183,7 @@ Epic [#131](https://github.com/nathanjohnpayne/gaycruisebingo/issues/131). The p
 | Phone-native — installable PWA iOS+Android, Lighthouse ≥ 90, one-handed | w1-pwa, w0-app-shell, x-launch-checklist |
 | Make it theirs — community-editable pool, 8 themes, add/switch < 5 s | w1-prompt-pool, w1-themes |
 | Shareable — on-device Share Cards, ≥ 25 share events | w2-share-cards, w2-ga4-events |
-| Remember winners — durable Leaderboard + First to BINGO, archive | w2-leaderboard, w2-feed-moments, x-multi-event-schema |
+| Remember winners — durable Leaderboard + First to BINGO, archive | w2-leaderboard, w2-feed-moments, x-multi-event-schema, p2-archive |
 
 ### PRD Non-Goals → enforcing tickets
 
@@ -219,10 +219,10 @@ Epic [#131](https://github.com/nathanjohnpayne/gaycruisebingo/issues/131). The p
 
 | ADR | Tickets |
 |---|---|
-| **0001** honor-system (client-authoritative; self-writable intentional; no recompute-as-anti-cheat) | w0-type-contract, w0-firestore-rules, w1-board-mark-win, w2-leaderboard, w2-tally, w2-doubts, w3-claim-modes, recon-recompute-stats, w3-security-hardening |
+| **0001** honor-system (client-authoritative; self-writable intentional; no recompute-as-anti-cheat) | w0-type-contract, w0-firestore-rules, w1-board-mark-win, w2-leaderboard, w2-tally, w2-doubts, w3-claim-modes, recon-recompute-stats, w3-security-hardening, p2-archive |
 | **0002** Mark visibility (private Board, public per-Prompt Tally; bare Mark posts nothing) | w2-tally, w2-feed-moments, w2-proof-capture, w0-firestore-rules, w3-security-hardening |
-| **0003** pool is pre-cruise (freeze at join; dense; no re-deal) | w1-prompt-pool, w1-board-deal-join, w1-event-seed, x-multi-event-schema |
-| **0004** reactive moderation (report → threshold → hide; client Phase 0 → server Phase 1; remove `blackoutEnabled`; guard pool<24) | w2-admin-console, w4-phase1-functions, w0-firestore-rules, w0-type-contract, w1-event-seed, w1-board-deal-join, w0-storage-rules |
+| **0003** pool is pre-cruise (freeze at join; dense; no re-deal) | w1-prompt-pool, w1-board-deal-join, w1-event-seed, x-multi-event-schema, p2-archive |
+| **0004** reactive moderation (report → threshold → hide; client Phase 0 → server Phase 1; remove `blackoutEnabled`; guard pool<24) | w2-admin-console, w4-phase1-functions, w0-firestore-rules, w0-type-contract, w1-event-seed, w1-board-deal-join, w0-storage-rules, p2-vision-proof, p2-vision-moderation |
 | **0005** client-side Share Cards (on-device; drop Cloud Run OG + `share` pages; keep static og-default) | w2-share-cards, recon-share-og |
 | **0006** offline resilience (`persistentLocalCache` + durable Mark queue; shell precached) | w0-offline-persistence, w1-board-mark-win, w1-pwa, x-e2e-happy-path |
 

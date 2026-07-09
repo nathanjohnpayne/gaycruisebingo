@@ -1,6 +1,6 @@
 **Track:** launch · **Phase:** 2 (hardening) · **Wave:** 4 · **Size:** M · **ADR(s):** 0001, 0003
 **Epic:** #__NUM_epic-phase2-hardening__
-**Labels:** agent-action, track:launch, phase-2, hardening, wave-4, size:M
+**Labels:** agent-action, track:launch, phase-2, hardening, wave-4, size:M, needs-phase-4
 
 ## Context & scope
 

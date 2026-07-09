@@ -84,7 +84,7 @@ w4-infra-domain|Infra: Cloudflare → Firebase Hosting custom domain + SSL (DNS-
 w4-infra-blaze-budget|Infra: Blaze upgrade + budget alert before enabling Phase 1|epic-backend|agent-action,track:infra,phase-1,wave-4,size:S,needs-phase-4,decision-needed
 p2-vision-proof|Cloud Vision (proof): re-enable the gated moderateProof SafeSearch scanner + thumbnails|epic-phase2-hardening|agent-action,track:proof,phase-2,hardening,wave-4,size:M,needs-phase-4
 p2-vision-moderation|Cloud Vision (moderation): auto-hide extreme/illegal Vision flags (extend shipped autohide)|epic-phase2-hardening|agent-action,track:moderation,phase-2,hardening,wave-4,size:M,needs-phase-4
-p2-archive|Post-sailing archive: freeze the Event + durable Leaderboard / First-to-BINGO hall of fame|epic-phase2-hardening|agent-action,track:launch,phase-2,hardening,wave-4,size:M
+p2-archive|Post-sailing archive: freeze the Event + durable Leaderboard / First-to-BINGO hall of fame|epic-phase2-hardening|agent-action,track:launch,phase-2,hardening,wave-4,size:M,needs-phase-4
 x-e2e-happy-path|E2E happy-path (join → mark → BINGO → leaderboard) + offline-mark test against the emulator|epic-launch|agent-action,track:launch,hardening,wave-3,size:M
 x-launch-checklist|Cross-device matrix + launch checklist + printed-PDF fallback|epic-launch|agent-action,track:launch,hardening,wave-4,size:M
 x-multi-event-schema|Multi-event schema readiness (P2, design-only)|epic-launch|agent-action,track:schema,hardening,wave-4,size:S

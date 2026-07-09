@@ -10,7 +10,7 @@ A Wave is a dependency depth, not a phase. Wave 0 is the foundation that unblock
 - **Wave 1 — Identity & core play.** Auth, 18+ attestation, profile/avatar, event seed; Board deal/join, Mark/win, prompt pool, themes, PWA.
 - **Wave 2 — Social core.** Tally, Proof, Doubts, Feed/Moments, Leaderboard, Share Cards, admin/moderation console, GA4, the two Phase-0 reconciliations.
 - **Wave 3 — Remaining social + hardening.** Claim Modes, security hardening, e2e happy-path.
-- **Wave 4 — Phase 1 backend & infra.** Server-authoritative hide + Vision, App Check, domain/SSL, Blaze/budget, launch checklist, multi-event schema.
+- **Wave 4 — Phase 1 backend & infra, then Phase 2 hardening.** Phase 1 (largely merged): server-authoritative report-count hide, domain/SSL, Blaze/budget. **Phase 2 hardening** (epic #131): Cloud Vision re-enable (`p2-vision-proof` → `p2-vision-moderation`), `w4-app-check`, `p2-archive`; plus launch checklist and multi-event schema.
 
 ## Dependency DAG
 
@@ -41,6 +41,8 @@ w2-admin-console ─┬─> w3-claim-modes         w2-share-cards ─> recon-sha
 w1-board-mark-win + w2-leaderboard + w0-test-harness ─> x-e2e-happy-path ─> x-launch-checklist
 w0-firestore-rules ─> w3-security-hardening
 w4-infra-domain, w4-infra-blaze-budget, x-multi-event-schema: independent (near-launch)
+p2-vision-proof ─> p2-vision-moderation   (Phase 2; p2-vision-proof reverses the #126 Vision gate; both build on the merged w4-phase1-functions autohide + w4-infra-blaze-budget Blaze)
+w2-leaderboard + w2-feed-moments ─> p2-archive   (Phase 2; post-sailing freeze + hall of fame)
 x-decisions-needed ─(soft)─> w1-event-seed, w2-admin-console, w4-app-check, w4-infra-blaze-budget, w4-infra-domain, w2-ga4-events, recon-recompute-stats
 ```
 
@@ -69,7 +71,7 @@ Rule of thumb for an agent: **if your ticket must edit a hot file whose owner ti
 Keep these PRs small (< 300 changed lines) so review stays tractable, and expect external (Phase 4) review:
 
 - Auto-escalated by path today (`src/auth/**`): `w1-auth-google`, `w1-adult-attestation`.
-- Security/backend-sensitive (mark `needs-phase-4`, keep small — not auto-escalated unless ≥ 300 lines): `w0-firestore-rules`, `w0-storage-rules`, `recon-recompute-stats`, `w3-security-hardening`, `w4-phase1-functions`, `w4-app-check`, `w4-infra-domain`, `w4-infra-blaze-budget`.
+- Security/backend-sensitive (mark `needs-phase-4`, keep small — not auto-escalated unless ≥ 300 lines): `w0-firestore-rules`, `w0-storage-rules`, `recon-recompute-stats`, `w3-security-hardening`, `w4-phase1-functions`, `w4-app-check`, `w4-infra-domain`, `w4-infra-blaze-budget`, `p2-vision-proof`, `p2-vision-moderation`, `p2-archive`. (Note: `firestore.rules` / `storage.rules` / `functions/**` are now in `external_review_paths`, so the `functions/`- and rules-touching ones also auto-escalate regardless of size.)
 - `w3-security-hardening` proposes adding `firestore.rules` / `storage.rules` / `functions/**` to `external_review_paths` so these auto-escalate in future.
 
 ## Claim protocol (so agents don't double-pick)
