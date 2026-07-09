@@ -15,7 +15,15 @@ const mocks = vi.hoisted(() => ({
   signOut: vi.fn(),
   ensureUserProfile: vi.fn(),
   attestAdult: vi.fn(),
+  // The SERVER-only authority read (#117 r6, getDocFromServer) and the cache-first
+  // RENDER read (getDocFromCache) are DISTINCT spies here, so a test can prove deal
+  // authority never comes from cache. `readAdultAttestation` is the OLD cache-capable
+  // getDoc reader the fix moved OFF the authority path — modelled as a separate spy
+  // so the round-6 test can pin that a cache-served stamp (this spy) does NOT
+  // authorize a deal when the SERVER read disagrees (it fails on the pre-fix code,
+  // which read authority from this cache-capable getDoc).
   readAdultAttestation: vi.fn(),
+  readAdultAttestationFromServer: vi.fn(),
   readAdultAttestationFromCache: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
@@ -35,6 +43,7 @@ vi.mock('../data/api', () => ({
   ensureUserProfile: mocks.ensureUserProfile,
   attestAdult: mocks.attestAdult,
   readAdultAttestation: mocks.readAdultAttestation,
+  readAdultAttestationFromServer: mocks.readAdultAttestationFromServer,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
   joinAndDeal: mocks.joinAndDeal,
 }));
@@ -144,6 +153,10 @@ beforeEach(() => {
     return () => {};
   });
   mocks.ensureUserProfile.mockResolvedValue(undefined);
+  mocks.readAdultAttestationFromServer.mockResolvedValue(1);
+  // Default the OLD cache-capable reader to the SAME value so it never TypeErrors
+  // if the pre-fix code path is exercised in a stash comparison; the round-6 test
+  // sets it distinctly to model getDoc serving a stale cached stamp.
   mocks.readAdultAttestation.mockResolvedValue(1);
   mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
   mocks.attestAdult.mockResolvedValue(undefined);
@@ -182,7 +195,7 @@ describe('offline cold boot (#115)', () => {
     mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
     const read = deferred<number | null>();
     mocks.ensureUserProfile.mockResolvedValue(undefined);
-    mocks.readAdultAttestation.mockReturnValue(read.promise);
+    mocks.readAdultAttestationFromServer.mockReturnValue(read.promise);
 
     mount();
     await coldBoot(RETURNING_USER);
@@ -230,7 +243,7 @@ describe('offline cold boot (#115)', () => {
     mocks.readAdultAttestationFromCache.mockResolvedValue(1);
     mocks.ensureUserProfile.mockResolvedValue(undefined);
     const read = deferred<number | null>();
-    mocks.readAdultAttestation.mockReturnValue(read.promise);
+    mocks.readAdultAttestationFromServer.mockReturnValue(read.promise);
 
     mount();
     await coldBoot(RETURNING_USER);
@@ -259,7 +272,7 @@ describe('offline cold boot (#115)', () => {
     mocks.readAdultAttestationFromCache.mockResolvedValue(1);
     mocks.ensureUserProfile.mockResolvedValue(undefined);
     const read = deferred<number | null>();
-    mocks.readAdultAttestation.mockReturnValue(read.promise);
+    mocks.readAdultAttestationFromServer.mockReturnValue(read.promise);
 
     mount();
     await coldBoot(RETURNING_USER);
@@ -285,7 +298,7 @@ describe('offline cold boot (#115)', () => {
     setOnline(true);
     mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
     mocks.ensureUserProfile.mockResolvedValue(undefined);
-    mocks.readAdultAttestation.mockResolvedValue(null); // stale: attest txn not visible yet
+    mocks.readAdultAttestationFromServer.mockResolvedValue(null); // stale: attest txn not visible yet
 
     mount();
     mocks.auth.currentUser = RETURNING_USER;
@@ -316,7 +329,7 @@ describe('offline cold boot (#115)', () => {
     // Reconnect with a server that reports a genuinely UN-attested profile: the
     // gate HOLDS as a definite re-prompt, never a fail-open deal, loading released.
     mocks.ensureUserProfile.mockResolvedValue(undefined);
-    mocks.readAdultAttestation.mockResolvedValue(null);
+    mocks.readAdultAttestationFromServer.mockResolvedValue(null);
     await reconnect();
 
     await waitFor(() => expect(rePromptShown()).toBe(true));
@@ -331,7 +344,7 @@ describe('offline cold boot (#115)', () => {
     setOnline(false);
     mocks.readAdultAttestationFromCache.mockResolvedValue(1);
     mocks.ensureUserProfile.mockReturnValue(NEVER);
-    mocks.readAdultAttestation.mockResolvedValue(1);
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1);
 
     mount();
     await coldBoot(RETURNING_USER);
@@ -365,7 +378,7 @@ describe('offline cold boot (#115)', () => {
     setOnline(true);
     mocks.readAdultAttestationFromCache.mockResolvedValue(1);
     mocks.ensureUserProfile.mockResolvedValue(undefined);
-    mocks.readAdultAttestation.mockResolvedValue(1);
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1);
     mocks.joinAndDeal.mockRejectedValue(new Error('network request failed'));
 
     mount();
@@ -386,7 +399,7 @@ describe('offline cold boot (#115)', () => {
     mocks.readAdultAttestationFromCache.mockResolvedValue(1);
     const ensure = deferred<void>();
     mocks.ensureUserProfile.mockReturnValue(ensure.promise); // in flight → loading gated
-    mocks.readAdultAttestation.mockResolvedValue(1);
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1);
 
     mount();
     await coldBoot(RETURNING_USER);
@@ -421,7 +434,7 @@ describe('offline cold boot (#115)', () => {
     setOnline(true);
     mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
     mocks.ensureUserProfile.mockResolvedValue(undefined);
-    mocks.readAdultAttestation.mockResolvedValue(1); // server: attested (authoritative)
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1); // server: attested (authoritative)
     mocks.joinAndDeal.mockRejectedValueOnce(new Error('network request failed')); // deal fails, no board
 
     mount();
@@ -434,7 +447,7 @@ describe('offline cold boot (#115)', () => {
     // Reconnect with the FRESH read HELD in flight so the reconnect window is
     // observable; joinAndDeal would now "succeed" (create rows) if it fired.
     const read = deferred<number | null>();
-    mocks.readAdultAttestation.mockReturnValue(read.promise);
+    mocks.readAdultAttestationFromServer.mockReturnValue(read.promise);
     mocks.joinAndDeal.mockResolvedValue(undefined);
     await reconnect();
     // The pre-offline authority must NOT license a deal in the reconnect window.
@@ -455,7 +468,7 @@ describe('offline cold boot (#115)', () => {
     setOnline(true);
     mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
     mocks.ensureUserProfile.mockResolvedValue(undefined);
-    mocks.readAdultAttestation.mockResolvedValue(1);
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1);
     mocks.joinAndDeal.mockRejectedValueOnce(new Error('network request failed')); // first deal fails, no board
 
     mount();
@@ -481,7 +494,7 @@ describe('offline cold boot (#115)', () => {
     setOnline(true);
     mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
     mocks.ensureUserProfile.mockRejectedValueOnce(new Error('network request failed'));
-    mocks.readAdultAttestation.mockResolvedValue(null);
+    mocks.readAdultAttestationFromServer.mockResolvedValue(null);
 
     mount();
     await coldBoot(RETURNING_USER);
@@ -509,11 +522,88 @@ describe('offline cold boot (#115)', () => {
     expect(dealingActive()).toBe(false);
   });
 
+  it('finding A (round 6): deal AUTHORITY is SERVER-only — a cache-served stamp does NOT authorize a deal when the SERVER row has none (re-prompt, no rows); a genuine server stamp deals once', async () => {
+    // Offline cold boot with a CACHED stamp → provisional render (no deal offline).
+    setOnline(false);
+    mocks.readAdultAttestationFromCache.mockResolvedValue(1); // cache render: attested
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    // The OLD cache-capable getDoc WOULD serve this stale cached stamp as authority…
+    mocks.readAdultAttestation.mockResolvedValue(1);
+    // …but the SERVER row's stamp was removed while offline — server truth is NULL.
+    mocks.readAdultAttestationFromServer.mockResolvedValue(null);
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    expect(boardRendered()).toBe(true); // provisional cache render
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+
+    // Reconnect: authority is SERVER-only, so the server-null downgrades to a
+    // re-prompt and NO deal/rows are created — even though the cache still has a
+    // stamp (the pre-fix code, which read authority from the cache-capable getDoc,
+    // deals here).
+    await reconnect();
+    await waitFor(() => expect(rePromptShown()).toBe(true));
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+  });
+
+  it('finding A (round 6): a server-UNREACHABLE authority read (throw) does not authorize a deal; a genuine server stamp deals once', async () => {
+    // Online, but the server authority read THROWS (flaky: navigator online, no
+    // route). getDocFromServer rejects → authority NOT established → no deal.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestation.mockResolvedValue(1); // a cache-served getDoc would attest…
+    mocks.readAdultAttestationFromServer.mockRejectedValueOnce(new Error('server unreachable'));
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    // The throw is a bootstrap failure → no authority, no deal (deferred/retryable).
+    await waitFor(() => expect(dealErrorShown()).toBe(true));
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+
+    // A later reconnect where the server actually returns a stamp → deals once.
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1);
+    await reconnect();
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+    expect(rePromptShown()).toBe(false);
+  });
+
+  it('finding B (round 6): going offline while a deal is in flight retires it — a stale late REJECTION does NOT set dealError over the rendered cached Board', async () => {
+    // Online, authoritative, cache-attested; the deal is HELD in flight.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockResolvedValue(1);
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1);
+    let rejectDeal!: (e: unknown) => void;
+    const dealPromise = new Promise<void>((_res, rej) => (rejectDeal = rej));
+    mocks.joinAndDeal.mockReturnValue(dealPromise); // deal in flight, will reject late
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+    expect(dealErrorShown()).toBe(false);
+
+    // Connectivity drops mid-deal: the offline handler RETIRES the in-flight deal
+    // (bumps dealAttemptRef) and the cache-first path renders the cached Board.
+    await goOffline();
+    await waitFor(() => expect(boardRendered()).toBe(true));
+
+    // The stale in-flight deal now REJECTS (late) — its catch must return early on
+    // the dealAttempt mismatch and NOT set dealError over the rendered cached Board
+    // (the pre-fix code, which did not bump dealAttemptRef, sets the error panel).
+    await act(async () => {
+      rejectDeal(new Error('network request failed'));
+      await dealPromise.catch(() => {});
+    });
+    expect(dealErrorShown()).toBe(false);
+    expect(boardRendered()).toBe(true);
+  });
+
   it('online: a genuinely-new attested User still deals', async () => {
     setOnline(true);
     mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
     mocks.ensureUserProfile.mockResolvedValue(undefined);
-    mocks.readAdultAttestation.mockResolvedValue(1); // server: attested
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1); // server: attested
 
     mount();
     await coldBoot(RETURNING_USER);

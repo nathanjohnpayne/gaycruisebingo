@@ -34,7 +34,9 @@ vi.mock('../firebase', () => ({ auth: mocks.auth, googleProvider: {} }));
 vi.mock('../data/api', () => ({
   ensureUserProfile: mocks.ensureUserProfile,
   attestAdult: mocks.attestAdult,
-  readAdultAttestation: mocks.readAdultAttestation,
+  // AuthProvider's authority read is server-only now (#117 r6); route the same spy
+  // this suite already configures for the settled gate read to it.
+  readAdultAttestationFromServer: mocks.readAdultAttestation,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
   joinAndDeal: mocks.joinAndDeal,
 }));

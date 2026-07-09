@@ -31,7 +31,8 @@ vi.mock('../components/ConfirmWinMoments', () => ({ default: () => null }));
 vi.mock('../data/api', () => ({
   ensureUserProfile: mocks.ensureUserProfile,
   attestAdult: mocks.attestAdult,
-  readAdultAttestation: mocks.readAdultAttestation,
+  // AuthContext's authority read is server-only now (#117 r6); same spy.
+  readAdultAttestationFromServer: mocks.readAdultAttestation,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
   joinAndDeal: mocks.joinAndDeal,
 }));

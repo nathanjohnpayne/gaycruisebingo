@@ -5,8 +5,8 @@ import {
   attestAdult,
   ensureUserProfile,
   joinAndDeal,
-  readAdultAttestation,
   readAdultAttestationFromCache,
+  readAdultAttestationFromServer,
 } from '../data/api';
 import { track } from '../analytics';
 import SignIn from '../components/SignIn';
@@ -205,8 +205,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let bootstrapFailure: { err: unknown } | null = null;
     try {
       await ensureUserProfile(u);
-      // The SETTLED (create-or-existing) row: a definite present/absent.
-      attestedRead = (await readAdultAttestation(u.uid)) !== null;
+      // SERVER-ONLY authority read (Codex #117 round 6): getDocFromServer, NOT the
+      // cache-capable getDoc — a stamp served from cache must never authorize a
+      // deal. It REJECTS when the server is actually unreachable (a flaky reconnect
+      // where navigator.onLine is true but there is no route), which falls into the
+      // catch below → authority NOT established, no deal, deferred to reconnect.
+      attestedRead = (await readAdultAttestationFromServer(u.uid)) !== null;
     } catch (err) {
       bootstrapFailure = { err };
     }
@@ -310,7 +314,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setOnline(false);
       const u = auth.currentUser;
       if (!u) return;
-      setDealing(false); // supersede: clear an invalidated retry's spinner (finding B)
+      setDealing(false); // supersede: clear an invalidated retry's spinner (r5 finding B)
+      // RETIRE any in-flight joinAndDeal (Codex #117 round 6, finding B): the deal
+      // path has its OWN supersede ref (dealAttemptRef), which the offline handler
+      // did not bump, so a runDeal already in flight stayed "current" — its late
+      // REJECTION after the cache-first path rendered the board would set dealError
+      // and replace the cached board with the error panel during the dead zone.
+      // Bumping dealAttemptRef makes that stale deal's catch return early on the
+      // attempt mismatch (the deal-attempt analog of the r5 profileAttemptRef fix).
+      dealAttemptRef.current += 1;
       // A pre-offline authoritative read must NOT survive the dead zone as a
       // license to deal on reconnect (Codex #117 round 5, finding A): the stamp
       // could be deleted server-side while offline, and the reconnect handler flips
@@ -399,7 +411,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDealing(true);
     try {
       await ensureUserProfile(u);
-      const read = (await readAdultAttestation(u.uid)) !== null;
+      // SERVER-ONLY authority read (round 6), same as bootstrapUser — a retry must
+      // not authorize a deal from a cache-served getDoc either.
+      const read = (await readAdultAttestationFromServer(u.uid)) !== null;
       if (profileAttemptRef.current !== attempt) return;
       const attestedSticky = attestedUidsRef.current.has(u.uid);
       // Authoritative settle (finding D): the server read is definitive — only a

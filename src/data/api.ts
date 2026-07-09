@@ -4,6 +4,7 @@ import {
   doc,
   getDoc,
   getDocFromCache,
+  getDocFromServer,
   getDocs,
   increment,
   query,
@@ -199,6 +200,26 @@ export async function readAdultAttestation(uid: string): Promise<number | null> 
  */
 export async function readAdultAttestationFromCache(uid: string): Promise<number | null> {
   const snap = await getDocFromCache(rawUser(uid));
+  const v = snap.exists() ? (snap.data() as Partial<UserDoc>).attestedAdultAt : undefined;
+  return typeof v === 'number' ? v : null;
+}
+
+/**
+ * Read a User's 18+ attestation from the SERVER ONLY — the AUTHORITY read that
+ * gates the deal (Codex #117 round 6). `readAdultAttestation` above wraps `getDoc`,
+ * whose Web API MAY silently RETURN CACHED DATA when the server is unreachable, so
+ * it is NOT server-truth and must never establish deal authority: a stale cached
+ * stamp could authorize creating board/player rows for a User whose server row no
+ * longer carries the 18+ stamp. `getDocFromServer` forces a server round trip and
+ * REJECTS when the server cannot be reached — so AuthContext treats a thrown read
+ * as "authority NOT established" (no `attestedAuthoritative`, no deal; fall to the
+ * deferred/offline path), and only a server-returned stamp (or a same-session
+ * optimistic attest) authorizes the deal. The provisional offline RENDER still uses
+ * the cache-first `readAdultAttestationFromCache`; only the deal-authority gate is
+ * server-only.
+ */
+export async function readAdultAttestationFromServer(uid: string): Promise<number | null> {
+  const snap = await getDocFromServer(rawUser(uid));
   const v = snap.exists() ? (snap.data() as Partial<UserDoc>).attestedAdultAt : undefined;
   return typeof v === 'number' ? v : null;
 }

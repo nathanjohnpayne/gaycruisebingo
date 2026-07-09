@@ -5,20 +5,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // `runTransaction` is driven to model the transactional read-then-write that makes
 // `attestAdult` create-only (an existing earlier stamp is never overwritten), and
 // `getDoc` the point read `readAdultAttestation` uses for the re-prompt gate.
-const { docMock, runTransactionMock, getDocMock } = vi.hoisted(() => ({
+const { docMock, runTransactionMock, getDocMock, getDocFromServerMock } = vi.hoisted(() => ({
   docMock: vi.fn((_db: unknown, ...segments: string[]) => ({ path: segments.join('/') })),
   runTransactionMock: vi.fn(),
   getDocMock: vi.fn(),
+  getDocFromServerMock: vi.fn(),
 }));
 vi.mock('firebase/firestore', () => ({
   doc: docMock,
   runTransaction: runTransactionMock,
   getDoc: getDocMock,
+  getDocFromServer: getDocFromServerMock,
 }));
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
 
 import type { User } from 'firebase/auth';
-import { attestAdult, readAdultAttestation } from './api';
+import { attestAdult, readAdultAttestation, readAdultAttestationFromServer } from './api';
 
 type FakeTx = { get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn> };
 
@@ -106,5 +108,25 @@ describe('readAdultAttestation reports the settled attestation for the gate (#23
   it('returns null when the profile row is missing', async () => {
     getDocMock.mockResolvedValue(snap(null));
     await expect(readAdultAttestation('sailor-1')).resolves.toBeNull();
+  });
+});
+
+describe('readAdultAttestationFromServer is the SERVER-ONLY authority read (#117 r6)', () => {
+  it('reads via getDocFromServer (never the cache-capable getDoc)', async () => {
+    getDocFromServerMock.mockResolvedValue(snap({ attestedAdultAt: 777 }));
+    await expect(readAdultAttestationFromServer('sailor-1')).resolves.toBe(777);
+    // The authority read must NOT go through the cache-capable getDoc.
+    expect(getDocFromServerMock).toHaveBeenCalledTimes(1);
+    expect(getDocMock).not.toHaveBeenCalled();
+  });
+
+  it('returns null for a server row without the stamp (definitive)', async () => {
+    getDocFromServerMock.mockResolvedValue(snap({ displayName: 'Ada' }));
+    await expect(readAdultAttestationFromServer('sailor-1')).resolves.toBeNull();
+  });
+
+  it('REJECTS when the server is unreachable (never falls back to cache)', async () => {
+    getDocFromServerMock.mockRejectedValue(new Error('Failed to reach server'));
+    await expect(readAdultAttestationFromServer('sailor-1')).rejects.toThrow(/server/i);
   });
 });
