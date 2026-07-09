@@ -133,6 +133,18 @@ describe('isReportHidden — the at/over/below boundary (ADR 0004 Phase 0)', () 
     expect(isReportHidden(999, undefined)).toBe(false);
     expect(isReportHidden(0, undefined)).toBe(false);
   });
+
+  it('fails OPEN on a NON-POSITIVE threshold — a 0/negative/NaN typo hides nothing (Codex P2, PR #107 finding 2)', () => {
+    // A threshold <= 0 would make reportCount >= threshold true for ALL content and
+    // blank the whole app from one admin typo; only a POSITIVE threshold is active.
+    expect(isReportHidden(0, 0)).toBe(false);
+    expect(isReportHidden(5, 0)).toBe(false);
+    expect(isReportHidden(5, -1)).toBe(false);
+    expect(isReportHidden(0, -1)).toBe(false);
+    // NaN is `typeof 'number'` but not > 0, so the same guard rejects it.
+    expect(isReportHidden(5, Number.NaN)).toBe(false);
+    expect(isReportHidden(0, Number.NaN)).toBe(false);
+  });
 });
 
 describe('useProofFeed — the public Feed excludes threshold-hidden Proofs', () => {
@@ -161,6 +173,17 @@ describe('useProofFeed — the public Feed excludes threshold-hidden Proofs', ()
     cap.fireQuery(colSnap([proof('p1', 99)])); // heavily reported
 
     expect(result.current.proofs.map((p) => p.id)).toEqual(['p1']); // still shown
+  });
+
+  it('does NOT blank the Feed when the threshold is 0 — a non-positive typo hides nothing (finding 2)', () => {
+    const cap = capture();
+    const { result } = renderHook(() => useProofFeed());
+
+    cap.fireDoc(eventSnap(0)); // admin typo: 0 would hide reportCount >= 0 = everything
+    cap.fireQuery(colSnap([proof('p1', 99), proof('p2', 1), proof('p3', 0)]));
+
+    // All three still show — a 0 threshold is inactive, not "hide all".
+    expect(result.current.proofs.map((p) => p.id).sort()).toEqual(['p1', 'p2', 'p3']);
   });
 });
 

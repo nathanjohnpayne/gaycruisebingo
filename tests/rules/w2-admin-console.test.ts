@@ -118,9 +118,9 @@ describe('firestore.rules — moderation surface (specs/w2-admin-console.md)', (
     await assertSucceeds(updateDoc(doc(db(ADMIN), at('proofs/p1')), { status: 'hidden' }));
     await assertSucceeds(updateDoc(doc(db(ADMIN), at('proofs/p1')), { status: 'active' }));
     // An admin update is unconstrained: resetting reportCount below the threshold
-    // would lift the Phase-0 community auto-hide. The rules already permit this;
-    // the shipped console uses status hide/restore/delete, and #43 owns the
-    // server-authoritative hide.
+    // lifts the Phase-0 community auto-hide. This is the rules allowance the shipped
+    // Clear reports control relies on (data/admin.ts clearItemReports/clearProofReports,
+    // Codex P2 PR #107 finding 3); #43 owns the server-authoritative hide.
     await assertSucceeds(updateDoc(doc(db(ADMIN), at('items/i-hot')), { reportCount: 0 }));
     await assertSucceeds(updateDoc(doc(db(ADMIN), at('proofs/p-hot')), { reportCount: 0 }));
     await assertSucceeds(deleteDoc(doc(db(ADMIN), at('items/i1'))));

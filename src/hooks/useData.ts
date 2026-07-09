@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
 import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol } from '../data/paths';
+import { isReportHidden } from '../data/moderation';
 import { sortPlayers } from '../game/logic';
 import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, MomentDoc } from '../types';
 
@@ -82,18 +83,15 @@ export function useEventDoc(enabled = true) {
   return useDocSub<EventDoc>(enabled ? eventRef() : null, enabled ? 'event' : 'event:disabled');
 }
 
-/**
- * ADR 0004 Phase 0 community auto-hide test: a Prompt or Proof is hidden once its
- * `reportCount` REACHES the event's `reportHideThreshold` — at OR over, not just
- * over. An `undefined` threshold (the event doc still loading, or the setting
- * simply unset) means NO hiding: the filter fails OPEN, because wrongly blanking
- * the Feed/pool for everyone is worse than briefly showing a heavily-reported
- * item, and the Admin report queue is the backstop either way. Pure so the
- * at/over/below boundary is unit-testable without a subscription.
- */
-export function isReportHidden(reportCount: number, threshold: number | undefined): boolean {
-  return typeof threshold === 'number' && reportCount >= threshold;
-}
+// The ADR 0004 Phase 0 community auto-hide predicate lives in the Firestore-free,
+// React-free ./moderation module (imported above) so the deal path (src/data/api.ts's
+// joinAndDeal) can apply the EXACT same "is this community-hidden" test as these
+// read hooks without importing React (Codex P2, PR #107 finding 1). Re-exported here
+// so the existing importers (Admin.tsx, the hooks suite) keep importing it from
+// useData. The predicate treats only a POSITIVE threshold as active (0 / negative /
+// NaN / undefined → no filtering) — see ./moderation for the fail-open-unless-positive
+// rationale (Codex P2, PR #107 finding 2).
+export { isReportHidden };
 
 /**
  * The Event's community auto-hide threshold (`settings.reportHideThreshold`,

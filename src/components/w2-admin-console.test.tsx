@@ -26,9 +26,11 @@ const H = vi.hoisted(() => ({
   items: [] as ItemDoc[],
   hideProof: vi.fn(),
   restoreProof: vi.fn(),
+  clearProofReports: vi.fn(),
   hideItem: vi.fn(),
   restoreItem: vi.fn(),
   deleteItem: vi.fn(),
+  clearItemReports: vi.fn(),
   deleteProof: vi.fn(),
   confirmClaim: vi.fn(),
   rejectClaim: vi.fn(),
@@ -69,9 +71,11 @@ vi.mock('../data/admin', () => ({
   rejectClaim: (...a: unknown[]) => H.rejectClaim(...a),
   hideProof: (...a: unknown[]) => H.hideProof(...a),
   restoreProof: (...a: unknown[]) => H.restoreProof(...a),
+  clearProofReports: (...a: unknown[]) => H.clearProofReports(...a),
   hideItem: (...a: unknown[]) => H.hideItem(...a),
   restoreItem: (...a: unknown[]) => H.restoreItem(...a),
   deleteItem: (...a: unknown[]) => H.deleteItem(...a),
+  clearItemReports: (...a: unknown[]) => H.clearItemReports(...a),
   setClaimMode: (...a: unknown[]) => H.setClaimMode(...a),
   setEventTheme: (...a: unknown[]) => H.setEventTheme(...a),
 }));
@@ -193,6 +197,60 @@ describe('Report queue (specs/w2-admin-console.md)', () => {
     const q = within(queue());
     expect(q.getByText('Reported prompt')).toBeInTheDocument();
     expect(q.queryByText('Clean prompt')).toBeNull(); // unreported, active → not queued
+  });
+
+  it('lifts the community auto-hide on a reported Proof — Clear reports resets its reportCount (Codex P2, PR #107 finding 3)', () => {
+    // An auto-hidden but status-active Proof: previously the queue offered only
+    // Hide, so there was NO way to lift the community auto-hide (the auto-hidden-
+    // but-active gap). Clear reports zeroes reportCount so it reappears everywhere.
+    H.flagged = [proof('hot', 6, { displayName: 'Hot Proof', status: 'active' })];
+    render(<Admin />);
+
+    const q = within(queue());
+    expect(q.getByText(/auto-hidden/i)).toBeInTheDocument(); // 6 ≥ 4
+    fireEvent.click(q.getByRole('button', { name: /clear reports/i }));
+    expect(H.clearProofReports).toHaveBeenCalledWith('hot');
+  });
+
+  it('lifts the community auto-hide on a reported Prompt — Clear reports resets its reportCount (finding 3)', () => {
+    H.items = [item('hot', 6, { text: 'Hot Prompt', status: 'active' })];
+    render(<Admin />);
+
+    const q = within(queue());
+    expect(q.getByText(/auto-hidden/i)).toBeInTheDocument();
+    fireEvent.click(q.getByRole('button', { name: /clear reports/i }));
+    expect(H.clearItemReports).toHaveBeenCalledWith('hot');
+  });
+
+  it('offers NO Clear reports control on a below-threshold row — nothing to lift', () => {
+    // reportCount 2 is below the threshold of 4: the row is reported (so it queues)
+    // but not auto-hidden, so there is no community hide to lift.
+    H.flagged = [proof('mild', 2, { displayName: 'Mild Proof' })];
+    render(<Admin />);
+    expect(within(queue()).queryByRole('button', { name: /clear reports/i })).toBeNull();
+  });
+
+  it('orders the mixed queue by reportCount desc ACROSS kinds (Codex P3, PR #107 finding 4)', () => {
+    // A heavily-reported Prompt must not bury below a lightly-reported Proof: the
+    // queue is ONE list sorted by reportCount desc across BOTH kinds, ties broken by
+    // createdAt ascending.
+    H.flagged = [
+      proof('p-lo', 1, { displayName: 'ProofLo' }),
+      proof('p-mid', 5, { displayName: 'ProofMid', createdAt: 200 }),
+    ];
+    H.items = [
+      item('i-hi', 9, { text: 'ItemHi' }),
+      item('i-mid', 5, { text: 'ItemMid', createdAt: 100 }),
+    ];
+    render(<Admin />);
+
+    const labels = Array.from(queue().querySelectorAll('.row .name')).map((n) => n.textContent ?? '');
+    const idx = (needle: string) => labels.findIndex((l) => l.includes(needle));
+    // 9 first, 1 last; the two count-5 rows sit between, tie broken by createdAt asc.
+    expect(idx('ItemHi')).toBe(0);
+    expect(idx('ProofLo')).toBe(labels.length - 1);
+    expect(idx('ItemHi')).toBeLessThan(idx('ProofMid')); // a 9 beats a 5 across kinds
+    expect(idx('ItemMid')).toBeLessThan(idx('ProofMid')); // createdAt 100 < 200 tiebreak
   });
 
   it('renders NO ban control — no ban surface exists in the rules yet (documented skip)', () => {
