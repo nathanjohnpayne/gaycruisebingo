@@ -1,5 +1,13 @@
 import { useAuth } from '../auth/AuthContext';
-import { useEventDoc, usePendingClaims, useReportedProofs, useAllItems, isReportHidden } from '../hooks/useData';
+import {
+  useEventDoc,
+  usePendingClaims,
+  useReportedProofs,
+  useAllItems,
+  isReportHidden,
+  isBanned,
+  isSystemAuthor,
+} from '../hooks/useData';
 import {
   confirmClaim,
   rejectClaim,
@@ -12,6 +20,8 @@ import {
   clearItemReports,
   setClaimMode,
   setEventTheme,
+  banUser,
+  unbanUser,
 } from '../data/admin';
 import { deleteProof } from '../data/proofs';
 import { THEMES } from '../theme/themes';
@@ -26,13 +36,71 @@ type QueueRow =
   | { kind: 'item'; sortCount: number; sortAt: number; item: ItemDoc };
 
 /**
+ * Ban / Unban the AUTHOR of a queued row (#108). Banning is an admin action on the
+ * CURRENT event: it adds/removes the content owner's uid on the event doc's
+ * `bannedUids` roster (`data/admin` banUser/unbanUser → arrayUnion/arrayRemove), the
+ * ADR 0004 Phase 0 presentational hide/mute the #113 rules landed. It is a
+ * MODERATION / DISPUTE tool, NOT anti-cheat (ADR 0001) and NOT hard access
+ * revocation (server-authoritative enforcement is #43/#44) — a banned Player's
+ * content is filtered from every PUBLIC/player surface (the read hooks + the deal
+ * path), yet stays reachable HERE so an Admin can review it and unban. The label
+ * reflects the current banned state.
+ */
+function BanControl({
+  uid,
+  bannedUids,
+  admins,
+}: {
+  uid: string;
+  bannedUids: string[];
+  admins: string[];
+}) {
+  // Two kinds of author are NOT bannable, so no Ban control renders for them:
+  //  - System/sentinel authors ('seed', the createdBy on every seeded default
+  //    Prompt) — Codex P1, PR #122: a single Ban click would add 'seed' to
+  //    bannedUids and hide the ENTIRE default pool from useItems AND the deal path.
+  //  - Fellow ADMINS — Codex P2, PR #122 round 2: #113's rules REJECT any resulting
+  //    bannedUids that overlaps `admins` (firestore.rules `!bannedUids.hasAny(admins)`,
+  //    pinned in tests/rules/w2-banned-uids.test.ts), so offering Ban on an
+  //    admin-authored row is a doomed action that can only fail with a permission
+  //    error. Suppress it so the admin never sees an action that cannot succeed.
+  // A banned sentinel stays recoverable via the Banned players section's Unban
+  // (not gated); an admin uid can never be in bannedUids in the first place.
+  if (isSystemAuthor(uid) || admins.includes(uid)) return null;
+  return isBanned(uid, bannedUids) ? (
+    <button className="btn" title="Un-mute this player's content" onClick={() => unbanUser(uid)}>
+      Unban author
+    </button>
+  ) : (
+    <button
+      className="btn"
+      title="Mute this player's content on this event (moderation, not anti-cheat)"
+      onClick={() => banUser(uid)}
+    >
+      Ban author
+    </button>
+  );
+}
+
+/**
  * One reported-Proof row in the moderation queue. `Clear reports` lifts the ADR
  * 0004 Phase 0 community auto-hide by zeroing reportCount — rendered ONLY when the
  * row is actually auto-hidden (the only state with a hide to lift; Codex P2, PR
  * #107 finding 3). It is distinct from Restore, which lifts the `status` hard-hide,
- * so a doubly-hidden row (status hidden AND over threshold) shows both.
+ * so a doubly-hidden row (status hidden AND over threshold) shows both. `Ban author`
+ * mutes the Proof's owner across the event (#108); the row stays reachable after.
  */
-function ProofQueueRow({ proof: p, threshold }: { proof: ProofDoc; threshold: number | undefined }) {
+function ProofQueueRow({
+  proof: p,
+  threshold,
+  bannedUids,
+  admins,
+}: {
+  proof: ProofDoc;
+  threshold: number | undefined;
+  bannedUids: string[];
+  admins: string[];
+}) {
   const autoHidden = isReportHidden(p.reportCount, threshold);
   return (
     <div className="row">
@@ -61,6 +129,7 @@ function ProofQueueRow({ proof: p, threshold }: { proof: ProofDoc; threshold: nu
           Hide
         </button>
       )}
+      <BanControl uid={p.uid} bannedUids={bannedUids} admins={admins} />
       <button className="iconbtn" title="Delete" onClick={() => deleteProof(p.id, p.storagePath)}>
         🗑
       </button>
@@ -69,8 +138,19 @@ function ProofQueueRow({ proof: p, threshold }: { proof: ProofDoc; threshold: nu
 }
 
 /** One reported-Prompt row in the moderation queue — the Prompt-side twin of
- * `ProofQueueRow`, with the same `Clear reports` auto-hide lift (finding 3). */
-function ItemQueueRow({ item: it, threshold }: { item: ItemDoc; threshold: number | undefined }) {
+ * `ProofQueueRow`, with the same `Clear reports` auto-hide lift (finding 3) and the
+ * same `Ban author` control (#108), keyed on the Prompt's `createdBy` owner. */
+function ItemQueueRow({
+  item: it,
+  threshold,
+  bannedUids,
+  admins,
+}: {
+  item: ItemDoc;
+  threshold: number | undefined;
+  bannedUids: string[];
+  admins: string[];
+}) {
   const autoHidden = isReportHidden(it.reportCount, threshold);
   return (
     <div className="row">
@@ -96,6 +176,7 @@ function ItemQueueRow({ item: it, threshold }: { item: ItemDoc; threshold: numbe
           Hide
         </button>
       )}
+      <BanControl uid={it.createdBy} bannedUids={bannedUids} admins={admins} />
       <button className="iconbtn" title="Delete" onClick={() => deleteItem(it.id)}>
         🗑
       </button>
@@ -118,6 +199,15 @@ export default function Admin() {
   // (useProofFeed / useItems), yet stays reachable in the queue below so an Admin
   // can restore or delete it — the whole reason the Admin views skip the filter.
   const threshold = event?.settings?.reportHideThreshold;
+  // The Admin ban roster (#108): the event's `bannedUids`, `[]` when absent (the
+  // converter default). Drives each queue row's Ban/Unban control and the Banned
+  // players section below. Admin views are UNfiltered — a banned Player's content
+  // stays reachable here for review/unban (only PUBLIC/player reads filter).
+  const bannedUids = event?.bannedUids ?? [];
+  // The event admins roster (#113 contract), read from the SAME event doc. A ban
+  // that overlaps admins is rejected by the rules, so BanControl suppresses the Ban
+  // action for an admin-authored row (Codex P2, PR #122 round 2).
+  const admins = event?.admins ?? [];
   // Prompts needing moderation attention: reported at least once, or already
   // hard-hidden. Derived from useAllItems (already subscribed) so the queue opens
   // NO extra listener, and UNfiltered by the threshold so an auto-hidden Prompt
@@ -159,12 +249,50 @@ export default function Admin() {
         <div className="list">
           {queueRows.map((entry) =>
             entry.kind === 'proof' ? (
-              <ProofQueueRow key={`proof-${entry.proof.id}`} proof={entry.proof} threshold={threshold} />
+              <ProofQueueRow
+                key={`proof-${entry.proof.id}`}
+                proof={entry.proof}
+                threshold={threshold}
+                bannedUids={bannedUids}
+                admins={admins}
+              />
             ) : (
-              <ItemQueueRow key={`item-${entry.item.id}`} item={entry.item} threshold={threshold} />
+              <ItemQueueRow
+                key={`item-${entry.item.id}`}
+                item={entry.item}
+                threshold={threshold}
+                bannedUids={bannedUids}
+                admins={admins}
+              />
             ),
           )}
         </div>
+      </div>
+
+      {/* Banned players (#108): the current `bannedUids` roster, so an Admin can see
+          who is muted and unban them — including a Player who has no queued content
+          (their prompts/proofs may all be deleted, yet they can still be unbanned
+          here). A ban is a presentational moderation/dispute tool (ADR 0004 Phase 0),
+          NOT anti-cheat (ADR 0001) or hard access revocation (#43/#44). */}
+      <div className="admin-section">
+        <h3>Banned players{bannedUids.length ? ` (${bannedUids.length})` : ''}</h3>
+        {!bannedUids.length ? (
+          <p className="muted" style={{ fontSize: 12 }}>No one is banned.</p>
+        ) : (
+          <div className="list">
+            {bannedUids.map((uid) => (
+              <div key={uid} className="row">
+                <div className="grow">
+                  <div className="name">{uid}</div>
+                  <div className="sub">content hidden from players (moderation, not anti-cheat)</div>
+                </div>
+                <button className="btn" onClick={() => unbanUser(uid)}>
+                  Unban
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="admin-section">

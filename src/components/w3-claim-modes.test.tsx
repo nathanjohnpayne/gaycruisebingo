@@ -64,6 +64,12 @@ vi.mock('../hooks/useData', () => ({
   useReportedProofs: () => ({ flagged: [], loading: false }),
   useAllItems: () => ({ items: [], loading: false }),
   isReportHidden: () => false,
+  // Admin.tsx imports these ban predicates from useData (#108/#122); this mock
+  // replaces the whole module, so they must be provided or Admin loads with the
+  // names undefined. Mirror src/data/moderation.ts.
+  isBanned: (uid: string | null | undefined, banned: readonly string[] | undefined) =>
+    !!uid && Array.isArray(banned) && banned.includes(uid),
+  isSystemAuthor: (uid: string | null | undefined) => uid === 'seed',
 }));
 // Keep planConfirmBroadcasts + MomentActor real (the decision under test); stub the
 // three writers + the durable-witness read.
@@ -89,6 +95,10 @@ vi.mock('../data/admin', () => ({
   deleteItem: vi.fn(),
   clearItemReports: vi.fn(),
   setEventTheme: vi.fn(),
+  // Admin.tsx imports banUser/unbanUser (#108/#122); provide them so this
+  // whole-module mock does not leave the names undefined at import.
+  banUser: vi.fn(),
+  unbanUser: vi.fn(),
 }));
 vi.mock('../data/proofs', () => ({ deleteProof: vi.fn() }));
 

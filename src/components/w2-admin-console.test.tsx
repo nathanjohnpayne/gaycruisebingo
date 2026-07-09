@@ -10,8 +10,10 @@ import type { EventDoc, ItemDoc, ProofDoc } from '../types';
 // importOriginal, not a re-implementation); the moderation controls on a
 // threshold-hidden row invoke the data/admin writes — so an Admin can restore or
 // delete content the ADR 0004 Phase 0 community hide removed from every Player's
-// Feed. No ban control is rendered: no ban surface exists in firestore.rules yet
-// (documented in the spec's Self-review; deferred to a rules-owned follow-up).
+// Feed. The Admin ban control (#108, consuming the #113 rules) now DOES render on
+// each queue row; its behaviour is pinned in depth by
+// src/components/w2-ban-console.test.tsx — here we only confirm the control appears
+// (the deferred-skip this file once pinned was flipped when #108 landed).
 
 const H = vi.hoisted(() => ({
   user: { uid: 'admin-uid' } as { uid: string } | null,
@@ -36,6 +38,8 @@ const H = vi.hoisted(() => ({
   rejectClaim: vi.fn(),
   setClaimMode: vi.fn(),
   setEventTheme: vi.fn(),
+  banUser: vi.fn(),
+  unbanUser: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event', storage: {}, auth: {}, googleProvider: {}, analytics: null }));
@@ -78,6 +82,8 @@ vi.mock('../data/admin', () => ({
   clearItemReports: (...a: unknown[]) => H.clearItemReports(...a),
   setClaimMode: (...a: unknown[]) => H.setClaimMode(...a),
   setEventTheme: (...a: unknown[]) => H.setEventTheme(...a),
+  banUser: (...a: unknown[]) => H.banUser(...a),
+  unbanUser: (...a: unknown[]) => H.unbanUser(...a),
 }));
 vi.mock('../data/proofs', () => ({ deleteProof: (...a: unknown[]) => H.deleteProof(...a) }));
 vi.mock('../theme/themes', () => ({ THEMES: [{ id: 'neon-playground', emoji: '🎉', label: 'Neon' }] }));
@@ -277,9 +283,12 @@ describe('Report queue (specs/w2-admin-console.md)', () => {
     expect(idx('ItemMid')).toBeLessThan(idx('ProofMid')); // createdAt 100 < 200 tiebreak
   });
 
-  it('renders NO ban control — no ban surface exists in the rules yet (documented skip)', () => {
+  it('renders the #108 Ban author control on a queue row (deeper assertions in w2-ban-console.test.tsx)', () => {
+    // Flipped from the old deferred-skip pin: the #113 rules landed the bannedUids
+    // surface and #108 built the console consumer, so a Ban author control now
+    // renders on each queue row.
     H.flagged = [proof('p1', 4, { displayName: 'Someone' })];
     render(<Admin />);
-    expect(screen.queryByRole('button', { name: /ban/i })).toBeNull();
+    expect(within(queue()).getByRole('button', { name: 'Ban author' })).toBeInTheDocument();
   });
 });

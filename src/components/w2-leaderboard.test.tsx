@@ -32,6 +32,11 @@ vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../hooks/useData', () => ({
   useLeaderboard: () => ({ players: H.players, loading: H.loading }),
   useEventDoc: () => ({ data: H.event, loading: false }),
+  // Mirrors src/data/moderation.ts isBanned (#108). The event fixtures here carry no
+  // bannedUids, so it filters nothing and these pin/filter assertions are unchanged;
+  // the ban filter itself is pinned in src/components/w2-ban-console.test.tsx.
+  isBanned: (uid: string | null | undefined, bannedUids: readonly string[] | undefined) =>
+    !!uid && Array.isArray(bannedUids) && bannedUids.includes(uid),
 }));
 
 import Leaderboard from './Leaderboard';

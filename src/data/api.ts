@@ -18,7 +18,7 @@ import {
 import type { User } from 'firebase/auth';
 import { db, EVENT_ID } from '../firebase';
 import { markerDisplayName } from './attribution';
-import { isReportHidden } from './moderation';
+import { isReportHidden, isBanned } from './moderation';
 import { itemsCol } from './paths';
 import { FREE_TEXT } from './seed';
 import {
@@ -303,16 +303,27 @@ export async function joinAndDeal(u: User): Promise<boolean> {
     typeof eventData?.settings?.reportHideThreshold === 'number'
       ? eventData.settings.reportHideThreshold
       : undefined;
+  // The Admin ban roster (#108), read from the SAME event-doc fetch as the threshold
+  // so the frozen card is dealt from the SAME pool a Player sees live (`useItems`):
+  // a Prompt authored by a banned uid is hidden everywhere, so it must never land on
+  // a new Player's board. A missing/unreadable event doc, or a malformed value,
+  // falls open to no filtering via `isBanned` — exactly the live pool's behavior.
+  const bannedUids = Array.isArray(eventData?.bannedUids) ? eventData.bannedUids : [];
 
-  // Filter the active pool by the SAME predicate the live pool uses, AFTER the
+  // Filter the active pool by the SAME predicates the live pool uses, AFTER the
   // status==='active' query and the free-space drop. Filtering here (before
   // dealBoard) keeps the MIN_POOL thin-pool guard honest: dealBoard needs >= 24
-  // prompts AFTER the community hide, so a pool padded past the floor by
-  // heavily-reported Prompts still fails fast rather than dealing a card that
-  // hides squares the moment it renders.
+  // prompts AFTER the community hide AND the ban, so a pool padded past the floor by
+  // heavily-reported or banned-author Prompts still fails fast rather than dealing a
+  // card that hides squares the moment it renders.
   const pool: DealItem[] = snap.docs
     .map((d) => d.data())
-    .filter((it) => !it.isFreeSpace && !isReportHidden(it.reportCount, threshold))
+    .filter(
+      (it) =>
+        !it.isFreeSpace &&
+        !isReportHidden(it.reportCount, threshold) &&
+        !isBanned(it.createdBy, bannedUids),
+    )
     .map((it) => ({ id: it.id, text: it.text }));
 
   const seed = seedFromUid(u.uid);

@@ -1,6 +1,7 @@
-import { doc, updateDoc, deleteDoc, runTransaction } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout } from '../game/logic';
+import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc } from '../types';
 
 const evt = () => doc(db, 'events', EVENT_ID);
@@ -34,6 +35,35 @@ export const clearItemReports = (id: string) => updateDoc(item(id), { reportCoun
 export const clearProofReports = (id: string) => updateDoc(proof(id), { reportCount: 0 });
 export const setClaimMode = (mode: ClaimMode) => updateDoc(evt(), { claimMode: mode });
 export const setEventTheme = (theme: ThemeId) => updateDoc(evt(), { defaultTheme: theme });
+
+// The Admin ban (#108): add/remove a uid on the event doc's `bannedUids` roster —
+// the ADR 0004 Phase 0 presentational, event-scoped hide/mute the #113 rules + type
+// contract landed (EventDoc.bannedUids, the isAdmin-gated event-doc write path). A
+// ban is a moderation/dispute tool, NOT anti-cheat (ADR 0001) and NOT hard access
+// revocation (server-authoritative enforcement is #43/#44); the client consumers
+// (isBanned filters in the read hooks + the deal path) hide a banned uid's content
+// from every PUBLIC/player surface.
+//
+// arrayUnion/arrayRemove are DELIBERATE (not a whole-doc { bannedUids } write): a
+// partial update touches ONLY the roster, so a ban never clobbers other event
+// config (claimMode, defaultTheme, settings, admins). firestore.rules validates the
+// RESULTING field state (a list, size <= 1000, disjoint from admins), so the
+// partial-update shape is accepted — pinned by tests/rules/w2-banned-uids.test.ts.
+// This writes ONLY events/{EVENT_ID}, never owner-only users/{uid}. EVENT_ID scopes
+// the single-event app exactly like setClaimMode/setEventTheme above.
+//
+// SENTINEL GUARD (Codex P1, PR #122): banUser REFUSES to add a system/sentinel
+// author (isSystemAuthor — today just 'seed', the createdBy on every seeded default
+// Prompt). Banning 'seed' would hide the ENTIRE default pool from useItems AND the
+// deal path at once — a single mis-click could leave new Players with an empty
+// board. The guard is the write-side backstop to the UI's hidden-control, so even a
+// programmatic/leaked call can never poison the pool: it no-ops (resolves) rather
+// than throwing so any awaiting caller stays happy. unbanUser is DELIBERATELY NOT
+// gated — it removes ANY uid including a sentinel, so an admin who banned 'seed' on
+// a pre-fix build (or by any other means) can always recover the pool.
+export const banUser = (uid: string): Promise<void> =>
+  isSystemAuthor(uid) ? Promise.resolve() : updateDoc(evt(), { bannedUids: arrayUnion(uid) });
+export const unbanUser = (uid: string) => updateDoc(evt(), { bannedUids: arrayRemove(uid) });
 
 /** Recompute a player's stats after an admin resolves one of their claims. */
 async function resolve(
