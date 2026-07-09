@@ -39,6 +39,13 @@ export interface EventDoc {
   bannedUids: string[];
   settings: {
     reportHideThreshold: number;
+    // Target share of spicy (🔞) Prompts among a Board's 24 non-free Squares,
+    // read defensively (`typeof === 'number'`) at the deal-time call site the
+    // same way `reportHideThreshold` is, even though it is typed required
+    // above — optional here because an Event doc seeded before this field
+    // existed has no key to read, and `dealBoard`'s own default (0.4) applies
+    // when it is absent.
+    spicyRatio?: number;
   };
 }
 
@@ -50,6 +57,9 @@ export interface ItemDoc {
   isFreeSpace: boolean;
   status: 'active' | 'hidden';
   reportCount: number;
+  // Whether this Prompt is in the 🔞-tagged "spicy" category (vs. "tame") for
+  // stratified Board composition (`dealBoard`'s spicyRatio sampling).
+  spicy: boolean;
 }
 
 export interface Cell {

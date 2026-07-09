@@ -148,12 +148,13 @@ function mkItem(id: string, isFreeSpace = false): ItemDoc {
     isFreeSpace,
     status: 'active',
     reportCount: 0,
+    spicy: false,
   };
 }
 
 const activeItems = (n: number): ItemDoc[] => Array.from({ length: n }, (_, i) => mkItem(`a${i}`));
 
-const dealPool: DealItem[] = SEED_ITEMS.map((text, i) => ({ id: `seed${i}`, text }));
+const dealPool: DealItem[] = SEED_ITEMS.map((it, i) => ({ id: `seed${i}`, text: it.text, spicy: it.spicy }));
 
 beforeEach(() => {
   H.authUser = SIGNED_IN;

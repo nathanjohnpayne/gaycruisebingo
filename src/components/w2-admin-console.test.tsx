@@ -120,6 +120,7 @@ const item = (id: string, reportCount: number, over: Partial<ItemDoc> = {}): Ite
     isFreeSpace: false,
     status: 'active',
     reportCount,
+    spicy: false,
     ...over,
   }) as ItemDoc;
 

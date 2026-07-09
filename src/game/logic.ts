@@ -46,18 +46,49 @@ export function shuffle<T>(arr: T[], rnd: () => number): T[] {
 export interface DealItem {
   id: string;
   text: string;
+  spicy: boolean;
+}
+
+/**
+ * Stratified sample of 24 picks from `pool`: `spicyRatio` of them (rounded)
+ * drawn from the spicy category, the rest from tame, each category shuffled
+ * independently with the SAME seeded `rnd` for determinism. Backfills from
+ * the other category when one runs short (so a thin category still yields a
+ * full 24, so long as the pool overall has >= MIN_POOL), then re-shuffles the
+ * chosen 24 so spicy/tame interleave across grid positions instead of
+ * clustering (e.g. all spicy picks landing in the shuffled pool's front).
+ */
+function stratifiedPicks(pool: DealItem[], spicyRatio: number, rnd: () => number): DealItem[] {
+  const spicyPool = shuffle(pool.filter((p) => p.spicy), rnd);
+  const tamePool = shuffle(pool.filter((p) => !p.spicy), rnd);
+  const targetSpicy = Math.round(24 * spicyRatio);
+  const targetTame = 24 - targetSpicy;
+  let spicyTaken = Math.min(spicyPool.length, targetSpicy);
+  let tameTaken = Math.min(tamePool.length, targetTame + (targetSpicy - spicyTaken));
+  const remaining = 24 - spicyTaken - tameTaken;
+  if (remaining > 0) {
+    spicyTaken += Math.min(spicyPool.length - spicyTaken, remaining);
+  }
+  const picks = [...spicyPool.slice(0, spicyTaken), ...tamePool.slice(0, tameTaken)];
+  return shuffle(picks, rnd); // re-shuffle so spicy/tame interleave across grid positions, not cluster
 }
 
 /** Deal a frozen 5x5 board: 24 sampled prompts + free center (index 12). */
-export function dealBoard(pool: DealItem[], freeText: string, seed: number): Cell[] {
+export function dealBoard(
+  pool: DealItem[],
+  freeText: string,
+  seed: number,
+  spicyRatio: number = 0.4,
+): Cell[] {
   // A board needs MIN_POOL (24) non-free prompts; dealing from a smaller pool
   // would leave blank cells (itemId: null, empty text). Fail fast so callers
-  // (joinAndDeal) never persist a broken board.
+  // (joinAndDeal) never persist a broken board. This guard fires before any
+  // stratification, so it is unaffected by ratio/backfill.
   if (pool.length < MIN_POOL) {
     throw new Error(`dealBoard needs at least ${MIN_POOL} prompts, received ${pool.length}.`);
   }
   const rnd = mulberry32(seed);
-  const picks = shuffle(pool, rnd).slice(0, 24);
+  const picks = stratifiedPicks(pool, spicyRatio, rnd);
   const cells: Cell[] = [];
   let p = 0;
   for (let i = 0; i < 25; i++) {

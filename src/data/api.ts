@@ -324,10 +324,17 @@ export async function joinAndDeal(u: User): Promise<boolean> {
         !isReportHidden(it.reportCount, threshold) &&
         !isBanned(it.createdBy, bannedUids),
     )
-    .map((it) => ({ id: it.id, text: it.text }));
+    .map((it) => ({ id: it.id, text: it.text, spicy: it.spicy }));
+
+  // The target spicy share for stratified composition (w1-seed-and-composition),
+  // read defensively from the same already-fetched event doc as `threshold` above
+  // — an event doc seeded before this field existed has no key to read, so
+  // `dealBoard`'s own default (0.4) applies when it is absent.
+  const spicyRatio =
+    typeof eventData?.settings?.spicyRatio === 'number' ? eventData.settings.spicyRatio : undefined;
 
   const seed = seedFromUid(u.uid);
-  const cells = dealBoard(pool, FREE_TEXT, seed);
+  const cells = dealBoard(pool, FREE_TEXT, seed, spicyRatio ?? 0.4);
   const now = Date.now();
 
   const batch = writeBatch(db);
@@ -722,8 +729,11 @@ export function itemRateLimitRemainingMs(key: string, now: number = Date.now()):
  * real call site rather than inside the write itself (checking again in here
  * would consume the SAME window a second time and silently drop the write
  * the caller's own check just approved).
+ *
+ * `spicy` defaults to `false`: a user-added Prompt is tame unless the ItemPool
+ * 🔞 toggle was checked when they submitted it.
  */
-export async function addItem(uid: string, text: string): Promise<void> {
+export async function addItem(uid: string, text: string, spicy = false): Promise<void> {
   const t = text.trim();
   if (!t) return;
   await addDoc(rawItems(), {
@@ -733,6 +743,7 @@ export async function addItem(uid: string, text: string): Promise<void> {
     isFreeSpace: false,
     status: 'active',
     reportCount: 0,
+    spicy,
   });
 }
 

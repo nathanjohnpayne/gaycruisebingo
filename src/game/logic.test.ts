@@ -15,6 +15,7 @@ import {
 const pool: DealItem[] = Array.from({ length: 32 }, (_, i) => ({
   id: `i${i}`,
   text: `prompt ${i}`,
+  spicy: false,
 }));
 
 describe('LINES', () => {

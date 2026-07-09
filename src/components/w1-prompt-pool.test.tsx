@@ -75,7 +75,7 @@ describe('adding a Prompt', () => {
     await user.click(screen.getByRole('button', { name: 'Add' }));
 
     await waitFor(() => expect(addItemMock).toHaveBeenCalledTimes(1));
-    expect(addItemMock).toHaveBeenCalledWith('add-basic-uid', '  Cabin karaoke incident  ');
+    expect(addItemMock).toHaveBeenCalledWith('add-basic-uid', '  Cabin karaoke incident  ', false);
     await waitFor(() => expect(input).toHaveValue(''));
   });
 
@@ -117,7 +117,7 @@ describe('client-side rate limit on Add (Phase 0, presentational only)', () => {
     });
 
     expect(addItemMock).toHaveBeenCalledTimes(1);
-    expect(addItemMock).toHaveBeenCalledWith('add-throttle-uid', 'First prompt');
+    expect(addItemMock).toHaveBeenCalledWith('add-throttle-uid', 'First prompt', false);
     expect(screen.getByRole('alert')).toHaveTextContent(/slow down/i);
     expect(addButton()).toBeDisabled();
 
@@ -136,7 +136,7 @@ describe('client-side rate limit on Add (Phase 0, presentational only)', () => {
 
     fireEvent.click(addButton());
     expect(addItemMock).toHaveBeenCalledTimes(2);
-    expect(addItemMock).toHaveBeenLastCalledWith('add-throttle-uid', 'Second prompt');
+    expect(addItemMock).toHaveBeenLastCalledWith('add-throttle-uid', 'Second prompt', false);
     await act(async () => {
       await Promise.resolve();
     });
@@ -196,7 +196,7 @@ describe('client-side rate limit on Add (Phase 0, presentational only)', () => {
     // After expiry, Enter works again and reaches `add()`.
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(addItemMock).toHaveBeenCalledTimes(2);
-    expect(addItemMock).toHaveBeenLastCalledWith('add-mismatch-uid', 'Second prompt');
+    expect(addItemMock).toHaveBeenLastCalledWith('add-mismatch-uid', 'Second prompt', false);
     await act(async () => {
       await Promise.resolve();
     });

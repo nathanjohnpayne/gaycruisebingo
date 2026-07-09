@@ -132,6 +132,7 @@ function mkItems(activeCount: number, free = 0): ItemDoc[] {
       isFreeSpace: false,
       status: 'active',
       reportCount: 0,
+      spicy: false,
     });
   }
   for (let i = 0; i < free; i++) {
@@ -143,6 +144,7 @@ function mkItems(activeCount: number, free = 0): ItemDoc[] {
       isFreeSpace: true,
       status: 'active',
       reportCount: 0,
+      spicy: false,
     });
   }
   return items;

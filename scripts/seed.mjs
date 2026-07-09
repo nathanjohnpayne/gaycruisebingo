@@ -40,11 +40,15 @@ export const EVENT_SEED = {
   // and a reseed leaves the existing bannedUids untouched because this merge write
   // never mentions it. The follow-up (#108) fills it via banUser/unbanUser
   // (arrayUnion/arrayRemove) on the admin-writable event doc, never users/{uid}.
-  // reportHideThreshold is the only settings key — it is load-bearing (ADR 0004
-  // reactive moderation: auto-hide at 4 distinct reports; value pending final
-  // confirmation via #15). ADR 0004 removed the event's other Phase-0 flag as dead
-  // config (type-side removal: w0-type-contract), so nothing else is seeded here.
-  settings: { reportHideThreshold: 4 },
+  // reportHideThreshold is load-bearing (ADR 0004 reactive moderation: auto-hide
+  // at 4 distinct reports; value pending final confirmation via #15).
+  // spicyRatio is the target share of spicy (🔞) Prompts among a Board's 24
+  // non-free Squares for `dealBoard`'s stratified sampling (w1-seed-and-composition);
+  // 0.4 matches `dealBoard`'s own default, kept explicit here so the seeded Event
+  // doc is self-describing rather than relying on the app-side fallback. ADR 0004
+  // removed the event's other Phase-0 flag as dead config (type-side removal:
+  // w0-type-contract), so no other key is seeded here.
+  settings: { reportHideThreshold: 4, spicyRatio: 0.4 },
 };
 
 // Parse the ADMIN_UID env var (comma-separated uids) into the events/{id}.admins roster.
@@ -74,41 +78,99 @@ export function eventWritePayload(admins, deleteBlackoutEnabled) {
   };
 }
 
-// Dense pre-cruise Prompt pool (ADR 0003): keep this ~30–50 strong so `dealBoard`
-// always has its ≥ 24 sample and a late joiner can still be dealt a Board.
+// Canonical 87-entry Prompt pool (24 spicy / 63 tame — w1-seed-and-composition),
+// the SAME content as `SEED_ITEMS` in `src/data/seed.ts`; kept as a separate
+// literal here (rather than imported) so this plain-JS script has no
+// cross-module import into the TS app source. `src/data/seed-and-composition.test.ts`
+// asserts the two stay in sync.
 export const ITEMS = [
-  'Threesome',
-  'Foursome',
-  'Fivesome',
-  'Propositioned by septuagenarians',
-  'Suite orgy',
-  'Domestic violence',
-  'Dance-floor blowjob',
-  'Locked in a bathroom',
-  'Loses passport',
-  'Make OnlyFans content on a boat',
-  'Make LinkedIn content on a boat',
-  'Make out with Patti LuPone',
-  'Scabies',
-  '3 loads in one day',
-  'Bang a Dutch person',
-  'Passaround party Norwegian',
-  'Poppers spill',
-  '30-year age gap',
-  'Dance-floor k-hole',
-  'Cafeteria k-hole',
-  'Make out with a woman',
-  '3-way kiss',
-  'Cause an international incident',
-  'Wear a sissy skirt',
-  "Loudly announce you're going to bed early",
-  'Karaoke "Fergalicious"',
-  'Eat carbs',
-  'Become Dick Deck famous',
-  'Post butthole pic to Telegram',
-  'Use a condom',
-  'Mirror-hall selfie',
-  'Snort powder off a cock',
+  { text: `Threesome`, spicy: true },
+  { text: `Foursome`, spicy: true },
+  { text: `Fivesome`, spicy: true },
+  { text: `Propositioned by septuagenarians`, spicy: true },
+  { text: `Suite orgy`, spicy: true },
+  { text: `Domestic violence`, spicy: false },
+  { text: `Dance floor blowjob`, spicy: true },
+  { text: `Locked in a bathroom`, spicy: false },
+  { text: `Loose passport`, spicy: false },
+  { text: `Make OnlyFans content on a boat`, spicy: true },
+  { text: `Make LinkedIn content on a boat`, spicy: false },
+  { text: `Selfie with Patti LuPone`, spicy: false },
+  { text: `Selfie with Bianca Del Rio`, spicy: false },
+  { text: `Selfie with HAYLA`, spicy: false },
+  { text: `Scabies`, spicy: false },
+  { text: `Three loads in one day`, spicy: true },
+  { text: `Bang a Dutch person`, spicy: true },
+  { text: `Bang an Aussie`, spicy: true },
+  { text: `Sex with four gays, each from a different continent`, spicy: true },
+  { text: `Passaround party Norwegian`, spicy: true },
+  { text: `Poppers spill`, spicy: true },
+  { text: `30-year age gap`, spicy: true },
+  { text: `Dance floor k-hole`, spicy: false },
+  { text: `Cafeteria k-hole`, spicy: false },
+  { text: `Make out with a woman`, spicy: true },
+  { text: `Three-way kiss`, spicy: true },
+  { text: `Cause an international incident`, spicy: false },
+  { text: `Wear a sissy skirt`, spicy: true },
+  { text: `Loudly announce that you're going to bed early`, spicy: false },
+  { text: `Karaoke "Fergalicious"`, spicy: false },
+  { text: `Eat carbs`, spicy: false },
+  { text: `Become Dick Deck famous`, spicy: true },
+  { text: `Post butthole pic to Telegram`, spicy: true },
+  { text: `Use a condom`, spicy: true },
+  { text: `Mirror hall selfie`, spicy: false },
+  { text: `Snort powder off a cock`, spicy: true },
+  { text: `Hear Madonna's "Danceteria" on the dance floor`, spicy: false },
+  { text: `Get read by Bianca Del Rio`, spicy: false },
+  { text: `Get bred by Bianca Del Rio`, spicy: true },
+  { text: `Drink three dirty martinis`, spicy: false },
+  { text: `Matching Speedos spotted`, spicy: false },
+  { text: `Sunset selfie`, spicy: false },
+  { text: `Someone loses their room key`, spicy: false },
+  { text: `Dramatic outfit change before dinner`, spicy: false },
+  { text: `Feather, mesh, or sequins before noon`, spicy: false },
+  { text: `"I'm just having one drink"`, spicy: false },
+  { text: `Pool-chair territory dispute`, spicy: false },
+  { text: `Overpacked toiletries`, spicy: false },
+  { text: `Cruise crush acquired`, spicy: false },
+  { text: `Cruise crush immediately disappears`, spicy: false },
+  { text: `Accidental matching outfits`, spicy: false },
+  { text: `Elevator outfit complement`, spicy: false },
+  { text: `New best friend from another city`, spicy: false },
+  { text: `Late-night pizza`, spicy: false },
+  { text: `Breakfast in sunglasses`, spicy: false },
+  { text: `Someone naps through the main event`, spicy: false },
+  { text: `"Where are you from?" conversation`, spicy: false },
+  { text: `Someone knows the DJ`, spicy: false },
+  { text: `Poolside caftan moment`, spicy: false },
+  { text: `Too many group chats`, spicy: false },
+  { text: `"I need electrolytes"`, spicy: false },
+  { text: `Emergency fan deployment`, spicy: false },
+  { text: `Cabaret hands during karaoke`, spicy: false },
+  { text: `Someone gets adopted by a friend group`, spicy: false },
+  { text: `Themed-party costume escalation`, spicy: false },
+  { text: `Someone forgets which deck they're on`, spicy: false },
+  { text: `Ship photographer ambush`, spicy: false },
+  { text: `Formal night, but make it gay`, spicy: false },
+  { text: `"This is my vacation personality"`, spicy: false },
+  { text: `Unexpected Broadway sing-along`, spicy: false },
+  { text: `Someone becomes briefly ship-famous`, spicy: false },
+  { text: `Matching tank tops`, spicy: false },
+  { text: `Someone complains about the music`, spicy: false },
+  { text: `Someone reappears two hours after "going to bed"`, spicy: false },
+  { text: `Suspiciously perfect tan`, spicy: false },
+  { text: `"I'm never drinking again"`, spicy: false },
+  { text: `"I need a vacation from my vacation"`, spicy: false },
+  { text: `Caftan receives sincere applause`, spicy: false },
+  { text: `Someone brought a garment steamer`, spicy: false },
+  { text: `Group dinner reservation drama`, spicy: false },
+  { text: `Bathroom mirror selfie`, spicy: false },
+  { text: `Someone finds their cruise husband`, spicy: false },
+  { text: `Someone books next year's cruise before leaving`, spicy: false },
+  { text: `"I'm going to be homophobic for a week after this cruise"`, spicy: false },
+  { text: `Danced to the Total Eclipse of the Heart remix`, spicy: false },
+  { text: `Fuck a drag queen out of drag`, spicy: true },
+  { text: `Fuck a drag queen IN drag`, spicy: true },
 ];
 
 // ---------------------------------------------------------------------------
@@ -142,12 +204,26 @@ async function seed() {
   await eventRef.set(eventWritePayload(admins, FieldValue.delete()), { merge: true });
 
   const col = eventRef.collection('items');
+
+  // Replace semantics, not append (w1-seed-and-composition): delete every
+  // existing item doc first, so a reseed leaves exactly the current ITEMS —
+  // never a superset of old + new prompts. 87 docs comfortably fits a single
+  // batch's 500-op limit, so both the delete pass and the write pass below
+  // run as one batch each with no chunking.
+  const existing = await col.get();
+  if (!existing.empty) {
+    const deleteBatch = db.batch();
+    for (const doc of existing.docs) deleteBatch.delete(doc.ref);
+    await deleteBatch.commit();
+  }
+
   const now = Date.now();
   const batch = db.batch();
-  for (const text of ITEMS) {
-    // Deterministic doc id (content hash) so re-running the seed upserts the same
-    // prompt docs instead of creating duplicates (boards sample distinct ids, so
-    // dupes would surface the same prompt on multiple squares).
+  for (const { text, spicy } of ITEMS) {
+    // Deterministic doc id (content hash of the text only) so re-running the
+    // seed upserts the same prompt docs instead of creating duplicates
+    // (boards sample distinct ids, so dupes would surface the same prompt on
+    // multiple squares).
     const id = `seed-${createHash('sha1').update(text).digest('hex').slice(0, 20)}`;
     batch.set(
       col.doc(id),
@@ -158,6 +234,7 @@ async function seed() {
         isFreeSpace: false,
         status: 'active',
         reportCount: 0,
+        spicy,
       },
       { merge: true },
     );
