@@ -134,17 +134,24 @@ test.describe('x-e2e-happy-path', () => {
     // re-initializes from scratch, so anything that survives came from the
     // durable IndexedDB queue, not memory. The SW serves the shell + JS
     // offline, so the Firestore SDK re-initializes and RECOVERS the pending
-    // Mark from that queue. (The app's UI cannot cold-boot fully offline — its
-    // auth bootstrap awaits a Firestore transaction, ensureUserProfile, that
-    // needs the network, so App.tsx holds on "Loading…" until reconnect — but
-    // the SDK-level queue recovery, the ADR 0006 property under test, does not
-    // depend on the UI having rendered.)
+    // Mark from that queue.
     await page.reload();
 
-    // 4. Reconnect — the recovered queue drains to the emulator.
+    // 4. The app COLD-BOOTS offline (#115): AuthContext publishes the cached
+    // auth User and settles loading:false without awaiting the network-bound
+    // bootstrap (ensureUserProfile is a transaction that never resolves
+    // offline), and settles the 18+ gate from the cached attestation — so the
+    // signed-in shell + the cached Board render offline instead of stalling on
+    // "Loading…" or the #23 re-prompt. The recovered Mark reaches the UI, not
+    // just storage: this is the end-to-end UI proof, done directly on the
+    // offline-booted page (no fresh online reload needed).
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible({ timeout: 15_000 });
+    await expect(markedCellLocator(page, targetText)).toHaveClass(/marked/, { timeout: 15_000 });
+
+    // 5. Reconnect — the recovered queue drains to the emulator.
     await context.setOffline(false);
 
-    // 5. Ground truth via an INDEPENDENT observer (never this reloaded tab's
+    // 6. Ground truth via an INDEPENDENT observer (never this reloaded tab's
     // own cache), scoped to THIS Player's own board: the emulator now has the
     // Mark on boards/{uid}. It was made offline and never synced before the
     // reload, so the ONLY path it could reach the emulator is the durable
@@ -153,17 +160,6 @@ test.describe('x-e2e-happy-path', () => {
     await expect(async () => {
       expect(await boardHasMarkedText(testEnv, uid, targetText)).toBe(true);
     }).toPass({ timeout: 20_000 });
-
-    // 6. End-to-end: a fresh ONLINE reload boots the app and renders the Mark —
-    // the durable Mark reaches the UI too, not just storage. A fresh reload
-    // (never "wait for the offline-booted page to recover") on purpose: the
-    // offline-booted page's auth bootstrap already FAILED its network-bound
-    // reads (the ensureUserProfile transaction, the #23 attestation read), and
-    // the app's recovery from that state after reconnect is nondeterministic —
-    // an app-level gap documented in specs/x-e2e-happy-path.md, distinct from
-    // the ADR 0006 durability property this case proves.
-    await page.reload();
-    await expect(markedCellLocator(page, targetText)).toHaveClass(/marked/, { timeout: 15_000 });
   });
 });
 

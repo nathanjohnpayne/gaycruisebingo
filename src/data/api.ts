@@ -4,6 +4,7 @@ import {
   doc,
   getDoc,
   getDocFromCache,
+  getDocFromServer,
   getDocs,
   increment,
   query,
@@ -177,10 +178,84 @@ export async function readAdultAttestation(uid: string): Promise<number | null> 
   return typeof v === 'number' ? v : null;
 }
 
-/** Deal a frozen board + create the player row the first time a user joins. */
-export async function joinAndDeal(u: User): Promise<void> {
+/**
+ * Read a User's 18+ attestation from the PERSISTENT LOCAL CACHE only — the
+ * offline-safe, render-path read for the cold-boot gate (#115). Unlike
+ * `readAdultAttestation` (a server point read that offline never resolves — a
+ * transaction-free `getDoc` still awaits the network round trip when the doc is
+ * absent from cache), this is `getDocFromCache`: it resolves SYNCHRONOUSLY from
+ * the IndexedDB cache (ADR 0006) with no network, so a returning User's already-
+ * cached row settles the gate while offline.
+ *
+ * Returns the ms-epoch `attestedAdultAt` when the cached row carries one, or
+ * `null` for a cached row that DEFINITIVELY lacks it (present-but-unstamped, or a
+ * cached "not found"). It REJECTS on a genuine cache MISS (the row was never
+ * fetched into this device's cache). AuthContext maps those three outcomes to the
+ * knownFirstBingoAt / hasServerData tri-state discipline: a stamp settles the gate
+ * TRUE offline; a definite `null` or a cache miss stays UNKNOWN (never re-prompted
+ * offline, never settled `true`), so cache-first can neither block render nor fail
+ * the age gate OPEN. The authoritative present/absent determination — the one that
+ * can settle a definite re-prompt — comes from the server `readAdultAttestation`
+ * on the online/reconnect path, never from this cache read.
+ */
+export async function readAdultAttestationFromCache(uid: string): Promise<number | null> {
+  const snap = await getDocFromCache(rawUser(uid));
+  const v = snap.exists() ? (snap.data() as Partial<UserDoc>).attestedAdultAt : undefined;
+  return typeof v === 'number' ? v : null;
+}
+
+/**
+ * Read a User's 18+ attestation from the SERVER ONLY — the AUTHORITY read that
+ * gates the deal (Codex #117 round 6). `readAdultAttestation` above wraps `getDoc`,
+ * whose Web API MAY silently RETURN CACHED DATA when the server is unreachable, so
+ * it is NOT server-truth and must never establish deal authority: a stale cached
+ * stamp could authorize creating board/player rows for a User whose server row no
+ * longer carries the 18+ stamp. `getDocFromServer` forces a server round trip and
+ * REJECTS when the server cannot be reached — so AuthContext treats a thrown read
+ * as "authority NOT established" (no `attestedAuthoritative`, no deal; fall to the
+ * deferred/offline path), and only a server-returned stamp (or a same-session
+ * optimistic attest) authorizes the deal. The provisional offline RENDER still uses
+ * the cache-first `readAdultAttestationFromCache`; only the deal-authority gate is
+ * server-only.
+ */
+export async function readAdultAttestationFromServer(uid: string): Promise<number | null> {
+  const snap = await getDocFromServer(rawUser(uid));
+  const v = snap.exists() ? (snap.data() as Partial<UserDoc>).attestedAdultAt : undefined;
+  return typeof v === 'number' ? v : null;
+}
+
+/**
+ * True when THIS device already has the User's Event board in the persistent
+ * cache — i.e. they are a RETURNING, already-boarded Player (Codex #117 round 9,
+ * finding A). Cache-only (`getDocFromCache`, no network) and never rejects: a
+ * genuine cache MISS (a first-time User with no board yet) resolves `false`.
+ * AuthContext uses it to scope the "bootstrap failed" retryable error to the
+ * BOARDLESS case: a returning User with a cached board renders it (they need no
+ * deal), while a first-time User whose online bootstrap failed on an
+ * optimistic-only attestation gets a Retry instead of being stranded on
+ * "Dealing…".
+ */
+export async function hasCachedBoard(uid: string): Promise<boolean> {
+  try {
+    return (await getDocFromCache(rawBoard(uid))).exists();
+  } catch {
+    return false; // not in this device's cache → no local board
+  }
+}
+
+/**
+ * Deal a frozen board + create the player row the first time a user joins.
+ *
+ * Returns `true` when it dealt a NEW board (an actual join), `false` when the
+ * board already existed and it early-returned a no-op. The caller gates the
+ * `join_event` analytic on this so a reconnect that re-runs the deal for an
+ * already-boarded Player records nothing (Codex #117 round 8, finding B) —
+ * `runDeal` re-fires on every online/authority flip, and an existing-board no-op
+ * is not a join.
+ */
+export async function joinAndDeal(u: User): Promise<boolean> {
   const existing = await getDoc(rawBoard(u.uid));
-  if (existing.exists()) return;
+  if (existing.exists()) return false;
 
   // Denormalize the Player's SAVED identity, not the raw Google one (Codex P2
   // on PR #67, the join-side half): a Player who customized their users/{uid}
@@ -261,6 +336,7 @@ export async function joinAndDeal(u: User): Promise<void> {
     { merge: true },
   );
   await batch.commit();
+  return true; // dealt a NEW board — an actual join
 }
 
 /**
