@@ -136,8 +136,10 @@ describe('firestore.rules — honor-system invariants', () => {
 
   it('ADR 0002: Moments broadcast a big beat — own-attributed, public', async () => {
     const moment = (over = {}) => ({ kind: 'bingo', uid: ALICE, displayName: 'Alice', photoURL: null, createdAt: NOW(), ...over });
-    await assertSucceeds(setDoc(doc(db(ALICE), at('moments/m1')), moment())); // own beat
-    await assertFails(setDoc(doc(db(ALICE), at('moments/m2')), moment({ uid: BOB }))); // forged uid
+    // Canonical `${uid}-${kind}` ids so these turn on ownership, not the #103 id↔kind
+    // binding: an own beat at its deterministic id is allowed, a forged uid is denied.
+    await assertSucceeds(setDoc(doc(db(ALICE), at(`moments/${ALICE}-bingo`)), moment())); // own beat
+    await assertFails(setDoc(doc(db(ALICE), at(`moments/${BOB}-bingo`)), moment({ uid: BOB }))); // forged uid
     await assertSucceeds(getDoc(doc(db(ALICE), at('moments/seed')))); // public read
   });
 });

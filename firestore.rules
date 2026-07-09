@@ -226,6 +226,20 @@ service cloud.firestore {
         allow read: if signedIn();
         allow create: if isOwner(request.resource.data.uid)
           && request.resource.data.kind in ['bingo', 'blackout', 'first_bingo']
+          // Bind the doc id to the payload kind so a caller cannot squat an id with a
+          // MISMATCHED kind (issue #103). Mirrors the writer's deterministic scheme
+          // (src/data/moments.ts): the event-singleton `first_bingo` id must carry kind
+          // 'first_bingo', and every per-Player id must be `${uid}-${kind}`
+          // (`${uid}-bingo` / `${uid}-blackout`). Without it any signed-in Player could
+          // create moments/first_bingo with a non-first_bingo kind: the read-side filter
+          // (useData.ts hasCanonicalMomentId) hides it, but a Moment is fully immutable,
+          // so the legitimate First-to-BINGO create then hits the deny-all `update` rule
+          // on the same id and is denied FOREVER — a denial-of-ceremony squat (only
+          // `first_bingo` is exposed; per-Player ids embed the writer's own uid and
+          // create already requires isOwner). The read-side filter stays defense-in-depth.
+          && (momentId == 'first_bingo'
+                ? request.resource.data.kind == 'first_bingo'
+                : momentId == request.resource.data.uid + '-' + request.resource.data.kind)
           && request.resource.data.displayName is string
           && request.resource.data.displayName.size() > 0
           && request.resource.data.displayName.size() <= 100
