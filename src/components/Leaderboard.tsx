@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { useLeaderboard } from '../hooks/useData';
+import { useEventDoc, useLeaderboard } from '../hooks/useData';
+import { track } from '../analytics';
+import { renderLeaderboardShareCard, shareCardBlob, SHARE_CARD_APP_NAME, type LeaderboardShareRow } from './ShareCard';
 import Avatar from './Avatar';
 import type { PlayerDoc } from '../types';
 
@@ -38,8 +40,47 @@ function matchesFilter(p: PlayerDoc, filter: LeaderboardFilter): boolean {
   }
 }
 
+// Share Card row cap (issue #36): a fixed-size card can't fit the whole
+// roster, so the card shows the top MAX_SHARE_ROWS by rank.
+const MAX_SHARE_ROWS = 8;
+
+function toShareRow(p: PlayerDoc, rank: number, firstBingoUid: string | undefined): LeaderboardShareRow {
+  return {
+    uid: p.uid,
+    rank,
+    displayName: p.displayName,
+    bingoCount: p.bingoCount,
+    squaresMarked: p.squaresMarked,
+    blackout: !!p.blackout,
+    firstToBingo: p.uid === firstBingoUid,
+  };
+}
+
+/**
+ * Shapes the Share Card's row list from the FULL (already `sortPlayers`-
+ * ordered) roster — independent of the presentational filter above, same
+ * principle as the pin itself (specs/w2-leaderboard.md): the top `maxRows`
+ * by rank, plus the First to BINGO Player appended at the end when their
+ * rank falls outside that slice, so the pin can never silently drop off the
+ * card just because its holder isn't otherwise a top-ranked Player.
+ */
+function buildShareStandings(
+  players: PlayerDoc[],
+  firstBingoUid: string | undefined,
+  maxRows: number,
+): LeaderboardShareRow[] {
+  const ranked = players.map((p, i) => toShareRow(p, i + 1, firstBingoUid));
+  const top = ranked.slice(0, maxRows);
+  if (firstBingoUid && !top.some((r) => r.uid === firstBingoUid)) {
+    const pinned = ranked.find((r) => r.uid === firstBingoUid);
+    if (pinned) top.push(pinned);
+  }
+  return top;
+}
+
 export default function Leaderboard() {
   const { players, loading } = useLeaderboard();
+  const { data: event } = useEventDoc();
   const [filter, setFilter] = useState<LeaderboardFilter>('all');
 
   if (loading) return <div className="center muted">Loading…</div>;
@@ -60,8 +101,43 @@ export default function Leaderboard() {
   // order sortPlayers produced is always preserved.
   const visible = players.filter((p) => matchesFilter(p, filter));
 
+  // The Share Card always reflects the top standings across the FULL roster
+  // (buildShareStandings), independent of whatever filter is currently
+  // selected — mirrors the pin's own full-roster scope above, so switching
+  // filters can never change what a shared card shows.
+  const shareLeaderboard = async () => {
+    let blob: Blob | null = null;
+    try {
+      blob = await renderLeaderboardShareCard({
+        eventName: event?.name ?? SHARE_CARD_APP_NAME,
+        rows: buildShareStandings(players, firstBingoUid, MAX_SHARE_ROWS),
+      });
+    } catch {
+      /* on-device render failed — fall through with blob: null */
+    }
+    try {
+      await shareCardBlob({
+        blob,
+        filename: 'gay-cruise-bingo-leaderboard.png',
+        title: `${SHARE_CARD_APP_NAME} — Leaderboard`,
+        text: 'Check out the Gay Cruise Bingo leaderboard 🏆',
+        url: window.location.origin,
+      });
+    } catch {
+      // shareCardBlob is designed to never throw, but a share failure must
+      // never crash the Leaderboard regardless.
+    } finally {
+      track('share_click', { surface: 'leaderboard' });
+    }
+  };
+
   return (
     <>
+      <div className="lb-actions">
+        <button type="button" className="btn" onClick={shareLeaderboard}>
+          Share leaderboard
+        </button>
+      </div>
       <div className="lb-filters" role="group" aria-label="Filter leaderboard">
         {FILTERS.map((f) => (
           <button
