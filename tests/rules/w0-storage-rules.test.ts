@@ -13,11 +13,12 @@ import { doc, setDoc } from 'firebase/firestore';
 
 // Storage security-rules coverage for storage.rules (ADR 0004): the okImage()
 // (image/* < 8 MB) and okAudio() (audio/* < 12 MB) upload caps, the
-// filename-pinned avatars path, the owner/admin proofs path, the inert /og/**
-// block, and — critically — the cross-check that a Proof object which passes
-// storage.rules also passes the Firestore `proofs` create rule, so the two stay
-// in lockstep. Runs on the rules-emulator layer via `npm run test:rules`, which
-// boots both the Firestore and Storage emulators.
+// filename-pinned avatars path, the owner/admin proofs path, the now-removed
+// /og/** block staying unmatched (#39, ADR 0005), and — critically — the
+// cross-check that a Proof object which passes storage.rules also passes the
+// Firestore `proofs` create rule, so the two stay in lockstep. Runs on the
+// rules-emulator layer via `npm run test:rules`, which boots both the
+// Firestore and Storage emulators.
 
 const storageRules = readFileSync(
   fileURLToPath(new URL('../../storage.rules', import.meta.url)),
@@ -179,20 +180,20 @@ describe('storage.rules — proofs/{eventId}/{uid}/{file} (owner create, owner/a
   });
 });
 
-describe('storage.rules — /og/** inert block', () => {
-  it('is public-read but denies all writes', async () => {
+describe('storage.rules — /og/** removed (#39, ADR 0005)', () => {
+  it('denies reads under og/** now that no rule matches the path (default deny)', async () => {
+    // Pre-#39, this same object was public-read via the inert OG-renderer
+    // block. That block is gone, so an unmatched path now falls through to
+    // Storage's default deny for read too — proving the removal actually
+    // took effect, not just that a comment was deleted.
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await put(ctx, 'og/card.png', TINY, { contentType: 'image/png' });
     });
     const anon = testEnv.unauthenticatedContext();
-    await assertSucceeds(getMetadata(ref(anon.storage(), 'og/card.png')));
-    const owner = testEnv.authenticatedContext(OWNER);
-    await assertFails(put(owner, 'og/card.png', TINY, { contentType: 'image/png' }));
+    await assertFails(getMetadata(ref(anon.storage(), 'og/card.png')));
   });
 
-  it('denies writing a brand-new object under og/**, not just updating an existing one', async () => {
-    // The assertion above writes to the pre-seeded `og/card.png`, so it only
-    // proves update-deny. This path is never seeded, isolating create-deny.
+  it('denies writing a brand-new object under og/** (no rule grants it)', async () => {
     const owner = testEnv.authenticatedContext(OWNER);
     await assertFails(put(owner, 'og/new-card.png', TINY, { contentType: 'image/png' }));
   });

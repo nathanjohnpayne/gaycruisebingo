@@ -1,6 +1,6 @@
 # Phase 1 — deploy guide
 
-Phase 1 adds the proof system, moderation, and dynamic share images. It needs the **Blaze** plan (Functions, Cloud Run, Vision API, outbound networking). Deploys go through `op-firebase-deploy` (1Password-backed) — see the root `DEPLOYMENT.md`; do not run `firebase login` / `firebase deploy` directly.
+Phase 1 adds the proof system and moderation. It needs the **Blaze** plan (Functions, Cloud Run, Vision API, outbound networking). Deploys go through `op-firebase-deploy` (1Password-backed) — see the root `DEPLOYMENT.md`; do not run `firebase login` / `firebase deploy` directly.
 
 Client code is already wired (proof capture, feed, admin console, App Check hook). This guide covers the backend + config.
 
@@ -9,18 +9,16 @@ Client code is already wired (proof capture, feed, admin console, App Check hook
 - Upgrade the `gaycruisebingo` project to Blaze (set a budget alert first).
 - Enable APIs: **Cloud Vision**, **Cloud Functions**, **Cloud Run**, **Cloud Build**, **Artifact Registry**.
 
-## 1. Cloud Functions (moderation, thumbnails, share)
+## 1. Cloud Functions (moderation, thumbnails)
 
 Build the functions package, then deploy through the wrapper:
 
 ```bash
 cd functions && npm install && npm run build && cd ..
-# optional: set the OG renderer URL (from step 3) so /s/** unfurls have images
-echo "OG_RENDERER_URL=https://og-renderer-XXXX.run.app" > functions/.env
 op-firebase-deploy --only functions
 ```
 
-Deploys: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail) and `share` (HTTP → crawler OG meta). Player stats are **not** server-recomputed — they stay client-authoritative by design (ADR 0001).
+Deploys: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail). Player stats are **not** server-recomputed — they stay client-authoritative by design (ADR 0001).
 
 **If a previously deployed project still carries `recomputeStats`:** this deploy is what deletes it — Firebase discovers exports removed from the source and prompts to confirm deleting the live function. The wrapper always runs `firebase deploy --non-interactive`, which stalls on that prompt, so the one-time cleanup deploy must pass the force flag through: `op-firebase-deploy --only functions --force` (extra args pass straight through to `firebase deploy`). The deletion is expected and required (#40, ADR 0001); do not recreate the function.
 
@@ -33,18 +31,7 @@ Deploys: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail) and `
 3. Set `VITE_RECAPTCHA_SITE_KEY` in `.env.local`, rebuild, redeploy hosting.
 4. In App Check, **enforce** on Cloud Firestore and Cloud Storage once traffic looks healthy.
 
-## 3. Cloud Run OG renderer (Playwright)
-
-```bash
-cd cloud-run/og-renderer
-gcloud run deploy og-renderer --source . --project gaycruisebingo \
-  --region us-central1 --allow-unauthenticated \
-  --memory 1Gi --cpu 1 --concurrency 4 --min-instances 0
-```
-
-Take the service URL and put it in `functions/.env` as `OG_RENDERER_URL`, then redeploy functions. Share links then look like `https://gaycruisebingo.com/s/?kind=win&name=Nathan&theme=seriously-pink` (Hosting rewrites `/s/**` → the `share` function → OG meta → Cloud Run image).
-
-## 4. Storage & rules
+## 3. Storage & rules
 
 `storage.rules` already restricts proof/avatar uploads by owner, MIME type, and size. Deploy:
 
@@ -54,14 +41,15 @@ op-firebase-deploy --only storage,firestore:rules,firestore:indexes
 
 **Do not lock player-stat writes — they stay client-authoritative by design (ADR 0001).** The honor system makes `players/{uid}` self-writable: each Player owns its own `bingoCount`, `squaresMarked`, `firstBingoAt`, and `blackout`. There is no server-side stat recompute to make those fields authoritative, so there is nothing to "harden" toward — do **not** tighten the `players/{uid}` rule to profile-fields-only / admins-only. Such a lock has nothing backing it and would break the client stat writes in `joinAndDeal` and `setMark` (`src/data/api.ts`) and in `attachProof` (`src/data/proofs.ts`), making joins and marks **fail** with a permission error.
 
-## 5. What each Phase 1 piece gives you
+## 4. What each Phase 1 piece gives you
 
 - **Proof capture** (`ProofSheet`) — photo (camera), audio (MediaRecorder), or a text callout; images are downscaled client-side before upload.
 - **Proof Feed** — live activity stream; report/delete.
 - **Verified mode** — marks go `pending` and create a claim; admins confirm/reject in the console (stats recompute on resolve).
 - **Admin console** — claim mode, default theme, pending claims, flagged/reported proofs, prompt moderation.
-- **Dynamic OG** — themed retina share images per win/leaderboard.
+
+Share Cards (BINGO + Leaderboard) are generated on-device and are not part of this backend — see ADR 0005.
 
 ## Verification status
 
-The **client** (proof UI, feed, admin, App Check hook) builds with the app. The **functions** and **cloud-run** packages are standalone — install and build them in their own folders (`npm install && npm run build`) before first deploy.
+The **client** (proof UI, feed, admin, App Check hook) builds with the app. The **functions** package is standalone — install and build it in its own folder (`npm install && npm run build`) before first deploy.

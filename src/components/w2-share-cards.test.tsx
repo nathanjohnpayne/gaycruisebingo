@@ -236,9 +236,9 @@ describe('ShareCard — renderBingoShareCard', () => {
 // ShareCard CSS — .share-card-title uses the theme ink token, not a
 // hardcoded hex (Codex P2, PR #111 finding 4). jsdom never loads
 // src/index.css into the document (no external stylesheet fetch), so — same
-// technique as src/theme/w1-themes.test.tsx and src/og-theme-parity.test.ts
-// — this reads the actual rule straight out of the CSS source rather than
-// asserting on a jsdom `getComputedStyle` that would never reflect it.
+// technique as src/theme/w1-themes.test.tsx — this reads the actual rule
+// straight out of the CSS source rather than asserting on a jsdom
+// `getComputedStyle` that would never reflect it.
 // ---------------------------------------------------------------------------
 
 // `join(dirname(fileURLToPath(import.meta.url)), ...)` rather than
@@ -251,8 +251,9 @@ const indexCss = readFileSync(indexCssPath, 'utf8');
 describe('ShareCard CSS — .share-card-title contrast', () => {
   it('fills the title with var(--ink), not a hardcoded hex', () => {
     // Hardcoded #fff was invisible against summer-white's light --bg — the
-    // same failure specs/og-theme-parity.md/issue #71 already fixed for the
-    // OG renderer's own `.title` rule by following the theme ink instead.
+    // same failure issue #71 already fixed for the (since-removed, #39/ADR
+    // 0005) OG renderer's own `.title` rule by following the theme ink
+    // instead.
     const rule = indexCss.match(/\.share-card-title\s*\{([^}]*)\}/);
     expect(rule, '.share-card-title rule not found in src/index.css').not.toBeNull();
     expect(rule![1]).toMatch(/color:\s*var\(--ink\)/);

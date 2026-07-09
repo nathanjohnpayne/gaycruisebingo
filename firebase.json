@@ -3,17 +3,12 @@
     "public": "dist",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
-      { "source": "/s/**", "function": "share" },
       { "source": "**", "destination": "/index.html" }
     ],
     "headers": [
       {
         "source": "**",
         "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
-      },
-      {
-        "source": "/s/**",
-        "headers": [{ "key": "Cache-Control", "value": "public, max-age=3600" }]
       },
       {
         "source": "**/*.@(js|css|woff2|png|svg)",

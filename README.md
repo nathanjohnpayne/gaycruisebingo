@@ -45,8 +45,7 @@ Deploys go through `op-firebase-deploy` (1Password-backed service-account impers
 | Path | Purpose |
 |---|---|
 | `src/` | App code: game logic, Firebase init, auth, theme, hooks, components |
-| `functions/` | Phase-1 Cloud Functions (Vision moderation, crawler share page — stats stay client-authoritative, ADR 0001) |
-| `cloud-run/og-renderer/` | Phase-1 Playwright service for dynamic OG share images |
+| `functions/` | Phase-1 Cloud Functions (Vision moderation, thumbnails — stats stay client-authoritative, ADR 0001) |
 | `public/` | Static assets served verbatim (icons, manifest, `og-default.png`, service worker) |
 | `firestore.rules` · `storage.rules` · `firestore.indexes.json` | Security rules + indexes |
 | `scripts/` | Seed script + build / CI / deploy tooling |
