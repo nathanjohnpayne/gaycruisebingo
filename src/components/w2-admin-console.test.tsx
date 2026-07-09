@@ -187,6 +187,30 @@ describe('Report queue (specs/w2-admin-console.md)', () => {
     expect(H.deleteProof).toHaveBeenCalledWith('gone', 'proofs/e/u/gone.jpg');
   });
 
+  it('keeps a hard-hidden ZERO-count Proof reachable with Restore + Delete (clear-then-restore, Codex P2 round 2)', () => {
+    // The state Clear reports leaves a doubly-hidden Proof in: count 0, status
+    // still 'hidden'. The row must render with Restore + Delete — and with
+    // neither the auto-hidden pill nor Clear reports (0 < threshold: no
+    // community hide left to mark or lift), just the status hard-hide controls.
+    H.flagged = [
+      proof('half-lifted', 0, {
+        status: 'hidden',
+        displayName: 'Half Lifted',
+        storagePath: 'proofs/e/u/half-lifted.jpg',
+      }),
+    ];
+    render(<Admin />);
+
+    const q = within(queue());
+    expect(q.getByText('Half Lifted')).toBeInTheDocument(); // still queued at count 0
+    expect(q.queryByText(/auto-hidden/i)).toBeNull();
+    expect(q.queryByRole('button', { name: /clear reports/i })).toBeNull();
+    fireEvent.click(q.getByRole('button', { name: 'Restore' }));
+    expect(H.restoreProof).toHaveBeenCalledWith('half-lifted');
+    fireEvent.click(q.getByTitle('Delete'));
+    expect(H.deleteProof).toHaveBeenCalledWith('half-lifted', 'proofs/e/u/half-lifted.jpg');
+  });
+
   it('surfaces reported Prompts in the queue and omits unreported ones', () => {
     H.items = [
       item('i1', 3, { text: 'Reported prompt' }),

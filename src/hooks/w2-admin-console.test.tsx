@@ -244,4 +244,24 @@ describe('Admin views stay UNfiltered — threshold-hidden content is reachable'
     // still surface in the report queue; p3 is unreported so it is not queued.
     expect(result.current.flagged.map((p) => p.id).sort()).toEqual(['p1', 'p2']);
   });
+
+  it('useReportedProofs includes a hard-hidden ZERO-count Proof — clear-then-restore can never orphan it (Codex P2, PR #107 round 2)', () => {
+    // The clear-then-restore ordering trap: Clear reports on a doubly-hidden Proof
+    // (status 'hidden' AND over threshold) zeroes reportCount FIRST. There is no
+    // all-proofs admin list (unlike Prompts' useAllItems), so if membership were
+    // only `reportCount > 0 || flagged`, the still-hidden Proof would vanish from
+    // the console forever. Queue membership is reported OR flagged OR hidden.
+    const cap = capture();
+    const { result } = renderHook(() => useReportedProofs());
+
+    cap.fireCol(
+      colSnap([
+        proof('p-cleared', 0, { status: 'hidden' }), // cleared first, not yet restored → MUST stay queued
+        proof('p-flagged', 0, { status: 'flagged' }),
+        proof('p-clean', 0), // active + unreported → not queued
+      ]),
+    );
+
+    expect(result.current.flagged.map((p) => p.id).sort()).toEqual(['p-cleared', 'p-flagged']);
+  });
 });

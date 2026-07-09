@@ -286,18 +286,28 @@ export function useAllItems() {
 }
 
 /**
- * The Proof report queue: every reported or flagged Proof, most-reported-first.
+ * The Proof moderation queue: every Proof needing admin attention, most-reported-
+ * first. Queue membership is reported (`reportCount > 0`) OR `flagged` OR
+ * hard-hidden (`status === 'hidden'`) — hidden content belongs in the queue
+ * regardless of its count. The hidden arm is load-bearing (Codex P2, PR #107
+ * round 2): unlike Prompts, whose `useAllItems` lists EVERY Prompt, there is no
+ * all-proofs admin list, so this queue is the ONLY admin surface for Proofs.
+ * Without it, an admin who Clear-reports a doubly-hidden Proof (status 'hidden'
+ * AND over the threshold) BEFORE restoring drops its reportCount to 0 and the
+ * still-hidden Proof would vanish from the console with no UI path to restore or
+ * delete it — the clear-then-restore ordering must never orphan anything.
  * Like `useAllItems` it is UNfiltered by the ADR 0004 Phase 0 threshold — a Proof
  * whose `reportCount` has crossed `reportHideThreshold` (and so self-hid on every
  * Player's Feed via `useProofFeed`) still surfaces here so an Admin can reach it
- * to restore or delete it. The `reportCount > 0` predicate already includes every
- * threshold-hidden Proof (the threshold is ≥1), so the queue is a strict superset
- * of the auto-hidden set.
+ * (any count at/over a POSITIVE threshold is > 0, so the reported arm is a strict
+ * superset of the auto-hidden set). The subscription is the one broad admin read
+ * of the whole collection (no `where()`), so the OR is a pure client-side filter —
+ * no second listener, no composite index.
  */
 export function useReportedProofs() {
   const { data, loading } = useColSub<ProofDoc>(proofsCol(), 'proofs-admin');
   const flagged = data
-    .filter((p) => p.reportCount > 0 || p.status === 'flagged')
+    .filter((p) => p.reportCount > 0 || p.status === 'flagged' || p.status === 'hidden')
     .sort((a, b) => b.reportCount - a.reportCount);
   return { flagged, loading };
 }
