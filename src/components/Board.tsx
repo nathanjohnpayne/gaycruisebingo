@@ -7,6 +7,10 @@ import {
   broadcastBlackout,
   broadcastFirstBingo,
   hasPriorBingoWitness,
+  enqueueWinMoments,
+  enqueueFirstBingoMoment,
+  peekPendingMoments,
+  clearPendingMoment,
 } from '../data/moments';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
 import { track } from '../analytics';
@@ -151,57 +155,36 @@ export default function Board() {
   const [celebrate, setCelebrate] = useState<null | 'bingo' | 'blackout'>(null);
   const [proofTarget, setProofTarget] = useState<Cell | null>(null);
   const [tallyTarget, setTallyTarget] = useState<Cell | null>(null);
+  // Edge refs for the COSMETIC Celebration UI only (issue #104). The public Moment
+  // broadcast moved OFF this snapshot-diffing machinery and ONTO the action path —
+  // doMark reads `setMark`'s synchronous win-transition verdict and enqueues into a
+  // MODULE-scope pending queue that survives Board unmounts (src/data/moments.ts) —
+  // so these refs no longer drive any Feed write. They serve one purpose now: fire
+  // the local celebrate animation on the transition into a bingo/blackout, without
+  // re-celebrating a win that ALREADY stood on first paint (a returning Player).
+  // `initialized` holds that "baseline the first snapshot, detect edges after" rule;
+  // the account-switch reset below re-establishes it per uid.
   const wasBingo = useRef(false);
   const wasBlackout = useRef(false);
   const initialized = useRef(false);
-  // A Moment edge crossed while its GATE is still closed is HELD here, keyed by
-  // kind, and fired by `flushPending` once the gate opens (Codex P2, PR #99). Two
-  // gates: identity-known gates ALL three broadcasts — never stamp a returning
-  // Player's stale auth/Google name into an IMMUTABLE Moment, the same window in
-  // which setMark passes `undefined` (finding 1); a server-confirmed roster
-  // additionally gates first_bingo (finding 2). A held flag is NOT a promise to
-  // fire: it is dropped if the win no longer stands when the gate opens (round 2
-  // finding A — falling-edge clearing below plus fire-time revalidation in
-  // flushPending). The deterministic Moment doc id keeps a held-then-fired
-  // broadcast idempotent. Reset per-uid synchronously in render (finding 5 +
-  // round 2 finding B).
-  const pending = useRef<{ bingo: boolean; blackout: boolean; firstBingo: boolean }>({
-    bingo: false,
-    blackout: false,
-    firstBingo: false,
-  });
-  // Incremented by doMark when THIS player's own tap changes the board; consumed
-  // one snapshot at a time by the cells-effect (round 3 finding A). The round-2 rule baselines
-  // EVERY snapshot while the board is still cache-only (!boardConfirmed) — which
-  // silently swallowed a win completed OFFLINE (an offline reload never confirms
-  // until reconnect, so the player's own line got baselined and the edge never
-  // fired, violating the offline-queueable Moments AC). A snapshot the player
-  // CAUSED is not hydration: the cells effect treats it as a LIVE edge against
-  // the pre-action baseline, and the queued Moment rides the offline queue
-  // exactly as designed (setDoc pends, ADR 0006). Passive unconfirmed snapshots
-  // (no local action pending) keep the round-2 baseline behavior. This is a count,
-  // not a boolean: two fast offline taps can produce two local snapshots before
-  // server confirmation, and the second snapshot may be the winning edge.
-  const localActionsPending = useRef(0);
 
-  // Account switch (finding 5, hardened by round 2 finding B): the edge state is
-  // per-uid, and the reset must happen BEFORE any effect of the uid-switch render
-  // runs — an effect-based reset raced the still-stale subscription rows (useBoard/
-  // useMyPlayer return the PREVIOUS uid's data for the render(s) before their
-  // keyed effects clear it), letting the cells effect seed the baseline from the
-  // OLD board. React's adjust-during-render pattern: compare the uid the edge
-  // state belongs to during render and restore the uninitialized baseline
-  // synchronously on a mismatch. Idempotent per uid (StrictMode-safe), and the
-  // attribution gate below keeps the stale board from being seeded even in this
-  // same render's effects.
+  // Account switch: the celebration edge state is per-uid, and the reset must run
+  // BEFORE any effect of the uid-switch render — an effect-based reset raced the
+  // still-stale subscription rows (useBoard/useMyPlayer return the PREVIOUS uid's
+  // data for the render(s) before their keyed effects clear it), which could seed
+  // the new account's celebration baseline from the OLD board. React's
+  // adjust-during-render pattern: on a uid mismatch, restore the uninitialized
+  // baseline synchronously (idempotent per uid, StrictMode-safe), and the
+  // attribution gate below keeps the stale board out of this same render's effect.
+  // The pending Moment queue needs NO reset here — it is module state keyed BY uid
+  // (src/data/moments.ts), so a held win for the previous account can never drain
+  // under the new one.
   const edgeStateUid = useRef(uid);
   if (edgeStateUid.current !== uid) {
     edgeStateUid.current = uid;
     initialized.current = false;
     wasBingo.current = false;
     wasBlackout.current = false;
-    pending.current = { bingo: false, blackout: false, firstBingo: false };
-    localActionsPending.current = 0;
   }
 
   const cells: Cell[] = board?.cells ?? [];
@@ -212,18 +195,16 @@ export default function Board() {
   // — this gate does. BoardDoc carries its owner's uid, so the check is direct.
   const cellsAttributable = board != null && board.uid === uid;
 
-  // The latest identity + roster + gate signals + CURRENT cells for Moment
-  // broadcasts, stored in a ref so the edge effect and `flushPending` can READ
-  // them without DEPENDING on them — the edge effect must fire only on a genuine
-  // board transition, never when the resolved name or the roster merely
-  // re-renders. Written every render (store-latest-value ref). photoURL mirrors
-  // ProofSheet: a loaded player row's null photo wins over the stale auth photo.
-  // The name is the SAME resolved public identity the Tally + Proof carry;
-  // moments.ts bounds it to the rules' ≤100 contract. `identityKnown`/
-  // `rosterConfirmed` travel here too so `flushPending` always reads the CURRENT
-  // gate state, never a stale render's closure — and `cells` (attribution-gated:
-  // another uid's board contributes NOTHING) so a held broadcast is revalidated
-  // against the board as it stands at FIRE time (round 2 finding A).
+  // The latest identity + roster + gate signals for Moment broadcasts, stored in a
+  // ref so `drainMoments` (a stable callback) always reads the CURRENT actor and
+  // gate state, never a stale render's closure. Written every render. photoURL
+  // mirrors ProofSheet: a loaded player row's null photo wins over the stale auth
+  // photo. The name is the SAME resolved public identity the Tally + Proof carry;
+  // moments.ts bounds it to the rules' ≤100 contract. There is deliberately NO
+  // `cells` here anymore (issue #104): the broadcast decision is the completing
+  // mark's synchronous verdict (doMark), not a fire-time recompute against a
+  // snapshot — so a drain never needs to revalidate the board, and can never
+  // vacuously fire against an empty one (the round 3 finding B hazard is gone).
   const feedCtx = useRef<{
     uid: string | undefined;
     displayName: string;
@@ -231,7 +212,6 @@ export default function Board() {
     players: PlayerDoc[];
     identityKnown: boolean;
     rosterConfirmed: boolean;
-    cells: Cell[];
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -239,7 +219,6 @@ export default function Board() {
     players: [],
     identityKnown: false,
     rosterConfirmed: false,
-    cells: [],
   });
   feedCtx.current = {
     uid,
@@ -248,21 +227,32 @@ export default function Board() {
     players,
     identityKnown,
     rosterConfirmed,
-    cells: cellsAttributable ? cells : [],
   };
 
-  // Fire any HELD broadcast whose gate is now open, reading the LATEST identity +
-  // roster + cells from feedCtx (never a stale closure). All three broadcasts need
-  // a KNOWN identity; first_bingo additionally needs a SERVER-CONFIRMED roster and
-  // is re-decided against it here. Every kind REVALIDATES against the board as it
-  // stands NOW (round 2 finding A): a flag queued while a gate was closed is a
-  // candidate, not a promise — if the player unmarked and the win no longer
-  // stands, the stale flag is DROPPED, never fired. (The falling-edge clearing in
-  // the cells effect handles the common case; this fire-time recheck is the
-  // invariant.) Each fired-or-dropped kind clears its flag so a later flush can't
-  // re-fire it (the deterministic doc id is the structural backstop besides).
-  // Stable (reads only refs), so the effects below list it without churn.
-  const flushPending = useCallback(() => {
+  // Drain the module-scope pending queue (src/data/moments.ts): fire every held
+  // Moment whose gate is now open, reading the LATEST actor + gates from feedCtx
+  // (never a stale closure). Called after a mark enqueues (doMark, below) and
+  // whenever a gate OPENS (identity resolves / the roster becomes server-confirmed).
+  // Two gates:
+  //   • Identity (all three, PR #99 finding 1): HOLD until a KNOWN saved identity,
+  //     so a returning Player's stale auth/Google name is never stamped into an
+  //     IMMUTABLE Moment (the same window setMark passes `undefined`). Because the
+  //     queue is MODULE state, a held win survives a Board unmount / route change
+  //     and drains on the next mount — the issue #104 fix. (Only a full page reload
+  //     can still drop it; documented residual.)
+  //   • Roster (first_bingo only, PR #99 finding 2): claim the ceremonial event
+  //     singleton only against a SERVER-CONFIRMED roster showing no OTHER Player
+  //     with an earlier bingo; while unconfirmed the candidate stays HELD (not
+  //     cleared). The per-Player bingo/blackout do NOT wait on the roster.
+  // There is NO fire-time board revalidation (issue #104): the broadcast decision
+  // was already made by the mark that COMPLETED the win (doMark, off setMark's
+  // verdict), so the drain trusts the queue. The drop invariant PR #99 round 2
+  // finding A protected — a win UNMARKED before its gate opens must not post — is
+  // preserved on the ACTION path instead (doMark clears the flag when an unmark's
+  // verdict shows the win no longer stands), and the round 3 finding B vacuous
+  // isBlackout([]) hazard cannot arise here because the drain never recomputes from
+  // cells. Stable (reads only refs + the module queue), so effects list it freely.
+  const drainMoments = useCallback(() => {
     const {
       uid: cUid,
       displayName: cName,
@@ -270,170 +260,77 @@ export default function Board() {
       players: roster,
       identityKnown: idKnown,
       rosterConfirmed: rosterOk,
-      cells: cellsNow,
     } = feedCtx.current;
-    // Identity gate (finding 1): with no KNOWN saved identity, HOLD every broadcast
-    // rather than stamp the possibly-stale auth name into an immutable Moment doc.
-    if (!cUid || !idKnown) return;
+    if (!cUid || !idKnown) return; // identity gate: hold every kind
+    const pending = peekPendingMoments(cUid);
     const actor = { uid: cUid, displayName: cName, photoURL: cPhoto };
-    // Fire-time revalidation (round 2 finding A) — recomputed from the CURRENT
-    // attributable cells. A missing/empty/other-uid board means NOTHING stands,
-    // and the length gate is load-bearing (round 3 finding B): isBlackout([]) is
-    // vacuously TRUE ([].every(Boolean)), so without it a held blackout would
-    // FIRE against a deleted or non-attributable board. hasBingo([]) is already
-    // false (no line completes over no cells), but the guard is applied uniformly
-    // so neither path ever rests on a vacuous-truth accident.
-    const boardStands = cellsNow.length > 0;
-    const bingoNow = boardStands && hasBingo(cellsNow);
-    const blackoutNow = boardStands && isBlackout(cellsNow);
-    if (pending.current.bingo) {
-      if (bingoNow) broadcastBingo(actor);
-      pending.current.bingo = false; // fired, or dropped: the win no longer stands
+    if (pending.bingo) {
+      broadcastBingo(actor);
+      clearPendingMoment(cUid, 'bingo');
     }
-    if (pending.current.blackout) {
-      if (blackoutNow) broadcastBlackout(actor);
-      pending.current.blackout = false;
+    if (pending.blackout) {
+      broadcastBlackout(actor);
+      clearPendingMoment(cUid, 'blackout');
     }
-    if (pending.current.firstBingo) {
-      if (!bingoNow) {
-        // No standing bingo → no ceremonial claim (round 2 finding A): drop it.
-        pending.current.firstBingo = false;
-      } else if (rosterOk) {
-        // Roster gate (finding 2): claim First-to-BINGO only against a SERVER-
-        // CONFIRMED roster — an unloaded/cache-only empty roster is not proof
-        // nobody has bingoed. While unconfirmed the flag stays HELD (not cleared).
-        // Ceremonial + self-reported (ADR 0001): claim it only when, as far as this
-        // client's CONFIRMED known-players view shows, no OTHER Player has bingoed
-        // yet. The race (two clients briefly both believing they are first)
-        // resolves to one Moment per Event via the singleton doc id.
-        const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
-        if (!othersBingoed) broadcastFirstBingo(actor);
-        pending.current.firstBingo = false;
-      }
+    if (pending.firstBingo && rosterOk) {
+      // Ceremonial + self-reported (ADR 0001): claim First-to-BINGO only when, as
+      // far as this client's CONFIRMED known-players view shows, no OTHER Player
+      // has bingoed yet. The race (two clients briefly both believing they are
+      // first) resolves to one Moment per Event via the singleton doc id.
+      const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
+      if (!othersBingoed) broadcastFirstBingo(actor);
+      clearPendingMoment(cUid, 'firstBingo');
     }
   }, []);
 
-  // Queue the ceremonial First-to-BINGO candidate for a just-crossed bingo edge —
-  // but only after the durable-witness check (round 2 finding D). `firstBingoAt`
-  // is BY DESIGN volatile (computeMark clears it when the last line falls), so a
-  // player who had a line, unmarked it, and regains one later would otherwise mint
-  // the event singleton despite not being first EVER. The player's own immutable
-  // `${uid}-bingo` Moment doc is the durable witness a prior win existed: if the
-  // local cache holds it, the ceremonial candidate is SUPPRESSED (their regained
-  // line still attempts the plain bingo Moment, which the writer's write-once
-  // cache pre-check skips — or the create-only rule denies on a cold cache; round
-  // 3 finding C). On a cache miss (fresh device) the check resolves false and the
-  // existing roster gate is the fallback — the narrowed residual is documented in
-  // the spec. The uid recheck guards an account switch during the async check:
-  // the pending state it would write belongs to the OLD uid and must not leak.
-  const queueFirstBingo = useCallback(() => {
-    const cUid = feedCtx.current.uid;
-    if (!cUid) return;
-    void hasPriorBingoWitness(cUid).then((witnessed) => {
-      if (witnessed) return;
-      if (feedCtx.current.uid !== cUid) return;
-      pending.current.firstBingo = true;
-      flushPending();
-    });
-  }, [flushPending]);
-
   // When a gate OPENS — identity resolves, or the roster becomes server-confirmed —
-  // fire any broadcast held while it was closed (findings 1 + 2).
+  // drain any Moment held while it was closed (PR #99 findings 1 + 2). The queue
+  // itself holds the state across unmounts; this effect just re-attempts the drain.
   useEffect(() => {
-    flushPending();
-  }, [identityKnown, rosterConfirmed, flushPending]);
+    drainMoments();
+  }, [identityKnown, rosterConfirmed, drainMoments]);
 
+  // Cosmetic Celebration UI ONLY — no public writes (issue #104). This snapshot
+  // edge detection fires the local celebrate animation on the transition into a
+  // bingo/blackout; the Feed Moment broadcast now rides the action path (doMark +
+  // the module-scope queue above), so nothing here touches the Feed.
   useEffect(() => {
     // Attribution gate (round 2 finding B): during an account switch this effect
     // can run one render with the PREVIOUS uid's board still in the subscription;
-    // that data must neither seed the new uid's baseline nor read as an edge.
+    // ignore a board that is not the current account's so it neither seeds the
+    // celebration baseline nor animates.
     if (!cellsAttributable || !cells.length) return;
-    // Consume one local-action marker for THIS snapshot (round 3 finding A) so
-    // back-to-back local snapshots each keep their own live-edge treatment, while
-    // later passive snapshots cannot inherit it.
-    const localAction = localActionsPending.current > 0;
-    if (localActionsPending.current > 0) localActionsPending.current -= 1;
     const bingo = hasBingo(cells);
     const black = isBlackout(cells);
-    // Baseline vs detection (round 2 finding C): under the ADR 0006 persistent
-    // cache the FIRST snapshot(s) can be cache-only, and a stale cache that lacks
-    // a bingo the server already has would make the server confirmation read as a
-    // live transition — a Moment for a win that already stood. So while the board
-    // is NOT server-confirmed, EVERY PASSIVE snapshot is baseline: keep re-seeding
-    // wasBingo/wasBlackout and never fire edges (initialized stays false). The
-    // FIRST server-confirmed snapshot is baseline too (init-without-firing — a
-    // standing win it reveals already stood server-side); only after it does edge
-    // DETECTION run. Under a confirmed board, local optimistic Marks fire via
-    // latency compensation: `hasServerData` is a latch — once true it never
-    // un-sets — and the local write arrives as the next snapshot.
-    //
-    // EXCEPTION — the player's own action on a still-unconfirmed board (round 3
-    // finding A): an offline reload never confirms until reconnect, so baselining
-    // the player's OWN just-completed line would swallow the win entirely (the
-    // edge would never fire, even after reconnect — the first confirmed snapshot
-    // baselines it as already standing). A snapshot doMark caused is not
-    // hydration; fall through to LIVE detection against the pre-action baseline
-    // instead, and let the Moment ride the offline queue. (By the time a tap is
-    // possible the cells have rendered, so a pre-action baseline always exists.)
-    // The later server confirmation re-baselines the same standing state
-    // (initialized is still false) without firing a second edge.
+    // Baseline vs detection (round 2 finding C, kept for the animation): under the
+    // ADR 0006 persistent cache the first snapshot(s) can be cache-only, and a
+    // stale cache lacking a bingo the server already has would make the server
+    // confirmation read as a live transition — animating a celebration for a win
+    // that already stood. So while the board is NOT server-confirmed every snapshot
+    // re-seeds wasBingo/wasBlackout without animating (initialized stays false); the
+    // first server-confirmed snapshot is baseline too; edge DETECTION runs after it.
+    // This is now purely cosmetic (no writes), so the round-3/round-4 local-action
+    // machinery the offline MOMENT once needed is gone: a win completed while the
+    // board is still cache-only animates when the board confirms — a small cosmetic
+    // delay the durable Moment (action path, fires at mark time) does not share.
     if (!boardConfirmed || !initialized.current) {
-      if (boardConfirmed || !localAction) {
-        wasBingo.current = bingo;
-        wasBlackout.current = black;
-        initialized.current = boardConfirmed;
-        return;
-      }
-      // fall through: local action on an unconfirmed board → live edge.
+      wasBingo.current = bingo;
+      wasBlackout.current = black;
+      initialized.current = boardConfirmed;
+      return;
     }
     const bingoEdge = bingo && !wasBingo.current;
     const blackoutEdge = black && !wasBlackout.current;
-    // Falling edges (round 2 finding A): a win LOST while its broadcast was still
-    // held (gates closed) clears the held flag — the queued Moment described a
-    // board state that no longer exists. A later re-gain crosses a fresh rising
-    // edge and legitimately re-queues. flushPending's fire-time revalidation is
-    // the backstop for any path that skips this effect.
-    if (!bingo && wasBingo.current) {
-      pending.current.bingo = false;
-      pending.current.firstBingo = false;
-    }
-    if (!black && wasBlackout.current) {
-      pending.current.blackout = false;
-    }
-    // Celebration UI (unchanged): a Blackout takes visual priority over a plain
-    // BINGO, and only one animation shows at a time. This is LOCAL UI, fired on the
-    // edge itself and never held — only the Moment write is gated below.
+    // A Blackout takes visual priority over a plain BINGO; only one animation shows.
     if (blackoutEdge) {
       setCelebrate('blackout');
       track('blackout');
     } else if (bingoEdge) {
       setCelebrate('bingo');
     }
-    // Enqueue the matching Moment(s) for each crossed edge, then flush (ADR 0002) —
-    // fire-and-forget and offline-queueable (src/data/moments.ts). Each fires on its
-    // OWN transition, independent of the celebration's visual priority, and once per
-    // Player (the deterministic Moment doc id makes the once-only structural: a
-    // re-fire on a lose→regain, a reload, or another tab is SKIPPED by the writer's
-    // write-once cache pre-check, or denied by the create-only rule on a cold cache
-    // — updates are denied for everyone). On a real 5×5 board the first-line
-    // (BINGO) edge always precedes the full-card (Blackout) edge, so a Blackout never
-    // suppresses the earlier first-BINGO broadcast. A bare Mark that completes no line
-    // crosses NO edge here, so it broadcasts nothing. A bingo edge enqueues the
-    // per-Player bingo directly and the ceremonial first_bingo candidate through the
-    // durable-witness check (round 2 finding D, queueFirstBingo above); flushPending
-    // fires each once its gate is open — holding whatever is still gated, and
-    // dropping (finding A) whatever no longer stands.
-    if (bingoEdge) {
-      pending.current.bingo = true;
-      queueFirstBingo();
-    }
-    if (blackoutEdge) {
-      pending.current.blackout = true;
-    }
-    flushPending();
     wasBingo.current = bingo;
     wasBlackout.current = black;
-  }, [cells, cellsAttributable, boardConfirmed, flushPending, queueFirstBingo]);
+  }, [cells, cellsAttributable, boardConfirmed]);
 
   if (!uid) return null;
   if (!board) {
@@ -479,10 +376,6 @@ export default function Board() {
   const wins = winningCells(cells);
 
   const doMark = async (c: Cell, nextMarked: boolean) => {
-    // The next board snapshot is THIS player's own action, not passive hydration
-    // (round 3 finding A): set before the write so the latency-compensation
-    // snapshot — which can arrive before setMark resolves — is already marked.
-    localActionsPending.current += 1;
     try {
       const res = await setMark({
         uid,
@@ -495,6 +388,46 @@ export default function Board() {
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
+      // Feed Moment broadcast on the ACTION path (issue #104): the win is tied to
+      // the mark that COMPLETED it — setMark's synchronous transition verdict —
+      // not to a snapshot diff that dies on unmount. Enqueue into the module-scope
+      // pending queue and drain; whatever gate is still closed stays queued (it
+      // survives an unmount / route change) and drains on the next gate-open
+      // (identity resolves / roster confirms). This covers the OFFLINE win for
+      // free: setMark computes the transition from the local cache and its Moment
+      // `setDoc` pends durably (ADR 0006), so no local-action-vs-hydration
+      // disambiguation is needed anymore.
+      if (nextMarked) {
+        enqueueWinMoments({
+          uid,
+          bingoTransition: res.bingoTransition,
+          blackoutTransition: res.blackoutTransition,
+        });
+        // The ceremonial First-to-BINGO candidate is gated by the durable prior-win
+        // witness FIRST (round 2 finding D): a regained line whose owner already has
+        // a `${uid}-bingo` Moment in the local cache must NOT re-claim the event
+        // singleton. A cache miss (fresh device) resolves false, so the drain's
+        // roster gate is the fallback (the narrowed residual the spec documents).
+        // The uid recheck guards an account switch during the async read — the queue
+        // is uid-keyed, so only enqueue if this is still the acting account.
+        if (res.bingoTransition && !(await hasPriorBingoWitness(uid)) && feedCtx.current.uid === uid) {
+          enqueueFirstBingoMoment(uid);
+        }
+      } else if (!res.bingo || !res.blackout) {
+        // Action-driven falling edge (issue #104) — the replacement for PR #99
+        // round 2 finding A's snapshot falling edge + fire-time revalidation: an
+        // unmark whose verdict shows the win no longer stands DROPS its still-held
+        // broadcast, so a win completed-then-unmarked BEFORE its gate opens never
+        // posts. An already-drained flag is a harmless no-op (the Moment is
+        // immutable + once-only besides). A bingo fall also drops the ceremonial
+        // candidate.
+        if (!res.bingo) {
+          clearPendingMoment(uid, 'bingo');
+          clearPendingMoment(uid, 'firstBingo');
+        }
+        if (!res.blackout) clearPendingMoment(uid, 'blackout');
+      }
+      drainMoments();
     } catch {
       /* Neither an offline Mark nor an online write REJECTION lands here:
          setMark's commit is fire-and-forget. Offline it queues durably in the
@@ -502,9 +435,8 @@ export default function Board() {
          rejection is logged inside setMark and self-corrects when Firestore
          rolls the write back and the live listener re-renders without the Mark.
          This catch only guards a synchronous throw from setMark itself — no
-         write happened, so no snapshot is coming: remove this action's marker
-         rather than let it misread a later passive snapshot as live. */
-      localActionsPending.current = Math.max(0, localActionsPending.current - 1);
+         write happened and no Moment was enqueued, so there is nothing to
+         broadcast or undo. */
     }
   };
 

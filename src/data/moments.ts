@@ -49,6 +49,118 @@ export interface MomentActor {
   photoURL: string | null;
 }
 
+// --- The pending-Moment queue (issue #104): a win awaiting its gate ---------
+//
+// A win Moment broadcasts off the MARK that completed it (setMark's synchronous
+// transition verdict, consumed in Board.doMark) — not off snapshot diffing. But
+// the broadcast still has GATES: a KNOWN saved identity for all three kinds (never
+// stamp a returning Player's stale auth name into an IMMUTABLE Moment), plus a
+// SERVER-CONFIRMED roster for the ceremonial First-to-BINGO. When a win crosses
+// while a gate is still closed, its broadcast must WAIT for the gate to open.
+//
+// Round-4 of PR #99 kept that waiting state in a COMPONENT ref in Board.tsx, so a
+// Player who left the Card route before the gate opened lost the Moment forever
+// (the ref died with the unmount, and the returning board baselined the already
+// standing win). This queue lifts that state to MODULE scope — keyed by app+uid,
+// the same durability pattern `markChains` uses in api.ts — so it survives Board
+// unmounts and route changes: whichever Board mount next sees the gate open drains
+// it. The deterministic Moment doc id keeps a held-then-fired broadcast idempotent,
+// and the writer's write-once cache pre-check + create-only rule are the structural
+// once-only backstop besides. RESIDUAL (documented, accepted): a queued-but-undrained
+// broadcast still dies on a full page RELOAD (module state is per-page-load) — but
+// the deterministic id + the returning board baselining the standing win mean that
+// costs at most one possibly-lost Moment for a win that straddled a reload, never a
+// duplicate or a spurious fire. That is the SAME class of loss as the prior
+// unmount bug, strictly NARROWER (only a reload, not any route change).
+export interface PendingMomentFlags {
+  bingo: boolean;
+  blackout: boolean;
+  firstBingo: boolean;
+}
+const pendingMoments = new Map<string, PendingMomentFlags>();
+
+// Key by app + uid (mirrors `markChains` in api.ts). The moment writers always
+// use the module `db` singleton, so the app segment is effectively constant here;
+// keying on uid is what actually isolates two identities sharing a browser (a
+// held win for one account must never drain under the other), and the app prefix
+// keeps the shape identical to the mark-chain key for anyone reading both.
+function pendingKey(uid: string): string {
+  const appName = (db as unknown as { app?: { name?: string } }).app?.name ?? 'default';
+  return `${appName}/${uid}`;
+}
+
+function ensurePending(uid: string): PendingMomentFlags {
+  const key = pendingKey(uid);
+  let flags = pendingMoments.get(key);
+  if (!flags) {
+    flags = { bingo: false, blackout: false, firstBingo: false };
+    pendingMoments.set(key, flags);
+  }
+  return flags;
+}
+
+/**
+ * Enqueue the per-Player win Moment(s) a mark just COMPLETED — driven by
+ * `setMark`'s transition verdict (Board.doMark), never by a snapshot diff. Only a
+ * rising edge enqueues; a no-op call (neither transition) leaves the queue
+ * untouched so it never resurrects a drained-or-absent flag.
+ */
+export function enqueueWinMoments(params: {
+  uid: string;
+  bingoTransition: boolean;
+  blackoutTransition: boolean;
+}): void {
+  const { uid, bingoTransition, blackoutTransition } = params;
+  if (!bingoTransition && !blackoutTransition) return;
+  const flags = ensurePending(uid);
+  if (bingoTransition) flags.bingo = true;
+  if (blackoutTransition) flags.blackout = true;
+}
+
+/**
+ * Enqueue the ceremonial First-to-BINGO candidate for a just-completed bingo. Kept
+ * separate from `enqueueWinMoments` because the caller gates it on the durable
+ * prior-win witness first (`hasPriorBingoWitness`, PR #99 round 2 finding D): a
+ * regained line whose owner already has a `${uid}-bingo` Moment must not re-claim
+ * the event singleton. The roster gate (no OTHER Player has an earlier bingo) is
+ * applied at DRAIN time, where the confirmed roster lives.
+ */
+export function enqueueFirstBingoMoment(uid: string): void {
+  ensurePending(uid).firstBingo = true;
+}
+
+/**
+ * The pending flags for `uid` (a stable empty triple when nothing is queued). The
+ * drainer reads this, applies the identity/roster gates, broadcasts, then clears
+ * each fired kind via `clearPendingMoment`.
+ */
+export function peekPendingMoments(uid: string): PendingMomentFlags {
+  return pendingMoments.get(pendingKey(uid)) ?? { bingo: false, blackout: false, firstBingo: false };
+}
+
+/**
+ * Clear one drained kind so a later drain cannot re-fire it. An UNMARK that drops
+ * the win before its gate opens also calls this (Board.doMark's action-driven
+ * falling edge) — the win no longer stands, so its still-held broadcast is dropped.
+ * The map entry is deleted once empty to keep it from growing per uid.
+ */
+export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags): void {
+  const key = pendingKey(uid);
+  const flags = pendingMoments.get(key);
+  if (!flags) return;
+  flags[kind] = false;
+  if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
+}
+
+/**
+ * Drop the ENTIRE pending queue. Exported for test isolation only: the queue is
+ * module state that (by design) persists across component unmounts, so a suite that
+ * exercises the hold→drain path must reset it between cases. Not used by app code.
+ */
+export function resetPendingMoments(): void {
+  pendingMoments.clear();
+}
+
 /**
  * Write one Moment, fire-and-forget and offline-queueable (ADR 0002 + ADR 0006).
  *

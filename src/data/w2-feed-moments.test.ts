@@ -47,6 +47,11 @@ import {
   broadcastFirstBingo,
   hasPriorBingoWitness,
   FIRST_BINGO_MOMENT_ID,
+  enqueueWinMoments,
+  enqueueFirstBingoMoment,
+  peekPendingMoments,
+  clearPendingMoment,
+  resetPendingMoments,
 } from './moments';
 import { hasCanonicalMomentId, mergeFeed } from '../hooks/useData';
 import { addDoc, runTransaction } from 'firebase/firestore';
@@ -61,6 +66,9 @@ beforeEach(() => {
   // Cache-miss default: getDocFromCache REJECTS when the doc is not cached, which
   // is the fresh-state norm — the write-once pre-check then lets the write proceed.
   getDocFromCacheSpy.mockRejectedValue(new Error('unavailable'));
+  // The pending-Moment queue is MODULE state (it survives unmounts on purpose,
+  // issue #104), so reset it between cases for isolation.
+  resetPendingMoments();
 });
 
 describe('moments broadcasts — the Feed beat writer (specs/w2-feed-moments.md)', () => {
@@ -170,6 +178,58 @@ describe('hasPriorBingoWitness — the durable prior-win witness (PR #99 round 2
     // spec documents.
     getDocFromCacheSpy.mockRejectedValue(new Error('unavailable'));
     await expect(hasPriorBingoWitness('u1')).resolves.toBe(false);
+  });
+});
+
+describe('the pending-Moment queue — module state that survives Board unmounts (issue #104)', () => {
+  it('enqueues a bingo/blackout win off the mark transition verdict; peek reads it back', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    expect(peekPendingMoments('u1')).toEqual({ bingo: true, blackout: false, firstBingo: false });
+
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true });
+    expect(peekPendingMoments('u1')).toEqual({ bingo: true, blackout: true, firstBingo: false });
+  });
+
+  it('a no-op enqueue (neither transition) leaves the queue untouched — never resurrects a drained flag', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: false });
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('enqueues the ceremonial First-to-BINGO candidate separately (Board gates it on the witness first)', () => {
+    enqueueFirstBingoMoment('u1');
+    expect(peekPendingMoments('u1').firstBingo).toBe(true);
+  });
+
+  it('is keyed per-uid: a held win for one account never leaks into another', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    expect(peekPendingMoments('u2')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('SURVIVES across calls — the state lives in module scope, so an unmount cannot lose it', () => {
+    // The headline #104 fix: enqueue is one call (a mark in doMark), peek is a
+    // LATER call (a drain from a fresh Board mount). Module state bridges them.
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    enqueueFirstBingoMoment('u1');
+    // …a Board unmount / remount happens between enqueue and drain in the app; here
+    // the two calls are simply separated, and the flags are still queued.
+    expect(peekPendingMoments('u1')).toEqual({ bingo: true, blackout: false, firstBingo: true });
+  });
+
+  it('clears one drained kind and drops the entry once empty', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: true });
+    clearPendingMoment('u1', 'bingo');
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: true, firstBingo: false });
+    clearPendingMoment('u1', 'blackout');
+    // Empty now → peek still returns a stable empty triple (the map entry is gone).
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('resetPendingMoments drops the whole queue (test-support)', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    enqueueWinMoments({ uid: 'u2', bingoTransition: false, blackoutTransition: true });
+    resetPendingMoments();
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+    expect(peekPendingMoments('u2')).toEqual({ bingo: false, blackout: false, firstBingo: false });
   });
 });
 
