@@ -85,10 +85,13 @@ async function cachedPlayerName(uid: string): Promise<unknown> {
  * nothing stores `id`; `satisfied*` is left absent because satisfaction is
  * DERIVED from Proofs (see `isDoubtSatisfied`), not written here.
  *
- * Fires the `demand_proof` GA4/PostHog event via `track()` on a genuine raise —
- * one of the two PRD events the pre-Doubt catalog was missing. A skipped
- * duplicate (local guard, cache pre-check, or the rules' once-only denial) fires
- * nothing, so the event count cannot inflate either.
+ * Fires the `demand_proof` GA4/PostHog event via `track()` only once the write
+ * SETTLES SUCCESSFULLY (Codex P2, PR #106 round 3 finding 2) — one of the two PRD
+ * events the pre-Doubt catalog was missing. Only a PERSISTED Doubt counts: every
+ * skipped duplicate (local guard, cache pre-check) and every rejected write (the
+ * rules' once-only denial, a genuine failure) fires nothing, so the event count
+ * cannot inflate. Offline trade-off: a queued Doubt tracks at reconnect drain,
+ * not at tap time.
  */
 export interface RaiseDoubtArgs {
   fromUid: string;
@@ -179,32 +182,43 @@ export async function raiseDoubt(args: RaiseDoubtArgs): Promise<void> {
     createdAt: Date.now(),
   };
 
-  const settled = setDoc(ref, payload).catch((err: unknown) => {
-    // Not the offline case: offline the write PENDS in the persistent cache and
-    // drains on reconnect (ADR 0006). A permission denial here is, by
-    // construction, the once-only slot doing its job — a COLD-cache cross-client
-    // duplicate landing on the doc-exists `update` rule (round 2 finding 2): this
-    // module's payload satisfies the create rule by construction (own fromUid,
-    // bound id, bounded names, near-now createdAt), so the only other deny on
-    // this path is the documented >24h offline-drain residual. Benign either
-    // way — debug, not error, mirroring writeMomentOnce's skip log. Anything
-    // else is a genuine online failure and must not vanish silently, yet it is
-    // never a retry surface — a Doubt is social pressure, not a gate.
-    if ((err as { code?: unknown } | null)?.code === 'permission-denied') {
-      console.debug('[doubts] raise denied — slot already raised (once-only backstop)', {
-        fromUid,
-        targetUid,
-        itemId,
-      });
-      return;
-    }
-    console.error('[doubts] raiseDoubt rejected', { fromUid, targetUid, itemId }, err);
-  });
-
-  // The Doubt-flow GA4/PostHog event (#33), fired at the single raise call site —
-  // a GENUINE raise only (every skipped duplicate above fires nothing).
-  track('demand_proof', { itemId });
-  return settled;
+  return setDoc(ref, payload).then(
+    () => {
+      // The Doubt-flow GA4/PostHog event (#33), fired ONLY once the write has
+      // PERSISTED (Codex P2, PR #106 round 3 finding 2): the old tap-time fire
+      // also counted demands the once-only backstop then REJECTED (the cross-tab
+      // duplicate below) — inflating the metric in exactly the race the code
+      // treats as a no-op. Honest trade-off (specs/w2-doubts.md): an OFFLINE-
+      // queued Doubt's setDoc settles at reconnect drain, so demand_proof now
+      // tracks then rather than at tap time — and not at all if the app closes
+      // first. Accurate-but-delayed beats inflated for a counting metric.
+      track('demand_proof', { itemId });
+    },
+    (err: unknown) => {
+      // Not the offline case: offline the write PENDS in the persistent cache and
+      // drains on reconnect (ADR 0006). A permission denial here is, by
+      // construction, the once-only slot doing its job — a COLD-cache cross-client
+      // duplicate landing on the doc-exists `update` rule (round 2 finding 2): this
+      // module's payload satisfies the create rule by construction (own fromUid,
+      // bound id, bounded names, near-now createdAt), so the only other denials on
+      // this path are the documented drain-time residuals (a >24h offline queue, or
+      // a target who unmarked — round 3 finding 1 — before an offline raise
+      // drained). Benign either way — debug, not error, mirroring writeMomentOnce's
+      // skip log; and per round 3 finding 2 an UNPERSISTED demand fires no
+      // analytics. Anything else is a genuine online failure and must not vanish
+      // silently, yet it is never a retry surface — a Doubt is social pressure,
+      // not a gate.
+      if ((err as { code?: unknown } | null)?.code === 'permission-denied') {
+        console.debug('[doubts] raise denied — slot already raised (once-only backstop)', {
+          fromUid,
+          targetUid,
+          itemId,
+        });
+        return;
+      }
+      console.error('[doubts] raiseDoubt rejected', { fromUid, targetUid, itemId }, err);
+    },
+  );
 }
 
 // ---- Satisfied-by-Proof: PURE DERIVATION (ADR 0001) ----

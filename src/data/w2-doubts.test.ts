@@ -9,11 +9,12 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 //      saved-player helper (`markerDisplayName`, bounded to the ≤100 rule, falling
 //      back to the CACHED player row before 'Anonymous' — round 2 finding 3), as a
 //      plain offline-queueable `setDoc` (never a transaction, never a Feed post),
-//      and fires the `demand_proof` analytics event at that single raise call
-//      site. Every duplicate path is a no-op — a self-doubt, an open duplicate in
-//      `currentlyOpen`, a slot already in the LOCAL cache (the writeMomentOnce-
-//      style pre-check), and a server-side once-only denial (logged at debug, not
-//      error) — none writes, none fires analytics twice.
+//      and fires the `demand_proof` analytics event ONLY once the write settles
+//      successfully — a persisted Doubt counts, an in-flight or rejected one does
+//      not (round 3 finding 2). Every duplicate path is a no-op — a self-doubt, an
+//      open duplicate in `currentlyOpen`, a slot already in the LOCAL cache (the
+//      writeMomentOnce-style pre-check), and a server-side once-only denial
+//      (logged at debug, not error) — none writes, none fires analytics.
 //   2. Satisfaction is a PURE derivation over Proofs — no write is added to
 //      `attachProof`, no Doubt doc is mutated. `isDoubtSatisfied` /`openDoubts`/
 //      `doubtStatusFor` are exercised as a truth table: a Doubt is answered when
@@ -110,8 +111,32 @@ describe('raiseDoubt — self-published Doubt + demand_proof (specs/w2-doubts.md
     expect(data.id).toBeUndefined();
     expect(data.satisfiedAt).toBeUndefined();
 
+    // demand_proof fired exactly once — the awaited raise settled successfully,
+    // so the persisted-only rule (round 3 finding 2) is satisfied here.
     expect(trackSpy).toHaveBeenCalledTimes(1);
     expect(trackSpy).toHaveBeenCalledWith('demand_proof', { itemId: 'i3' });
+  });
+
+  it('fires demand_proof ONLY once the write settles successfully — not at tap time (PR #106 round 3 finding 2)', async () => {
+    // A deferred setDoc models the in-flight window (an online round-trip, or an
+    // offline queue awaiting drain): the demand is not yet PERSISTED, so nothing
+    // may be counted yet — the old tap-time fire counted demands the once-only
+    // backstop then rejected, inflating the metric.
+    let resolveWrite: () => void = () => {};
+    setDocSpy.mockImplementationOnce(
+      () =>
+        new Promise<void>((res) => {
+          resolveWrite = () => res();
+        }),
+    );
+    const settled = raiseDoubt({ fromUid: 'alice', targetUid: 'bob', itemId: 'i1', cellIndex: 1 });
+    await vi.waitFor(() => expect(setDocSpy).toHaveBeenCalledTimes(1));
+    expect(trackSpy).not.toHaveBeenCalled(); // in flight — nothing persisted, nothing counted
+
+    resolveWrite(); // the server acknowledged (or the offline queue drained)
+    await settled;
+    expect(trackSpy).toHaveBeenCalledTimes(1); // exactly one persisted demand
+    expect(trackSpy).toHaveBeenCalledWith('demand_proof', { itemId: 'i1' });
   });
 
   it('attributes via the shared saved-player helper: Anonymous fallback + ≤100 bound', async () => {
@@ -199,11 +224,15 @@ describe('raiseDoubt — self-published Doubt + demand_proof (specs/w2-doubts.md
     await raiseDoubt({ fromUid: 'alice', targetUid: 'bob', itemId: 'i1', cellIndex: 1 });
     expect(debugSpy).toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
+    // The denied duplicate never persisted — it counts NOTHING (round 3 finding 2).
+    expect(trackSpy).not.toHaveBeenCalled();
 
-    // Any OTHER rejection is a genuine online failure — observability kept.
+    // Any OTHER rejection is a genuine online failure — observability kept, and an
+    // unpersisted demand still fires no analytics.
     setDocSpy.mockImplementationOnce(() => Promise.reject(new Error('network down')));
     await raiseDoubt({ fromUid: 'alice', targetUid: 'carol', itemId: 'i1', cellIndex: 1 });
     expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(trackSpy).not.toHaveBeenCalled();
     debugSpy.mockRestore();
     errorSpy.mockRestore();
   });

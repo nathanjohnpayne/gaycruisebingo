@@ -219,6 +219,21 @@ service cloud.firestore {
           // (#103/#105). `_` joins the triple: it appears in no Firebase-minted
           // uid or Firestore auto-id, and the id is constructed, never parsed.
           && doubtId == request.auth.uid + '_' + request.resource.data.targetUid + '_' + request.resource.data.itemId
+          // The target must have a STANDING Mark on the Prompt: their attributed
+          // Tally marker (tally/{itemId}/markers/{targetUid} — the PUBLIC half of
+          // the Mark, ADR 0002, doc id == marker uid so this lookup is exact) must
+          // exist at raise time (Codex P2, PR #106 round 3). A Doubt is an
+          // accusation against a standing Mark — the spec's social model — so a
+          // direct-write client can no longer pre-seed Doubts against (target,
+          // Prompt) pairs the target never marked and ambush their badge the
+          // moment they later mark that Prompt. Residual (accepted): this gates
+          // CREATE only — a Doubt legitimately raised and then unmarked-away
+          // survives as a doc (its marker deleted; rules never cascade), which
+          // the display layer's dormant/reappear semantics already handle
+          // (specs/w2-doubts.md finding 2); and an offline-queued raise whose
+          // target unmarks before the queue drains is denied at drain time (the
+          // client logs it as the benign once-only/denied path).
+          && exists(/databases/$(database)/documents/events/$(eventId)/tally/$(request.resource.data.itemId)/markers/$(request.resource.data.targetUid))
           && request.resource.data.cellIndex is number
           // createdAt is client-set and is the satisfaction CUTOFF the derivation
           // compares Proof timestamps against (src/data/doubts.ts isDoubtSatisfied):

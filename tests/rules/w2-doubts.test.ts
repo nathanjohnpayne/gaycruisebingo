@@ -18,10 +18,12 @@ import { deleteDoc, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 // mirroring the moments id↔kind binding #103/#105 so no one can squat another
 // doubter's slot):
 //   - create: raised BY the caller (own fromUid), ON someone else (targetUid is a
-//     string ≠ the caller — no self-doubt), with a string itemId + numeric
-//     cellIndex + a near-now createdAt, AT the bound slot id. A forged fromUid, a
-//     self-doubt, an unbound id, and a squat of another doubter's slot are each
-//     denied.
+//     string ≠ the caller — no self-doubt), AGAINST a STANDING Mark (the target's
+//     tally/{itemId}/markers/{targetUid} doc must exist — round 3 finding 1), with
+//     a string itemId + numeric cellIndex + a near-now createdAt, AT the bound
+//     slot id. A forged fromUid, a self-doubt, an unbound id, a squat of another
+//     doubter's slot, and a Doubt against an unmarked (target, Prompt) pair are
+//     each denied.
 //   - once-only: a second create on an existing slot is a doc-exists UPDATE,
 //     denied for the doubter — the cross-client duplicate backstop; counts cannot
 //     inflate. The doubter's own retract (delete) + fresh create is the structural
@@ -92,6 +94,17 @@ beforeEach(async () => {
       text: 'Saw a drag show', createdBy: ALICE, createdAt: NOW(), isFreeSpace: false,
       status: 'active', reportCount: 0,
     });
+    // Standing Marks for every doubt-create fixture (PR #106 round 3 finding 1):
+    // the create rule requires the TARGET's Tally marker to exist, so each player
+    // a test legitimately doubts is seeded as a marker of that Prompt — Alice too,
+    // so the self-doubt denial turns on the self-doubt rule, not a missing marker.
+    // Dave is deliberately NOT a marker anywhere (the marker-binding denial), and
+    // item2 is marked by Bob only.
+    const marker = (uid: string) => ({ uid, displayName: uid, markedAt: NOW() });
+    await setDoc(doc(s, at(`tally/${ITEM}/markers/${ALICE}`)), marker(ALICE));
+    await setDoc(doc(s, at(`tally/${ITEM}/markers/${BOB}`)), marker(BOB));
+    await setDoc(doc(s, at(`tally/${ITEM}/markers/${CAROL}`)), marker(CAROL));
+    await setDoc(doc(s, at(`tally/item2/markers/${BOB}`)), marker(BOB));
     await setDoc(doc(s, slot(CAROL, BOB)), doubt(CAROL, BOB));
   });
 });
@@ -122,6 +135,23 @@ describe('firestore.rules — Doubts (specs/w2-doubts.md)', () => {
     await assertFails(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB, { createdAt: 'now' }))); // createdAt not a number
     await assertFails(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB, { targetUid: 42 }))); // targetUid not a string
     await assertSucceeds(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB))); // the well-formed Doubt
+  });
+
+  it('requires the target’s STANDING Mark — a Doubt against an unmarked (target, Prompt) pair is denied (PR #106 round 3 finding 1)', async () => {
+    // A Doubt is an accusation against a standing Mark (the spec's social model):
+    // the create rule requires tally/{itemId}/markers/{targetUid} to EXIST, so a
+    // direct-write client can no longer pre-seed Doubts against pairs the target
+    // never marked and ambush their Square badge the moment they later mark it.
+    const DAVE = 'dave'; // marked nothing (see the fixture seed)
+    // An unmarked PLAYER on a marked Prompt: denied.
+    await assertFails(setDoc(doc(db(ALICE), slot(ALICE, DAVE)), doubt(ALICE, DAVE)));
+    // A marked Player on a Prompt THEY have not marked (Carol marked item1 only):
+    // denied — the binding is per (target, Prompt), not per target.
+    await assertFails(
+      setDoc(doc(db(ALICE), slot(ALICE, CAROL, 'item2')), doubt(ALICE, CAROL, { itemId: 'item2' })),
+    );
+    // The same Doubt against a STANDING Mark: allowed (Bob marked item1).
+    await assertSucceeds(setDoc(doc(db(ALICE), slot(ALICE, BOB)), doubt(ALICE, BOB)));
   });
 
   it('binds the doc id to the (doubter, target, Prompt) triple — an unbound id and a slot squat are denied (PR #106 round 2 finding 2)', async () => {
