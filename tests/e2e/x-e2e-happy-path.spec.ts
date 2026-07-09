@@ -49,7 +49,11 @@ test.describe('x-e2e-happy-path', () => {
       await tapCellByText(page, dealtTexts[index]);
     }
 
-    await expect(page.getByText('BINGO!')).toBeVisible();
+    // The celebration headline (Celebration.tsx `.big`), targeted by class +
+    // text: the w2-share-cards Share Card renders a second "BINGO!" node
+    // (`.share-card-title`) inside the same celebration, so a bare
+    // getByText('BINGO!') is ambiguous under strict mode.
+    await expect(page.locator('.big', { hasText: 'BINGO!' })).toBeVisible();
     await page.getByRole('button', { name: 'Keep playing' }).click();
 
     await page.getByRole('link', { name: 'Ranks' }).click();
