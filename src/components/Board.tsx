@@ -41,28 +41,38 @@ function TallyBadge({ itemId, onOpen }: { itemId: string; onOpen: () => void }) 
 
 /**
  * The open-Doubt count on a marked Square (ADR 0001): how many "pics or it didn't
- * happen" Doubts for this Prompt are still UNANSWERED. Mirrors `TallyBadge` — a
- * per-cell subscription (`useDoubts`) plus the Feed's Proofs (passed down once
- * from Board) folded through the PURE `openDoubts` derivation — but sits top-LEFT,
- * clear of the ✓ (top-right), the proof ＋ (bottom-left), and the Tally count
- * (bottom-right). Renders ONLY when at least one Doubt is open, so an undoubted
- * Square shows nothing. Tapping opens the same who-list sheet, where a Doubt is
- * actually raised against another Player's entry — a Doubt never blocks or unmarks
- * the Square, so this is a pressure signal, never a gate.
+ * happen" Doubts AGAINST THIS SQUARE'S OWN MARKER (`targetUid` — Board only ever
+ * renders the signed-in Player's own board, so that is always the viewer) are
+ * still UNANSWERED. Scoped to `targetUid` deliberately: the shared item pool means
+ * another Player commonly holds the same Prompt (ADR 0002 — "see who else got this
+ * square"), and a Doubt is inherently a targeted accusation against ONE Player's
+ * Mark, not ambient per-Prompt noise — an un-doubted Player must never see a badge
+ * on their own Square just because someone ELSE who also marked this Prompt is
+ * being doubted (verifier finding, #33). Mirrors `TallyBadge` — a per-cell
+ * subscription (`useDoubts`) plus the Feed's Proofs (passed down once from Board)
+ * folded through the PURE `openDoubts` derivation — but sits top-LEFT, clear of the
+ * ✓ (top-right), the proof ＋ (bottom-left), and the Tally count (bottom-right).
+ * Renders ONLY when at least one Doubt against `targetUid` is open. Tapping opens
+ * the same who-list sheet, where a Doubt is actually raised against another
+ * Player's entry — a Doubt never blocks or unmarks the Square, so this is a
+ * pressure signal, never a gate.
  */
 function DoubtBadge({
   itemId,
   itemText,
+  targetUid,
   proofs,
   onOpen,
 }: {
   itemId: string;
   itemText: string;
+  targetUid: string;
   proofs: readonly Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>[];
   onOpen: () => void;
 }) {
   const { doubts } = useDoubts(itemId);
-  const open = openDoubts(doubts, itemText, proofs);
+  const mine = doubts.filter((d) => d.targetUid === targetUid);
+  const open = openDoubts(mine, itemText, proofs);
   if (open.length <= 0) return null;
   return (
     <button
@@ -87,10 +97,13 @@ function DoubtBadge({
  *
  * It is also where a Doubt is RAISED (ADR 0001, #33): each OTHER Player's row
  * carries a "pics or it didn't happen" affordance that raises a Doubt against
- * their Mark of this Prompt; the same open-Doubt count the Square shows appears in
- * the header. A row whose Doubt(s) have been answered by a Proof renders a
- * distinct SATISFIED state, an open one a distinct DOUBTED state — social pressure
- * applied then visibly cooled. A Doubt never blocks, unmarks, or discounts the
+ * their Mark of this Prompt; the header summarizes the Prompt-wide open-Doubt
+ * total across every marker listed below (deliberately UN-scoped, unlike the
+ * per-target Square badge — this sheet already lists everyone by name, so an
+ * aggregate here is a heat summary, not a personal accusation). A row whose
+ * Doubt(s) have been answered by a Proof renders a distinct SATISFIED state, an
+ * open one a distinct DOUBTED state — social pressure applied then visibly
+ * cooled. A Doubt never blocks, unmarks, or discounts the
  * Mark (never a gate), so nothing here changes the Board; the doubter's own row
  * offers no affordance (no self-doubt), and a Doubt already raised by this Player
  * disables the button so they can't stack duplicates.
@@ -676,6 +689,7 @@ export default function Board() {
               <DoubtBadge
                 itemId={c.itemId}
                 itemText={c.text}
+                targetUid={uid}
                 proofs={proofs}
                 onOpen={() => setTallyTarget(c)}
               />

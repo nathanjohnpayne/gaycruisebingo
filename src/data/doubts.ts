@@ -131,10 +131,13 @@ export function isDoubtSatisfied(
 }
 
 /**
- * The OPEN (unanswered) Doubts among `doubts` for a Prompt whose text is
- * `itemText`, given the Feed's `proofs`. The Square badge + Tally-sheet summary
- * both read `.length` of this — the single per-Prompt open-Doubt total (ADR 0002:
- * the count surfaces identically in both places).
+ * The OPEN (unanswered) subset of `doubts`, matched against `itemText` + `proofs`.
+ * Generic over whatever `doubts` the caller passes in — it does not itself decide
+ * "open count for whom". The Square badge (Board.tsx `DoubtBadge`) pre-filters its
+ * input to Doubts targeting the Square's own marker before calling this, so an
+ * un-doubted Player's Square never shows another marker's open Doubt on the same
+ * shared-pool Prompt (ADR 0002); the Tally-sheet header instead passes the FULL
+ * per-Prompt set for a Prompt-wide heat summary. Both then read `.length`.
  */
 export function openDoubts<T extends Pick<DoubtDoc, 'targetUid' | 'createdAt'>>(
   doubts: readonly T[],
