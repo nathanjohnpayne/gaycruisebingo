@@ -69,15 +69,16 @@ export function DealError({
   onRetry: () => void;
   retrying: boolean;
 }) {
-  // Recovery is deliberately MANUAL: the Retry button re-invokes the deal, and
-  // the /items Prompts tab stays reachable (the shell keeps rendering) so a
-  // Player or Admin can add Prompts, then come back and retry. An automatic
-  // pool-recovery watcher was prototyped here during review and removed by
-  // human decision (PR #66 tiebreak): three review rounds showed it needs a
-  // deliberate design (misfires on non-pool deal failures because the pool
-  // subscription starts empty; unmounts when the Player navigates to /items —
-  // the exact recovery path; wants a context-level home). Tracked as a
-  // follow-up rather than accreted onto this ticket.
+  // This panel owns the MANUAL Retry: the button re-invokes the deal, and the
+  // /items Prompts tab stays reachable (the shell keeps rendering) so a Player or
+  // Admin can add Prompts, then come back and retry. The AUTOMATIC pool-recovery
+  // retry (#70) deliberately does NOT live here — a watcher on this panel would
+  // unmount the moment the Player navigates to /items (the exact recovery path,
+  // the PR #66 finding), so it lives at the app shell instead
+  // (src/components/PoolRecoveryWatcher.tsx, mounted in AuthProvider). This panel
+  // stays the manual fallback for the cases the shell watcher deliberately does
+  // not cover (e.g. a first server snapshot that is already healthy is a baseline,
+  // not a trigger — see specs/w1-deal-auto-retry.md).
   return (
     <div className="signin" role="alert">
       <h1>GAY CRUISE BINGO</h1>

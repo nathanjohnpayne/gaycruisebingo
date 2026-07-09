@@ -83,7 +83,12 @@ function DoubtBadge({
   proofs: readonly Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>[];
   onOpen: () => void;
 }) {
-  const { doubts } = useDoubts(itemId);
+  // `targetUid` here is the signed-in viewer (Board only ever renders the viewer's
+  // OWN board, so every Square's `targetUid` is `uid`). Passing it as the viewerUid
+  // keeps the ban own-content exception (#122 round 2): a banned viewer still sees —
+  // and can answer — a Doubt raised against THEMSELVES on their own board, even
+  // though `useDoubts` hides Doubts against a banned target for every OTHER viewer.
+  const { doubts } = useDoubts(itemId, targetUid);
   const mine = doubts.filter((d) => d.targetUid === targetUid);
   const open = openDoubts(mine, itemText, proofs);
   if (open.length <= 0) return null;
@@ -169,7 +174,10 @@ function TallySheet({
   onClose: () => void;
 }) {
   const { markers, loading } = useTally(itemId);
-  const { doubts } = useDoubts(itemId);
+  // `meUid` is the signed-in viewer — pass it so the ban own-content exception holds
+  // in the sheet too (#122 round 2): a banned viewer still sees Doubts against
+  // themselves, while Doubts against a banned OTHER marker stay hidden.
+  const { doubts } = useDoubts(itemId, meUid);
   // The active Proofs for THIS Prompt (finding 4) — joined by itemText, the same
   // (uid, itemText) key the derivation uses (ProofDoc carries no itemId). Mounted
   // only while this sheet is, so no Board-wide proof listener is opened.
@@ -659,9 +667,12 @@ export default function Board() {
     // whose server state is a healthy pool or an existing Board — so the alert
     // additionally requires both subscriptions' hasServerData latch (a
     // server-confirmed snapshot has arrived). Cache-only data keeps the neutral
-    // state below. (The pool-recovery auto-retry is deliberately deferred to
-    // #70 — recovery is manual (the DealError panel's Retry). This empty state
-    // only explains the shortage; it must not promise automatic dealing.)
+    // state below. (Pool-recovery has TWO recovery paths once a deal has failed:
+    // the DealError panel's manual Retry, and the shell-level auto-retry that fires
+    // when the pool crosses MIN_POOL upward — #70, src/components/PoolRecoveryWatcher.tsx.
+    // This pre-deal empty state only explains the shortage; the auto-retry watches
+    // the post-failure DealError state, not this one, so this copy still must not
+    // promise automatic dealing here.)
     const activePool = items.filter((i) => !i.isFreeSpace);
     if (
       !boardLoading &&

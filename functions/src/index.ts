@@ -1,10 +1,13 @@
 import { setGlobalOptions } from 'firebase-functions/v2';
 import { onObjectFinalized } from 'firebase-functions/v2/storage';
+import { onDocumentWritten } from 'firebase-functions/v2/firestore';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import vision from '@google-cloud/vision';
 import sharp from 'sharp';
+import { RESEND_API_KEY } from './params';
+import { shouldNotify, notifyAdminsOfModeration, type ModeratedDoc } from './notify';
 
 initializeApp();
 setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
@@ -55,3 +58,57 @@ export const moderateProof = onObjectFinalized({ memory: '512MiB' }, async (even
     /* Vision optional; reporting still covers moderation */
   }
 });
+
+/**
+ * Email Event admins when a Proof/Prompt transitions INTO a moderation state
+ * (issue #101). Decoupled from the writes that own the transition; reads
+ * `status` only. Best-effort — a mail failure is swallowed so the moderation
+ * write is never blocked (ADR 0001). Bound to the RESEND_API_KEY secret.
+ *
+ * Uses onDocumentWritten (not onDocumentUpdated) so a proof CREATED already
+ * flagged — moderateProof's merge-set can create the doc in the
+ * upload-before-doc race (#101 Codex F2) — still notifies; `shouldNotify`
+ * ignores create-into-active and deletes (`after` undefined). `transitionId`
+ * is the CloudEvent id, threaded into the idempotency key (#101 Codex F3).
+ */
+async function handleModeration(
+  collection: 'proofs' | 'items',
+  eventId: string,
+  docId: string,
+  transitionId: string,
+  before: ModeratedDoc | undefined,
+  after: ModeratedDoc | undefined,
+): Promise<void> {
+  try {
+    if (!after || !shouldNotify(before, after)) return;
+    await notifyAdminsOfModeration(eventId, collection, docId, after, transitionId);
+  } catch (err) {
+    console.error('notifyOnModeration failed', err);
+  }
+}
+
+export const notifyProofModeration = onDocumentWritten(
+  { document: 'events/{eventId}/proofs/{proofId}', secrets: [RESEND_API_KEY] },
+  (event) =>
+    handleModeration(
+      'proofs',
+      event.params.eventId,
+      event.params.proofId,
+      event.id,
+      event.data?.before.data(),
+      event.data?.after.data(),
+    ),
+);
+
+export const notifyItemModeration = onDocumentWritten(
+  { document: 'events/{eventId}/items/{itemId}', secrets: [RESEND_API_KEY] },
+  (event) =>
+    handleModeration(
+      'items',
+      event.params.eventId,
+      event.params.itemId,
+      event.id,
+      event.data?.before.data(),
+      event.data?.after.data(),
+    ),
+);

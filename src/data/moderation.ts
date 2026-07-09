@@ -26,3 +26,55 @@
 export function isReportHidden(reportCount: number, threshold: number | undefined): boolean {
   return typeof threshold === 'number' && threshold > 0 && reportCount >= threshold;
 }
+
+/**
+ * True iff `uid` is on the event's `bannedUids` roster — the ADR 0004 Phase 0
+ * presentational, event-scoped hide/mute (#108, consuming the #113 rules + type
+ * contract). Like `isReportHidden` it lives in this Firestore-free, React-free
+ * module so BOTH the public read hooks (src/hooks/useData.ts, which re-exports it)
+ * AND the deal path (src/data/api.ts's joinAndDeal, which must not import React)
+ * apply the identical test — a banned Player's content is filtered by its OWNER
+ * uid off every PUBLIC/player surface with no Admin awake.
+ *
+ * It fails OPEN exactly like the auto-hide: an empty, missing, or malformed
+ * `bannedUids` (the event doc still loading, a fresh event whose converter default
+ * is `[]`, or an unexpected non-array) filters NOTHING. A ban is presentational
+ * and bypassable by design (ADR 0004 Phase 0) — NOT hard access revocation, which
+ * is #43/#44; and NOT anti-cheat (ADR 0001), it is a moderation/dispute tool.
+ *
+ * Deliberately NOT applied to the raw Leaderboard roster that feeds Board's
+ * First-to-BINGO determination (a ban never rewrites who was first to BINGO — that
+ * already happened) nor to a viewer's OWN content in their own view; see the
+ * per-hook comments in src/hooks/useData.ts and specs/w2-ban-console.md.
+ */
+export function isBanned(
+  uid: string | null | undefined,
+  bannedUids: readonly string[] | undefined,
+): boolean {
+  return !!uid && Array.isArray(bannedUids) && bannedUids.includes(uid);
+}
+
+/**
+ * The SYSTEM/SENTINEL content-author ids that are NOT real player uids and so must
+ * never be bannable (Codex P1, PR #122): banning one would hide EVERY doc it
+ * authored at once. The only one today is `'seed'` — `scripts/seed.mjs` sets
+ * `createdBy: 'seed'` on every seeded default Prompt (a content-hash-keyed upsert,
+ * not a per-player write), so a single `banUser('seed')` would drop the whole
+ * default pool from BOTH the live pool (`useItems`) and the deal path
+ * (`joinAndDeal`), leaving new Players with a thin/empty board. Extend this set if
+ * any other non-uid system author is ever introduced. (Proof/marker/moment/doubt
+ * authors are always real player uids; `'Anonymous'` is a displayName fallback,
+ * never a `uid`/`createdBy`, so it is not a poisoning vector.)
+ */
+export const SYSTEM_AUTHOR_UIDS: readonly string[] = ['seed'];
+
+/**
+ * True when `uid` is a system/sentinel content author (see `SYSTEM_AUTHOR_UIDS`),
+ * NOT a real player. The Admin console hides the Ban control for such authors and
+ * `banUser` refuses to add one to `bannedUids`, so the default pool can never be
+ * nuked by a mis-click. Unbanning is deliberately NOT gated by this — see
+ * `unbanUser` — so an admin who banned a sentinel on a pre-fix build can recover.
+ */
+export function isSystemAuthor(uid: string | null | undefined): boolean {
+  return !!uid && SYSTEM_AUTHOR_UIDS.includes(uid);
+}

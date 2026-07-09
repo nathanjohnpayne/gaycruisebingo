@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
 import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol } from '../data/paths';
-import { isReportHidden } from '../data/moderation';
+import { isReportHidden, isBanned, isSystemAuthor } from '../data/moderation';
 import { sortPlayers } from '../game/logic';
 import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, MomentDoc, DoubtDoc } from '../types';
 
@@ -55,12 +55,23 @@ function useColSub<T>(q: Query<T> | null, key: string) {
   // server-backed observation from a stale cache replay (e.g. `useMyClaims` seeding
   // the confirm-path freshness witness, #41 / Codex #116 R2 finding 2) read this.
   const [fromCache, setFromCache] = useState(true);
+  // `hasPendingWrites` is the LATEST snapshot's OPTIMISTIC-write flag (per-snapshot):
+  // true when the snapshot reflects a LOCAL write this client issued that the server
+  // has NOT yet acked. It is the OTHER half of the `{ includeMetadataChanges: true }`
+  // discipline — `fromCache` is cache-vs-server, `hasPendingWrites` is
+  // local-optimistic-vs-server-committed. A snapshot is fully SERVER-COMMITTED only
+  // when both are false. The pool-recovery watcher (#70, Codex P2 on PR #124 round 2)
+  // needs this: a local optimistic prompt-add arrives with `fromCache === false` AND
+  // `hasPendingWrites === true`, so a `fromCache`-only gate would treat that
+  // not-yet-committed local echo as a server crossing and fire before the write acks.
+  const [hasPendingWrites, setHasPendingWrites] = useState(false);
   useEffect(() => {
     // Drop the previous query's rows when the key changes so stale results can't
     // render against the new subscription.
     setData([]);
     setHasServerData(false);
     setFromCache(true);
+    setHasPendingWrites(false);
     if (!q) {
       setLoading(false);
       return;
@@ -73,6 +84,7 @@ function useColSub<T>(q: Query<T> | null, key: string) {
         setData(snap.docs.map((d) => d.data() as T));
         setLoading(false);
         setFromCache(snap.metadata.fromCache);
+        setHasPendingWrites(snap.metadata.hasPendingWrites);
         if (!snap.metadata.fromCache) setHasServerData(true);
       },
       () => setLoading(false),
@@ -80,7 +92,7 @@ function useColSub<T>(q: Query<T> | null, key: string) {
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return { data, loading, hasServerData, fromCache };
+  return { data, loading, hasServerData, fromCache, hasPendingWrites };
 }
 
 export function useEventDoc(enabled = true) {
@@ -101,20 +113,44 @@ export function useEventDoc(enabled = true) {
 // rationale (Codex P2, PR #107 finding 2).
 export { isReportHidden };
 
+// The ADR 0004 Phase 0 presentational ban predicate (#108) is also owned by the
+// Firestore-free, React-free ./moderation module and re-exported here for the SAME
+// reason as isReportHidden — the deal path (src/data/api.ts) applies it without
+// importing React, and the console (Admin.tsx) + Leaderboard import it from here.
+// `isSystemAuthor` (Codex P1, PR #122) rides along so the console can hide the Ban
+// control for a system/sentinel author ('seed') that must never be banned.
+export { isBanned, isSystemAuthor };
+
 /**
- * The Event's community auto-hide threshold (`settings.reportHideThreshold`,
- * seeded 4 — `scripts/seed.mjs`), read from `useEventDoc()` so EVERY client
- * computes the SAME presentational hide with no Admin online (ADR 0004 Phase 0).
- * Returns `undefined` while the event doc is loading or when the setting is unset
- * so callers treat it as "no filtering" (see `isReportHidden`). This is a read of
- * shared config, not a per-client knob — the hide is bypassable by design (a
- * client can patch its bundle to ignore it); tamper-proof server enforcement that
- * flips `status` at the threshold is deferred to #43.
+ * The Event's shared moderation config, read ONCE from `useEventDoc()` so every
+ * client computes the SAME presentational hides with no Admin online (ADR 0004
+ * Phase 0):
+ *
+ *  - `threshold` — the community auto-hide `settings.reportHideThreshold` (seeded 4,
+ *    `scripts/seed.mjs`), `undefined` while the event doc loads or the setting is
+ *    unset so callers treat it as "no filtering" (see `isReportHidden`).
+ *  - `bannedUids` — the Admin ban roster (#113 contract, #108 consumer), `[]` while
+ *    loading or absent (the `eventConverter` defaults a missing field to `[]`) so
+ *    `isBanned` filters nothing until a real roster arrives.
+ *
+ * Both are reads of SHARED config, not per-client knobs — the hides are bypassable
+ * by design (a client can patch its bundle to ignore them); tamper-proof server
+ * enforcement is deferred to #43/#44. Combined into one hook so a consumer that
+ * needs both opens a SINGLE event-doc subscription rather than two.
+ *
+ * `enabled` mirrors `useEventDoc`'s gate: an id-scoped consumer (useTally /
+ * useDoubts) passes `false` when its own id is null so it opens NO subscription at
+ * all — preserving those hooks' "pass null to open no subscription" contract. When
+ * disabled the config reads as unset (threshold `undefined`, bannedUids `[]`), which
+ * both filters fail open on anyway.
  */
-function useReportHideThreshold(): number | undefined {
-  const { data: event } = useEventDoc();
+function useEventModeration(enabled = true): { threshold: number | undefined; bannedUids: string[] } {
+  const { data: event } = useEventDoc(enabled);
   const threshold = event?.settings?.reportHideThreshold;
-  return typeof threshold === 'number' ? threshold : undefined;
+  return {
+    threshold: typeof threshold === 'number' ? threshold : undefined,
+    bannedUids: event?.bannedUids ?? [],
+  };
 }
 
 export function useItems(enabled = true) {
@@ -124,20 +160,34 @@ export function useItems(enabled = true) {
   // prompt add/report out as a full-pool read + rerender. Toggle the key (not
   // just the query) so the effect re-subscribes if `enabled` flips back to
   // true — mirrors useEventDoc's pre-auth gate above.
-  const threshold = useReportHideThreshold();
-  const { data, loading, hasServerData } = useColSub<ItemDoc>(
+  const { threshold, bannedUids } = useEventModeration();
+  const { data, loading, hasServerData, fromCache, hasPendingWrites } = useColSub<ItemDoc>(
     enabled ? itemsCol() : null,
     enabled ? 'items' : 'items:disabled',
   );
-  // Two hides drop a Prompt from the live pool: the Admin hard-hide (`status`
-  // flipped off 'active', the Phase-0 override) and the ADR 0004 Phase 0
-  // community auto-hide once `reportCount` reaches `reportHideThreshold`.
-  // `useAllItems` (Admin) applies NEITHER, so an Admin can still reach and
-  // restore threshold-hidden Prompts. Presentational only — the doc is untouched.
+  // Three hides drop a Prompt from the live pool: the Admin hard-hide (`status`
+  // flipped off 'active', the Phase-0 override); the ADR 0004 Phase 0 community
+  // auto-hide once `reportCount` reaches `reportHideThreshold`; and the Admin ban
+  // (#108) — a Prompt authored by a banned uid (`createdBy` on `bannedUids`) is
+  // hidden by its OWNER, mirroring `isReportHidden`. `useAllItems` (Admin) applies
+  // NONE of the three, so an Admin can still reach and restore/unban a banned or
+  // threshold-hidden Prompt. Presentational only — the doc is untouched.
   const items = data
-    .filter((i) => i.status === 'active' && !isReportHidden(i.reportCount, threshold))
+    .filter(
+      (i) =>
+        i.status === 'active' &&
+        !isReportHidden(i.reportCount, threshold) &&
+        !isBanned(i.createdBy, bannedUids),
+    )
     .sort((a, b) => a.createdAt - b.createdAt);
-  return { items, loading, hasServerData };
+  // `hasServerData` is the LIFETIME latch (has a server snapshot EVER arrived);
+  // `fromCache` and `hasPendingWrites` are THIS snapshot's per-snapshot metadata. The
+  // pool-recovery watcher (#70) needs the per-snapshot flags, not the latch: once
+  // latched, a later cache/local replay would otherwise read as a server-confirmed
+  // pool crossing (Codex P2 on PR #124 round 1), so the edge detector gates on
+  // `!fromCache && !hasPendingWrites` — fully server-committed, no local optimistic
+  // prompt-add echo (Codex P2 round 2). Other `useItems` consumers ignore both.
+  return { items, loading, hasServerData, fromCache, hasPendingWrites };
 }
 
 export function useBoard(uid: string | undefined) {
@@ -158,11 +208,18 @@ export function useMyPlayer(uid: string | undefined) {
  * the free centre Square, which never tallies) to open no subscription.
  */
 export function useTally(itemId: string | null | undefined) {
+  const { bannedUids } = useEventModeration(!!itemId);
   const { data, loading, hasServerData } = useColSub<TallyEntry>(
     itemId ? tallyMarkersCol(itemId) : null,
     itemId ? `tally:${itemId}` : 'tally:none',
   );
-  const markers = [...data].sort((a, b) => a.markedAt - b.markedAt);
+  // The Admin ban (#108): a banned marker's entry drops from the PUBLIC who-list
+  // AND from the derived `count` the Square badge shows — a banned Player's mark is
+  // hidden from other Players, mirroring `isReportHidden` elsewhere. Presentational
+  // only; the marker doc is untouched, and admin surfaces do not read this hook.
+  const markers = [...data]
+    .filter((m) => !isBanned(m.uid, bannedUids))
+    .sort((a, b) => a.markedAt - b.markedAt);
   return { markers, count: markers.length, loading, hasServerData };
 }
 
@@ -177,6 +234,16 @@ export function useLeaderboard() {
   // roster, since an initial empty `players` from a still-loading (or cache-only)
   // subscription is not proof nobody has bingoed yet (Codex P2, PR #99). The
   // Leaderboard view ignores it and reads only `players`/`loading`.
+  //
+  // This roster is deliberately RAW — UNfiltered by the Admin ban (#108). It is the
+  // SHARED source of BOTH the Leaderboard VIEW and Board's First-to-BINGO
+  // determination, and those two need OPPOSITE treatment of a ban: filtering banned
+  // players HERE would let a later Player retroactively become "first to BINGO"
+  // after the original first Player is banned — rewriting a factual historical event
+  // (a ban never changes who was first to BINGO; that already happened). So the ban
+  // is a PRESENTATIONAL filter applied by the Leaderboard COMPONENT for display only
+  // (src/components/Leaderboard.tsx, via `isBanned`), while this hook stays raw so
+  // Board's ceremony reads the true roster. See specs/w2-ban-console.md § Leaderboard.
   const { data, loading, hasServerData } = useColSub<PlayerDoc>(playersCol(), 'players');
   return { players: sortPlayers(data), loading, hasServerData };
 }
@@ -193,13 +260,16 @@ export function useProofFeed(max = 60) {
   // Admin can still reach a threshold-hidden Proof to restore or delete it. This
   // one chokepoint also covers the merged Feed's proof side — `useFeed` composes
   // `useProofFeed`, so a Moment (no `reportCount`) is never touched.
-  const threshold = useReportHideThreshold();
+  const { threshold, bannedUids } = useEventModeration();
   const { data, loading } = useColSub<ProofDoc>(
     query(proofsCol(), where('status', '==', 'active')),
     'proofs',
   );
+  // Plus the Admin ban (#108): a Proof authored by a banned uid drops from the
+  // public Feed (and, through `useFeed`, the merged stream) by its OWNER — the same
+  // presentational hide `useReportedProofs` (Admin) deliberately does NOT apply.
   const proofs = data
-    .filter((p) => !isReportHidden(p.reportCount, threshold))
+    .filter((p) => !isReportHidden(p.reportCount, threshold) && !isBanned(p.uid, bannedUids))
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, max);
   return { proofs, loading };
@@ -214,9 +284,14 @@ export function useProofFeed(max = 60) {
  * filter — a Moment has no lifecycle, it just happened.
  */
 export function useMoments(max = 60) {
+  const { bannedUids } = useEventModeration();
   const { data, loading } = useColSub<MomentDoc>(momentsCol(), 'moments');
+  // The Admin ban (#108): a banned Player's broadcast beats drop from the public
+  // Feed by their `uid`, mirroring the proof side above so the whole merged Feed
+  // (`useFeed`) is consistent. Presentational only; admin surfaces do not read this.
   const moments = data
     .filter(hasCanonicalMomentId)
+    .filter((m) => !isBanned(m.uid, bannedUids))
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, max);
   return { moments, loading };
@@ -354,13 +429,35 @@ export function useReportedProofs() {
  * derivation over the Feed's Proofs (`openDoubts`/`doubtStatusFor` in
  * src/data/doubts.ts) — this hook only streams the raw Doubts; it never gates,
  * blocks, or mutates a Mark (a Doubt is social pressure, never a gate).
+ *
+ * `viewerUid` is the signed-in Player whose board this read serves (Board passes it
+ * for both the per-Square DoubtBadge and the TallySheet). It makes the target-side
+ * ban filter VIEWER-AWARE (see below).
  */
-export function useDoubts(itemId: string | null | undefined) {
+export function useDoubts(itemId: string | null | undefined, viewerUid?: string | null) {
+  const { bannedUids } = useEventModeration(!!itemId);
   const { data, loading, hasServerData } = useColSub<DoubtDoc>(
     itemId ? query(doubtsCol(), where('itemId', '==', itemId)) : null,
     itemId ? `doubts:${itemId}` : 'doubts:none',
   );
-  const doubts = [...data].sort((a, b) => a.createdAt - b.createdAt);
+  // The Admin ban (#108), with the own-content exception mirroring `useMyProofs`
+  // (Codex P2, PR #122 round 2): a ban hides content from OTHERS, not from oneself.
+  //  - `fromUid` banned → ALWAYS hidden (a banned accuser's Doubts vanish for
+  //    everyone, themselves included — the accusation is content aimed at others).
+  //  - `targetUid` banned → hidden EXCEPT when the target IS the current viewer.
+  //    From another Player's board the banned target's presence stays hidden (their
+  //    Mark is already gone from `useTally`, so a Doubt about it would dangle), but
+  //    a banned Player viewing their OWN board must still SEE and be able to answer
+  //    a Doubt raised against them — otherwise the ban would silence accusations
+  //    against them in their own UI, which the own-content exception forbids.
+  // Presentational only; admin surfaces do not read this hook.
+  const doubts = [...data]
+    .filter((d) => {
+      if (isBanned(d.fromUid, bannedUids)) return false;
+      if (isBanned(d.targetUid, bannedUids) && d.targetUid !== viewerUid) return false;
+      return true;
+    })
+    .sort((a, b) => a.createdAt - b.createdAt);
   return { doubts, count: doubts.length, loading, hasServerData };
 }
 
@@ -386,7 +483,13 @@ export function useDoubts(itemId: string | null | undefined) {
  * missing/non-positive threshold filters nothing.
  */
 export function useMyProofs(uid: string | null | undefined) {
-  const threshold = useReportHideThreshold();
+  // Threshold only, no ban filter (#108): this is the VIEWER'S OWN content shown in
+  // the viewer's OWN Doubt-badge derivation, and a ban is PRESENTATIONAL — it hides
+  // a Player's content from OTHERS, not from themselves. So a banned viewer's own
+  // Proofs still answer Doubts against them in their own UI; the ban takes effect on
+  // the PUBLIC-facing reads (useProofFeed / useProofsForItemText) where OTHERS see
+  // this content. See specs/w2-ban-console.md § Filtered surfaces.
+  const { threshold } = useEventModeration();
   const { data, loading, hasServerData } = useColSub<ProofDoc>(
     uid ? query(proofsCol(), where('uid', '==', uid), where('status', '==', 'active')) : null,
     uid ? `proofs:mine:${uid}` : 'proofs:mine:none',
@@ -412,13 +515,20 @@ export function useMyProofs(uid: string | null | undefined) {
  * #107: a missing/non-positive threshold filters nothing.
  */
 export function useProofsForItemText(itemText: string | null | undefined) {
-  const threshold = useReportHideThreshold();
+  const { threshold, bannedUids } = useEventModeration();
   const { data, loading, hasServerData } = useColSub<ProofDoc>(
     itemText
       ? query(proofsCol(), where('itemText', '==', itemText), where('status', '==', 'active'))
       : null,
     itemText ? `proofs:item:${itemText}` : 'proofs:item:none',
   );
-  const proofs = data.filter((p) => !isReportHidden(p.reportCount, threshold));
+  // This is a PUBLIC-facing read — the Tally sheet renders it for EVERY viewer to
+  // show which markers have shown a Proof — so unlike `useMyProofs` it DOES apply
+  // the Admin ban (#108): a banned Player's Proof must not render "Proof shown ✓" in
+  // another Player's Tally sheet. Filtered by the Proof's owner `uid`, composed with
+  // the community auto-hide.
+  const proofs = data.filter(
+    (p) => !isReportHidden(p.reportCount, threshold) && !isBanned(p.uid, bannedUids),
+  );
   return { proofs, loading, hasServerData };
 }

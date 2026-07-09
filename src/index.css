@@ -504,14 +504,19 @@ a {
 /* ---------- per-Prompt tally ---------- */
 /* The count badge sits bottom-RIGHT of a marked Square — clear of the ✓
    (top-right) and the proof ＋ (bottom-left). Tapping opens the who-list, so it
-   is a real button that stops the tap from also toggling the Square. */
+   is a real button that stops the tap from also toggling the Square.
+   The scrim is a TRANSLUCENT black over the marked-cell gradient, so its
+   composited color depends on the gradient end it covers. At 0.4 the near-white
+   --secondary end of get-sporty bled through to ~2.97:1 white text; 0.55 keeps
+   the white numerals ≥ WCAG AA (4.5:1) over BOTH gradient ends on all 8 Themes
+   (worst 4.92:1). See specs/a11y-badge-contrast.md. */
 .tally-badge {
   position: absolute;
   bottom: 2px;
   right: 4px;
   z-index: 3;
   border: none;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(0, 0, 0, 0.55);
   color: #fff;
   border-radius: 20px;
   min-width: 18px;
@@ -531,14 +536,20 @@ a {
    (top-right), the proof ＋ (bottom-left), and the Tally count (bottom-right).
    A distinct warm tone reads as social heat, separate from the neutral Tally
    count. Tapping opens the who-list sheet where a Doubt is raised; a Doubt never
-   blocks or unmarks the Square (ADR 0001), so this is a pressure signal only. */
+   blocks or unmarks the Square (ADR 0001), so this is a pressure signal only.
+   The chip is a darkened --secondary (an OPAQUE color-mix over black, so it
+   covers the gradient beneath it). At 78% it stayed too light for white text on
+   Themes with a light --secondary (get-sporty #eaffef → 1.77:1, neon cyan →
+   2.54:1). 45% keeps a visible secondary tint while dropping every Theme's
+   white numerals to ≥ WCAG AA (4.5:1; worst 4.92:1 on get-sporty). See
+   specs/a11y-badge-contrast.md. */
 .doubt-badge {
   position: absolute;
   top: 2px;
   left: 4px;
   z-index: 3;
   border: none;
-  background: color-mix(in srgb, var(--secondary) 78%, #000);
+  background: color-mix(in srgb, var(--secondary) 45%, #000);
   color: #fff;
   border-radius: 20px;
   min-width: 18px;

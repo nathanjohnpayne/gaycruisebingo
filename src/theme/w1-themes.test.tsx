@@ -6,17 +6,17 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { THEMES } from './themes';
 import { ThemeProvider, useTheme } from './ThemeContext';
-import { parseThemeBlocks, contrastRatio } from './contrast';
+import { contrastRatio, hexToRgb, parseThemeBlocks } from './contrast';
 
 // Covers specs/w1-themes.md: WCAG AA contrast across all 8 [data-theme]
 // blocks, ThemeContext's persistence + async-default invariants, the <5s PRD
 // switch-latency metric, and the "no Atlantis marks" non-goal.
 //
-// The WCAG relative-luminance/contrast-ratio math and the parse-themes.css
-// approach live in ./contrast.ts (extracted by issue #72,
-// specs/theme-on-color-contrast.md) so this suite and
-// src/theme/theme-on-color-contrast.test.tsx share one implementation and
-// can never drift apart on how they compute a contrast ratio.
+// The WCAG 2.1 luminance/contrast helpers and the themes.css block parser live
+// in ./contrast (shared with the badge and theme-on-color suites) so the suite
+// computes from one implementation and never hand-transcribes a color table.
+// Ratios are still computed over [data-theme] blocks parsed straight out of
+// themes.css, so this test can never drift from the CSS it polices.
 
 // `join(dirname(fileURLToPath(import.meta.url)), ...)` rather than
 // `new URL('./themes.css', import.meta.url)`: Vite statically rewrites the
@@ -73,7 +73,7 @@ describe('themes.css — WCAG AA contrast (specs/w1-themes.md)', () => {
 
     for (const [fg, bg] of TEXT_PAIRS) {
       it(`${t.id}: --${fg} on --${bg} meets ${TEXT_MIN}:1`, () => {
-        expect(contrastRatio(vars[fg], vars[bg])).toBeGreaterThanOrEqual(TEXT_MIN);
+        expect(contrastRatio(hexToRgb(vars[fg]), hexToRgb(vars[bg]))).toBeGreaterThanOrEqual(TEXT_MIN);
       });
     }
   }

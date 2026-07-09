@@ -58,6 +58,11 @@ vi.mock('../hooks/useData', () => ({
   useMyPlayer: () => ({ data: null, loading: true, hasServerData: false }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   useLeaderboard: () => ({ players: H.players, loading: H.leaderboardLoading }),
+  // Mirrors src/data/moderation.ts isBanned (#108); the fixtures carry no bannedUids,
+  // so it filters nothing and the share-card standings are unchanged. The ban filter
+  // is pinned in src/components/w2-ban-console.test.tsx.
+  isBanned: (uid: string | null | undefined, bannedUids: readonly string[] | undefined) =>
+    !!uid && Array.isArray(bannedUids) && bannedUids.includes(uid),
 }));
 
 import Celebration from './Celebration';

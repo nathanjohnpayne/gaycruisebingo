@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { THEMES } from './themes';
-import { parseThemeBlocks, contrastRatio, mixSrgb } from './contrast';
+import { contrastRatio, hexToRgb, mixSrgb, parseThemeBlocks } from './contrast';
 
 // Covers specs/theme-on-color-contrast.md (issue #72): the hardcoded-#fff
 // text/border fills in src/index.css that never adapted to [data-theme]
@@ -71,8 +71,8 @@ describe('src/index.css — no hardcoded #fff text/border fill (specs/theme-on-c
     // both painted #fff directly against summer-white's light --bg).
     const bg = themeBlocks['summer-white']?.bg;
     expect(bg).toBeDefined();
-    expect(contrastRatio('#ffffff', bg!)).toBeLessThan(1.2);
-    expect(contrastRatio('#ffffff', bg!)).toBeLessThan(TEXT_MIN);
+    expect(contrastRatio(hexToRgb('#ffffff'), hexToRgb(bg!))).toBeLessThan(1.2);
+    expect(contrastRatio(hexToRgb('#ffffff'), hexToRgb(bg!))).toBeLessThan(TEXT_MIN);
   });
 });
 
@@ -96,10 +96,10 @@ describe('--on-gradient vs both .cell.marked gradient endpoints (specs/theme-on-
   for (const t of THEMES) {
     const vars = themeBlocks[t.id] ?? {};
     it(`${t.id}: --on-gradient meets ${TEXT_MIN}:1 against --primary`, () => {
-      expect(contrastRatio(vars['on-gradient'], vars.primary)).toBeGreaterThanOrEqual(TEXT_MIN);
+      expect(contrastRatio(hexToRgb(vars['on-gradient']), hexToRgb(vars.primary))).toBeGreaterThanOrEqual(TEXT_MIN);
     });
     it(`${t.id}: --on-gradient meets ${TEXT_MIN}:1 against --secondary`, () => {
-      expect(contrastRatio(vars['on-gradient'], vars.secondary)).toBeGreaterThanOrEqual(TEXT_MIN);
+      expect(contrastRatio(hexToRgb(vars['on-gradient']), hexToRgb(vars.secondary))).toBeGreaterThanOrEqual(TEXT_MIN);
     });
   }
 });
@@ -118,7 +118,7 @@ describe('--ink vs --bg for the .cell.marked border (specs/theme-on-color-contra
   for (const t of THEMES) {
     const vars = themeBlocks[t.id] ?? {};
     it(`${t.id}: --ink meets the ${UI_MIN}:1 UI-component floor against --bg`, () => {
-      expect(contrastRatio(vars.ink, vars.bg)).toBeGreaterThanOrEqual(UI_MIN);
+      expect(contrastRatio(hexToRgb(vars.ink), hexToRgb(vars.bg))).toBeGreaterThanOrEqual(UI_MIN);
     });
   }
 });
@@ -137,8 +137,8 @@ describe('.celebrate .big: --ink vs the composited celebrate backdrop (specs/the
   for (const t of THEMES) {
     const vars = themeBlocks[t.id] ?? {};
     it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the 34% --primary tint over --bg`, () => {
-      const composite = mixSrgb(vars.primary, vars.bg, 0.34);
-      expect(contrastRatio(vars.ink, composite)).toBeGreaterThanOrEqual(TEXT_MIN);
+      const composite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), 0.34);
+      expect(contrastRatio(hexToRgb(vars.ink), composite)).toBeGreaterThanOrEqual(TEXT_MIN);
     });
   }
 });
@@ -154,7 +154,7 @@ describe('.signin h1: --ink vs --bg (specs/theme-on-color-contrast.md)', () => {
   for (const t of THEMES) {
     const vars = themeBlocks[t.id] ?? {};
     it(`${t.id}: --ink meets ${TEXT_MIN}:1 against --bg`, () => {
-      expect(contrastRatio(vars.ink, vars.bg)).toBeGreaterThanOrEqual(TEXT_MIN);
+      expect(contrastRatio(hexToRgb(vars.ink), hexToRgb(vars.bg))).toBeGreaterThanOrEqual(TEXT_MIN);
     });
   }
 });
@@ -178,12 +178,12 @@ describe('body gradient tints: --ink vs the composited backdrop (specs/theme-on-
   for (const t of THEMES) {
     const vars = themeBlocks[t.id] ?? {};
     it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the 32% --primary tint over --bg (.brand b, .bingo-head span)`, () => {
-      const composite = mixSrgb(vars.primary, vars.bg, 0.32);
-      expect(contrastRatio(vars.ink, composite)).toBeGreaterThanOrEqual(TEXT_MIN);
+      const composite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), 0.32);
+      expect(contrastRatio(hexToRgb(vars.ink), composite)).toBeGreaterThanOrEqual(TEXT_MIN);
     });
     it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the 26% --secondary tint over --bg (.count b)`, () => {
-      const composite = mixSrgb(vars.secondary, vars.bg, 0.26);
-      expect(contrastRatio(vars.ink, composite)).toBeGreaterThanOrEqual(TEXT_MIN);
+      const composite = mixSrgb(hexToRgb(vars.secondary), hexToRgb(vars.bg), 0.26);
+      expect(contrastRatio(hexToRgb(vars.ink), composite)).toBeGreaterThanOrEqual(TEXT_MIN);
     });
   }
 
@@ -196,8 +196,8 @@ describe('body gradient tints: --ink vs the composited backdrop (specs/theme-on-
     // neon-playground (a mid-saturation theme, not just the summer-white
     // extreme this issue's table led with) so a future revert is caught.
     const vars = themeBlocks['neon-playground']!;
-    const oldComposite = mixSrgb(vars.primary, vars.bg, 0.32);
-    expect(contrastRatio(vars.primary, oldComposite)).toBeLessThan(TEXT_MIN);
+    const oldComposite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), 0.32);
+    expect(contrastRatio(hexToRgb(vars.primary), oldComposite)).toBeLessThan(TEXT_MIN);
   });
 });
 
@@ -213,8 +213,8 @@ describe('share-card gradient tints: --ink vs the composited backdrop (specs/the
   for (const t of THEMES) {
     const vars = themeBlocks[t.id] ?? {};
     it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the 30% --primary tint over --bg (.share-card-bhead span)`, () => {
-      const composite = mixSrgb(vars.primary, vars.bg, 0.3);
-      expect(contrastRatio(vars.ink, composite)).toBeGreaterThanOrEqual(TEXT_MIN);
+      const composite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), 0.3);
+      expect(contrastRatio(hexToRgb(vars.ink), composite)).toBeGreaterThanOrEqual(TEXT_MIN);
     });
   }
 });

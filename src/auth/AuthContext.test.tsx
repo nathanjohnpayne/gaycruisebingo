@@ -27,6 +27,10 @@ vi.mock('../firebase', () => ({ auth: {}, googleProvider: {} }));
 // AuthProvider now mounts the confirm-path listener (#41) beside the attestation
 // gate; stub it — this suite exercises deal-error / stale-attempt hardening only.
 vi.mock('../components/ConfirmWinMoments', () => ({ default: () => null }));
+// AuthProvider also mounts the pool-recovery watcher (#70) beside the gate; stub it —
+// this suite exercises the deal-error/stale-attempt state machine, not the watcher (the
+// watcher has its own suite in src/components/w1-deal-auto-retry.test.tsx).
+vi.mock('../components/PoolRecoveryWatcher', () => ({ default: () => null }));
 vi.mock('../data/api', () => ({
   ensureUserProfile: mocks.ensureUserProfile,
   attestAdult: mocks.attestAdult,

@@ -1,22 +1,67 @@
-// WCAG 2.1 contrast-ratio utilities shared by the theme test suites
-// (src/theme/w1-themes.test.tsx, src/theme/theme-on-color-contrast.test.tsx)
-// so both suites compute contrast the same way and can never drift out of
-// sync with each other's math. Originally lived only in w1-themes.test.tsx
-// (PR #63); extracted here by issue #72 (specs/theme-on-color-contrast.md)
-// when a second suite needed the same math.
+/* WCAG 2.1 contrast + sRGB compositing helpers, plus a themes.css token-block
+ * parser. Extracted here so every contrast check in the suite computes from one
+ * implementation instead of hand-transcribing a color table:
+ *   - src/theme/w1-themes.test.tsx
+ *   - src/theme/a11y-badge-contrast.test.tsx
+ *   - src/theme/theme-on-color-contrast.test.tsx
+ * See specs/w1-themes.md, specs/a11y-badge-contrast.md, and
+ * specs/theme-on-color-contrast.md. */
 
+export type Rgb = [r: number, g: number, b: number];
 export type ThemeVars = Record<string, string>;
 
+/** Parse `#rgb` / `#rrggbb` (ignoring any leading `#` and surrounding space). */
+export function hexToRgb(hex: string): Rgb {
+  const h = hex.trim().replace('#', '');
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const num = parseInt(full, 16);
+  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+}
+
+/** WCAG 2.1 relative luminance of an sRGB color. https://www.w3.org/TR/WCAG21/#dfn-relative-luminance */
+export function relativeLuminance([r, g, b]: Rgb): number {
+  const [R, G, B] = [r, g, b].map((c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * R + 0.7152 * G + 0.0722 * B;
+}
+
+/** WCAG 2.1 contrast ratio between two opaque sRGB colors. https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio */
+export function contrastRatio(a: Rgb, b: Rgb): number {
+  const lA = relativeLuminance(a);
+  const lB = relativeLuminance(b);
+  const [lighter, darker] = lA >= lB ? [lA, lB] : [lB, lA];
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 /**
- * Parses `[data-theme='<id>']` blocks (and the `:root, [data-theme='x']`
- * default block) straight out of a themes.css source string into a map of
- * ThemeId -> custom-property values. Used so contrast tests can never
- * hand-transcribe a color and drift out of sync with the CSS they police.
+ * CSS `color-mix(in srgb, a <aWeight*100>%, b)` for two OPAQUE colors: a
+ * per-channel linear blend in gamma-encoded sRGB (the space `in srgb` mixes in),
+ * rounded to 8-bit. `aWeight` is a's fraction in [0,1]; b takes the rest.
+ */
+export function mixSrgb(a: Rgb, b: Rgb, aWeight: number): Rgb {
+  return [0, 1, 2].map((i) => Math.round(a[i] * aWeight + b[i] * (1 - aWeight))) as Rgb;
+}
+
+/**
+ * Source-over compositing of a translucent `fg` at `alpha` painted onto an
+ * OPAQUE `bg` — the composited color a `rgba(fg, alpha)` fill shows over `bg`.
+ * Identical blend math to {@link mixSrgb} with the alpha as fg's weight; named
+ * separately so call sites read as "this scrim over that backdrop".
+ */
+export function alphaCompositeOver(fg: Rgb, alpha: number, bg: Rgb): Rgb {
+  return mixSrgb(fg, bg, alpha);
+}
+
+/**
+ * Parse `:root, [data-theme='x']` (and bare / comma-chained `[data-theme='x']`)
+ * blocks out of a CSS source into `{ themeId: { varName: value } }`. Lets a test
+ * read the real token values straight from themes.css so it can never drift from
+ * the CSS it polices.
  */
 export function parseThemeBlocks(source: string): Record<string, ThemeVars> {
   const blocks: Record<string, ThemeVars> = {};
-  // Matches ":root, [data-theme='x']" or a bare "[data-theme='x']" (optionally
-  // comma-chained with more theme selectors) followed by its declaration body.
   const blockRe =
     /((?:\[data-theme='[\w-]+'\]|:root)(?:\s*,\s*\[data-theme='[\w-]+'\])*)\s*\{([^}]*)\}/g;
   for (const match of source.matchAll(blockRe)) {
@@ -28,47 +73,4 @@ export function parseThemeBlocks(source: string): Record<string, ThemeVars> {
     for (const id of ids) blocks[id] = { ...(blocks[id] ?? {}), ...vars };
   }
   return blocks;
-}
-
-export function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.trim().replace('#', '');
-  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
-  const num = parseInt(full, 16);
-  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
-}
-
-/** WCAG 2.1 relative luminance of an sRGB color. https://www.w3.org/TR/WCAG21/#dfn-relative-luminance */
-export function relativeLuminance([r, g, b]: [number, number, number]): number {
-  const [R, G, B] = [r, g, b].map((c) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  });
-  return 0.2126 * R + 0.7152 * G + 0.0722 * B;
-}
-
-/** WCAG 2.1 contrast ratio between two sRGB hex colors. https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio */
-export function contrastRatio(hexA: string, hexB: string): number {
-  const lA = relativeLuminance(hexToRgb(hexA));
-  const lB = relativeLuminance(hexToRgb(hexB));
-  const [lighter, darker] = lA >= lB ? [lA, lB] : [lB, lA];
-  return (lighter + 0.05) / (darker + 0.05);
-}
-
-/**
- * Mixes two sRGB hex colors in the sRGB (gamma-encoded) space at `weightA`
- * for `hexA` — the same math `color-mix(in srgb, hexA <weightA*100>%,
- * hexB)` performs, and specifically what `color-mix(in srgb, var(--x) N%,
- * transparent)` painted directly over an opaque `hexB` base composites to
- * (mixing toward `transparent` scales alpha only, so compositing that layer
- * "over" an opaque base is equivalent to mixing straight toward the base
- * color at the same weight). Used to check text-safe-color choices against
- * a `color-mix(...)` tint layered over a flat token, e.g. `.celebrate`'s
- * backdrop or `body`'s gradient-tinted background (src/index.css).
- */
-export function mixSrgb(hexA: string, hexB: string, weightA: number): string {
-  const [r1, g1, b1] = hexToRgb(hexA);
-  const [r2, g2, b2] = hexToRgb(hexB);
-  const mix = (a: number, b: number) => Math.round(a * weightA + b * (1 - weightA));
-  const toHex = (n: number) => n.toString(16).padStart(2, '0');
-  return `#${toHex(mix(r1, r2))}${toHex(mix(g1, g2))}${toHex(mix(b1, b2))}`;
 }
