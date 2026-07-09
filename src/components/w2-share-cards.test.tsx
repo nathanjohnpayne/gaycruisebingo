@@ -441,7 +441,11 @@ describe('Celebration — image share + fallback', () => {
     await user.click(screen.getByRole('button', { name: 'Share' }));
 
     await waitFor(() => expect(toBlobMock).toHaveBeenCalledTimes(1));
-    expect(toBlobNode().textContent).toContain(SHARE_CARD_APP_NAME);
+    // Assert on the `.share-card-event` node specifically, not just
+    // `textContent` at large — the card's footer always renders
+    // `${SHARE_CARD_APP_NAME} 🚢` regardless of `eventName`, so a whole-node
+    // substring check would pass even if the eventName fallback were broken.
+    expect(toBlobNode().querySelector('.share-card-event')?.textContent).toBe(SHARE_CARD_APP_NAME);
   });
 
   it('"Keep playing" closes without generating or sharing a card', async () => {
