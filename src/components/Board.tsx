@@ -13,7 +13,12 @@ import {
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
+  firstBingoCandidateCurrent,
 } from '../data/moments';
+// Type-only (erased at runtime — pulls no module into suites that stub proofs):
+// the proofed-mark completion verdict ProofSheet reports back (PR #110 round 2
+// finding 1), same shape as setMark's return.
+import type { AttachProofResult } from '../data/proofs';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
 import { track } from '../analytics';
 import Celebration from './Celebration';
@@ -291,6 +296,36 @@ export default function Board() {
     const bingoNow = hasBingo(cellsNow);
     const blackoutNow = isBlackout(cellsNow);
     const actor = { uid: cUid, displayName: cName, photoURL: cPhoto };
+    // Ceremonial decision — HOISTED before the plain-bingo fire below (PR #110
+    // round 2 finding 3): the drain-time witness read must be SCHEDULED before
+    // this pass's own bingo Moment write, or a legitimate first win would
+    // witness-suppress its own ceremony (Firestore resolves cache reads/writes in
+    // scheduling order, and writeMomentOnce's setDoc lands after this read).
+    let ceremonialWitness: Promise<boolean> | null = null;
+    let ceremonialGeneration = 0;
+    if (pending.firstBingo && bingoNow && rosterOk) {
+      if (!firstBingoCandidateCurrent(cUid)) {
+        // Stale candidate (finding 3a): an unmark or observed fall bumped the
+        // generation since this candidate was enqueued — the win context it
+        // described no longer holds. KILLED, never fired.
+        clearPendingMoment(cUid, 'firstBingo');
+      } else {
+        // Ceremonial + self-reported (ADR 0001): claim First-to-BINGO only when,
+        // as far as this client's CONFIRMED known-players view shows, no OTHER
+        // Player has bingoed yet — and only while the underlying bingo still
+        // STANDS. The race (two clients briefly both believing they are first)
+        // resolves to one Moment per Event via the singleton doc id. The flag is
+        // consumed NOW (decided-and-lost, killed-stale, and decision-in-flight
+        // are all clears, not falls) so a racing second drain cannot
+        // double-decide the singleton.
+        const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
+        clearPendingMoment(cUid, 'firstBingo');
+        if (!othersBingoed) {
+          ceremonialGeneration = pendingActionGeneration(cUid);
+          ceremonialWitness = hasPriorBingoWitness(cUid);
+        }
+      }
+    }
     if (pending.bingo && bingoNow) {
       broadcastBingo(actor);
       clearPendingMoment(cUid, 'bingo');
@@ -299,16 +334,19 @@ export default function Board() {
       broadcastBlackout(actor);
       clearPendingMoment(cUid, 'blackout');
     }
-    if (pending.firstBingo && bingoNow && rosterOk) {
-      // Ceremonial + self-reported (ADR 0001): claim First-to-BINGO only when, as
-      // far as this client's CONFIRMED known-players view shows, no OTHER Player
-      // has bingoed yet — and only while the underlying bingo still STANDS. The
-      // race (two clients briefly both believing they are first) resolves to one
-      // Moment per Event via the singleton doc id. Decided-and-lost is a CLEAR
-      // (not a fall): the ceremony was adjudicated, not invalidated.
-      const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
-      if (!othersBingoed) broadcastFirstBingo(actor);
-      clearPendingMoment(cUid, 'firstBingo');
+    if (ceremonialWitness) {
+      void ceremonialWitness.then((witnessed) => {
+        // Drain-time witness (finding 3b): if the plain bingo of the ORIGINAL win
+        // ever posted, its immutable `${uid}-bingo` doc is the durable witness —
+        // read from the cache as it stood BEFORE this pass's own bingo write — and
+        // it suppresses a candidate that outlived a fall this tab never observed
+        // (the regain must not mint the singleton). If it never posted, firing is
+        // exactly what a fresh re-enqueue would have legitimately done.
+        if (witnessed) return;
+        // A fall observed while the read was in flight bumps the generation: drop.
+        if (pendingActionGeneration(cUid) !== ceremonialGeneration) return;
+        broadcastFirstBingo(actor);
+      });
     }
   }, []);
 
@@ -441,53 +479,12 @@ export default function Board() {
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
-      // Feed Moment broadcast on the ACTION path (issue #104): the win is tied to
-      // the mark that COMPLETED it — setMark's synchronous transition verdict —
-      // not to a snapshot diff that dies on unmount. Enqueue into the module-scope
-      // pending queue and drain; whatever gate is still closed stays queued (it
-      // survives an unmount / route change) and drains on the next gate-open
-      // (identity resolves / roster confirms). This covers the OFFLINE win for
-      // free: setMark computes the transition from the local cache and its Moment
-      // `setDoc` pends durably (ADR 0006), so no local-action-vs-hydration
-      // disambiguation is needed anymore.
       if (nextMarked) {
-        enqueueWinMoments({
-          uid,
-          bingoTransition: res.bingoTransition,
-          blackoutTransition: res.blackoutTransition,
-        });
-        // The ceremonial First-to-BINGO candidate is gated by the durable prior-win
-        // witness FIRST (round 2 finding D): a regained line whose owner already has
-        // a `${uid}-bingo` Moment in the local cache must NOT re-claim the event
-        // singleton. A cache miss (fresh device) resolves false, so the drain's
-        // roster gate is the fallback (the narrowed residual the spec documents).
-        //
-        // The read is ASYNC, and the pending win can change inside that gap (Codex
-        // P1, PR #110): the player can unmark and LOSE the bingo while the witness
-        // read is in flight — the unmark verdict drops the queued flags — and a
-        // continuation that re-enqueued on the uid check alone would let a later
-        // drain publish the IMMUTABLE event singleton for a win that no longer
-        // stands. So the continuation is triple-gated: the uid is still the acting
-        // account (the queue is uid-keyed), the per-uid ACTION GENERATION captured
-        // before the await is unchanged (every unmark and observed fall bumps it —
-        // the token catches interleaved actions), AND the pending bingo flag still
-        // stands (the flag recheck catches clears the token cannot see). Fail-
-        // closed residual: a concurrent gate-open drain that FIRES the plain bingo
-        // while the read is in flight clears the flag without bumping, so the
-        // recheck forfeits the ceremonial candidate for that action — the bingo
-        // itself published, and nothing false ever posts.
-        if (res.bingoTransition) {
-          const generation = pendingActionGeneration(uid);
-          const witnessed = await hasPriorBingoWitness(uid);
-          if (
-            !witnessed &&
-            feedCtx.current.uid === uid &&
-            pendingActionGeneration(uid) === generation &&
-            peekPendingMoments(uid).bingo
-          ) {
-            enqueueFirstBingoMoment(uid);
-          }
-        }
+        // Feed Moment broadcast on the ACTION path (issue #104): the win is tied
+        // to the mark that COMPLETED it — setMark's synchronous transition
+        // verdict — not to a snapshot diff that dies on unmount. Shared with the
+        // proofed-mark path (attachProof returns the same verdict shape).
+        await broadcastWinVerdict(res);
       } else {
         // Action-driven falling edge (issue #104, hardened by PR #110 finding 1):
         // an unmark whose verdict shows a win no longer stands DROPS its
@@ -497,13 +494,10 @@ export default function Board() {
         // continuation from an earlier mark is invalidated. An already-drained
         // flag is a harmless no-op (the Moment is immutable + once-only besides).
         dropPendingWins(uid, { bingo: !res.bingo, blackout: !res.blackout });
+        // Drain with the action's own folded cells (see broadcastWinVerdict) —
+        // skipped if the account switched while the await was in flight.
+        if (feedCtx.current.uid === uid) drainMoments(res.cells);
       }
-      // Drain with the action's own folded cells: the authoritative post-action
-      // board (the render-current snapshot has usually not echoed yet), so the
-      // fire-time revalidation sees the state this verdict came from. Skipped if
-      // the account switched while the awaits were in flight — the queue keeps
-      // the flags for this uid until its own next drain.
-      if (feedCtx.current.uid === uid) drainMoments(res.cells);
     } catch {
       /* Neither an offline Mark nor an online write REJECTION lands here:
          setMark's commit is fire-and-forget. Offline it queues durably in the
@@ -516,7 +510,68 @@ export default function Board() {
     }
   };
 
+  // ONE completing-action broadcast pipeline for BOTH mark paths (issue #104 +
+  // PR #110 round 2 finding 1): the bare honor Mark (doMark → setMark) and the
+  // proofed Mark (ProofSheet → attachProof) return the SAME win verdict shape.
+  // Enqueue the Moment(s) the verdict reports, run the ceremonial witness +
+  // generation gauntlet, then drain with the action's own folded cells — the
+  // authoritative post-action board (the render-current snapshot has usually not
+  // echoed yet), so the drain's fire-time revalidation sees the state this
+  // verdict came from. Whatever gate is still closed stays queued (surviving an
+  // unmount / route change) and drains on the next gate-open. This covers the
+  // OFFLINE honor win for free: setMark computes the transition from the local
+  // cache and the Moment `setDoc` pends durably (ADR 0006). attachProof cannot
+  // run offline at all (its transaction rejects), so its verdict is always an
+  // online fact.
+  const broadcastWinVerdict = async (res: {
+    cells: Cell[];
+    bingoTransition: boolean;
+    blackoutTransition: boolean;
+  }) => {
+    enqueueWinMoments({
+      uid,
+      bingoTransition: res.bingoTransition,
+      blackoutTransition: res.blackoutTransition,
+    });
+    // The ceremonial First-to-BINGO candidate is gated by the durable prior-win
+    // witness FIRST (round 2 finding D): a regained line whose owner already has
+    // a `${uid}-bingo` Moment in the local cache must NOT re-claim the event
+    // singleton. A cache miss (fresh device) resolves false, so the drain's
+    // roster gate is the fallback (the narrowed residual the spec documents).
+    //
+    // The read is ASYNC, and the pending win can change inside that gap (Codex
+    // P1, PR #110): the player can unmark and LOSE the bingo while the witness
+    // read is in flight — the unmark verdict drops the queued flags — and a
+    // continuation that re-enqueued on the uid check alone would let a later
+    // drain publish the IMMUTABLE event singleton for a win that no longer
+    // stands. So the continuation is gated on: the uid still being the acting
+    // account (the queue is uid-keyed), AND the per-uid ACTION GENERATION
+    // captured before the await being unchanged — every unmark and observed fall
+    // bumps it, so the token catches interleaved actions. Deliberately NOT gated
+    // on the pending bingo flag (PR #110 round 2 finding 2 corrected round 1's
+    // over-tight dual check): a concurrent gate-open/snapshot drain can
+    // legitimately FIRE the plain bingo mid-read — a clear that says the win
+    // STOOD, not that it fell — and must not forfeit the ceremony. Whether the
+    // win still stands at publish is the drain's fire-time revalidation
+    // (bingoNow), not the continuation's job.
+    if (res.bingoTransition) {
+      const generation = pendingActionGeneration(uid);
+      const witnessed = await hasPriorBingoWitness(uid);
+      if (!witnessed && feedCtx.current.uid === uid && pendingActionGeneration(uid) === generation) {
+        enqueueFirstBingoMoment(uid);
+      }
+    }
+    // Skipped if the account switched while the awaits were in flight — the
+    // queue keeps the flags for this uid until its own next drain.
+    if (feedCtx.current.uid === uid) drainMoments(res.cells);
+  };
+
   const toggle = (c: Cell) => {
+    // The shared attribution guard (PR #110 finding 2, widened in round 2):
+    // NO action may start from a render still showing another account's board —
+    // an honor mark would fold the wrong cells (doMark also guards, belt-and-
+    // braces), and a proof sheet would open against the wrong card.
+    if (!cellsAttributable) return;
     if (c.free) return;
     if (c.marked) {
       doMark(c, false); // unmark is always instant
@@ -599,6 +654,15 @@ export default function Board() {
           cell={proofTarget}
           claimMode={claimMode}
           currentFirstBingoAt={player?.firstBingoAt ?? null}
+          // The proofed-mark completion verdict (PR #110 round 2 finding 1): a
+          // successful attachProof reports the SAME win-transition shape setMark
+          // returns, and it rides the SAME broadcast pipeline — a proof_required
+          // win posts its Moment exactly like an honor win. (In admin_confirmed
+          // the attached cell is pending and excluded from the win mask, so the
+          // verdict is structurally transition-free — the confirm-path Moment
+          // stays #41's.) Fire-and-forget: the sheet closes without waiting on
+          // the witness read.
+          onAttached={(res: AttachProofResult) => void broadcastWinVerdict(res)}
           onClose={() => setProofTarget(null)}
         />
       )}

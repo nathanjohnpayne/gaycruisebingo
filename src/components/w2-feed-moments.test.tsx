@@ -32,6 +32,12 @@ const H = vi.hoisted(() => ({
   players: [] as PlayerDoc[],
   rosterConfirmed: true,
   feedEntries: [] as FeedEntry[],
+  // 'honor' marks straight through doMark; 'proof_required' routes an unmarked tap
+  // to ProofSheet (mocked below with a submit trigger) so the proofed completion
+  // path (PR #110 round 2 finding 1) is drivable too.
+  claimMode: 'honor' as 'honor' | 'proof_required' | 'admin_confirmed',
+  // What the mocked ProofSheet reports via onAttached — the attachProof verdict.
+  proofAttachResult: null as unknown,
   setMark: vi.fn(),
   broadcastBingo: vi.fn(),
   broadcastBlackout: vi.fn(),
@@ -45,8 +51,7 @@ vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user, loading:
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
-  // honor mode so a completed line marks straight through (no ProofSheet detour).
-  useEventDoc: () => ({ data: { claimMode: 'honor' }, loading: false }),
+  useEventDoc: () => ({ data: { claimMode: H.claimMode }, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
   useLeaderboard: () => ({ players: H.players, loading: false, hasServerData: H.rosterConfirmed }),
@@ -77,7 +82,23 @@ vi.mock('../data/proofs', () => ({
   reportProof: vi.fn(() => Promise.resolve()),
   deleteProof: vi.fn(() => Promise.resolve()),
 }));
-vi.mock('./ProofSheet', () => ({ default: () => null }));
+// The mocked sheet exposes the COMPLETION path (PR #110 round 2 finding 1): its
+// submit trigger reports H.proofAttachResult through onAttached — the verdict a
+// real attachProof returns — then closes, exactly like the real sheet's submit.
+// The real capture/submit flow is w2-proof-capture.test.tsx; here only the
+// verdict hand-off to Board matters.
+vi.mock('./ProofSheet', () => ({
+  default: (props: { onAttached?: (res: unknown) => void; onClose: () => void }) => (
+    <button
+      onClick={() => {
+        if (H.proofAttachResult) props.onAttached?.(H.proofAttachResult);
+        props.onClose();
+      }}
+    >
+      submit-proof
+    </button>
+  ),
+}));
 vi.mock('./Celebration', () => ({ default: () => null }));
 
 import Board from './Board';
@@ -144,9 +165,17 @@ beforeEach(() => {
   H.players = [];
   H.rosterConfirmed = true;
   H.feedEntries = [];
+  H.claimMode = 'honor';
+  H.proofAttachResult = null;
   H.setMark.mockResolvedValue({ cells: [], ...NO_WIN });
   H.hasPriorBingoWitness.mockResolvedValue(false); // fresh device / no prior win
 });
+
+// The attachProof verdict the mocked ProofSheet reports on submit (same shape as
+// setMark's return — that sameness IS finding 1's fix).
+function attachVerdict(cellsAfter: Cell[], verdict: Partial<Verdict> = {}) {
+  return { cells: cellsAfter, ...NO_WIN, ...verdict };
+}
 
 describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments.md, issue #104)', () => {
   // Moments now broadcast off setMark's SYNCHRONOUS win-transition verdict, consumed
@@ -586,6 +615,151 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     expect(H.broadcastBingo).not.toHaveBeenCalled();
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
     expect(H.broadcastBlackout).not.toHaveBeenCalled();
+  });
+
+  it('a proof_required win broadcasts its Moment from the attach verdict — the proofed path rides the same pipeline (PR #110 round 2 finding 1)', async () => {
+    H.claimMode = 'proof_required';
+    H.board = boardWith([0, 1, 2, 3]); // row 0 one Square shy
+    render(<Board />);
+
+    // Tapping the unmarked fifth Square opens ProofSheet instead of marking — the
+    // proof gate means doMark/setMark never run for this win.
+    await act(async () => {
+      fireEvent.click(screen.getByText('p4'));
+    });
+    expect(H.setMark).not.toHaveBeenCalled();
+
+    // A successful attach reports the SAME verdict shape setMark returns, and the
+    // completion path enqueues + drains exactly like an honor win.
+    H.proofAttachResult = attachVerdict(dealtWith(ROW0), { bingo: true, bingoTransition: true });
+    await act(async () => {
+      fireEvent.click(screen.getByText('submit-proof'));
+    });
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null });
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1); // witness clean + roster clean
+    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1'); // same ceremonial gauntlet
+  });
+
+  it('a proofed Mark that completes no line broadcasts nothing (finding 1)', async () => {
+    H.claimMode = 'proof_required';
+    H.board = boardWith([]);
+    render(<Board />);
+    await act(async () => {
+      fireEvent.click(screen.getByText('p0'));
+    });
+    H.proofAttachResult = attachVerdict(dealtWith([0])); // no transition in the verdict
+    await act(async () => {
+      fireEvent.click(screen.getByText('submit-proof'));
+    });
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled();
+    expect(H.broadcastBlackout).not.toHaveBeenCalled();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('an unmark after a proofed win still clears the held broadcast via the verdict path (finding 1)', async () => {
+    // The proofed win completes while identity is UNKNOWN → held in the queue.
+    H.claimMode = 'proof_required';
+    H.playerLoading = true;
+    H.player = null;
+    H.board = boardWith([0, 1, 2, 3]);
+    const { rerender } = render(<Board />);
+    await act(async () => {
+      fireEvent.click(screen.getByText('p4'));
+    });
+    H.proofAttachResult = attachVerdict(dealtWith(ROW0), { bingo: true, bingoTransition: true });
+    await act(async () => {
+      fireEvent.click(screen.getByText('submit-proof'));
+    });
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // held (identity unknown)
+
+    // The listener echoes the proofed win, then the player UNMARKS a marked Square
+    // (unmark is instant in every claim mode → doMark) and the win falls: the
+    // unmark VERDICT drops the held broadcast — one falling-edge path for both
+    // completing paths.
+    H.board = boardWith(ROW0);
+    rerender(<Board />);
+    await flushAsync();
+    await clickMark('p0', { bingo: false, bingoTransition: false });
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+
+    // Identity resolves: nothing to drain — no Moment for the fallen proofed win.
+    H.playerLoading = false;
+    H.playerConfirmed = true;
+    H.player = { displayName: 'Deck Daddy', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('the ceremonial survives its own plain-bingo drain mid-witness-read — the over-tight flag recheck is gone (PR #110 round 2 finding 2)', async () => {
+    // Identity UNKNOWN at the winning tap; the witness read HANGS.
+    H.playerLoading = true;
+    H.player = null;
+    H.board = boardWith([0, 1, 2, 3]);
+    const { rerender } = render(<Board />);
+    let resolveWitness!: (v: boolean) => void;
+    H.hasPriorBingoWitness.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { resolveWitness = resolve; }),
+    );
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // held; witness in flight
+
+    // The gate OPENS while the read is in flight: the echo lands and identity
+    // resolves — the gate-open drain legitimately FIRES the plain bingo (clearing
+    // its flag) before the ceremonial continuation has run.
+    H.board = boardWith(ROW0);
+    rerender(<Board />);
+    H.playerLoading = false;
+    H.playerConfirmed = true;
+    H.player = { displayName: 'Deck Daddy', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // the plain bingo drained mid-read
+
+    // The witness resolves clean: the win stood the whole time and no prior win
+    // exists — the ceremonial must proceed. (Round 1's pending-flag recheck wrongly
+    // forfeited it here: the drain-fire clear says the win STOOD, not that it fell.
+    // The generation is unchanged — no unmark, no fall — so the candidate enqueues
+    // and publishes.)
+    resolveWitness(false);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+  });
+
+  it('a ceremonial candidate held across an unmount does NOT mint the singleton for a regained line — the drain-time witness suppresses it (PR #110 round 2 finding 3)', async () => {
+    // Identity known, roster UNCONFIRMED: the plain bingo fires, the ceremonial holds.
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.board = boardWith([0, 1, 2, 3]);
+    const { unmount } = render(<Board />);
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // posted — its immutable doc IS the witness now
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // roster-held candidate
+
+    // The Player leaves the Card route (the candidate survives — that is the #104
+    // fix), the win FALLS without this tab ever observing it (no snapshot showed
+    // the fall, so no generation bump), and a line is REGAINED in the same page
+    // load. The posted bingo Moment is in the local cache:
+    unmount();
+    H.hasPriorBingoWitness.mockResolvedValue(true);
+
+    // Remount with the regained line standing and the roster now confirmed. The
+    // stale candidate passes revalidation (a bingo STANDS) and its generation
+    // never moved — but the DRAIN-TIME witness sees the original win's Moment and
+    // suppresses the ceremony: a regain must not mint the event singleton.
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
+    H.board = boardWith(ROW0);
+    render(<Board />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // not re-fired either (drained pre-unmount)
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false }); // candidate consumed
   });
 });
 

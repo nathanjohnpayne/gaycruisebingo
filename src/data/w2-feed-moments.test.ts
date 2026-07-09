@@ -53,6 +53,7 @@ import {
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
+  firstBingoCandidateCurrent,
   resetPendingMoments,
 } from './moments';
 import { hasCanonicalMomentId, mergeFeed } from '../hooks/useData';
@@ -280,6 +281,27 @@ describe('the action generation + fall-driven drops (Codex P1/P2, PR #110)', () 
     expect(pendingActionGeneration('u2')).toBe(0); // isolated
     resetPendingMoments();
     expect(pendingActionGeneration('u1')).toBe(0);
+  });
+
+  it('stamps the ceremonial candidate at enqueue — a moved generation makes it STALE (round 2 finding 3)', () => {
+    enqueueFirstBingoMoment('u1');
+    expect(firstBingoCandidateCurrent('u1')).toBe(true);
+
+    dropPendingWins('u1', {}); // an unmark that dropped nothing still bumps
+    // The candidate flag itself survived (nothing fell)…
+    expect(peekPendingMoments('u1').firstBingo).toBe(true);
+    // …but it is STALE now: the drain must KILL it, never fire it.
+    expect(firstBingoCandidateCurrent('u1')).toBe(false);
+
+    // A fresh re-enqueue at the new generation is current again.
+    enqueueFirstBingoMoment('u1');
+    expect(firstBingoCandidateCurrent('u1')).toBe(true);
+  });
+
+  it('firstBingoCandidateCurrent is false when no candidate is queued', () => {
+    expect(firstBingoCandidateCurrent('u1')).toBe(false);
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    expect(firstBingoCandidateCurrent('u1')).toBe(false); // a plain bingo is not a candidate
   });
 });
 

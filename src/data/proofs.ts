@@ -33,6 +33,32 @@ export interface AttachProofArgs {
 }
 
 /**
+ * The win verdict a proofed Mark reports back to Board — the SAME shape `setMark`
+ * returns (issue #104 / PR #110 round 2 finding 1), so both completing-mark paths
+ * feed one broadcast helper. `bingo`/`blackout` are the STANDING state of the
+ * folded board; the transitions are the rising EDGE this attach crossed
+ * (no-win → win), computed against the LIVE prior cells the transaction read.
+ * In `admin_confirmed` mode the attached cell goes `pending`, and the win mask
+ * (game/logic: `marked && status !== 'pending'`) excludes it — so an
+ * admin-confirmed attach structurally crosses NO transition and broadcasts no
+ * Moment at attach time. That is a decision, not an accident: a pending claim
+ * can be REJECTED, and a Moment is IMMUTABLE (delete-only moderation) — an
+ * attach-time broadcast would leave a permanent win announcement for a claim an
+ * admin then rejects. The tally-marker analogy (which does publish at attach,
+ * #87) does not carry: `rejectClaim` deletes the marker on rejection, but no
+ * automatic cleanup path exists for a Moment. The admin-confirmed win (and its
+ * Moment) materialize at admin confirm — the #41 deferral. `cells` is the folded
+ * post-attach board, for fire-time revalidation in the drain.
+ */
+export interface AttachProofResult {
+  cells: Cell[];
+  bingo: boolean;
+  blackout: boolean;
+  bingoTransition: boolean;
+  blackoutTransition: boolean;
+}
+
+/**
  * Mark a square and attach a playful proof (ADR 0002: the Proof IS the Feed
  * entry — a bare Mark posts nothing, an attached Proof posts here). In
  * admin_confirmed mode the square goes pending (doesn't count) and a claim is
@@ -69,7 +95,7 @@ export interface AttachProofArgs {
  * protection; see its own comment for what it does and does not do once a
  * drain has actually clobbered the projection.
  */
-export async function attachProof(args: AttachProofArgs): Promise<void> {
+export async function attachProof(args: AttachProofArgs): Promise<AttachProofResult> {
   const { uid, displayName, photoURL, cells, cellIndex, itemId, itemText, claimMode, currentFirstBingoAt, proof } =
     args;
   const now = Date.now();
@@ -88,7 +114,11 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
 
   // Recompute cells from the live board inside a transaction so a concurrent
   // mark from another tab/device isn't clobbered by this caller's stale snapshot.
-  await runTransaction(db, async (tx) => {
+  // The transaction callback RETURNS the win verdict (PR #110 round 2 finding 1 —
+  // return-shape only; the write set is untouched): on a retry the callback
+  // re-runs against fresh reads, so the verdict always describes the COMMITTED
+  // attempt's fold. runTransaction resolves with the callback's return value.
+  return await runTransaction(db, async (tx): Promise<AttachProofResult> => {
     const boardRef = rawBoard(uid);
     const playerRef = rawPlayer(uid);
     const markerRef = itemId ? rawMarker(itemId, uid) : null;
@@ -179,6 +209,17 @@ export async function attachProof(args: AttachProofArgs): Promise<void> {
         resolvedBy: null,
       });
     }
+    // The verdict (see AttachProofResult): standing state from the fold, rising
+    // edges against the LIVE prior cells this transaction read. In
+    // admin_confirmed the folded cell is `pending` and the win mask excludes it,
+    // so both transitions are structurally false — no Moment fires at attach.
+    return {
+      cells: next,
+      bingo: bingoCount > 0,
+      blackout,
+      bingoTransition: completedLines(liveCells).length === 0 && bingoCount > 0,
+      blackoutTransition: blackout && !isBlackout(liveCells),
+    };
   });
 }
 

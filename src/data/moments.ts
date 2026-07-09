@@ -77,7 +77,18 @@ export interface PendingMomentFlags {
   blackout: boolean;
   firstBingo: boolean;
 }
-const pendingMoments = new Map<string, PendingMomentFlags>();
+// The STORED entry carries one INTERNAL field beyond the public triple (PR #110
+// round 2 finding 3): the action generation at which the ceremonial candidate was
+// enqueued. A candidate can be held for a long time (roster gate, unmounts), and
+// the drain must fire it only if the uid's generation is UNCHANGED since its
+// enqueue (`firstBingoCandidateCurrent`): any interleaved unmark or observed fall
+// bumps the generation and thereby kills stale candidates — even ones whose flag
+// survived because the bump came from a blackout-only fall or a no-drop unmark.
+// `peekPendingMoments` projects the public triple, keeping this internal.
+interface StoredPendingFlags extends PendingMomentFlags {
+  firstBingoGeneration: number;
+}
+const pendingMoments = new Map<string, StoredPendingFlags>();
 
 // The per-uid ACTION GENERATION (Codex P1 on PR #110): a monotonically increasing
 // token bumped by every unmark and every observed win-fall (`dropPendingWins`).
@@ -87,9 +98,13 @@ const pendingMoments = new Map<string, PendingMomentFlags>();
 // stale continuation that re-enqueued on the uid check alone would let a later
 // drain publish the IMMUTABLE event-level singleton for a win that no longer
 // stands. The continuation therefore captures the generation BEFORE the await and
-// enqueues ONLY if it is unchanged after AND the pending bingo flag still stands
-// (the token catches interleaved actions; the flag recheck catches clears). Kept
-// in a SEPARATE map from the flags: the flags entry is deleted when empty, and a
+// enqueues ONLY if it is unchanged after (round 2 finding 2 corrected the round-1
+// dual check: the pending-flag recheck was over-tight — a concurrent drain can
+// legitimately FIRE the plain bingo mid-read, and that clear must not forfeit the
+// ceremony; whether the win still STANDS is the drain's fire-time revalidation,
+// not the continuation's). The token also stamps each ceremonial candidate at
+// enqueue (round 2 finding 3 — see `firstBingoCandidateCurrent`). Kept in a
+// SEPARATE map from the flags: the flags entry is deleted when empty, and a
 // deleted-then-recreated entry must not reset the token to a value a stale
 // continuation already captured.
 const pendingGenerations = new Map<string, number>();
@@ -104,11 +119,11 @@ function pendingKey(uid: string): string {
   return `${appName}/${uid}`;
 }
 
-function ensurePending(uid: string): PendingMomentFlags {
+function ensurePending(uid: string): StoredPendingFlags {
   const key = pendingKey(uid);
   let flags = pendingMoments.get(key);
   if (!flags) {
-    flags = { bingo: false, blackout: false, firstBingo: false };
+    flags = { bingo: false, blackout: false, firstBingo: false, firstBingoGeneration: 0 };
     pendingMoments.set(key, flags);
   }
   return flags;
@@ -138,19 +153,43 @@ export function enqueueWinMoments(params: {
  * prior-win witness first (`hasPriorBingoWitness`, PR #99 round 2 finding D): a
  * regained line whose owner already has a `${uid}-bingo` Moment must not re-claim
  * the event singleton. The roster gate (no OTHER Player has an earlier bingo) is
- * applied at DRAIN time, where the confirmed roster lives.
+ * applied at DRAIN time, where the confirmed roster lives. The candidate is
+ * STAMPED with the current action generation (PR #110 round 2 finding 3): the
+ * drain fires it only while that stamp is current (`firstBingoCandidateCurrent`).
  */
 export function enqueueFirstBingoMoment(uid: string): void {
-  ensurePending(uid).firstBingo = true;
+  const flags = ensurePending(uid);
+  flags.firstBingo = true;
+  flags.firstBingoGeneration = pendingActionGeneration(uid);
 }
 
 /**
- * The pending flags for `uid` (a stable empty triple when nothing is queued). The
- * drainer reads this, applies the identity/roster gates, broadcasts, then clears
- * each fired kind via `clearPendingMoment`.
+ * The pending flags for `uid` (a stable empty triple when nothing is queued),
+ * PROJECTED to the public triple — the internal candidate-generation stamp stays
+ * internal. The drainer reads this, applies the identity/roster gates plus the
+ * fire-time revalidation, broadcasts, then clears each fired kind via
+ * `clearPendingMoment`.
  */
 export function peekPendingMoments(uid: string): PendingMomentFlags {
-  return pendingMoments.get(pendingKey(uid)) ?? { bingo: false, blackout: false, firstBingo: false };
+  const flags = pendingMoments.get(pendingKey(uid));
+  return flags
+    ? { bingo: flags.bingo, blackout: flags.blackout, firstBingo: flags.firstBingo }
+    : { bingo: false, blackout: false, firstBingo: false };
+}
+
+/**
+ * True when a ceremonial candidate is queued AND was enqueued at the CURRENT
+ * action generation — no unmark or observed fall has interleaved since (PR #110
+ * round 2 finding 3). A stale candidate (generation moved) must be KILLED by the
+ * drain, never fired: the win context it was enqueued for no longer describes the
+ * board. The complementary protection for falls this tab NEVER observed (no bump)
+ * is the drain-time witness re-check in Board's drain — see specs/w2-feed-moments.md
+ * § PR #110 hardening.
+ */
+export function firstBingoCandidateCurrent(uid: string): boolean {
+  const flags = pendingMoments.get(pendingKey(uid));
+  if (!flags?.firstBingo) return false;
+  return flags.firstBingoGeneration === pendingActionGeneration(uid);
 }
 
 /**

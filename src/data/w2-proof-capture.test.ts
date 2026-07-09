@@ -255,6 +255,76 @@ describe('attachProof — posts an active Proof to the Feed and marks the cell (
   });
 });
 
+// A dealt board with `indices` already marked-confirmed (for verdict tests).
+function withMarked(indices: number[]): Cell[] {
+  const cells = dealt();
+  for (const i of indices) cells[i] = { ...cells[i], marked: true, markedAt: 1, status: 'confirmed' };
+  return cells;
+}
+
+describe('attachProof — returns the win-transition verdict (PR #110 round 2 finding 1)', () => {
+  // The SAME verdict shape setMark returns (return-shape change only — the write
+  // set/transaction are untouched): Board broadcasts the proofed win's Moment off
+  // it, exactly like an honor win. Transitions are computed against the LIVE prior
+  // cells the transaction read, so a stale caller prop cannot fake an edge.
+
+  it('reports a bingo TRANSITION when the attach completes the first line', async () => {
+    boardState = { cells: withMarked([0, 1, 2, 3]) }; // row 0 one Square shy
+    const res = await attachProof({
+      ...baseArgs,
+      cellIndex: 4,
+      itemId: 'i4',
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'saw it happen' },
+    });
+    expect(res.bingo).toBe(true);
+    expect(res.bingoTransition).toBe(true); // no-bingo → bingo, THIS attach crossed it
+    expect(res.blackout).toBe(false);
+    expect(res.blackoutTransition).toBe(false);
+    // The folded post-attach board rides back for the drain's fire-time revalidation.
+    expect(res.cells[4]).toMatchObject({ marked: true, status: 'confirmed' });
+  });
+
+  it('reports NO transition when the attach completes no line, and none while a line already stood', async () => {
+    const res = await attachProof({
+      ...baseArgs,
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'a lone mark' },
+    });
+    expect(res.bingo).toBe(false);
+    expect(res.bingoTransition).toBe(false);
+
+    boardState = { cells: withMarked([0, 1, 2, 3, 4]) }; // a standing top-row BINGO
+    const further = await attachProof({
+      ...baseArgs,
+      cellIndex: 6,
+      itemId: 'i6',
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'another one' },
+    });
+    expect(further.bingo).toBe(true); // still standing…
+    expect(further.bingoTransition).toBe(false); // …but NOT a fresh edge
+  });
+
+  it('admin_confirmed: the pending cell is excluded from the win mask — NO transition at attach (the Moment belongs to the confirm path, #41)', async () => {
+    boardState = { cells: withMarked([0, 1, 2, 3]) }; // would complete row 0 if confirmed
+    const res = await attachProof({
+      ...baseArgs,
+      cellIndex: 4,
+      itemId: 'i4',
+      claimMode: 'admin_confirmed',
+      proof: { type: 'text', text: 'pending claim' },
+    });
+    // The cell IS marked (the tally marker publishes at attach, #87) but PENDING —
+    // and a pending claim can be REJECTED, so no immutable win Moment may exist for
+    // it yet: the win mask excludes pending, and the verdict is structurally clean.
+    expect(res.cells[4]).toMatchObject({ marked: true, status: 'pending' });
+    expect(res.bingo).toBe(false);
+    expect(res.bingoTransition).toBe(false);
+    expect(res.blackoutTransition).toBe(false);
+  });
+});
+
 describe('attachProof — ONLINE-only: it rejects offline rather than queuing (ADR 0006)', () => {
   it('rejects (does not queue) when the media upload has no signal — no proof doc is written', async () => {
     uploadSpy.mockRejectedValueOnce(new Error('storage/retry-limit-exceeded (offline)'));

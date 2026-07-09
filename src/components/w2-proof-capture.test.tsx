@@ -58,10 +58,12 @@ vi.mock('../data/moments', () => ({
   enqueueFirstBingoMoment: vi.fn(),
   peekPendingMoments: vi.fn(() => ({ bingo: false, blackout: false, firstBingo: false })),
   clearPendingMoment: vi.fn(),
-  // PR #110 hardening: doMark drops fallen wins on every unmark (dropPendingWins)
-  // and reads the action generation around the witness await; inert here.
+  // PR #110 hardening: doMark drops fallen wins on every unmark (dropPendingWins),
+  // reads the action generation around the witness await, and the drain checks the
+  // ceremonial candidate's enqueue stamp (firstBingoCandidateCurrent); inert here.
   dropPendingWins: vi.fn(),
   pendingActionGeneration: vi.fn(() => 0),
+  firstBingoCandidateCurrent: vi.fn(() => false),
 }));
 // Board resolves the caller's display name via resolveDisplayName (fed the player
 // row) for BOTH the Tally marker and ProofSheet (#31/#78). Stub it here to mirror
