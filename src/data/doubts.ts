@@ -256,18 +256,37 @@ export const DOUBT_SATISFACTION_SKEW_MS = 60_000;
 /**
  * Whether `doubt` has been answered by one of `proofs`: the doubted Player
  * (`targetUid`) has a Proof for the same Prompt (`itemText`) created at or after
- * the Doubt, within the rules' clock-skew tolerance. Two guards shape the cutoff:
- * it is CLAMPED to no-later-than `now` (Codex P2, PR #106 finding 3 — the rules
- * bound a Doubt's `createdAt` near request.time, but as defense-in-depth a Doubt
- * that somehow carries a far-future stamp, e.g. a doc written before that bound
- * shipped, must not be rendered permanently UNANSWERABLE: any Proof from `now`
- * onward answers it, while a normal past-dated Doubt is unaffected since `min` is
- * its own stamp); and the comparison tolerates `DOUBT_SATISFACTION_SKEW_MS` of
- * doubter-clock skew (round 2 finding 1 — a Proof at or after `cutoff - skew`
- * satisfies, so an immediate Proof against a fast-but-rules-legal Doubt stamp is
- * not rejected). `now` is injected (defaulting to the wall clock) purely so the
- * truth table stays deterministic; the derivations below share this one
- * definition of "answered".
+ * the Doubt, within the rules' clock-skew tolerance. Three regimes shape the
+ * cutoff, split by how trustworthy the Doubt's client-set stamp is:
+ *
+ *  - LEGAL PAST (`createdAt <= now`) — the normal case: the cutoff is the Doubt's
+ *    own stamp, and the comparison tolerates `DOUBT_SATISFACTION_SKEW_MS` of
+ *    doubter-clock skew (round 2 finding 1 — a Proof at or after
+ *    `createdAt - skew` satisfies, so an immediate Proof against a
+ *    fast-but-rules-legal stamp is not rejected).
+ *  - LEGAL WINDOW (`now < createdAt <= now + skew`) — a stamp the rules ACCEPT
+ *    (their +60s forward allowance): the cutoff clamps to `now` (finding 3), so
+ *    the Doubt is answerable immediately rather than only once its stamp passes.
+ *  - GARBAGE (`createdAt > now + skew`) — a stamp the rules could never have
+ *    accepted (they bound createdAt to +60s of request.time, so no in-app Doubt
+ *    can carry one; this is the legacy/malformed-doc case): the timestamp carries
+ *    NO information, so using it to reject Proofs is unjustifiable — ANY matching
+ *    (uid, itemText) Proof answers (cutoff -Infinity). This is what makes
+ *    satisfaction MONOTONE as `now` advances (Codex P3, PR #106 round 5): the
+ *    round-3 shape clamped the cutoff to a SLIDING `min(createdAt, now)`, so a
+ *    Proof attached "now" satisfied only until the moving cutoff outran it 60s
+ *    later — the badge/status re-opened on a Proof already shown. Once answered,
+ *    a garbage-stamped Doubt stays answered for as long as the stamp remains
+ *    provably garbage — for a far-future stamp, the entire offset minus the skew.
+ *    Residual (stateless-derivation limit, documented in specs/w2-doubts.md):
+ *    when the wall clock finally reaches `createdAt - skew`, the stamp becomes
+ *    indistinguishable from a legitimately-raised Doubt's and the legal-window
+ *    then legal-past semantics apply — a Proof older than `createdAt - skew` that
+ *    satisfied during the garbage phase reads open again from that boundary.
+ *
+ * `now` is injected (defaulting to the wall clock) purely so the truth table
+ * stays deterministic; the derivations below share this one definition of
+ * "answered".
  */
 export function isDoubtSatisfied(
   doubt: Pick<DoubtDoc, 'targetUid' | 'createdAt'>,
@@ -275,7 +294,10 @@ export function isDoubtSatisfied(
   proofs: readonly Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>[],
   now: number = Date.now(),
 ): boolean {
-  const cutoff = Math.min(doubt.createdAt, now);
+  const cutoff =
+    doubt.createdAt > now + DOUBT_SATISFACTION_SKEW_MS
+      ? Number.NEGATIVE_INFINITY // garbage stamp — any matching Proof answers (round 5)
+      : Math.min(doubt.createdAt, now);
   return proofs.some(
     (p) =>
       p.uid === doubt.targetUid &&

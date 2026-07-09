@@ -278,19 +278,45 @@ describe('satisfied-by-Proof — pure derivation truth table (specs/w2-doubts.md
     expect(isDoubtSatisfied(fastDoubt, TEXT, [proof({ createdAt: base - 1_001 })])).toBe(false);
   });
 
-  it('clamps the satisfaction cutoff to no-later-than now — a future-dated Doubt is answerable immediately (PR #106 finding 3)', () => {
+  it('treats an ILLEGALLY-future stamp as garbage — ANY matching Proof answers it (PR #106 finding 3, reshaped by round 5)', () => {
     const now = 20_000_000;
-    // A Doubt stamped an hour ahead of eval time (beyond any legal skew — a doc
-    // written before the rules bound shipped). WITHOUT the clamp, satisfaction is
-    // unreachable until that future instant; clamped to `now`, any Proof from
-    // now − skew onward answers it (defense-in-depth behind the rules bound).
-    const future = doubt({ createdAt: now + 3_600_000 });
-    expect(isDoubtSatisfied(future, TEXT, [proof({ createdAt: now })], now)).toBe(true);
-    expect(isDoubtSatisfied(future, TEXT, [proof({ createdAt: now - 59_999 })], now)).toBe(true); // within the skew of the clamped cutoff
-    expect(isDoubtSatisfied(future, TEXT, [proof({ createdAt: now - 60_001 })], now)).toBe(false); // beyond it
-    // A normal past-dated Doubt is unaffected by the clamp (min is its own stamp).
+    // A Doubt stamped an hour ahead of eval time — beyond the +60s the rules could
+    // ever have accepted, so a legacy/malformed doc. The stamp carries no
+    // information: WITHOUT the guard, satisfaction is unreachable until that
+    // future instant (finding 3); with it, any matching Proof answers, regardless
+    // of the Proof's own age (round 5 — a garbage stamp cannot justify rejecting).
+    const garbage = doubt({ createdAt: now + 3_600_000 });
+    expect(isDoubtSatisfied(garbage, TEXT, [proof({ createdAt: now })], now)).toBe(true);
+    expect(isDoubtSatisfied(garbage, TEXT, [proof({ createdAt: now - 60_001 })], now)).toBe(true); // even an old Proof
+    // ...but only a MATCHING Proof: uid + itemText still gate.
+    expect(isDoubtSatisfied(garbage, TEXT, [proof({ uid: 'carol', createdAt: now })], now)).toBe(false);
+    expect(isDoubtSatisfied(garbage, TEXT, [proof({ itemText: 'Other', createdAt: now })], now)).toBe(false);
+    // A normal past-dated Doubt is unaffected (its own stamp is the cutoff).
     expect(isDoubtSatisfied(doubt(), TEXT, [proof()], now)).toBe(true);
     expect(isDoubtSatisfied(doubt(), TEXT, [proof({ createdAt: DOUBT_AT - 61_000 })], now)).toBe(false);
+  });
+
+  it('keeps a garbage-stamped Doubt SATISFIED as now advances — monotone, never re-opening on a shown Proof (PR #106 round 5, P3)', () => {
+    const T = 30_000_000;
+    const garbage = doubt({ createdAt: T + 3_600_000 }); // +1h — illegally future throughout
+    const answered = [proof({ createdAt: T })]; // the Proof attached "now"
+    expect(isDoubtSatisfied(garbage, TEXT, answered, T)).toBe(true); // satisfied at T...
+    // ...and STILL satisfied later. On the round-3 shape the sliding
+    // min(createdAt, now) cutoff outran the Proof at T + 60s: the badge/status
+    // re-opened on evidence already shown. Once answered, always answered (for as
+    // long as the stamp remains provably garbage — the whole offset minus the skew).
+    expect(isDoubtSatisfied(garbage, TEXT, answered, T + 61_000)).toBe(true);
+    expect(isDoubtSatisfied(garbage, TEXT, answered, T + 1_800_000)).toBe(true); // 30 min on
+  });
+
+  it('keeps the legal-window semantics — a stamp within the rules’ +60s is NOT garbage (round 5 pins rounds 1–3 unchanged)', () => {
+    const now = 40_000_000;
+    // A fast-but-rules-legal clock (+59s): the finding-3 clamp still applies —
+    // answerable immediately, but an old Proof beyond now − skew still does not
+    // count (this stamp is plausible, so it still gates freshness).
+    const fastClock = doubt({ createdAt: now + 59_000 });
+    expect(isDoubtSatisfied(fastClock, TEXT, [proof({ createdAt: now })], now)).toBe(true);
+    expect(isDoubtSatisfied(fastClock, TEXT, [proof({ createdAt: now - 60_001 })], now)).toBe(false);
   });
 
   it('openDoubts keeps only the unanswered Doubts (the per-Prompt open count)', () => {
