@@ -21,6 +21,7 @@ export default function ItemPool() {
   const { user } = useAuth();
   const { items, loading } = useItems();
   const [text, setText] = useState('');
+  const [spicy, setSpicy] = useState(false);
   const [addThrottled, setAddThrottled] = useState(false);
   const [reportThrottled, setReportThrottled] = useState(false);
   const addTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -53,9 +54,10 @@ export default function ItemPool() {
       return;
     }
     try {
-      await addItem(user.uid, text);
+      await addItem(user.uid, text, spicy);
       track('add_item');
       setText('');
+      setSpicy(false);
     } catch (e) {
       console.error(e);
     }
@@ -96,6 +98,9 @@ export default function ItemPool() {
         <button className="btn primary" onClick={add} disabled={!text.trim() || addThrottled}>
           Add
         </button>
+        <label style={{ fontSize: 12 }}>
+          <input type="checkbox" checked={spicy} onChange={(e) => setSpicy(e.target.checked)} /> 🔞 Spicy
+        </label>
       </div>
       <p className="muted" style={{ fontSize: 12 }}>
         {PRESAIL_NOTE} {items.length} in the pool.

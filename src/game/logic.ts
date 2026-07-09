@@ -46,23 +46,96 @@ export function shuffle<T>(arr: T[], rnd: () => number): T[] {
 export interface DealItem {
   id: string;
   text: string;
+  spicy: boolean;
+}
+
+function interleavePicks(spicyPicks: DealItem[], tamePicks: DealItem[]): DealItem[] {
+  const total = spicyPicks.length + tamePicks.length;
+  const slots: (DealItem | null)[] = Array(total).fill(null);
+
+  // Place the smaller category first, spread evenly across the 24 non-free
+  // positions, then fill the rest. This guarantees the composition pattern
+  // cannot collapse into a random row-sized cluster for unlucky seeds while
+  // keeping each category's own seeded shuffle order intact.
+  const primary = spicyPicks.length <= tamePicks.length ? spicyPicks : tamePicks;
+  const secondary = spicyPicks.length <= tamePicks.length ? tamePicks : spicyPicks;
+  const primarySlots = new Set<number>();
+  for (let i = 0; i < primary.length; i++) {
+    primarySlots.add(Math.floor(((i + 0.5) * total) / primary.length));
+  }
+  let primaryIndex = 0;
+  let secondaryIndex = 0;
+  for (let i = 0; i < total; i++) {
+    slots[i] = primarySlots.has(i) ? primary[primaryIndex++] : secondary[secondaryIndex++];
+  }
+
+  return slots as DealItem[];
+}
+
+/**
+ * Stratified sample of 24 picks from `pool`: `spicyRatio` of them (rounded)
+ * drawn from the spicy category, the rest from tame, each category shuffled
+ * independently with the SAME seeded `rnd` for determinism. Backfills from
+ * the other category when one runs short (so a thin category still yields a
+ * full 24, so long as the pool overall has >= MIN_POOL), then lays out the
+ * chosen categories evenly across the 24 non-free positions so spicy/tame
+ * interleave instead of clustering.
+ */
+function stratifiedPicks(pool: DealItem[], spicyRatio: number, rnd: () => number): DealItem[] {
+  const spicyPool = shuffle(
+    pool.filter((p) => p.spicy),
+    rnd,
+  );
+  const tamePool = shuffle(
+    pool.filter((p) => !p.spicy),
+    rnd,
+  );
+  const targetSpicy = Math.round(24 * spicyRatio);
+  const targetTame = 24 - targetSpicy;
+  let spicyTaken = Math.min(spicyPool.length, targetSpicy);
+  let tameTaken = Math.min(tamePool.length, targetTame + (targetSpicy - spicyTaken));
+  const remaining = 24 - spicyTaken - tameTaken;
+  if (remaining > 0) {
+    spicyTaken += Math.min(spicyPool.length - spicyTaken, remaining);
+  }
+  return interleavePicks(spicyPool.slice(0, spicyTaken), tamePool.slice(0, tameTaken));
 }
 
 /** Deal a frozen 5x5 board: 24 sampled prompts + free center (index 12). */
-export function dealBoard(pool: DealItem[], freeText: string, seed: number): Cell[] {
+export function dealBoard(
+  pool: DealItem[],
+  freeText: string,
+  seed: number,
+  spicyRatio: number = 0.4,
+): Cell[] {
   // A board needs MIN_POOL (24) non-free prompts; dealing from a smaller pool
   // would leave blank cells (itemId: null, empty text). Fail fast so callers
-  // (joinAndDeal) never persist a broken board.
+  // (joinAndDeal) never persist a broken board. This guard fires before any
+  // stratification, so it is unaffected by ratio/backfill.
   if (pool.length < MIN_POOL) {
     throw new Error(`dealBoard needs at least ${MIN_POOL} prompts, received ${pool.length}.`);
   }
   const rnd = mulberry32(seed);
-  const picks = shuffle(pool, rnd).slice(0, 24);
+  // A malformed events/{id}.settings.spicyRatio (join-side only checks
+  // typeof === 'number', so NaN/Infinity/out-of-0..1 values can reach here)
+  // must not corrupt the slice math below (Math.round(NaN) etc. would starve
+  // both categories and let MIN_POOL pass while the board still gets blank
+  // non-free cells, Codex #135). Clamp to a finite 0..1, falling back to the
+  // default ratio when the value isn't usably numeric at all.
+  const ratio = Number.isFinite(spicyRatio) ? Math.min(1, Math.max(0, spicyRatio)) : 0.4;
+  const picks = stratifiedPicks(pool, ratio, rnd);
   const cells: Cell[] = [];
   let p = 0;
   for (let i = 0; i < 25; i++) {
     if (i === CENTER) {
-      cells.push({ index: i, itemId: null, text: freeText, free: true, marked: true, markedAt: null });
+      cells.push({
+        index: i,
+        itemId: null,
+        text: freeText,
+        free: true,
+        marked: true,
+        markedAt: null,
+      });
     } else {
       const item = picks[p++];
       cells.push({

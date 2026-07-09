@@ -17,8 +17,9 @@ describe('w1-event-seed: seeded settings (ADR 0004)', () => {
 
   it('seeds no blackoutEnabled — ADR 0004 removed it as dead config', () => {
     expect(EVENT_SEED.settings).not.toHaveProperty('blackoutEnabled');
-    // Exact shape: the threshold is the only settings key the static seed payload carries.
-    expect(Object.keys(EVENT_SEED.settings)).toEqual(['reportHideThreshold']);
+    // Exact shape: reportHideThreshold and spicyRatio (w1-seed-and-composition)
+    // are the only settings keys the static seed payload carries.
+    expect(Object.keys(EVENT_SEED.settings)).toEqual(['reportHideThreshold', 'spicyRatio']);
   });
 
   it('marks settings.blackoutEnabled for deletion in the merge write, so re-seeding an Event doc from the previous seed actually removes the stale field', () => {
@@ -29,7 +30,11 @@ describe('w1-event-seed: seeded settings (ADR 0004)', () => {
     // install — stand in a fake sentinel here and assert it passes through untouched.
     const deleteSentinel = Symbol('FieldValue.delete()');
     const payload = eventWritePayload([], deleteSentinel);
-    expect(payload.settings).toEqual({ reportHideThreshold: 4, blackoutEnabled: deleteSentinel });
+    expect(payload.settings).toEqual({
+      reportHideThreshold: 4,
+      spicyRatio: 0.4,
+      blackoutEnabled: deleteSentinel,
+    });
   });
 
   it('never seeds a literal value for blackoutEnabled — the seed source references it only as the delete target', () => {
@@ -86,16 +91,22 @@ describe('w1-event-seed: prompt pool density (ADR 0003)', () => {
     expect(ITEMS.length).toBeGreaterThanOrEqual(24);
   });
 
-  it('keeps the pool in the dense ~30–50 band so a late joiner can still be dealt a Board', () => {
-    expect(ITEMS.length).toBeGreaterThanOrEqual(30);
-    expect(ITEMS.length).toBeLessThanOrEqual(50);
+  // w1-seed-and-composition (#129) supersedes ADR 0003's original ~30-50
+  // "dense" band with a canonical 87-entry pool (24 spicy / 63 tame) — a
+  // deliberate, ticket-accepted decision, not a regression of the density
+  // intent (still comfortably above the 24-prompt deal floor).
+  it('seeds the canonical 87-entry pool (w1-seed-and-composition)', () => {
+    expect(ITEMS.length).toBe(87);
   });
 
-  it('seeds unique, non-empty prompt texts — content-hash doc ids collapse duplicates', () => {
-    expect(new Set(ITEMS).size).toBe(ITEMS.length);
-    for (const text of ITEMS) {
-      expect(typeof text).toBe('string');
-      expect(text.trim().length).toBeGreaterThan(0);
+  it('seeds unique, non-empty prompt { text, spicy } entries — content-hash doc ids (hashed on text) collapse duplicates', () => {
+    expect(new Set(ITEMS.map((it: { text: string; spicy: boolean }) => it.text)).size).toBe(
+      ITEMS.length,
+    );
+    for (const it of ITEMS as { text: string; spicy: boolean }[]) {
+      expect(typeof it.text).toBe('string');
+      expect(it.text.trim().length).toBeGreaterThan(0);
+      expect(typeof it.spicy).toBe('boolean');
     }
   });
 });
