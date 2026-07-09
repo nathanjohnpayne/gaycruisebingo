@@ -49,6 +49,228 @@ export interface MomentActor {
   photoURL: string | null;
 }
 
+// --- The pending-Moment queue (issue #104): a win awaiting its gate ---------
+//
+// A win Moment broadcasts off the MARK that completed it (setMark's synchronous
+// transition verdict, consumed in Board.doMark) — not off snapshot diffing. But
+// the broadcast still has GATES: a KNOWN saved identity for all three kinds (never
+// stamp a returning Player's stale auth name into an IMMUTABLE Moment), plus a
+// SERVER-CONFIRMED roster for the ceremonial First-to-BINGO. When a win crosses
+// while a gate is still closed, its broadcast must WAIT for the gate to open.
+//
+// Round-4 of PR #99 kept that waiting state in a COMPONENT ref in Board.tsx, so a
+// Player who left the Card route before the gate opened lost the Moment forever
+// (the ref died with the unmount, and the returning board baselined the already
+// standing win). This queue lifts that state to MODULE scope — keyed by app+uid,
+// the same durability pattern `markChains` uses in api.ts — so it survives Board
+// unmounts and route changes: whichever Board mount next sees the gate open drains
+// it. The deterministic Moment doc id keeps a held-then-fired broadcast idempotent,
+// and the writer's write-once cache pre-check + create-only rule are the structural
+// once-only backstop besides. RESIDUAL (documented, accepted): a queued-but-undrained
+// broadcast still dies on a full page RELOAD (module state is per-page-load) — but
+// the deterministic id + the returning board baselining the standing win mean that
+// costs at most one possibly-lost Moment for a win that straddled a reload, never a
+// duplicate or a spurious fire. That is the SAME class of loss as the prior
+// unmount bug, strictly NARROWER (only a reload, not any route change).
+export interface PendingMomentFlags {
+  bingo: boolean;
+  blackout: boolean;
+  firstBingo: boolean;
+}
+// The STORED entry carries one INTERNAL field beyond the public triple (PR #110
+// round 2 finding 3): the action generation at which the ceremonial candidate was
+// enqueued. A candidate can be held for a long time (roster gate, unmounts), and
+// the drain must fire it only if the uid's generation is UNCHANGED since its
+// enqueue (`firstBingoCandidateCurrent`): an interleaved OBSERVED BINGO FALL
+// bumps the generation and thereby kills stale candidates (round 4 narrowed the
+// bump — a no-drop unmark or a blackout-only fall preserves a valid candidate;
+// every in-app bingo-fall bump also clears the candidate, so the stamp is
+// belt-and-braces against future bump sites rather than a reachable kill today).
+// `peekPendingMoments` projects the public triple, keeping this internal.
+interface StoredPendingFlags extends PendingMomentFlags {
+  firstBingoGeneration: number;
+}
+const pendingMoments = new Map<string, StoredPendingFlags>();
+
+// The per-uid ACTION GENERATION (Codex P1 on PR #110): a monotonically increasing
+// token bumped by every OBSERVED BINGO FALL (`dropPendingWins` with fell.bingo —
+// round 4 narrowed it from every-unmark: only what changes whether the bingo
+// stands may stale the ceremonial machinery).
+// Board's ceremonial First-to-BINGO enqueue crosses an async gap (the durable-
+// witness cache read), and the pending win can change inside that gap: the player
+// unmarks and loses the bingo, the unmark verdict drops the queued flags — and a
+// stale continuation that re-enqueued on the uid check alone would let a later
+// drain publish the IMMUTABLE event-level singleton for a win that no longer
+// stands. The continuation therefore captures the generation BEFORE the await and
+// enqueues ONLY if it is unchanged after (round 2 finding 2 corrected the round-1
+// dual check: the pending-flag recheck was over-tight — a concurrent drain can
+// legitimately FIRE the plain bingo mid-read, and that clear must not forfeit the
+// ceremony; whether the win still STANDS is the drain's fire-time revalidation,
+// not the continuation's). The token also stamps each ceremonial candidate at
+// enqueue (round 2 finding 3 — see `firstBingoCandidateCurrent`). Kept in a
+// SEPARATE map from the flags: the flags entry is deleted when empty, and a
+// deleted-then-recreated entry must not reset the token to a value a stale
+// continuation already captured.
+const pendingGenerations = new Map<string, number>();
+
+// Key by app + uid (mirrors `markChains` in api.ts). The moment writers always
+// use the module `db` singleton, so the app segment is effectively constant here;
+// keying on uid is what actually isolates two identities sharing a browser (a
+// held win for one account must never drain under the other), and the app prefix
+// keeps the shape identical to the mark-chain key for anyone reading both.
+function pendingKey(uid: string): string {
+  const appName = (db as unknown as { app?: { name?: string } }).app?.name ?? 'default';
+  return `${appName}/${uid}`;
+}
+
+function ensurePending(uid: string): StoredPendingFlags {
+  const key = pendingKey(uid);
+  let flags = pendingMoments.get(key);
+  if (!flags) {
+    flags = { bingo: false, blackout: false, firstBingo: false, firstBingoGeneration: 0 };
+    pendingMoments.set(key, flags);
+  }
+  return flags;
+}
+
+/**
+ * Enqueue the per-Player win Moment(s) a mark just COMPLETED — driven by
+ * `setMark`'s transition verdict (Board.doMark), never by a snapshot diff. Only a
+ * rising edge enqueues; a no-op call (neither transition) leaves the queue
+ * untouched so it never resurrects a drained-or-absent flag.
+ */
+export function enqueueWinMoments(params: {
+  uid: string;
+  bingoTransition: boolean;
+  blackoutTransition: boolean;
+}): void {
+  const { uid, bingoTransition, blackoutTransition } = params;
+  if (!bingoTransition && !blackoutTransition) return;
+  const flags = ensurePending(uid);
+  if (bingoTransition) flags.bingo = true;
+  if (blackoutTransition) flags.blackout = true;
+}
+
+/**
+ * Enqueue the ceremonial First-to-BINGO candidate for a just-completed bingo. Kept
+ * separate from `enqueueWinMoments` because the caller gates it on the durable
+ * prior-win witness first (`hasPriorBingoWitness`, PR #99 round 2 finding D): a
+ * regained line whose owner already has a `${uid}-bingo` Moment must not re-claim
+ * the event singleton. The roster gate (no OTHER Player has an earlier bingo) is
+ * applied at DRAIN time, where the confirmed roster lives. The candidate is
+ * STAMPED with the current action generation (PR #110 round 2 finding 3): the
+ * drain fires it only while that stamp is current (`firstBingoCandidateCurrent`).
+ */
+export function enqueueFirstBingoMoment(uid: string): void {
+  const flags = ensurePending(uid);
+  flags.firstBingo = true;
+  flags.firstBingoGeneration = pendingActionGeneration(uid);
+}
+
+/**
+ * The pending flags for `uid` (a stable empty triple when nothing is queued),
+ * PROJECTED to the public triple — the internal candidate-generation stamp stays
+ * internal. The drainer reads this, applies the identity/roster gates plus the
+ * fire-time revalidation, broadcasts, then clears each fired kind via
+ * `clearPendingMoment`.
+ */
+export function peekPendingMoments(uid: string): PendingMomentFlags {
+  const flags = pendingMoments.get(pendingKey(uid));
+  return flags
+    ? { bingo: flags.bingo, blackout: flags.blackout, firstBingo: flags.firstBingo }
+    : { bingo: false, blackout: false, firstBingo: false };
+}
+
+/**
+ * True when a ceremonial candidate is queued AND was enqueued at the CURRENT
+ * action generation — no OBSERVED BINGO FALL has interleaved since (PR #110
+ * round 2 finding 3; round 4 narrowed the bump to actual bingo falls). A stale candidate (generation moved) must be KILLED by the
+ * drain, never fired: the win context it was enqueued for no longer describes the
+ * board. The complementary protection for falls this tab NEVER observed (no bump)
+ * is the drain-time witness re-check in Board's drain — see specs/w2-feed-moments.md
+ * § PR #110 hardening.
+ */
+export function firstBingoCandidateCurrent(uid: string): boolean {
+  const flags = pendingMoments.get(pendingKey(uid));
+  if (!flags?.firstBingo) return false;
+  return flags.firstBingoGeneration === pendingActionGeneration(uid);
+}
+
+/**
+ * The current action generation for `uid` (see `pendingGenerations` above).
+ * Board's doMark captures this immediately before the async durable-witness read
+ * and re-reads it in the continuation: a mismatch means the BINGO the action
+ * described has since been OBSERVED TO FALL (an unmark verdict or a passive
+ * falling edge — PR #110 round 4 narrowed the bump to actual bingo falls), so
+ * the ceremonial enqueue is refused (Codex P1, PR #110).
+ */
+export function pendingActionGeneration(uid: string): number {
+  return pendingGenerations.get(pendingKey(uid)) ?? 0;
+}
+
+/**
+ * Record what an unmark verdict or a passive falling-edge snapshot showed FELL:
+ * clears the corresponding still-held flags — a bingo fall also drops the
+ * ceremonial candidate, which cannot outlive the win it accompanies — and bumps
+ * the action generation ON AN ACTUAL BINGO FALL ONLY (Codex P2, PR #110 round 4).
+ * The generation's sole consumers are the CEREMONIAL machinery — the birth-time
+ * witness continuation and the candidate stamp — so only an event that changes
+ * whether the bingo stands may stale them: a non-falling unmark (another line
+ * still standing) cannot un-witness anything, and bumping on it suppressed a
+ * legitimate First-to-BINGO whose witness read was still in flight (the round-4
+ * finding). A blackout-only fall does not bump either — bumping there would
+ * reintroduce the same bug shape (an unrelated blackout fall staling a valid
+ * bingo ceremony); no consumer reads the generation for blackout. Two callers,
+ * both observers of reality: Board.doMark's unmark path (the local verdict) and
+ * Board's cells effect on a PASSIVE falling-edge snapshot (bingo/blackout
+ * true→false in listener data — a cross-tab unmark or a rules rollback that
+ * produces no local verdict; PR #110 finding 3). Distinct from
+ * `clearPendingMoment` (a drain FIRE-clear, or a decided-and-lost ceremony),
+ * which never bumps: a fire means the win stood and was published.
+ */
+export function dropPendingWins(uid: string, fell: { bingo?: boolean; blackout?: boolean }): void {
+  const key = pendingKey(uid);
+  if (fell.bingo) {
+    pendingGenerations.set(key, (pendingGenerations.get(key) ?? 0) + 1);
+  }
+  const flags = pendingMoments.get(key);
+  if (!flags) return;
+  if (fell.bingo) {
+    flags.bingo = false;
+    flags.firstBingo = false;
+  }
+  if (fell.blackout) flags.blackout = false;
+  if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
+}
+
+/**
+ * Clear one DRAINED kind so a later drain cannot re-fire it: the drain either
+ * published the Moment (the win stood at fire time) or decided-and-lost the
+ * ceremony against a confirmed roster. Not for falls — a win that no longer
+ * stands is dropped via `dropPendingWins`, which also bumps the action
+ * generation. The map entry is deleted once empty to keep it from growing per uid.
+ */
+export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags): void {
+  const key = pendingKey(uid);
+  const flags = pendingMoments.get(key);
+  if (!flags) return;
+  flags[kind] = false;
+  if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
+}
+
+/**
+ * Drop the ENTIRE pending queue and its action generations. Exported for test
+ * isolation only: both maps are module state that (by design) persist across
+ * component unmounts, so a suite that exercises the hold→drain path must reset
+ * them between cases. Not used by app code. (A continuation captured before a
+ * reset sees generation 0 again, but its flag recheck fails against the cleared
+ * flags — the dual check covers the wraparound.)
+ */
+export function resetPendingMoments(): void {
+  pendingMoments.clear();
+  pendingGenerations.clear();
+}
+
 /**
  * Write one Moment, fire-and-forget and offline-queueable (ADR 0002 + ADR 0006).
  *

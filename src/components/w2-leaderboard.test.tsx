@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { PlayerDoc } from '../types';
+import type { EventDoc, PlayerDoc } from '../types';
 
 // specs/w2-leaderboard.md, RTL layer (issue #35). Leaderboard is presentational
 // over useLeaderboard's already-ranked `players` array — the tie-break order
@@ -14,15 +14,24 @@ import type { PlayerDoc } from '../types';
 // WHEN that Player is not rank #1 (the pin tracks earliest-bingo, not rank —
 // ADR 0001, a ceremonial/self-reported honour); (2) the "· BLACKOUT" suffix
 // renders only for a Blackout Player; (3) the all/with-BINGO/Blackout filters
-// narrow the visible rows WITHOUT reordering the remaining ones.
+// narrow the visible rows WITHOUT reordering the remaining ones. The Share
+// Card affordance issue #36 adds is covered separately in
+// src/components/w2-share-cards.test.tsx — useEventDoc is stubbed here only
+// so Leaderboard's render doesn't crash on the added hook call, and
+// ../analytics is stubbed only because Leaderboard now imports `track` (its
+// real module imports ../firebase, which initializes a real Firebase app —
+// unnecessary and unsafe for a suite that never asserts on tracking).
 
 const H = vi.hoisted(() => ({
   players: [] as PlayerDoc[],
   loading: false,
+  event: null as EventDoc | null,
 }));
 
+vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../hooks/useData', () => ({
   useLeaderboard: () => ({ players: H.players, loading: H.loading }),
+  useEventDoc: () => ({ data: H.event, loading: false }),
 }));
 
 import Leaderboard from './Leaderboard';

@@ -289,6 +289,19 @@ export function computeMark(params: {
   player: { squaresMarked: number; bingoCount: number; firstBingoAt?: number | null; blackout: boolean };
   bingo: boolean;
   blackout: boolean;
+  // The win TRANSITION this mark crossed — the synchronous verdict the Feed
+  // Moment broadcast rides (issue #104). `bingo`/`blackout` above are the
+  // STANDING state (a bingo/blackout holds NOW); these are the EDGE (this mark
+  // newly COMPLETED one). `bingoTransition` is a no-bingo → bingo crossing
+  // (`previousBingoCount === 0 && bingoCount > 0`); `blackoutTransition` is a
+  // not-blackout → blackout crossing. An unmark can only remove a line, so it
+  // never sets either. doMark broadcasts the per-Player bingo/blackout Moment
+  // from THESE (not from snapshot diffing), so a broadcast is tied to the mark
+  // that caused the win rather than to a component-lifetime edge ref that dies
+  // on unmount (the #104 fix). Computed here — inside the folded next-state — so
+  // the write path is the single source of truth for "this mark won".
+  bingoTransition: boolean;
+  blackoutTransition: boolean;
 } {
   const { cells, index, nextMarked, claimMode, currentFirstBingoAt, now } = params;
   const next: Cell[] = cells.map((c) =>
@@ -338,6 +351,14 @@ export function computeMark(params: {
     player,
     bingo: bingoCount > 0,
     blackout,
+    // The rising edges, derived from the SAME folded state (no extra scan of a
+    // caller-held snapshot): a bingo transition needs the prior board to hold no
+    // line and this fold to hold one; a blackout transition needs the prior
+    // board to be not-full and this fold to be full. `nextMarked` need not be
+    // checked — an unmark can only reduce the mask, so neither count/mask can
+    // rise on it.
+    bingoTransition: previousBingoCount === 0 && bingoCount > 0,
+    blackoutTransition: blackout && !isBlackout(cells),
   };
 }
 
@@ -407,7 +428,13 @@ export async function setMark(params: {
   // to the cached player row's already-denormalized name — see `markerDisplayName`.
   displayName?: string;
   database?: Firestore;
-}): Promise<{ cells: Cell[]; bingo: boolean; blackout: boolean }> {
+}): Promise<{
+  cells: Cell[];
+  bingo: boolean;
+  blackout: boolean;
+  bingoTransition: boolean;
+  blackoutTransition: boolean;
+}> {
   const { uid } = params;
   const database = params.database ?? db;
   const chainKey = `${(database as unknown as { app?: { name?: string } }).app?.name ?? 'default'}/${uid}`;
@@ -438,7 +465,13 @@ async function runSetMark(
     displayName?: string;
   },
   database: Firestore,
-): Promise<{ cells: Cell[]; bingo: boolean; blackout: boolean }> {
+): Promise<{
+  cells: Cell[];
+  bingo: boolean;
+  blackout: boolean;
+  bingoTransition: boolean;
+  blackoutTransition: boolean;
+}> {
   const { uid } = params;
   const boardRef = doc(database, 'events', EVENT_ID, 'boards', uid);
   const playerRef = doc(database, 'events', EVENT_ID, 'players', uid);
@@ -474,7 +507,7 @@ async function runSetMark(
   }
 
   const now = Date.now();
-  const { cells, player, bingo, blackout } = computeMark({
+  const { cells, player, bingo, blackout, bingoTransition, blackoutTransition } = computeMark({
     ...params,
     cells: baseCells,
     currentFirstBingoAt: baseFirstBingoAt,
@@ -530,7 +563,11 @@ async function runSetMark(
     );
   });
 
-  return { cells, bingo, blackout };
+  // The transition verdict rides back to doMark synchronously (from the local
+  // fold above, computed BEFORE the fire-and-forget commit), which broadcasts
+  // the matching Feed Moment off it — the win is tied to the mark that caused
+  // it, not to a Board snapshot-diff that dies on unmount (issue #104).
+  return { cells, bingo, blackout, bingoTransition, blackoutTransition };
 }
 
 // --- Phase 0 client-side rate limiting (add / report a Prompt, #28) ---

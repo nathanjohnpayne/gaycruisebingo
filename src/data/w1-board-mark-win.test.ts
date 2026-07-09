@@ -225,6 +225,78 @@ describe('computeMark (win detection + stats)', () => {
     expect(r.blackout).toBe(true);
     expect(r.player.blackout).toBe(true);
   });
+
+  // The win TRANSITION verdict (issue #104): the synchronous edge doMark broadcasts
+  // the Feed Moment off — the mark that COMPLETED the win, distinguished from a mark
+  // made while a win already stood. `bingo`/`blackout` are the STANDING state;
+  // `bingoTransition`/`blackoutTransition` are the rising EDGE.
+  it('reports a bingo TRANSITION on the mark that completes the first line, not a further mark', () => {
+    const first = computeMark({
+      cells: withMarked([0, 1, 2, 3]), // one square shy of the top row
+      index: 4, // completes it → the transition into having a bingo
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      now: 1000,
+    });
+    expect(first.bingo).toBe(true);
+    expect(first.bingoTransition).toBe(true); // no-bingo → bingo
+
+    const further = computeMark({
+      cells: withMarked([0, 1, 2, 3, 4]), // the line already stands
+      index: 5, // a further mark while the bingo holds
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: 111,
+      now: 2000,
+    });
+    expect(further.bingo).toBe(true); // still standing…
+    expect(further.bingoTransition).toBe(false); // …but NOT a fresh edge
+  });
+
+  it('reports a blackout TRANSITION only on the mark that fills the card', () => {
+    const allButOne = Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12 && i !== 0);
+    const fill = computeMark({
+      cells: withMarked(allButOne), // everything but Square 0 (and the free centre)
+      index: 0, // the final square → the blackout edge
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: 111,
+      now: 6000,
+    });
+    expect(fill.blackout).toBe(true);
+    expect(fill.blackoutTransition).toBe(true);
+    // The same fill does not re-report a BINGO edge — a line already stood before it.
+    expect(fill.bingoTransition).toBe(false);
+  });
+
+  it('an unmark reports NEITHER transition (a mark can only reduce the mask on unmark)', () => {
+    const r = computeMark({
+      cells: withMarked([0, 1, 2, 3, 4]), // a standing top-row BINGO
+      index: 4,
+      nextMarked: false, // unmark removes the last line
+      claimMode: 'honor',
+      currentFirstBingoAt: 111,
+      now: 7000,
+    });
+    expect(r.bingo).toBe(false);
+    expect(r.bingoTransition).toBe(false);
+    expect(r.blackoutTransition).toBe(false);
+  });
+
+  it('an admin_confirmed mark that goes pending crosses no transition (pending does not count)', () => {
+    const r = computeMark({
+      cells: withMarked([0, 1, 2, 3]), // one square shy of the top row
+      index: 4, // would complete it, but admin_confirmed makes it pending
+      nextMarked: true,
+      claimMode: 'admin_confirmed',
+      currentFirstBingoAt: null,
+      now: 8000,
+    });
+    expect(r.cells[4].status).toBe('pending');
+    expect(r.bingo).toBe(false); // pending is excluded from the mask, so no line
+    expect(r.bingoTransition).toBe(false); // → the confirm-path emission is #41's (deferred)
+  });
 });
 
 describe('setMark (write shape)', () => {
@@ -274,7 +346,15 @@ describe('setMark (write shape)', () => {
     expect(runTransaction).not.toHaveBeenCalled();
     // Fire-and-forget commit; the win result comes back from the local compute.
     expect(commitSpy).toHaveBeenCalledTimes(1);
-    expect(res).toEqual({ cells: expect.any(Array), bingo: false, blackout: false });
+    // The return now also carries the win TRANSITION verdict doMark broadcasts the
+    // Feed Moment off (issue #104): a bare non-winning Mark crosses neither edge.
+    expect(res).toEqual({
+      cells: expect.any(Array),
+      bingo: false,
+      blackout: false,
+      bingoTransition: false,
+      blackoutTransition: false,
+    });
   });
 });
 
@@ -551,8 +631,15 @@ describe('setMark (surfaces a genuine commit failure instead of swallowing it)',
     });
 
     // Optimistic contract unchanged: setMark still resolves with the locally
-    // computed win result even though the write will be rolled back.
-    expect(res).toEqual({ cells: expect.any(Array), bingo: false, blackout: false });
+    // computed win result (now incl. the transition verdict) even though the
+    // write will be rolled back.
+    expect(res).toEqual({
+      cells: expect.any(Array),
+      bingo: false,
+      blackout: false,
+      bingoTransition: false,
+      blackoutTransition: false,
+    });
 
     // commit() is fire-and-forget, so the .catch runs on a later microtask.
     await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
