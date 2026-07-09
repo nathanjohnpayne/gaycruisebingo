@@ -12,7 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:rules": "firebase emulators:exec --only firestore,storage \"vitest run --config vitest.rules.config.ts\"",
-    "test:e2e": "firebase emulators:exec --only auth,firestore,storage \"playwright test\"",
+    "test:e2e": "scripts/test-e2e.sh",
     "emulator": "firebase emulators:start --only auth,firestore,storage",
     "deploy": "npm run build && scripts/firebase/op-firebase-deploy",
     "deploy:hosting": "npm run build && scripts/firebase/op-firebase-deploy --only hosting",

@@ -10,6 +10,7 @@ import {
   EVENT_SEED,
   seedEmulatorEvent,
   SEEDED_ACTIVE_PROMPT_COUNT,
+  userAttested,
 } from './support/seed';
 import { joinViaSharedLink, signedInUid } from './support/join';
 import { LINE_INDICES_EXCLUDING_CENTER, readDealtCellTexts, tapCellByText } from './support/board';
@@ -94,6 +95,17 @@ test.describe('x-e2e-happy-path', () => {
     await page.evaluate(async () => {
       await navigator.serviceWorker.ready;
     });
+
+    // The join must have FULLY settled server-side before the dead zone starts:
+    // signIn() persists the 18+ attestation via a Firestore TRANSACTION after
+    // the popup, and the signed-in shell renders before that transaction
+    // commits. Cutting the network too early kills it mid-flight (transactions
+    // never queue offline), leaving this User un-attested — the step-6 reload
+    // would then land on the #23 re-prompt gate instead of the Board. Realistic
+    // ordering too: the ship-wifi dead zone comes after the online join.
+    await expect(async () => {
+      expect(await userAttested(testEnv, uid)).toBe(true);
+    }).toPass({ timeout: 10_000 });
 
     // 1. Go offline — a ship-wifi dead zone.
     await context.setOffline(true);
