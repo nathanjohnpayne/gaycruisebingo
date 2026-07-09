@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   ensureUserProfile: vi.fn(),
   attestAdult: vi.fn(),
   readAdultAttestation: vi.fn(),
+  readAdultAttestationFromCache: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
 }));
@@ -31,6 +32,7 @@ vi.mock('../data/api', () => ({
   ensureUserProfile: mocks.ensureUserProfile,
   attestAdult: mocks.attestAdult,
   readAdultAttestation: mocks.readAdultAttestation,
+  readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));
@@ -89,6 +91,10 @@ beforeEach(() => {
   mocks.ensureUserProfile.mockResolvedValue(undefined);
   // profileReady is the subject here, not attestation — read the User as already
   // attested so the #23 re-prompt gate never intercepts the Probe / GatedSaver.
+  // The cache-first read (#115) misses under jsdom, so the online server read is
+  // what settles the gate — keeping profileReady's settle timing tied to the
+  // ensureUserProfile deferred these tests drive.
+  mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
   mocks.readAdultAttestation.mockResolvedValue(1);
   mocks.attestAdult.mockResolvedValue(undefined);
   mocks.joinAndDeal.mockResolvedValue(undefined);

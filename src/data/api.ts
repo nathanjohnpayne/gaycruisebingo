@@ -177,6 +177,32 @@ export async function readAdultAttestation(uid: string): Promise<number | null> 
   return typeof v === 'number' ? v : null;
 }
 
+/**
+ * Read a User's 18+ attestation from the PERSISTENT LOCAL CACHE only — the
+ * offline-safe, render-path read for the cold-boot gate (#115). Unlike
+ * `readAdultAttestation` (a server point read that offline never resolves — a
+ * transaction-free `getDoc` still awaits the network round trip when the doc is
+ * absent from cache), this is `getDocFromCache`: it resolves SYNCHRONOUSLY from
+ * the IndexedDB cache (ADR 0006) with no network, so a returning User's already-
+ * cached row settles the gate while offline.
+ *
+ * Returns the ms-epoch `attestedAdultAt` when the cached row carries one, or
+ * `null` for a cached row that DEFINITIVELY lacks it (present-but-unstamped, or a
+ * cached "not found"). It REJECTS on a genuine cache MISS (the row was never
+ * fetched into this device's cache). AuthContext maps those three outcomes to the
+ * knownFirstBingoAt / hasServerData tri-state discipline: a stamp settles the gate
+ * TRUE offline; a definite `null` or a cache miss stays UNKNOWN (never re-prompted
+ * offline, never settled `true`), so cache-first can neither block render nor fail
+ * the age gate OPEN. The authoritative present/absent determination — the one that
+ * can settle a definite re-prompt — comes from the server `readAdultAttestation`
+ * on the online/reconnect path, never from this cache read.
+ */
+export async function readAdultAttestationFromCache(uid: string): Promise<number | null> {
+  const snap = await getDocFromCache(rawUser(uid));
+  const v = snap.exists() ? (snap.data() as Partial<UserDoc>).attestedAdultAt : undefined;
+  return typeof v === 'number' ? v : null;
+}
+
 /** Deal a frozen board + create the player row the first time a user joins. */
 export async function joinAndDeal(u: User): Promise<void> {
   const existing = await getDoc(rawBoard(u.uid));

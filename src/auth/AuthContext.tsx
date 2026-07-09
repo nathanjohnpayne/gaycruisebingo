@@ -1,10 +1,26 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
-import { attestAdult, ensureUserProfile, joinAndDeal, readAdultAttestation } from '../data/api';
+import {
+  attestAdult,
+  ensureUserProfile,
+  joinAndDeal,
+  readAdultAttestation,
+  readAdultAttestationFromCache,
+} from '../data/api';
 import { track } from '../analytics';
 import SignIn from '../components/SignIn';
 import ConfirmWinMoments from '../components/ConfirmWinMoments';
+
+// Connectivity probe for the boot path (#115). The auth bootstrap and the deal
+// are both network-bound: a create-once transaction (ensureUserProfile) and a
+// create path (joinAndDeal) never resolve/complete offline, so they must not sit
+// on the render-critical path. `navigator.onLine` is the cheap synchronous
+// signal (a definite `false` means "no network"); a missing navigator (SSR /
+// exotic runtime) is treated as online so the normal online path still runs.
+function isOnline(): boolean {
+  return typeof navigator === 'undefined' || navigator.onLine !== false;
+}
 
 interface AuthContextValue {
   user: User | null;
@@ -92,10 +108,77 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // wrote the stamp — so a uid recorded here is never settled back to `false`.
   const attestedUidsRef = useRef<Set<string>>(new Set());
 
+  // The offline-tolerant profile/attestation bootstrap, run OFF the render path
+  // (#115). The auth callback publishes the User and settles `loading` BEFORE
+  // calling this, so nothing here blocks the first render — the cached Board can
+  // paint immediately. Two phases, in order:
+  //
+  //   (1) CACHE-FIRST attestation settle — offline-safe, no network. A cached
+  //       stamp lifts the 18+ gate for a returning User offline; a cache miss or
+  //       a definite-unstamped row leaves attestation UNKNOWN (never settled
+  //       `true` without a real stamp, so cache-first can't fail the age gate
+  //       open, and never re-prompted offline, so it can't flash the gate). This
+  //       is the knownFirstBingoAt / hasServerData tri-state discipline.
+  //   (2) BACKGROUND server bootstrap — ONLINE only. ensureUserProfile is a
+  //       create-once transaction that NEVER resolves offline (transactions don't
+  //       queue), and the server attestation read is the authoritative
+  //       present/absent (the only path that can settle a definite re-prompt).
+  //       Offline we DEFER both to the reconnect handler; the cache settle above
+  //       already rendered the UI. A genuine ONLINE failure surfaces the same
+  //       retryable dealError a failed deal gets (#112 round 2).
+  //
+  // Every settle is guarded by `attempt` vs `profileAttemptRef` so a superseded
+  // auth change / reconnect (a newer sign-in, sign-out, or online event already
+  // ran) leaves the signal to whoever owns it now — the deal's stale-attempt
+  // discipline, and the mechanism that makes reconnect recovery deterministic.
+  const bootstrapUser = useCallback(async (u: User, attempt: number) => {
+    // (1) Cache-first: only ever LIFT the gate to `true`, and only on a genuine
+    // cached stamp (or a session-optimistic attest, #112 Finding 3). A miss/reject
+    // or a definite-unstamped cached row leaves attestation UNKNOWN for phase (2).
+    try {
+      const cachedStamp = await readAdultAttestationFromCache(u.uid);
+      if (profileAttemptRef.current !== attempt) return;
+      if (cachedStamp !== null || attestedUidsRef.current.has(u.uid)) setAttested(true);
+    } catch {
+      /* cache miss / indeterminate — stays UNKNOWN, never re-prompted offline */
+    }
+
+    // (2) Offline: defer the network-bound bootstrap. `profileReady` stays false
+    // (the #77 contract: the bootstrap has NOT settled) so a profile-writing
+    // consumer still waits, and no re-prompt/error is shown — OFFLINE is a
+    // non-error DEFERRED state, distinct from the DealError terminal (#112).
+    if (!isOnline()) return;
+
+    let attestedRead: boolean | undefined;
+    let bootstrapFailure: { err: unknown } | null = null;
+    try {
+      await ensureUserProfile(u);
+      // The SETTLED (create-or-existing) row: a definite present/absent, not the
+      // pre-create absence. A thrown read stays UNKNOWN (no re-prompt) below.
+      attestedRead = (await readAdultAttestation(u.uid)) !== null;
+    } catch (err) {
+      bootstrapFailure = { err };
+    }
+    if (profileAttemptRef.current !== attempt) return;
+    // Never downgrade an attestation the User just made optimistically via
+    // `attest()` (#112 Finding 3): the server read may not see the write yet, but
+    // the transaction's success is authoritative. `prev === true` also preserves
+    // an optimistic flip (or the phase-1 cache lift) that landed during the await.
+    const attestedSticky = attestedUidsRef.current.has(u.uid);
+    setAttested((prev) => (prev === true || attestedSticky ? true : attestedRead));
+    setProfileReady(true);
+    // A failed ONLINE bootstrap surfaces the SAME Player-worded, retryable error a
+    // failed deal gets (#61 / #112 round 2): App renders the DealError panel on the
+    // Card tab, and its Retry re-attempts the bootstrap. A sticky-attested User
+    // needs no surface — their gate is already true, so the deferred deal fires
+    // and reports any genuine failure itself.
+    if (bootstrapFailure && !attestedSticky) setDealError(dealErrorMessage(bootstrapFailure.err));
+  }, []);
+
   useEffect(() => {
-    return onAuthStateChanged(auth, async (u) => {
-      // Auth changed: retire the previous account's in-flight deal and clear its
-      // stale state so a late result can't clobber the incoming User (P2).
+    return onAuthStateChanged(auth, (u) => {
+      // Auth changed: retire the previous account's in-flight deal/bootstrap and
+      // clear its stale state so a late result can't clobber the incoming User (P2).
       const profileAttempt = (profileAttemptRef.current += 1);
       dealAttemptRef.current += 1;
       setDealError(null);
@@ -105,49 +188,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfileReady(false);
       setAttested(undefined);
       setUser(u);
-      let attestedRead: boolean | undefined;
-      // A THROWN bootstrap must not stall silently (#112 round 2): with the deal
-      // gated on attested === true (Finding 1), an attestation left UNKNOWN by a
-      // transient Firestore failure would otherwise strand the User on the
-      // Board's endless "Dealing your card…" — no deal, no re-prompt, no error.
-      // Capture the failure and surface it through the retryable dealError below.
-      let bootstrapFailure: { err: unknown } | null = null;
-      if (u) {
-        try {
-          await ensureUserProfile(u);
-          // Read the SETTLED row (create-or-existing) so the gate sees a definite
-          // present/absent, not the pre-create absence; a thrown read stays
-          // UNKNOWN below (no re-prompt), so only a definite miss gates.
-          attestedRead = (await readAdultAttestation(u.uid)) !== null;
-        } catch (err) {
-          bootstrapFailure = { err };
-        }
-      }
-      // Only the latest auth change settles this bootstrap: a superseded callback
-      // (a newer sign-in / sign-out already ran) leaves it to that newer one,
-      // which owns the signal now — mirrors the deal's stale-attempt guard.
-      if (profileAttemptRef.current === profileAttempt) {
-        // Never downgrade an attestation the User just made optimistically via
-        // `attest()` (#23, Finding 3): its write may not be visible to the read
-        // above yet, but the transaction's success is authoritative. A uid marked
-        // in attestedUidsRef stays attested; the `prev === true` check also
-        // preserves an optimistic flip that happened to land during this await.
-        const attestedSticky = u != null && attestedUidsRef.current.has(u.uid);
-        setAttested((prev) => (prev === true || attestedSticky ? true : attestedRead));
-        setProfileReady(true);
-        // Surface a failed bootstrap as the SAME Player-worded, retryable error a
-        // failed deal gets (the #61 surface): App renders the DealError panel on
-        // the Card tab, and its Retry re-attempts the bootstrap (retryDeal picks
-        // the bootstrap path while the attestation is unsettled). A sticky-
-        // attested User needs no surface here — their gate settles true above, so
-        // the deferred deal fires and reports any genuine failure itself.
-        if (bootstrapFailure && !attestedSticky) {
-          setDealError(dealErrorMessage(bootstrapFailure.err));
-        }
-      }
+      // Publish loading:false IMMEDIATELY (#115): the cached auth User is known
+      // and the Board can render from the persistent cache NOW. The old code
+      // awaited ensureUserProfile — a transaction that never resolves offline —
+      // before this line, so an offline reload stuck on "Loading…" forever.
       setLoading(false);
+      // Bootstrap runs OFF the render path — fire-and-forget. Returning the
+      // promise keeps the auth-change unit tests deterministic (Firebase ignores
+      // an onAuthStateChanged callback's return value).
+      return u ? bootstrapUser(u, profileAttempt) : undefined;
     });
-  }, []);
+  }, [bootstrapUser]);
+
+  // Complete a DEFERRED offline bootstrap when connectivity returns (#115). One
+  // deterministic re-run of `bootstrapUser` for the current User, guarded by the
+  // SAME `profileAttemptRef` — so it supersedes (and is superseded by) any auth
+  // change cleanly. This is the fix for the observed post-reconnect
+  // nondeterminism: the old code left an awaited transaction PENDING on the auth
+  // callback across the whole dead zone, so on reconnect the transaction's retry
+  // backoff raced the profileAttempt supersede logic and the bootstrap did not
+  // reliably re-run. Now offline leaves NOTHING pending, and reconnect is a single
+  // guarded re-bootstrap.
+  useEffect(() => {
+    const onReconnect = () => {
+      const u = auth.currentUser;
+      if (u) void bootstrapUser(u, (profileAttemptRef.current += 1));
+    };
+    window.addEventListener('online', onReconnect);
+    return () => window.removeEventListener('online', onReconnect);
+  }, [bootstrapUser]);
 
   // Deal a Board once the User is known; failures surface via `dealError` so
   // App renders a retry surface, not a blank Board. `dealError` is replaced only
@@ -179,8 +248,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // settles `attested` true straight away); a first-time User deals after the
   // signed-in attest flow settles true. The dealAttempt guard + joinAndDeal's
   // board-exists early-return keep the flip from double-dealing.
+  //
+  // ALSO gated on connectivity (#115): a deal is a network-bound CREATE path
+  // (joinAndDeal writes a new board/player row), so it must not fire offline. A
+  // returning boarded User needs no deal — their board is cached and renders from
+  // the persistent cache — and offline their cache-lifted `attested === true`
+  // would otherwise fire a deal that can only queue a spurious create. A
+  // genuinely-new attested User only ever reaches this gate ONLINE, since sign-in
+  // itself needs the network; that is the one case the deal is meant to fire.
   useEffect(() => {
-    if (user && attested === true) void runDeal(user);
+    if (user && attested === true && isOnline()) void runDeal(user);
   }, [user, attested, runDeal]);
 
   // Re-attempt a FAILED attestation bootstrap (#112 round 2): re-runs

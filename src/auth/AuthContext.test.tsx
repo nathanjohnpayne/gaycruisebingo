@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   ensureUserProfile: vi.fn(),
   attestAdult: vi.fn(),
   readAdultAttestation: vi.fn(),
+  readAdultAttestationFromCache: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
 }));
@@ -30,6 +31,7 @@ vi.mock('../data/api', () => ({
   ensureUserProfile: mocks.ensureUserProfile,
   attestAdult: mocks.attestAdult,
   readAdultAttestation: mocks.readAdultAttestation,
+  readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));
@@ -72,7 +74,11 @@ beforeEach(() => {
   });
   mocks.ensureUserProfile.mockResolvedValue(undefined);
   // These deal/error tests are not about attestation — read the signed-in User as
-  // already attested so the re-prompt gate (#23) never intercepts the Harness.
+  // already attested so the re-prompt gate (#23) never intercepts the Harness. The
+  // cache-first read (#115) is a MISS here (jsdom has no persistent Firestore
+  // cache), so the online server read below is what settles the gate — the online
+  // path these tests exercise.
+  mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
   mocks.readAdultAttestation.mockResolvedValue(1);
   mocks.attestAdult.mockResolvedValue(undefined);
   mocks.signInWithPopup.mockResolvedValue({});
