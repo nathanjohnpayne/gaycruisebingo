@@ -16,6 +16,7 @@
 // Falls back to a serviceAccountKey.json in the project root if one exists
 // (gitignored — do NOT commit).
 //
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 // ---------------------------------------------------------------------------
@@ -73,7 +74,10 @@ export function adminRoster(raw = '') {
 export function eventWritePayload(admins, deleteBlackoutEnabled) {
   return {
     ...EVENT_SEED,
-    settings: { ...EVENT_SEED.settings, blackoutEnabled: deleteBlackoutEnabled },
+    settings: {
+      ...EVENT_SEED.settings,
+      blackoutEnabled: deleteBlackoutEnabled,
+    },
     ...(admins.length ? { admins } : {}),
   };
 }
@@ -167,11 +171,39 @@ export const ITEMS = [
   { text: `Bathroom mirror selfie`, spicy: false },
   { text: `Someone finds their cruise husband`, spicy: false },
   { text: `Someone books next year's cruise before leaving`, spicy: false },
-  { text: `"I'm going to be homophobic for a week after this cruise"`, spicy: false },
+  {
+    text: `"I'm going to be homophobic for a week after this cruise"`,
+    spicy: false,
+  },
   { text: `Danced to the Total Eclipse of the Heart remix`, spicy: false },
   { text: `Fuck a drag queen out of drag`, spicy: true },
   { text: `Fuck a drag queen IN drag`, spicy: true },
 ];
+
+// Deterministic doc id (content hash of the text only) so re-running the seed
+// upserts the same prompt docs instead of creating duplicates (boards sample
+// distinct ids, so dupes would surface the same prompt on multiple squares).
+export function seedItemDocId(text) {
+  return `seed-${createHash('sha1').update(text).digest('hex').slice(0, 20)}`;
+}
+
+export function seedItemMutations(existingDocs, now = Date.now()) {
+  return {
+    deleteIds: existingDocs.filter((doc) => doc.createdBy === 'seed').map((doc) => doc.id),
+    writes: ITEMS.map(({ text, spicy }) => ({
+      id: seedItemDocId(text),
+      data: {
+        text,
+        createdBy: 'seed',
+        createdAt: now,
+        isFreeSpace: false,
+        status: 'active',
+        reportCount: 0,
+        spicy,
+      },
+    })),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Seeding — runs only when executed directly (`node scripts/seed.mjs`), so
@@ -180,7 +212,6 @@ export const ITEMS = [
 
 async function seed() {
   const { readFileSync, existsSync } = await import('node:fs');
-  const { createHash } = await import('node:crypto');
   // firebase-admin is a run-directly-only dependency (`npm i -D firebase-admin`
   // before seeding) that is absent from the app install. The specifiers are
   // computed + @vite-ignore so Vite (which transforms this module when the
@@ -196,12 +227,16 @@ async function seed() {
 
   const keyUrl = new URL('../serviceAccountKey.json', import.meta.url);
   initializeApp(
-    existsSync(keyUrl) ? { credential: cert(JSON.parse(readFileSync(keyUrl))) } : { credential: applicationDefault() },
+    existsSync(keyUrl)
+      ? { credential: cert(JSON.parse(readFileSync(keyUrl))) }
+      : { credential: applicationDefault() },
   );
   const db = getFirestore();
 
   const eventRef = db.doc(`events/${EVENT_ID}`);
-  await eventRef.set(eventWritePayload(admins, FieldValue.delete()), { merge: true });
+  await eventRef.set(eventWritePayload(admins, FieldValue.delete()), {
+    merge: true,
+  });
 
   const col = eventRef.collection('items');
 
@@ -218,30 +253,16 @@ async function seed() {
   // prompts into this SAME collection with their own uid as createdBy, so an
   // unscoped delete-everything would erase user content on every reseed.
   const existing = await col.get();
-  const seedOwnedDocs = existing.docs.filter((doc) => doc.data().createdBy === 'seed');
-  const now = Date.now();
+  const { deleteIds, writes } = seedItemMutations(
+    existing.docs.map((doc) => ({
+      id: doc.id,
+      createdBy: doc.data().createdBy,
+    })),
+    Date.now(),
+  );
   const batch = db.batch();
-  for (const doc of seedOwnedDocs) batch.delete(doc.ref);
-  for (const { text, spicy } of ITEMS) {
-    // Deterministic doc id (content hash of the text only) so re-running the
-    // seed upserts the same prompt docs instead of creating duplicates
-    // (boards sample distinct ids, so dupes would surface the same prompt on
-    // multiple squares).
-    const id = `seed-${createHash('sha1').update(text).digest('hex').slice(0, 20)}`;
-    batch.set(
-      col.doc(id),
-      {
-        text,
-        createdBy: 'seed',
-        createdAt: now,
-        isFreeSpace: false,
-        status: 'active',
-        reportCount: 0,
-        spicy,
-      },
-      { merge: true },
-    );
-  }
+  for (const id of deleteIds) batch.delete(col.doc(id));
+  for (const { id, data } of writes) batch.set(col.doc(id), data, { merge: true });
   await batch.commit();
 
   console.log(`Seeded ${ITEMS.length} prompts into events/${EVENT_ID}.`);

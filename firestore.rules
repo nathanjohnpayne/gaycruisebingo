@@ -76,7 +76,8 @@ service cloud.firestore {
           && request.resource.data.text.size() <= 80
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.status == 'active'
-          && request.resource.data.reportCount == 0;
+          && request.resource.data.reportCount == 0
+          && request.resource.data.spicy is bool;
         // Report = increment reportCount by 1 only; admins can do anything.
         allow update: if isAdmin(eventId)
           || (signedIn()

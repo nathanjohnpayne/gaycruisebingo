@@ -75,12 +75,30 @@ describe('dealBoard — stratified composition (default spicyRatio 0.4)', () => 
     );
     expect(spicyRows.size).toBeGreaterThanOrEqual(3);
   });
+
+  it('does not allow an unlucky seed to cluster all spicy cells into two rows', () => {
+    const cells = dealBoard(fullPool, FREE_TEXT, 119985);
+    const spicyIndexes = cells.filter((c) => c.itemId && spicyById.get(c.itemId)).map((c) => c.index);
+    const spicyRows = new Set(spicyIndexes.map((index) => Math.floor(index / 5)));
+    expect(spicyRows.size).toBeGreaterThanOrEqual(4);
+    for (let i = 0; i <= spicyIndexes.length - 5; i++) {
+      expect(spicyIndexes[i + 4] - spicyIndexes[i]).toBeGreaterThan(4);
+    }
+  });
 });
 
 describe('dealBoard — backfill when a category is short', () => {
   it('backfills tame when spicy is short: 5 spicy + 40 tame -> 5 spicy + 19 tame, no throw', () => {
-    const spicy = Array.from({ length: 5 }, (_, i) => ({ id: `s${i}`, text: `spicy ${i}`, spicy: true }));
-    const tame = Array.from({ length: 40 }, (_, i) => ({ id: `t${i}`, text: `tame ${i}`, spicy: false }));
+    const spicy = Array.from({ length: 5 }, (_, i) => ({
+      id: `s${i}`,
+      text: `spicy ${i}`,
+      spicy: true,
+    }));
+    const tame = Array.from({ length: 40 }, (_, i) => ({
+      id: `t${i}`,
+      text: `tame ${i}`,
+      spicy: false,
+    }));
     const pool = [...spicy, ...tame];
     const cells = dealBoard(pool, FREE_TEXT, 7);
     const nonFree = nonFreeCells(cells);
@@ -89,10 +107,18 @@ describe('dealBoard — backfill when a category is short', () => {
     const spicyCount = nonFree.filter((c) => c.itemId && spicyIds.has(c.itemId)).length;
     expect(spicyCount).toBe(5);
     expect(nonFree.length - spicyCount).toBe(19);
+    expect(
+      new Set(nonFree.filter((c) => c.itemId && spicyIds.has(c.itemId)).map((c) => Math.floor(c.index / 5)))
+        .size,
+    ).toBe(5);
   });
 
   it('throws when the active pool has fewer than MIN_POOL (24) prompts, same as the pre-existing guard', () => {
-    const pool = Array.from({ length: 20 }, (_, i) => ({ id: `p${i}`, text: `prompt ${i}`, spicy: i < 5 }));
+    const pool = Array.from({ length: 20 }, (_, i) => ({
+      id: `p${i}`,
+      text: `prompt ${i}`,
+      spicy: i < 5,
+    }));
     expect(() => dealBoard(pool, FREE_TEXT, 1)).toThrow(/at least 24 prompts/);
   });
 });

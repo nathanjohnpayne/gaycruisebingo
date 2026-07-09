@@ -32,6 +32,7 @@ A Player may post a `moments/{id}` announcement of their own BINGO / Blackout / 
 A Report only increments `reportCount`; when it crosses the Event's `reportHideThreshold` the content is presentationally hidden (Phase 0). An `items` update that touches any field other than a single `reportCount` increment is denied, `settings.reportHideThreshold` must be a number, and `blackoutEnabled` is not reintroduced.
 
 - **Given** an `items` update **When** it only increments `reportCount` by 1 **Then** it is ALLOWED, and any other field change is DENIED. (Test: "ADR 0004: items are report-only increments; reportHideThreshold validated".)
+- **Given** an `items` create **When** the Prompt carries `spicy: true` or `spicy: false` **Then** it is ALLOWED, while a missing or non-boolean `spicy` value is DENIED so the stratified Board composition input stays well-typed. (Test: "items create requires a boolean spicy tag for stratified board composition".)
 - **Given** an Event update **When** an admin sets a numeric `settings.reportHideThreshold` **Then** it is ALLOWED, while a non-numeric value or a non-admin write is DENIED. (Same test.)
 
 ## Proof media is pinned to the proof's own Storage object

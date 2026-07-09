@@ -33,10 +33,21 @@ const at = (p: string) => `events/${EVENT}/${p}`;
 // A fully-valid `photo` Proof whose storagePath + mediaURL are pinned to this
 // proof's OWN doc id (proofs/{event}/{uid}/{id}.jpg); `over` mutates one field.
 const photoProof = (id: string, over: Record<string, unknown> = {}) => ({
-  uid: ALICE, displayName: 'Alice', photoURL: null, type: 'photo', cellIndex: 5,
-  itemText: 'Saw a drag show', storagePath: `proofs/${EVENT}/${ALICE}/${id}.jpg`,
+  uid: ALICE,
+  displayName: 'Alice',
+  photoURL: null,
+  type: 'photo',
+  cellIndex: 5,
+  itemText: 'Saw a drag show',
+  storagePath: `proofs/${EVENT}/${ALICE}/${id}.jpg`,
   mediaURL: `https://firebasestorage.googleapis.com/v0/b/demo-bucket/o/proofs%2F${EVENT}%2F${ALICE}%2F${id}.jpg?alt=media&token=t`,
-  thumbURL: null, text: null, createdAt: NOW(), reportCount: 0, status: 'active', visionFlag: null, ...over,
+  thumbURL: null,
+  text: null,
+  createdAt: NOW(),
+  reportCount: 0,
+  status: 'active',
+  visionFlag: null,
+  ...over,
 });
 
 beforeAll(async () => {
@@ -46,7 +57,11 @@ beforeAll(async () => {
   const [hostname, port] = host.split(':');
   testEnv = await initializeTestEnvironment({
     projectId: 'demo-gaycruisebingo-rules',
-    firestore: { host: hostname, port: Number(port), rules: readFileSync(RULES_PATH, 'utf8') },
+    firestore: {
+      host: hostname,
+      port: Number(port),
+      rules: readFileSync(RULES_PATH, 'utf8'),
+    },
   });
 });
 
@@ -61,27 +76,65 @@ beforeEach(async () => {
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const s = ctx.firestore();
     await setDoc(doc(s, `events/${EVENT}`), {
-      name: 'Cruise', sailStart: '2026-01-01', sailEnd: '2026-01-07', status: 'active',
-      defaultTheme: 'neon-playground', claimMode: 'honor', admins: [ADMIN],
+      name: 'Cruise',
+      sailStart: '2026-01-01',
+      sailEnd: '2026-01-07',
+      status: 'active',
+      defaultTheme: 'neon-playground',
+      claimMode: 'honor',
+      admins: [ADMIN],
       settings: { reportHideThreshold: 3 },
     });
     await setDoc(doc(s, at('items/item1')), {
-      text: 'Saw a drag show', createdBy: ALICE, createdAt: NOW(), isFreeSpace: false,
-      status: 'active', reportCount: 0,
+      text: 'Saw a drag show',
+      createdBy: ALICE,
+      createdAt: NOW(),
+      isFreeSpace: false,
+      status: 'active',
+      reportCount: 0,
+      spicy: false,
     });
-    await setDoc(doc(s, at(`tally/item1/markers/${CAROL}`)), { uid: CAROL, displayName: 'Carol', markedAt: NOW() });
+    await setDoc(doc(s, at(`tally/item1/markers/${CAROL}`)), {
+      uid: CAROL,
+      displayName: 'Carol',
+      markedAt: NOW(),
+    });
     await setDoc(doc(s, at('doubts/seed')), {
-      itemId: 'item1', cellIndex: 4, fromUid: CAROL, fromDisplayName: 'Carol',
-      targetUid: BOB, targetDisplayName: 'Bob', createdAt: NOW(),
+      itemId: 'item1',
+      cellIndex: 4,
+      fromUid: CAROL,
+      fromDisplayName: 'Carol',
+      targetUid: BOB,
+      targetDisplayName: 'Bob',
+      createdAt: NOW(),
     });
-    await setDoc(doc(s, at('moments/seed')), { kind: 'bingo', uid: CAROL, displayName: 'Carol', photoURL: null, createdAt: NOW() });
+    await setDoc(doc(s, at('moments/seed')), {
+      kind: 'bingo',
+      uid: CAROL,
+      displayName: 'Carol',
+      photoURL: null,
+      createdAt: NOW(),
+    });
   });
 });
 
 describe('firestore.rules — honor-system invariants', () => {
   it('ADR 0001: boards/players are self-writable; cross-player writes denied', async () => {
-    const board = (uid: string) => ({ uid, seed: 1, createdAt: NOW(), cells: [] });
-    const player = (uid: string) => ({ uid, displayName: uid, photoURL: null, joinedAt: NOW(), bingoCount: 0, squaresMarked: 0, firstBingoAt: null });
+    const board = (uid: string) => ({
+      uid,
+      seed: 1,
+      createdAt: NOW(),
+      cells: [],
+    });
+    const player = (uid: string) => ({
+      uid,
+      displayName: uid,
+      photoURL: null,
+      joinedAt: NOW(),
+      bingoCount: 0,
+      squaresMarked: 0,
+      firstBingoAt: null,
+    });
     await assertSucceeds(setDoc(doc(db(ALICE), at(`boards/${ALICE}`)), board(ALICE)));
     await assertFails(setDoc(doc(db(ALICE), at(`boards/${BOB}`)), board(BOB)));
     await assertSucceeds(setDoc(doc(db(ALICE), at(`players/${ALICE}`)), player(ALICE)));
@@ -112,23 +165,63 @@ describe('firestore.rules — honor-system invariants', () => {
     await assertFails(updateDoc(doc(db(ALICE), `events/${EVENT}`), { name: 'Hacked' })); // non-admin
   });
 
+  it('items create requires a boolean spicy tag for stratified board composition', async () => {
+    const item = (over = {}) => ({
+      text: 'New prompt',
+      createdBy: ALICE,
+      createdAt: NOW(),
+      isFreeSpace: false,
+      status: 'active',
+      reportCount: 0,
+      spicy: false,
+      ...over,
+    });
+    const missingSpicy = item() as Record<string, unknown>;
+    delete missingSpicy.spicy;
+
+    await assertSucceeds(setDoc(doc(db(ALICE), at('items/tame')), item({ spicy: false })));
+    await assertSucceeds(setDoc(doc(db(ALICE), at('items/spicy')), item({ spicy: true })));
+    await assertFails(setDoc(doc(db(ALICE), at('items/missing-spicy')), missingSpicy));
+    await assertFails(setDoc(doc(db(ALICE), at('items/string-spicy')), item({ spicy: 'false' })));
+  });
+
   it('proofs media is pinned to the proof’s own Storage object', async () => {
     await assertSucceeds(setDoc(doc(db(ALICE), at('proofs/p1')), photoProof('p1'))); // matching pin
     // Fresh create at a distinct id whose mediaURL points at a DIFFERENT object.
-    await assertFails(setDoc(doc(db(ALICE), at('proofs/p2')), photoProof('p2', {
-      mediaURL: `https://firebasestorage.googleapis.com/v0/b/demo-bucket/o/proofs%2F${EVENT}%2F${ALICE}%2Fp2.png?alt=media&token=t`,
-    })));
+    await assertFails(
+      setDoc(
+        doc(db(ALICE), at('proofs/p2')),
+        photoProof('p2', {
+          mediaURL: `https://firebasestorage.googleapis.com/v0/b/demo-bucket/o/proofs%2F${EVENT}%2F${ALICE}%2Fp2.png?alt=media&token=t`,
+        }),
+      ),
+    );
   });
 
   it('ADR 0001: a User self-attests 18+ (attestedAdultAt); cross/invalid denied', async () => {
-    const profile = (over = {}) => ({ displayName: 'Alice', photoURL: null, createdAt: NOW(), attestedAdultAt: NOW(), ...over });
+    const profile = (over = {}) => ({
+      displayName: 'Alice',
+      photoURL: null,
+      createdAt: NOW(),
+      attestedAdultAt: NOW(),
+      ...over,
+    });
     await assertSucceeds(setDoc(doc(db(ALICE), `users/${ALICE}`), profile())); // self-write
     await assertFails(setDoc(doc(db(ALICE), `users/${BOB}`), profile())); // cross-user
     await assertFails(setDoc(doc(db(ALICE), `users/${ALICE}`), profile({ attestedAdultAt: 'yes' }))); // non-numeric
   });
 
   it('ADR 0001: Doubts are social pressure — own-attributed, public, never a gate', async () => {
-    const doubt = (over = {}) => ({ itemId: 'item1', cellIndex: 5, fromUid: ALICE, fromDisplayName: 'Alice', targetUid: CAROL, targetDisplayName: 'Carol', createdAt: NOW(), ...over });
+    const doubt = (over = {}) => ({
+      itemId: 'item1',
+      cellIndex: 5,
+      fromUid: ALICE,
+      fromDisplayName: 'Alice',
+      targetUid: CAROL,
+      targetDisplayName: 'Carol',
+      createdAt: NOW(),
+      ...over,
+    });
     // Canonical `${fromUid}_${targetUid}_${itemId}` slots so these turn on
     // ownership, not the #106 id↔triple binding (mirroring the moments ids below),
     // and the target is CAROL — this file's seeded tally/item1 marker — because
@@ -140,7 +233,14 @@ describe('firestore.rules — honor-system invariants', () => {
   });
 
   it('ADR 0002: Moments broadcast a big beat — own-attributed, public', async () => {
-    const moment = (over = {}) => ({ kind: 'bingo', uid: ALICE, displayName: 'Alice', photoURL: null, createdAt: NOW(), ...over });
+    const moment = (over = {}) => ({
+      kind: 'bingo',
+      uid: ALICE,
+      displayName: 'Alice',
+      photoURL: null,
+      createdAt: NOW(),
+      ...over,
+    });
     // Canonical `${uid}-${kind}` ids so these turn on ownership, not the #103 id↔kind
     // binding: an own beat at its deterministic id is allowed, a forged uid is denied.
     await assertSucceeds(setDoc(doc(db(ALICE), at(`moments/${ALICE}-bingo`)), moment())); // own beat

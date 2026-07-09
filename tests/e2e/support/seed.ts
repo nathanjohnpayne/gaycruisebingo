@@ -7,11 +7,7 @@
 // `@firebase/rules-unit-testing` devDependency the tests/rules/ layer already
 // relies on — its `withSecurityRulesDisabled` context is the same
 // rules-bypassing write path an Admin SDK gets, without adding a dependency.
-import { createHash } from 'node:crypto';
-import {
-  initializeTestEnvironment,
-  type RulesTestEnvironment,
-} from '@firebase/rules-unit-testing';
+import { initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { doc, deleteField, getDoc, writeBatch } from 'firebase/firestore';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 // It is side-effect-free to import: seeding only runs when the script is the
 // entry module (see its own `import.meta.url === ...` guard). Mirrors the
 // same import src/test/w1-event-seed.test.ts already uses against Vitest.
-import { EVENT_SEED, ITEMS, adminRoster, eventWritePayload } from '../../../scripts/seed.mjs';
+import { EVENT_SEED, ITEMS, adminRoster, eventWritePayload, seedItemDocId } from '../../../scripts/seed.mjs';
 import { EVENT_ID, FIRESTORE_HOST, FIRESTORE_PORT, PROJECT_ID } from './env';
 
 const RULES_PATH = fileURLToPath(new URL('../../../firestore.rules', import.meta.url));
@@ -28,15 +24,10 @@ const RULES_PATH = fileURLToPath(new URL('../../../firestore.rules', import.meta
 /**
  * A dense pool needs >= MIN_POOL (24, src/game/logic.ts) active, non-free
  * Prompts so `dealBoard` never throws (ADR 0004 guard). scripts/seed.mjs's
- * own ITEMS list is 32 strong — reused verbatim rather than re-declaring a
- * parallel fixture, so this suite seeds the exact real pool shape.
+ * own ITEMS list is reused verbatim rather than re-declaring a parallel
+ * fixture, so this suite seeds the exact real pool shape.
  */
 export const SEEDED_ACTIVE_PROMPT_COUNT = ITEMS.length;
-
-/** Same content-hash id scheme as scripts/seed.mjs, so a re-run upserts the same docs. */
-function itemDocId(text: string): string {
-  return `seed-${createHash('sha1').update(text).digest('hex').slice(0, 20)}`;
-}
 
 /**
  * Boots a rules-test environment against the already-running Firestore
@@ -75,10 +66,12 @@ export async function seedEmulatorEvent(): Promise<RulesTestEnvironment> {
     // No ADMIN_UID roster: this ticket asserts the zero-admin-action path, so
     // the seed intentionally leaves `admins` empty (eventWritePayload omits
     // the key entirely — see scripts/seed.mjs).
-    batch.set(eventRef, eventWritePayload(adminRoster(''), deleteField()), { merge: true });
+    batch.set(eventRef, eventWritePayload(adminRoster(''), deleteField()), {
+      merge: true,
+    });
     const now = Date.now();
-    for (const text of ITEMS) {
-      const itemRef = doc(db, 'events', EVENT_ID, 'items', itemDocId(text));
+    for (const { text, spicy } of ITEMS) {
+      const itemRef = doc(db, 'events', EVENT_ID, 'items', seedItemDocId(text));
       batch.set(
         itemRef,
         {
@@ -88,6 +81,7 @@ export async function seedEmulatorEvent(): Promise<RulesTestEnvironment> {
           isFreeSpace: false,
           status: 'active',
           reportCount: 0,
+          spicy,
         },
         { merge: true },
       );
@@ -125,8 +119,7 @@ export async function boardHasMarkedText(
     const db = context.firestore();
     const snap = await getDoc(doc(db, 'events', EVENT_ID, 'boards', uid));
     const cells =
-      (snap.data() as { cells?: Array<{ text: string; marked: boolean }> } | undefined)?.cells ??
-      [];
+      (snap.data() as { cells?: Array<{ text: string; marked: boolean }> } | undefined)?.cells ?? [];
     found = cells.some((c) => c.text === text && c.marked === true);
   });
   return found;
@@ -152,8 +145,8 @@ export async function userAttested(testEnv: RulesTestEnvironment, uid: string): 
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
     const snap = await getDoc(doc(db, 'users', uid));
-    attested = typeof (snap.data() as { attestedAdultAt?: unknown } | undefined)
-      ?.attestedAdultAt === 'number';
+    attested =
+      typeof (snap.data() as { attestedAdultAt?: unknown } | undefined)?.attestedAdultAt === 'number';
   });
   return attested;
 }
