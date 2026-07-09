@@ -49,11 +49,18 @@ function useColSub<T>(q: Query<T> | null, key: string) {
   const [data, setData] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasServerData, setHasServerData] = useState(false);
+  // `fromCache` is the LATEST snapshot's origin (per-snapshot, unlike the
+  // `hasServerData` latch): true when the rows came from the persistent IndexedDB
+  // cache, false when server-backed. Consumers that must distinguish an in-session
+  // server-backed observation from a stale cache replay (e.g. `useMyClaims` seeding
+  // the confirm-path freshness witness, #41 / Codex #116 R2 finding 2) read this.
+  const [fromCache, setFromCache] = useState(true);
   useEffect(() => {
     // Drop the previous query's rows when the key changes so stale results can't
     // render against the new subscription.
     setData([]);
     setHasServerData(false);
+    setFromCache(true);
     if (!q) {
       setLoading(false);
       return;
@@ -65,6 +72,7 @@ function useColSub<T>(q: Query<T> | null, key: string) {
       (snap) => {
         setData(snap.docs.map((d) => d.data() as T));
         setLoading(false);
+        setFromCache(snap.metadata.fromCache);
         if (!snap.metadata.fromCache) setHasServerData(true);
       },
       () => setLoading(false),
@@ -72,7 +80,7 @@ function useColSub<T>(q: Query<T> | null, key: string) {
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return { data, loading, hasServerData };
+  return { data, loading, hasServerData, fromCache };
 }
 
 export function useEventDoc(enabled = true) {
@@ -269,6 +277,28 @@ export function usePendingClaims() {
   const { data, loading } = useColSub<ClaimDoc>(claimsCol(), 'claims');
   const claims = data.filter((c) => c.status === 'pending').sort((a, b) => a.createdAt - b.createdAt);
   return { claims, loading };
+}
+
+/**
+ * The signed-in Player's OWN Claims (#41). Scoped `where('uid','==',uid)` so every
+ * matched doc satisfies the claims read rule (`isOwner(resource.data.uid)`) — a
+ * Player is NOT an admin, so an unconstrained collection read would be denied.
+ * `ConfirmWinMoments` consumes this to notice when one of the Player's pending
+ * Marks is confirmed by an Admin, so it can emit the win's Moment wherever the
+ * Player is (the confirm-path edge Board's route-scoped detection misses). The
+ * `hasServerData` latch gates the baseline: the first server-backed snapshot's
+ * already-confirmed Claims are history, not fresh confirms to announce.
+ */
+export function useMyClaims(uid: string | undefined) {
+  const { data, loading, hasServerData, fromCache } = useColSub<ClaimDoc>(
+    uid ? query(claimsCol(), where('uid', '==', uid)) : null,
+    `my-claims:${uid ?? 'none'}`,
+  );
+  // `fromCache` lets `ConfirmWinMoments` seed its freshness witness ONLY from a
+  // server-backed pending observation (Codex #116 R2 finding 2): a cache-only
+  // pending snapshot on a fresh reload must not make a confirm that landed while
+  // the app was closed look like an in-session pending→confirmed flip.
+  return { claims: data, loading, hasServerData, fromCache };
 }
 
 /**

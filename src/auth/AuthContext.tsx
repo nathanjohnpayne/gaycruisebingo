@@ -4,6 +4,7 @@ import { auth, googleProvider } from '../firebase';
 import { attestAdult, ensureUserProfile, joinAndDeal, readAdultAttestation } from '../data/api';
 import { track } from '../analytics';
 import SignIn from '../components/SignIn';
+import ConfirmWinMoments from '../components/ConfirmWinMoments';
 
 interface AuthContextValue {
   user: User | null;
@@ -277,6 +278,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         retryDeal,
       }}
     >
+      {/* The confirm-path Moment emitter (#41) mounts for ANY signed-in user,
+          BESIDE the attestation gate rather than inside `children` — so an admin
+          confirming an admin_confirmed Claim while the player sits on the
+          attestation prompt still fires the win's Moment (Codex #116 R3 finding 2):
+          the listener observes the Claim pending in-session and survives the gate,
+          instead of unmounting and baselining the confirm as history after the
+          player attests. Its uid-keyed module state (getConfirmState) also carries
+          any parked ceremony across the remount. Renders nothing; scoped to the
+          mount location only — the attestation gate itself is #117's surface. */}
+      {user && <ConfirmWinMoments />}
       {needsAttestation ? <SignIn /> : children}
     </AuthContext.Provider>
   );
