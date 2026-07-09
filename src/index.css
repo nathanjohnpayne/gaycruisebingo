@@ -767,11 +767,27 @@ body.install-prompt-visible .profile-trigger {
   text-align: center;
 }
 .share-card-title {
+  /* color was hardcoded #fff (Codex P2, PR #111 finding 4): invisible on
+     summer-white's light --bg (#f6f1e7), the same failure mode
+     specs/og-theme-parity.md already fixed for the OG renderer's own
+     `.title` by following the theme ink instead — mirrored here. The
+     text-shadow's #fff stays: it is a glow/bloom layered around the fill,
+     not the fill itself, the same choice the OG renderer's fixed `.title`
+     rule made (it kept its own white glow while switching only `color`).
+     This block's other hardcoded pair — .share-card-cell.marked's white
+     text/border on the var(--primary)/var(--secondary) gradient below — is
+     deliberately left alone: it mirrors the app's own .cell.marked
+     (index.css), a known, already-tracked defect (specs/w1-themes.md,
+     issue #72) out of this ticket's scope, and unlike the title it is not
+     actually failing today (summer-white's --primary/--secondary are
+     deepened specifically to clear 4.5:1 as real text fills — see
+     themes.css — so white on that gradient still reads). Do not add a
+     third hardcoded-white spot to this file. */
   font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
   font-size: 64px;
   line-height: 1;
   text-align: center;
-  color: #fff;
+  color: var(--ink);
   text-shadow: 0 0 14px #fff, 0 0 40px var(--primary), 0 0 80px var(--secondary);
   margin: 6px 0 4px;
 }
@@ -824,6 +840,15 @@ body.install-prompt-visible .profile-trigger {
   color: #fff;
   border-color: #fff;
   background: linear-gradient(145deg, var(--primary), var(--secondary));
+}
+.share-card-cell.pending {
+  /* Mirrors .cell.pending (Board.tsx's own on-page pending styling) — a
+     marked-but-unconfirmed square (admin_confirmed claim mode) reads as
+     faded/dashed rather than a solid win, matching the semantics
+     game/logic.ts already encodes (Codex P2, PR #111 finding 2). Applies
+     alongside .marked, never instead of it — see ShareCard.tsx. */
+  opacity: 0.7;
+  border-style: dashed;
 }
 .share-card-rows {
   display: flex;

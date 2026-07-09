@@ -83,7 +83,17 @@ function buildBingoCardNode(data: BingoShareCardData): HTMLDivElement {
   card.append(bhead);
   const grid = el('div', 'share-card-grid');
   for (const c of data.cells) {
-    const cls = 'share-card-cell' + (c.free ? ' free' : '') + (c.marked ? ' marked' : '');
+    // A `marked` cell awaiting admin confirmation (admin_confirmed claim
+    // mode) does NOT count toward a win — game/logic.ts's markedMask
+    // excludes `status: 'pending'` from "on" — so the card must not depict
+    // it as an indistinguishable solid win square either (Codex P2, PR #111
+    // finding 2). `.pending` layers on top of `.marked` (both classes apply
+    // together), mirroring Board.tsx's own on-page cell className.
+    const cls =
+      'share-card-cell' +
+      (c.free ? ' free' : '') +
+      (c.marked ? ' marked' : '') +
+      (c.status === 'pending' ? ' pending' : '');
     grid.append(el('div', cls, c.text));
   }
   card.append(grid);
@@ -92,6 +102,16 @@ function buildBingoCardNode(data: BingoShareCardData): HTMLDivElement {
 }
 
 export async function renderBingoShareCard(data: BingoShareCardData): Promise<Blob> {
+  // Validity gate (Codex P2, PR #111 finding 1): a BINGO/Blackout card must
+  // depict the Player's REAL board — free center + 24 prompts, the exact
+  // invariant `dealBoard` enforces in game/logic.ts — never a partial or
+  // empty grid. Refuse outright rather than rasterize something misleading.
+  // Celebration.tsx's caller already treats any throw here as `blob: null`
+  // and falls through to shareCardBlob's text/URL leg, so this degrades to
+  // a text share instead of ever producing (let alone sharing) a bad image.
+  if (data.cells.length !== 25) {
+    throw new Error(`renderBingoShareCard needs exactly 25 cells, received ${data.cells.length}.`);
+  }
   return rasterize(buildBingoCardNode(data));
 }
 
@@ -166,14 +186,44 @@ function downloadBlob(blob: Blob, filename: string): void {
 }
 
 /**
+ * Whether a caught Web Share API rejection reflects the Player's OWN choice
+ * to dismiss the OS share sheet, rather than the API genuinely failing
+ * (Codex P2, PR #111 finding 3). `AbortError` is the spec-mandated name for
+ * a user-cancelled `navigator.share()`; `NotAllowedError` covers browsers
+ * that report a declined permission/dismissal that way instead. Duck-typed
+ * on `.name` rather than `instanceof Error` because a real rejection here is
+ * a `DOMException`, which is not guaranteed to be `instanceof Error` in
+ * every environment.
+ */
+function isUserCancelledShare(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null || !('name' in err)) return false;
+  const { name } = err as { name: unknown };
+  return name === 'AbortError' || name === 'NotAllowedError';
+}
+
+/**
  * Hands a rendered Share Card to the OS share sheet when the platform can
  * take image files (`navigator.canShare({ files })`); otherwise degrades —
  * in order — through a text/URL share, the clipboard, then a direct
  * download, so the Player always ends up with something they can act on
  * (ADR 0005, issue #36). `blob` may be `null` when the on-device render
- * itself failed; the chain simply skips the file-share and download legs.
- * Never throws — every branch is self-contained, so a caller can await this
- * without its own try/catch.
+ * itself failed (including `renderBingoShareCard`'s validity gate); the
+ * chain simply skips the file-share and download legs. Never throws — every
+ * branch is self-contained, so a caller can await this without its own
+ * try/catch.
+ *
+ * A `'cancelled'` outcome is terminal on BOTH the file leg and the text/URL
+ * leg — the chain stops rather than surprising a Player who just declined
+ * to share with a clipboard write or file download right after. The file
+ * leg treats ANY rejection there as a cancellation (see its own comment
+ * below); the text/URL leg distinguishes cancellation from a genuine
+ * failure via `isUserCancelledShare` (Codex P2, PR #111 finding 3) — a
+ * non-cancellation rejection there still falls through to the clipboard and
+ * download legs. Either way, callers (`Celebration.tsx`, `Leaderboard.tsx`)
+ * fire `share_click` unconditionally from their own `finally`, once per tap,
+ * regardless of this function's return value — a cancelled share still
+ * counts as a tap; the return value is what distinguishes outcomes for a
+ * caller that cares, not whether the analytics event fires.
  */
 export async function shareCardBlob(opts: {
   blob: Blob | null;
@@ -203,8 +253,12 @@ export async function shareCardBlob(opts: {
     try {
       await navigator.share({ title, text, url });
       return 'text';
-    } catch {
-      /* fall through to the clipboard/download legs */
+    } catch (err) {
+      // A cancellation here stops the chain silently (Codex P2, PR #111
+      // finding 3) — same Player-respecting rule as the file leg above.
+      // Only a genuine failure (the API existed but something actually went
+      // wrong) falls through to the clipboard/download legs.
+      if (isUserCancelledShare(err)) return 'cancelled';
     }
   }
 

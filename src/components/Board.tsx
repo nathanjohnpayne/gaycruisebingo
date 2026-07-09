@@ -571,7 +571,14 @@ export default function Board() {
       <div className="count">
         Marked <b>{countMarked(cells)}</b> · Bingos <b>{player?.bingoCount ?? 0}</b>
       </div>
-      {celebrate && <Celebration kind={celebrate} onClose={() => setCelebrate(null)} />}
+      {/* `cells` fixes the empty-card share race (Codex P2, PR #111 finding
+          1): Celebration used to open its own useBoard(uid) listener and
+          could render/share before that listener's own first snapshot
+          arrived. Board already has the loaded `cells` right here
+          (guaranteed by the `!board` early-return above), so handing them
+          down as a prop removes the race instead of letting Celebration
+          re-fetch what this component already has. */}
+      {celebrate && <Celebration kind={celebrate} cells={cells} onClose={() => setCelebrate(null)} />}
       {proofTarget && user && (
         <ProofSheet
           uid={uid}
