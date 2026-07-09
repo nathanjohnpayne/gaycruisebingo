@@ -608,6 +608,21 @@ a {
   font-size: 11px;
   margin-left: 6px;
 }
+/* Report queue: the moderation triage surface, called out from the rest of the
+   console so it reads as the first thing an Admin acts on. `.pill-hidden` marks a
+   row the ADR 0004 Phase 0 community auto-hide has already removed from every
+   Player's Feed/pool — presentational and bypassable by design; server-
+   authoritative removal is #43. */
+.admin-section.queue {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 4px 12px 12px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.pill-hidden {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 
 /* ---------- sign-in ---------- */
 .signin {
