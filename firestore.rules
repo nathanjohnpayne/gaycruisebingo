@@ -68,7 +68,16 @@ service cloud.firestore {
 
       // Community-editable prompt pool.
       match /items/{itemId} {
-        allow read: if signedIn();
+        // Non-admins read only visible ('active') Prompts; a server-hidden Prompt
+        // is moderation-only, readable by admins (#43 F4, ADR 0004 Phase 1). This
+        // MIRRORS the proofs read rule so the item (Prompt) hide is authoritative,
+        // not merely presentational: without it a hidden Prompt's `text` stayed
+        // directly fetchable by any signed-in client. The player-facing item query
+        // (useItems / joinAndDeal) filters `where('status','==','active')` so its
+        // collection read is allowed under this rule; the admin console query
+        // (useAllItems) reads all statuses via the isAdmin arm. A single-field
+        // `status` equality — no composite index (firestore.indexes.json untouched).
+        allow read: if signedIn() && (isAdmin(eventId) || resource.data.status == 'active');
         // Anyone signed in can add an item (basic validation).
         allow create: if signedIn()
           && request.resource.data.text is string
@@ -78,6 +87,17 @@ service cloud.firestore {
           && request.resource.data.status == 'active'
           && request.resource.data.reportCount == 0;
         // Report = increment reportCount by 1 only; admins can do anything.
+        //
+        // `status` is SERVER-AUTHORITATIVE for the community-hide transition
+        // (#43, ADR 0004 Phase 1). A non-admin's ONLY update is the report path,
+        // and `hasOnly(['reportCount'])` bounds it to `reportCount` alone — so a
+        // non-admin can NEVER set `status: 'hidden'` (or any status) here. The
+        // Phase-1 auto-hide is written exclusively by the `hideItemAtThreshold`
+        // Cloud Function via the admin SDK (which BYPASSES these rules) once
+        // reportCount crosses `settings.reportHideThreshold`; admins retain the
+        // manual hide/restore via the `isAdmin(eventId)` branch. This is the
+        // authoritative promotion of the Phase-0 presentational `isReportHidden`
+        // filter — pinned by tests/rules/w4-server-authoritative-hide.test.ts.
         allow update: if isAdmin(eventId)
           || (signedIn()
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reportCount'])
@@ -173,6 +193,16 @@ service cloud.firestore {
                  && request.resource.data.mediaURL is string
                  && request.resource.data.mediaURL.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F' + proofId + '[.]webm([?].*)?$'))
              );
+        // Report = increment reportCount by 1 only (same as /items). `status` is
+        // SERVER-AUTHORITATIVE for the community-hide transition (#43, ADR 0004
+        // Phase 1): `hasOnly(['reportCount'])` bounds a non-admin (including the
+        // proof's OWN uploader) to `reportCount` alone, so no client can set
+        // `status: 'hidden'` — nor un-hide by setting it back to 'active'. The
+        // Phase-1 auto-hide is written exclusively by the `hideProofAtThreshold`
+        // Cloud Function via the admin SDK (bypasses these rules) once reportCount
+        // crosses `settings.reportHideThreshold`; admins keep manual hide/restore
+        // and confirm-claim (`status: 'active'`) via the `isAdmin(eventId)` branch.
+        // Pinned by tests/rules/w4-server-authoritative-hide.test.ts.
         allow update: if isAdmin(eventId)
           || (signedIn()
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reportCount'])

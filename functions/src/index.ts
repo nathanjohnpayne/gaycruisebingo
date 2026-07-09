@@ -9,6 +9,7 @@ import sharp from 'sharp';
 import { RESEND_API_KEY } from './params';
 import { shouldNotify, notifyAdminsOfModeration, type ModeratedDoc } from './notify';
 import { visionModerationEnabled } from './visionGate';
+import { applyThresholdHide, applyThresholdBackfill, type ReportableDoc } from './autohide';
 
 initializeApp();
 setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
@@ -131,5 +132,66 @@ export const notifyItemModeration = onDocumentWritten(
       event.id,
       event.data?.before.data(),
       event.data?.after.data(),
+    ),
+);
+
+/**
+ * Server-authoritative reactive auto-hide (issue #43, ADR 0004 Phase 1). When a
+ * Proof/Prompt's `reportCount` crosses its Event's `settings.reportHideThreshold`,
+ * flip `status → 'hidden'` via the admin SDK (which bypasses security rules),
+ * promoting the Phase-0 presentational hide (`isReportHidden`) to authoritative
+ * removal. The decision (crossing predicate + fail-safe + loop guard) and its
+ * best-effort wrapping live in `applyThresholdHide` (./autohide) so they are
+ * unit-testable without a Functions runtime; these are the thin trigger seams.
+ *
+ * Both triggers share the `onDocumentWritten` path with the #101 notifiers: a
+ * report bump that crosses the threshold fires THIS function, whose `hidden`
+ * write then re-fires both — this one no-ops (loop-guarded), while
+ * `notifyItemModeration`/`notifyProofModeration` REACTS to the `status → hidden`
+ * transition and emails the admins. moderateProof and the notifiers are
+ * untouched; no secrets are needed here. Firestore triggers stay on us-central1.
+ */
+export const hideProofAtThreshold = onDocumentWritten(
+  'events/{eventId}/proofs/{proofId}',
+  (event) =>
+    applyThresholdHide(
+      'proofs',
+      event.params.eventId,
+      event.params.proofId,
+      event.data?.before.data() as ReportableDoc | undefined,
+      event.data?.after.data() as ReportableDoc | undefined,
+    ),
+);
+
+export const hideItemAtThreshold = onDocumentWritten(
+  'events/{eventId}/items/{itemId}',
+  (event) =>
+    applyThresholdHide(
+      'items',
+      event.params.eventId,
+      event.params.itemId,
+      event.data?.before.data() as ReportableDoc | undefined,
+      event.data?.after.data() as ReportableDoc | undefined,
+    ),
+);
+
+/**
+ * Threshold-decrease backfill (issue #43 F3, ADR 0004 Phase 1). The per-write
+ * hides above fire only on a fresh crossing, so LOWERING an Event's
+ * settings.reportHideThreshold below already-existing reportCounts would never
+ * server-hide those already-over-threshold docs. This Event-doc trigger closes
+ * that authoritative-hide gap: when reportHideThreshold decreases (or is enabled
+ * from unset), applyThresholdBackfill sweeps the Event's own active items +
+ * proofs and hides the ones that now meet the lower bar (active-only, update-based
+ * writes; best-effort). It never writes the Event doc, so it never re-fires
+ * itself; its status->hidden writes re-fire the per-write hides, which no-op.
+ */
+export const backfillHideOnThresholdDecrease = onDocumentWritten(
+  'events/{eventId}',
+  (event) =>
+    applyThresholdBackfill(
+      event.params.eventId,
+      event.data?.before.data()?.settings?.reportHideThreshold,
+      event.data?.after.data()?.settings?.reportHideThreshold,
     ),
 );

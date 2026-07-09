@@ -158,7 +158,9 @@ describe('useItems — a banned author’s Prompt drops from the public pool', (
     const { result, rerender } = renderHook(() => useItems());
 
     cap.fireDoc(eventSnap(['banned-uid']));
-    cap.fireCol(colSnap([item('i1', 'banned-uid'), item('i2', 'ok-uid')]));
+    // Since #43 F4 the player pool is a status=='active' query, delivered on the
+    // query channel (like useProofFeed), not the bare collection channel.
+    cap.fireQuery(colSnap([item('i1', 'banned-uid'), item('i2', 'ok-uid')]));
     expect(result.current.items.map((i) => i.id)).toEqual(['i2']);
 
     // Fail-open: an empty roster hides nothing (both prompts return).
