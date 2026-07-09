@@ -55,7 +55,11 @@ export default defineConfig({
       // then fails to reach.
       command: `npx vite build --mode e2e && npx vite preview --port ${WEB_PORT} --strictPort --host 127.0.0.1`,
       port: WEB_PORT,
-      reuseExistingServer: !process.env.CI,
+      // Never reuse: what this run must serve is the bundle the command above
+      // just built. A leftover listener on the dedicated e2e port (5183) would
+      // otherwise be silently trusted and could serve a stale — or non-e2e —
+      // bundle (Codex P3 on PR #114).
+      reuseExistingServer: false,
       timeout: 120_000,
       env: {
         // Demo-prefixed per Firebase convention (never resolves to a real

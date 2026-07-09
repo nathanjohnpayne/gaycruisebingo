@@ -1,17 +1,17 @@
 // x-e2e-happy-path — join -> Mark -> BINGO -> Leaderboard, zero admin action,
 // plus the ADR 0006 offline-mark-survives-reload assertion, against the
 // Firebase Local Emulator Suite. See specs/x-e2e-happy-path.md for the AC
-// mapping and the "Known limitation" this suite currently runs into.
+// mapping.
 import { test, expect, type Page } from '@playwright/test';
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { MIN_POOL } from '../../src/game/logic';
 import {
-  anyBoardHasMarkedText,
+  boardHasMarkedText,
   EVENT_SEED,
   seedEmulatorEvent,
   SEEDED_ACTIVE_PROMPT_COUNT,
 } from './support/seed';
-import { joinViaSharedLink } from './support/join';
+import { joinViaSharedLink, signedInUid } from './support/join';
 import { LINE_INDICES_EXCLUDING_CENTER, readDealtCellTexts, tapCellByText } from './support/board';
 
 test.describe('x-e2e-happy-path', () => {
@@ -73,6 +73,10 @@ test.describe('x-e2e-happy-path', () => {
   }) => {
     await joinViaSharedLink(page);
     await readDealtCellTexts(page); // waits for the deal to render (25 cells)
+    // THIS Player's uid — scopes the step-5 emulator observer to this case's
+    // own board (boards/{uid}), so a prompt-text collision with the happy-path
+    // Player's already-marked board in the same Event can never fake the pass.
+    const uid = await signedInUid(page);
 
     // Any unmarked, non-free Square — never index CENTER (always-on Free
     // Space, unreachable via toggle()) and never one the happy-path case may
@@ -115,13 +119,13 @@ test.describe('x-e2e-happy-path', () => {
     await context.setOffline(false);
 
     // 5. Ground truth via an INDEPENDENT observer (never this reloaded tab's
-    // own cache): the emulator now has the Mark. It was made offline and never
-    // synced before the reload, so the ONLY path it could reach the emulator is
-    // the durable IndexedDB queue surviving the reload and draining on
-    // reconnect — proving the Mark outlived memory (ADR 0006), not merely
-    // latency compensation.
+    // own cache), scoped to THIS Player's own board: the emulator now has the
+    // Mark on boards/{uid}. It was made offline and never synced before the
+    // reload, so the ONLY path it could reach the emulator is the durable
+    // IndexedDB queue surviving the reload and draining on reconnect — proving
+    // the Mark outlived memory (ADR 0006), not merely latency compensation.
     await expect(async () => {
-      expect(await anyBoardHasMarkedText(testEnv, targetText)).toBe(true);
+      expect(await boardHasMarkedText(testEnv, uid, targetText)).toBe(true);
     }).toPass({ timeout: 20_000 });
 
     // 6. End-to-end: a fresh ONLINE reload boots the app and renders the Mark —

@@ -12,7 +12,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { collection, doc, deleteField, getDocs, writeBatch } from 'firebase/firestore';
+import { doc, deleteField, getDoc, writeBatch } from 'firebase/firestore';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 // @ts-expect-error — scripts/seed.mjs is a plain-JS node script with no type
@@ -87,15 +87,20 @@ export async function seedEmulatorEvent(): Promise<RulesTestEnvironment> {
 }
 
 /**
- * Ground truth for the ADR 0006 sync assertion: reads `events/{EVENT_ID}/boards`
- * straight from the emulator (rules disabled, so this never depends on which
- * uid the browser's own popup sign-in resolved to) and reports whether ANY
- * Board has `text` marked. An INDEPENDENT read path from the page under
- * test — never the reloaded tab's own cache — mirrors the observer pattern in
- * tests/offline/w0-offline-persistence.test.ts.
+ * Ground truth for the ADR 0006 sync assertion: reads THIS Player's board doc
+ * (`events/{EVENT_ID}/boards/{uid}` — boards are keyed by uid, see
+ * src/data/paths.ts `boardRef`) straight from the emulator, rules disabled,
+ * and reports whether that board has `text` marked. Scoped to the signed-in
+ * uid on purpose (Codex P2 on PR #114): both cases join the same shared Event,
+ * so an any-board scan could false-pass on a prompt-text collision with the
+ * happy-path Player's already-marked board — uid-scoping makes the assertion
+ * provably about the offline Mark this case just made. An INDEPENDENT read
+ * path from the page under test — never the reloaded tab's own cache —
+ * mirrors the observer pattern in tests/offline/w0-offline-persistence.test.ts.
  */
-export async function anyBoardHasMarkedText(
+export async function boardHasMarkedText(
   testEnv: RulesTestEnvironment,
+  uid: string,
   text: string,
 ): Promise<boolean> {
   // `withSecurityRulesDisabled` is typed `(cb) => Promise<void>` and DISCARDS the
@@ -106,11 +111,11 @@ export async function anyBoardHasMarkedText(
   let found = false;
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
-    const snap = await getDocs(collection(db, 'events', EVENT_ID, 'boards'));
-    found = snap.docs.some((d) => {
-      const cells = (d.data() as { cells?: Array<{ text: string; marked: boolean }> }).cells ?? [];
-      return cells.some((c) => c.text === text && c.marked === true);
-    });
+    const snap = await getDoc(doc(db, 'events', EVENT_ID, 'boards', uid));
+    const cells =
+      (snap.data() as { cells?: Array<{ text: string; marked: boolean }> } | undefined)?.cells ??
+      [];
+    found = cells.some((c) => c.text === text && c.marked === true);
   });
   return found;
 }

@@ -63,3 +63,40 @@ export async function joinViaSharedLink(page: Page): Promise<void> {
   // resolve, not the retired src/firebase.ts wiring gap.
   await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible({ timeout: 15000 });
 }
+
+/**
+ * The signed-in User's uid, read from the Firebase Auth SDK's own IndexedDB
+ * persistence (`firebaseLocalStorageDb` / `firebaseLocalStorage`, the
+ * `firebase:authUser:*` entry) in the page under test. Each popup sign-in
+ * autogenerates a fresh account, so the uid is only knowable at runtime; the
+ * offline case needs it to scope its emulator-observer assertion to THIS
+ * Player's board (`events/{eventId}/boards/{uid}`) — a Codex P2 on PR #114:
+ * an any-board scan could false-pass on a prompt-text collision with the
+ * happy-path Player's already-marked board in the same shared Event.
+ */
+export async function signedInUid(page: Page): Promise<string> {
+  const uid = await page.evaluate(async () => {
+    const open = indexedDB.open('firebaseLocalStorageDb');
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      open.onsuccess = () => resolve(open.result);
+      open.onerror = () => reject(open.error);
+    });
+    try {
+      const store = db
+        .transaction('firebaseLocalStorage', 'readonly')
+        .objectStore('firebaseLocalStorage');
+      const rows = await new Promise<Array<{ fbase_key?: string; value?: { uid?: string } }>>(
+        (resolve, reject) => {
+          const req = store.getAll();
+          req.onsuccess = () => resolve(req.result as never);
+          req.onerror = () => reject(req.error);
+        },
+      );
+      return rows.find((r) => r.fbase_key?.startsWith('firebase:authUser:'))?.value?.uid ?? '';
+    } finally {
+      db.close();
+    }
+  });
+  if (!uid) throw new Error('No signed-in Firebase user found in IndexedDB auth persistence.');
+  return uid;
+}
