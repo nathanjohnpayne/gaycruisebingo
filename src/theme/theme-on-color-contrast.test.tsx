@@ -40,13 +40,31 @@ function ruleBlock(source: string, selector: string): string {
   return match[1];
 }
 
+// Parse the weight out of a `color-mix(in srgb, var(--<name>) N%, ...)` in a
+// rule body and return it as a fraction in [0,1] — so every composited-surface
+// check below computes against the REAL tint strength in src/index.css rather
+// than a hand-copied literal that would silently go stale if the gradient is
+// retuned (issue #72 Codex P3, PR #123 comment 3553469606). Same parse-the-CSS
+// approach specs/a11y-badge-contrast.md's suite uses for its badge weights.
+function mixWeight(ruleBody: string, varName: string): number {
+  const m = ruleBody.match(
+    new RegExp(`color-mix\\(\\s*in srgb\\s*,\\s*var\\(--${varName}\\)\\s*([\\d.]+)%`),
+  );
+  if (!m) throw new Error(`no color-mix(in srgb, var(--${varName}) N%, ...) in rule body`);
+  return Number(m[1]) / 100;
+}
+
+// Strip CSS /* ... */ comments — these rules' own comments name the old #fff
+// value and words like "transparent" in prose, which would false-positive the
+// source pins below. Applied before any assertion that greps the rule body.
+function stripComments(block: string): string {
+  return block.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
 function stripDecorativeGlow(block: string): string {
-  // Strip CSS comments first — this file's own /* ... */ comments document
-  // the old #fff value by name (see the edits above), which would otherwise
-  // false-positive this check. Then strip text-shadow declarations — a glow
-  // layered around a fill is not the fill itself and does not count toward
-  // contrast.
-  return block.replace(/\/\*[\s\S]*?\*\//g, '').replace(/text-shadow:[^;]*;/g, '');
+  // Also strip text-shadow declarations — a glow layered around a fill is not
+  // the fill itself and does not count toward contrast.
+  return stripComments(block).replace(/text-shadow:[^;]*;/g, '');
 }
 
 const FIXED_RULES = [
@@ -124,20 +142,37 @@ describe('--ink vs --bg for the .cell.marked border (specs/theme-on-color-contra
 });
 
 // ---------------------------------------------------------------------------
-// .celebrate .big: --ink against the composited celebrate backdrop —
-// color-mix(in srgb, var(--primary) 34%, transparent) painted over the
-// opaque --bg base (index.css's radial-gradient hits its hottest, most
-// primary-saturated point at the gradient's center, where `.big` renders).
-// mixSrgb reproduces that composite: mixing toward "transparent" only
-// scales alpha, so compositing a 34%-alpha primary layer over an opaque bg
-// is equivalent to mixing straight toward bg at the same weight.
+// .celebrate .big: --ink against the celebrate backdrop. The celebration
+// renders position:fixed OVER the live Board, so contrast here has to hold
+// against the *real* surface behind the hero text, not a bare --bg (issue #72
+// Codex P2, PR #123 comment 3553469597). The fix makes .celebrate's backdrop
+// OPAQUE — a color-mix(--primary N%, --bg) radial fading to solid --bg, with
+// no transparent stops — so no Board cell can bleed through and the surface is
+// fully determined by this rule's own tokens. The hottest (most --primary)
+// point is the radial's center, where `.big` sits. We first assert the
+// opaqueness premise (no `transparent`, and a solid `var(--bg)` stop), then
+// parse the actual center weight from the CSS (Codex P3, comment 3553469606)
+// rather than hard-coding it, so a retune of the gradient moves this check too.
 // ---------------------------------------------------------------------------
 
-describe('.celebrate .big: --ink vs the composited celebrate backdrop (specs/theme-on-color-contrast.md)', () => {
+describe('.celebrate .big: --ink vs the (opaque) celebrate backdrop (specs/theme-on-color-contrast.md)', () => {
+  // Comments stripped: this rule's own comment discusses the old translucent
+  // backdrop by name, which would false-positive the opaqueness grep below.
+  const celebrateBody = stripComments(ruleBlock(indexCss, '.celebrate'));
+
+  it('.celebrate backdrop is opaque — no transparent stop, fades to solid var(--bg)', () => {
+    // The point of the P2 fix: an opaque backdrop removes the dependency on
+    // whatever Board cell is underneath. A `transparent` anywhere in the
+    // background would let it bleed back through and invalidate the check.
+    expect(celebrateBody).not.toMatch(/transparent/);
+    expect(celebrateBody).toMatch(/,\s*var\(--bg\)\s*\)/); // solid --bg outer stop
+  });
+
+  const weight = mixWeight(celebrateBody, 'primary');
   for (const t of THEMES) {
     const vars = themeBlocks[t.id] ?? {};
-    it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the 34% --primary tint over --bg`, () => {
-      const composite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), 0.34);
+    it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the ${weight * 100}% --primary center over --bg`, () => {
+      const composite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), weight);
       expect(contrastRatio(hexToRgb(vars.ink), composite)).toBeGreaterThanOrEqual(TEXT_MIN);
     });
   }
@@ -175,14 +210,24 @@ describe('.signin h1: --ink vs --bg (specs/theme-on-color-contrast.md)', () => {
 // ---------------------------------------------------------------------------
 
 describe('body gradient tints: --ink vs the composited backdrop (specs/theme-on-color-contrast.md)', () => {
+  // Parse the two tint weights straight from body's own background rather than
+  // hard-coding 0.32/0.26 (issue #72 Codex P3, PR #123 comment 3553469606), so
+  // a retune of body's radial-gradient stops moves these checks with it. The
+  // color-mix(..., transparent) stops composite over the opaque --bg base
+  // identically to mixing toward --bg at the same weight (mixing toward
+  // transparent only scales alpha).
+  const bodyBody = ruleBlock(indexCss, 'body');
+  const primaryWeight = mixWeight(bodyBody, 'primary');
+  const secondaryWeight = mixWeight(bodyBody, 'secondary');
+
   for (const t of THEMES) {
     const vars = themeBlocks[t.id] ?? {};
-    it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the 32% --primary tint over --bg (.brand b, .bingo-head span)`, () => {
-      const composite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), 0.32);
+    it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the ${primaryWeight * 100}% --primary tint over --bg (.brand b, .bingo-head span)`, () => {
+      const composite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), primaryWeight);
       expect(contrastRatio(hexToRgb(vars.ink), composite)).toBeGreaterThanOrEqual(TEXT_MIN);
     });
-    it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the 26% --secondary tint over --bg (.count b)`, () => {
-      const composite = mixSrgb(hexToRgb(vars.secondary), hexToRgb(vars.bg), 0.26);
+    it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the ${secondaryWeight * 100}% --secondary tint over --bg (.count b)`, () => {
+      const composite = mixSrgb(hexToRgb(vars.secondary), hexToRgb(vars.bg), secondaryWeight);
       expect(contrastRatio(hexToRgb(vars.ink), composite)).toBeGreaterThanOrEqual(TEXT_MIN);
     });
   }
@@ -210,10 +255,15 @@ describe('body gradient tints: --ink vs the composited backdrop (specs/theme-on-
 // ---------------------------------------------------------------------------
 
 describe('share-card gradient tints: --ink vs the composited backdrop (specs/theme-on-color-contrast.md)', () => {
+  // Parse the tint weight from .share-card's own background rather than
+  // hard-coding 0.30 (issue #72 Codex P3, PR #123 comment 3553469606).
+  const shareCardBody = ruleBlock(indexCss, '.share-card');
+  const primaryWeight = mixWeight(shareCardBody, 'primary');
+
   for (const t of THEMES) {
     const vars = themeBlocks[t.id] ?? {};
-    it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the 30% --primary tint over --bg (.share-card-bhead span)`, () => {
-      const composite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), 0.3);
+    it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the ${primaryWeight * 100}% --primary tint over --bg (.share-card-bhead span)`, () => {
+      const composite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), primaryWeight);
       expect(contrastRatio(hexToRgb(vars.ink), composite)).toBeGreaterThanOrEqual(TEXT_MIN);
     });
   }
