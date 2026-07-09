@@ -15,10 +15,10 @@ ADR 0005 supersedes the scaffolded server-side Open Graph pipeline: Share Cards 
 
 ## The `share` Function and its orphaned `escapeHtml` helper are gone
 
-`functions/src/index.ts` no longer exports `share`, no longer imports `onRequest`, and no longer defines `escapeHtml` — the crawler OG HTML + redirect handler was its only caller. `moderateProof` (ADR 0004 Phase 1 moderation) is untouched.
+`functions/src/index.ts` no longer exports `share`, no longer imports `onRequest`, and no longer defines `escapeHtml` — the crawler OG HTML + redirect handler was its only caller. `moderateProof` (ADR 0004 Phase 1 moderation) is untouched by this removal — and is, since #126, conditionally exported behind the off-by-default `ENABLE_VISION_MODERATION` flag, so it deploys as a CloudFunction only when Cloud Vision is enabled (see `specs/w4-gate-vision-moderation.md`).
 
 - **Given** the on-device Share Card replacement (#36) **when** `functions/src/index.ts` is read **then** it defines no `share` export, no `escapeHtml` helper, and no `OG_RENDERER_URL` reference. (Test: "functions/src/index.ts no longer defines share, escapeHtml, or OG_RENDERER_URL".)
-- **Given** `moderateProof` is the real Phase-1 moderation surface **when** `functions/src/index.ts` is read **then** it still exports `moderateProof`. (Test: "keeps moderateProof intact".)
+- **Given** `moderateProof` is the real Phase-1 moderation surface **when** `functions/src/index.ts` is read **then** it still declares the `export const moderateProof` binding (conditionally a CloudFunction since #126). (Test: "keeps moderateProof intact".)
 
 ## The `/s/**` hosting rewrite and its cache-header rule are gone
 

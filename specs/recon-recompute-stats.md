@@ -16,9 +16,9 @@ ADR 0001 (the honor system) makes Marks client-authoritative and `players/{uid}`
 
 ## `moderateProof` is kept intact
 
-The removal is surgical — the ADR-0004 Phase-1 moderation Function is untouched (its ownership stays with #43).
+The removal is surgical — the ADR-0004 Phase-1 moderation Function is untouched (its ownership stays with #43). Note (post-#126): `moderateProof` is now CONDITIONALLY exported — gated behind the off-by-default `ENABLE_VISION_MODERATION` flag, so it is a deployed CloudFunction only when Cloud Vision is enabled (see `specs/w4-gate-vision-moderation.md`). The `export const moderateProof` declaration this reconciliation pins is still present in the source — which is all the guard below asserts — but it evaluates to `undefined`, and is skipped by Firebase's export discovery, when the flag is off.
 
-- **Given** `moderateProof` is the real Phase-1 moderation surface **when** `functions/src/index.ts` is read **then** it still exports `moderateProof`. (Test: "keeps moderateProof intact".)
+- **Given** `moderateProof` is the real Phase-1 moderation surface **when** `functions/src/index.ts` is read **then** it still declares the `export const moderateProof` binding (conditionally a CloudFunction since #126). (Test: "keeps moderateProof intact".)
 
 ## `phase-1-deploy.md` no longer tells operators to lock player-stat writes
 
