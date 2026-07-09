@@ -18,6 +18,20 @@ export const restoreItem = (id: string) => updateDoc(item(id), { status: 'active
 export const deleteItem = (id: string) => deleteDoc(item(id));
 export const hideProof = (id: string) => updateDoc(proof(id), { status: 'hidden' });
 export const restoreProof = (id: string) => updateDoc(proof(id), { status: 'active' });
+
+// Lift the ADR 0004 Phase 0 community auto-hide by resetting reportCount to 0 —
+// the explicit admin action the console lacked (Codex P2, PR #107 finding 3).
+// Restoring `status` alone reactivates a hard-hidden row but leaves reportCount
+// over the threshold, so it stays hidden on every Player's Feed/pool
+// (useItems / useProofFeed via isReportHidden); an auto-hidden-but-active row has
+// no `status` to restore at all. Clearing the counter is the one write that makes
+// community-hidden content reappear in the player surfaces. An admin update is
+// rules-unconstrained (firestore.rules `items`/`proofs`: `allow update: if
+// isAdmin(eventId) || ...`), so writing reportCount is permitted — pinned by
+// tests/rules/w2-admin-console.test.ts. This is the Phase 0 console affordance;
+// the server-authoritative hide/lift is #43.
+export const clearItemReports = (id: string) => updateDoc(item(id), { reportCount: 0 });
+export const clearProofReports = (id: string) => updateDoc(proof(id), { reportCount: 0 });
 export const setClaimMode = (mode: ClaimMode) => updateDoc(evt(), { claimMode: mode });
 export const setEventTheme = (theme: ThemeId) => updateDoc(evt(), { defaultTheme: theme });
 

@@ -17,6 +17,7 @@ import {
 import type { User } from 'firebase/auth';
 import { db, EVENT_ID } from '../firebase';
 import { markerDisplayName } from './attribution';
+import { isReportHidden } from './moderation';
 import { itemsCol } from './paths';
 import { FREE_TEXT } from './seed';
 import {
@@ -26,7 +27,7 @@ import {
   isBlackout,
   type DealItem,
 } from '../game/logic';
-import type { Cell, ClaimMode, UserDoc } from '../types';
+import type { Cell, ClaimMode, EventDoc, UserDoc } from '../types';
 
 // Raw (converter-free) refs for writes, to keep partial merges simple.
 const rawUser = (uid: string) => doc(db, 'users', uid);
@@ -34,6 +35,7 @@ const rawBoard = (uid: string) => doc(db, 'events', EVENT_ID, 'boards', uid);
 const rawPlayer = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
 const rawItems = () => collection(db, 'events', EVENT_ID, 'items');
 const rawItem = (id: string) => doc(db, 'events', EVENT_ID, 'items', id);
+const rawEvent = () => doc(db, 'events', EVENT_ID);
 
 /**
  * True only for a well-formed `https://` URL — the only photo shape the public
@@ -189,9 +191,10 @@ export async function joinAndDeal(u: User): Promise<void> {
   // value wins. One extra read, join-path only (returning Players early-return
   // above), fetched alongside the pool; best-effort — a missing or unreadable
   // profile falls back to the auth values rather than blocking the deal.
-  const [profileSnap, snap] = await Promise.all([
+  const [profileSnap, snap, eventSnap] = await Promise.all([
     getDoc(rawUser(u.uid)).catch(() => null),
     getDocs(query(itemsCol(), where('status', '==', 'active'))),
+    getDoc(rawEvent()).catch(() => null),
   ]);
   const profile = profileSnap?.exists() ? (profileSnap.data() as Partial<UserDoc>) : null;
   // Validate before denormalizing (Codex P2 on PR #66 round 3): users/{uid} is
@@ -211,9 +214,30 @@ export async function joinAndDeal(u: User): Promise<void> {
   const photoURL =
     profile?.customPhoto === true ? (savedPhoto ?? u.photoURL ?? null) : (u.photoURL ?? null);
 
+  // The ADR 0004 Phase 0 community auto-hide threshold, read from the event doc so
+  // a frozen card is dealt from the SAME pool a Player sees live (useItems): a
+  // Prompt whose reportCount has reached a POSITIVE reportHideThreshold is hidden
+  // everywhere, so it must never land on a new Player's board (Codex P2, PR #107
+  // finding 1). One extra event-doc read, join-path only (returning Players
+  // early-return above) and fetched in the SAME Promise.all as the pool + profile,
+  // so it adds no latency. A missing/unreadable event doc, or an unset/non-positive
+  // threshold, falls open to no filtering via `isReportHidden` — exactly the live
+  // pool's behavior.
+  const eventData = eventSnap?.exists() ? (eventSnap.data() as Partial<EventDoc>) : null;
+  const threshold =
+    typeof eventData?.settings?.reportHideThreshold === 'number'
+      ? eventData.settings.reportHideThreshold
+      : undefined;
+
+  // Filter the active pool by the SAME predicate the live pool uses, AFTER the
+  // status==='active' query and the free-space drop. Filtering here (before
+  // dealBoard) keeps the MIN_POOL thin-pool guard honest: dealBoard needs >= 24
+  // prompts AFTER the community hide, so a pool padded past the floor by
+  // heavily-reported Prompts still fails fast rather than dealing a card that
+  // hides squares the moment it renders.
   const pool: DealItem[] = snap.docs
     .map((d) => d.data())
-    .filter((it) => !it.isFreeSpace)
+    .filter((it) => !it.isFreeSpace && !isReportHidden(it.reportCount, threshold))
     .map((it) => ({ id: it.id, text: it.text }));
 
   const seed = seedFromUid(u.uid);
