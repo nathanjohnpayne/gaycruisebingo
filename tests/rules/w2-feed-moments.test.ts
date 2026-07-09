@@ -10,20 +10,24 @@ import {
 import { deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 
 // specs/w2-feed-moments.md — the Moments rules contract (ADR 0002). Pinned against
-// the block that shipped from #16/#18 and was TIGHTENED in PR #99 (Codex P2): the
-// create rule now bounds createdAt near request.time (finding 3), and the update
-// path was removed so a Moment is fully immutable (finding 4). A Moment is an
-// own-beat, self-published broadcast: a Player may create ONLY a Moment carrying
-// their own uid (a forged uid is denied), with a valid kind + non-empty ≤100
-// displayName + a numeric, near-now createdAt; reads are public; a Moment is fully
-// immutable (no update path); deletable by its owner or an admin.
+// the block that shipped from #16/#18, was TIGHTENED in PR #99 (Codex P2) — the
+// create rule bounds createdAt near request.time (finding 3) and the update path was
+// removed so a Moment is fully immutable (finding 4) — and was tightened again in #103
+// to bind the doc id to the payload kind. A Moment is an own-beat, self-published
+// broadcast: a Player may create ONLY a Moment carrying their own uid (a forged uid is
+// denied), at the deterministic id its kind implies (issue #103), with a valid kind +
+// non-empty ≤100 displayName + a numeric, near-now createdAt; reads are public; a
+// Moment is fully immutable (no update path); deletable by its owner or an admin.
 //
 // Two design-critical facts this suite PINS honestly (see the spec):
-//   1. The doc id is CALLER-CHOSEN (no rule constrains momentId), and `update` is
-//      DENIED for everyone — so a deterministic id (`${uid}-bingo`, the event-
-//      singleton `first_bingo`) makes the once-only STRUCTURAL: a re-broadcast hits
-//      the deny-all `update` rule and is denied, for admins exactly like everyone
-//      else. This is the strongest dedup the rules allow.
+//   1. The create rule BINDS the doc id to the payload kind (issue #103): the event-
+//      singleton `first_bingo` must carry kind 'first_bingo', and every other id must
+//      equal `${uid}-${kind}` — the writer's deterministic scheme (src/data/moments.ts).
+//      With `update` DENIED for everyone, a re-broadcast to an already-written
+//      deterministic id hits the deny-all `update` rule and is denied (admins included),
+//      so the once-only dedup is STRUCTURAL — and the id can no longer be squatted with
+//      a mismatched kind (the first_bingo denial-of-ceremony hole #103 closes). This is
+//      the strongest dedup the rules allow.
 //   2. The create rule has NO hasOnly/keys() constraint, so it does NOT reject a
 //      Moment carrying extra media/proofId fields. The ADR 0002 "a Moment carries
 //      no evidence" guarantee is therefore a WRITER + TYPE contract (moments.ts
@@ -95,16 +99,41 @@ describe('firestore.rules — Feed Moments (specs/w2-feed-moments.md)', () => {
     await assertFails(setDoc(doc(db(ALICE), momentPath('spoof')), moment(BOB)));
   });
 
-  it('enforces the shape — valid kind, non-empty ≤100 displayName, numeric createdAt', async () => {
+  it('binds the doc id to the payload kind on create — the first_bingo singleton cannot be squatted (issue #103)', async () => {
+    // The create rule binds momentId to the payload, mirroring the writer's
+    // deterministic scheme (src/data/moments.ts): the event singleton `first_bingo`
+    // requires kind 'first_bingo', and every other id must be `${uid}-${kind}`. Without
+    // it any signed-in Player could create moments/first_bingo with a MISMATCHED kind —
+    // the read-side filter (useData.ts hasCanonicalMomentId) would hide it, but a Moment
+    // is fully immutable, so the legitimate First-to-BINGO create would then be denied
+    // FOREVER as a doc-exists update (a denial-of-ceremony squat). Each assertion below
+    // turns SOLELY on the id↔kind binding — uid, kind, displayName and createdAt are all
+    // otherwise valid, so the binding is the only clause that can flip the outcome.
     const p = (id: string) => doc(db(ALICE), momentPath(id));
-    await assertFails(setDoc(p('bad-kind'), moment(ALICE, { kind: 'streak' }))); // not a MomentKind
-    await assertFails(setDoc(p('empty-name'), moment(ALICE, { displayName: '' }))); // empty name
-    await assertFails(setDoc(p('long-name'), moment(ALICE, { displayName: 'x'.repeat(101) }))); // over cap
-    await assertFails(setDoc(p('nan-time'), moment(ALICE, { createdAt: 'now' }))); // non-numeric stamp
-    await assertSucceeds(setDoc(p('cap-name'), moment(ALICE, { displayName: 'x'.repeat(100) }))); // exactly the cap
+    // The squat: the singleton id carrying a non-first_bingo kind is DENIED (the hole).
+    await assertFails(setDoc(p('first_bingo'), moment(ALICE, { kind: 'bingo' })));
+    // The canonical singleton create (kind first_bingo AT id first_bingo) is ALLOWED.
+    await assertSucceeds(setDoc(p('first_bingo'), moment(ALICE, { kind: 'first_bingo' })));
+    // A per-Player id whose kind does not match its `${uid}-${kind}` id is DENIED:
+    // `${ALICE}-bingo` carrying kind 'blackout' is not `${ALICE}-blackout`.
+    await assertFails(setDoc(p(`${ALICE}-bingo`), moment(ALICE, { kind: 'blackout' })));
+    // The matching per-Player create (the deterministic id the writer uses) is ALLOWED.
+    await assertSucceeds(setDoc(p(`${ALICE}-blackout`), moment(ALICE, { kind: 'blackout' })));
   });
 
-  it('is FULLY immutable — the caller-chosen id + create-only rule is the once-only backstop, and NO ONE (not even an admin) can update (PR #99 finding 4)', async () => {
+  it('enforces the shape — valid kind, non-empty ≤100 displayName, numeric createdAt', async () => {
+    // Every id here SATISFIES the #103 id↔kind binding (`${uid}-${kind}`), so the only
+    // clause that can deny is the shape rule under test — never the binding. The denied
+    // writes persist nothing, so they can share `${ALICE}-bingo`; the accepted one is last.
+    const p = (id: string) => doc(db(ALICE), momentPath(id));
+    await assertFails(setDoc(p(`${ALICE}-streak`), moment(ALICE, { kind: 'streak' }))); // not a MomentKind
+    await assertFails(setDoc(p(`${ALICE}-bingo`), moment(ALICE, { displayName: '' }))); // empty name
+    await assertFails(setDoc(p(`${ALICE}-bingo`), moment(ALICE, { displayName: 'x'.repeat(101) }))); // over cap
+    await assertFails(setDoc(p(`${ALICE}-bingo`), moment(ALICE, { createdAt: 'now' }))); // non-numeric stamp
+    await assertSucceeds(setDoc(p(`${ALICE}-bingo`), moment(ALICE, { displayName: 'x'.repeat(100) }))); // exactly the cap
+  });
+
+  it('is FULLY immutable — the deterministic id + create-only rule is the once-only backstop, and NO ONE (not even an admin) can update (PR #99 finding 4)', async () => {
     // The strongest dedup the rules allow: a deterministic id makes a re-broadcast a
     // doc-exists `update`, which is DENIED for everyone — a Moment has no update
     // path. So a duplicate BINGO / First-to-BINGO can never post, and an admin
@@ -129,9 +158,12 @@ describe('firestore.rules — Feed Moments (specs/w2-feed-moments.md)', () => {
     // offline queue would trip the lower bound (accepted residual — see the spec).
     const p = (id: string) => doc(db(ALICE), momentPath(id));
     const now = Date.now();
-    await assertSucceeds(setDoc(p('ts-now'), moment(ALICE, { createdAt: now }))); // near-now: accepted
-    await assertFails(setDoc(p('ts-future'), moment(ALICE, { createdAt: now + 3600000 }))); // +1h > +60s: denied
-    await assertFails(setDoc(p('ts-past'), moment(ALICE, { createdAt: now - 172800000 }))); // -2d < -24h: denied
+    // Canonical id (`${uid}-bingo`) so only the createdAt bound decides each outcome —
+    // the #103 id↔kind binding is satisfied. The denied writes persist nothing, so the
+    // accepted case reuses the same id last.
+    await assertFails(setDoc(p(`${ALICE}-bingo`), moment(ALICE, { createdAt: now + 3600000 }))); // +1h > +60s: denied
+    await assertFails(setDoc(p(`${ALICE}-bingo`), moment(ALICE, { createdAt: now - 172800000 }))); // -2d < -24h: denied
+    await assertSucceeds(setDoc(p(`${ALICE}-bingo`), moment(ALICE, { createdAt: now }))); // near-now: accepted
   });
 
   it('does NOT reject extra media/proofId fields — no-evidence is a writer/type contract, not a rules one', async () => {
@@ -140,7 +172,9 @@ describe('firestore.rules — Feed Moments (specs/w2-feed-moments.md)', () => {
     // moments.ts (writes only the MomentDoc fields) and the MomentDoc type — the
     // unit test src/data/w2-feed-moments.test.ts pins the writer side.
     await assertSucceeds(
-      setDoc(doc(db(ALICE), momentPath(`${ALICE}-extra`)), moment(ALICE, {
+      // Canonical id (`${uid}-bingo`, kind bingo) — the id↔kind binding (#103) still
+      // does not gate extra fields; that stays a writer/type contract, not a rules one.
+      setDoc(doc(db(ALICE), momentPath(`${ALICE}-bingo`)), moment(ALICE, {
         mediaURL: 'https://firebasestorage.example/x.jpg',
         proofId: 'p1',
       })),
