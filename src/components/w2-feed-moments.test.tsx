@@ -552,11 +552,40 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     // pending bingo flag is gone — it must NOT re-enqueue the ceremonial candidate,
     // or a later drain would publish the IMMUTABLE event singleton for a win that
     // no longer stands. (The clean-path pair — witness resolves with no interleaved
-    // action → enqueues exactly once — is the "claims First-to-BINGO" test above.)
+    // action → enqueues exactly once — is the "claims First-to-BINGO" test above;
+    // the non-falling-unmark pair — round 4 — is the next test.)
     resolveWitness(false);
     await flushAsync();
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
     expect(H.broadcastBingo).not.toHaveBeenCalled(); // the fallen win published nothing
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('a NON-falling unmark while the witness read is in flight does NOT forfeit the ceremony — the bingo stood the whole time (PR #110 round 4)', async () => {
+    // The player has four of row 0 plus an unrelated Square 5 marked; the tap on
+    // p4 completes the FIRST bingo and its witness read HANGS.
+    H.board = boardWith([0, 1, 2, 3, 5]);
+    render(<Board />);
+    let resolveWitness!: (v: boolean) => void;
+    H.hasPriorBingoWitness.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { resolveWitness = resolve; }),
+    );
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith([...ROW0, 5]));
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // suspended at the witness read
+
+    // The player unmarks the UNRELATED Square 5 while the read is in flight: the
+    // verdict shows the bingo STILL STANDING (row 0 intact), so nothing fell and
+    // nothing was un-witnessed. Before round 4 this unconditional-bumped the
+    // generation and the resolving continuation refused the ceremonial — a valid
+    // First-to-BINGO lost to an unrelated unmark.
+    await clickMark('p5', { bingo: true, bingoTransition: false }, dealtWith(ROW0));
+
+    // The read resolves clean: the generation is unchanged (no bingo fell), so the
+    // candidate enqueues, drains, and fires — exactly once, alongside the bingo.
+    resolveWitness(false);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
     expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
   });
 

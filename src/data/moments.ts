@@ -81,9 +81,11 @@ export interface PendingMomentFlags {
 // round 2 finding 3): the action generation at which the ceremonial candidate was
 // enqueued. A candidate can be held for a long time (roster gate, unmounts), and
 // the drain must fire it only if the uid's generation is UNCHANGED since its
-// enqueue (`firstBingoCandidateCurrent`): any interleaved unmark or observed fall
-// bumps the generation and thereby kills stale candidates — even ones whose flag
-// survived because the bump came from a blackout-only fall or a no-drop unmark.
+// enqueue (`firstBingoCandidateCurrent`): an interleaved OBSERVED BINGO FALL
+// bumps the generation and thereby kills stale candidates (round 4 narrowed the
+// bump — a no-drop unmark or a blackout-only fall preserves a valid candidate;
+// every in-app bingo-fall bump also clears the candidate, so the stamp is
+// belt-and-braces against future bump sites rather than a reachable kill today).
 // `peekPendingMoments` projects the public triple, keeping this internal.
 interface StoredPendingFlags extends PendingMomentFlags {
   firstBingoGeneration: number;
@@ -91,7 +93,9 @@ interface StoredPendingFlags extends PendingMomentFlags {
 const pendingMoments = new Map<string, StoredPendingFlags>();
 
 // The per-uid ACTION GENERATION (Codex P1 on PR #110): a monotonically increasing
-// token bumped by every unmark and every observed win-fall (`dropPendingWins`).
+// token bumped by every OBSERVED BINGO FALL (`dropPendingWins` with fell.bingo —
+// round 4 narrowed it from every-unmark: only what changes whether the bingo
+// stands may stale the ceremonial machinery).
 // Board's ceremonial First-to-BINGO enqueue crosses an async gap (the durable-
 // witness cache read), and the pending win can change inside that gap: the player
 // unmarks and loses the bingo, the unmark verdict drops the queued flags — and a
@@ -179,8 +183,8 @@ export function peekPendingMoments(uid: string): PendingMomentFlags {
 
 /**
  * True when a ceremonial candidate is queued AND was enqueued at the CURRENT
- * action generation — no unmark or observed fall has interleaved since (PR #110
- * round 2 finding 3). A stale candidate (generation moved) must be KILLED by the
+ * action generation — no OBSERVED BINGO FALL has interleaved since (PR #110
+ * round 2 finding 3; round 4 narrowed the bump to actual bingo falls). A stale candidate (generation moved) must be KILLED by the
  * drain, never fired: the win context it was enqueued for no longer describes the
  * board. The complementary protection for falls this tab NEVER observed (no bump)
  * is the drain-time witness re-check in Board's drain — see specs/w2-feed-moments.md
@@ -195,29 +199,40 @@ export function firstBingoCandidateCurrent(uid: string): boolean {
 /**
  * The current action generation for `uid` (see `pendingGenerations` above).
  * Board's doMark captures this immediately before the async durable-witness read
- * and re-reads it in the continuation: a mismatch means an unmark or an observed
- * win-fall interleaved, so the ceremonial enqueue is refused (Codex P1, PR #110).
+ * and re-reads it in the continuation: a mismatch means the BINGO the action
+ * described has since been OBSERVED TO FALL (an unmark verdict or a passive
+ * falling edge — PR #110 round 4 narrowed the bump to actual bingo falls), so
+ * the ceremonial enqueue is refused (Codex P1, PR #110).
  */
 export function pendingActionGeneration(uid: string): number {
   return pendingGenerations.get(pendingKey(uid)) ?? 0;
 }
 
 /**
- * Record that a win FELL (or that an unmark action happened at all): clears the
- * corresponding still-held flags — a bingo fall also drops the ceremonial
- * candidate, which cannot outlive the win it accompanies — and ALWAYS bumps the
- * action generation, invalidating any in-flight witness continuation (Codex P1,
- * PR #110). Two callers, both observers of reality: Board.doMark's unmark path
- * (the local verdict shows the win no longer stands) and Board's cells effect on
- * a PASSIVE falling-edge snapshot (bingo/blackout true→false in listener data —
- * a cross-tab unmark or a rules rollback that produces no local verdict; Codex
- * P2, PR #110 finding 3). Distinct from `clearPendingMoment` (a drain FIRE-clear,
- * or a decided-and-lost ceremony), which does NOT bump: a fire means the win
- * stood and was published, not that the action window changed.
+ * Record what an unmark verdict or a passive falling-edge snapshot showed FELL:
+ * clears the corresponding still-held flags — a bingo fall also drops the
+ * ceremonial candidate, which cannot outlive the win it accompanies — and bumps
+ * the action generation ON AN ACTUAL BINGO FALL ONLY (Codex P2, PR #110 round 4).
+ * The generation's sole consumers are the CEREMONIAL machinery — the birth-time
+ * witness continuation and the candidate stamp — so only an event that changes
+ * whether the bingo stands may stale them: a non-falling unmark (another line
+ * still standing) cannot un-witness anything, and bumping on it suppressed a
+ * legitimate First-to-BINGO whose witness read was still in flight (the round-4
+ * finding). A blackout-only fall does not bump either — bumping there would
+ * reintroduce the same bug shape (an unrelated blackout fall staling a valid
+ * bingo ceremony); no consumer reads the generation for blackout. Two callers,
+ * both observers of reality: Board.doMark's unmark path (the local verdict) and
+ * Board's cells effect on a PASSIVE falling-edge snapshot (bingo/blackout
+ * true→false in listener data — a cross-tab unmark or a rules rollback that
+ * produces no local verdict; PR #110 finding 3). Distinct from
+ * `clearPendingMoment` (a drain FIRE-clear, or a decided-and-lost ceremony),
+ * which never bumps: a fire means the win stood and was published.
  */
 export function dropPendingWins(uid: string, fell: { bingo?: boolean; blackout?: boolean }): void {
   const key = pendingKey(uid);
-  pendingGenerations.set(key, (pendingGenerations.get(key) ?? 0) + 1);
+  if (fell.bingo) {
+    pendingGenerations.set(key, (pendingGenerations.get(key) ?? 0) + 1);
+  }
   const flags = pendingMoments.get(key);
   if (!flags) return;
   if (fell.bingo) {

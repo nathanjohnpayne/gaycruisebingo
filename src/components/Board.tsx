@@ -319,7 +319,7 @@ export default function Board() {
     // every attempt — gate-open, snapshot, and action drains alike.
     if (pending.firstBingo && bingoNow && rosterOk) {
       if (!firstBingoCandidateCurrent(cUid)) {
-        // Stale candidate (round 2 finding 3a): an unmark or observed fall bumped
+        // Stale candidate (round 2 finding 3a): an observed BINGO fall bumped
         // the generation since this candidate was enqueued — the win context it
         // described no longer holds. KILLED, never fired.
         clearPendingMoment(cUid, 'firstBingo');
@@ -480,8 +480,10 @@ export default function Board() {
         // an unmark whose verdict shows a win no longer stands DROPS its
         // still-held broadcast — a win completed-then-unmarked BEFORE its gate
         // opens never posts (a bingo fall also drops the ceremonial candidate) —
-        // and EVERY unmark bumps the action generation so an in-flight witness
-        // continuation from an earlier mark is invalidated. An already-drained
+        // and an unmark that actually DROPS the bingo bumps the action generation
+        // so an in-flight witness continuation from an earlier mark is invalidated
+        // (round 4: a NON-falling unmark — another line still standing — bumps
+        // nothing, so a legitimate ceremony mid-witness-read survives it). An already-drained
         // flag is a harmless no-op (the Moment is immutable + once-only besides).
         dropPendingWins(uid, { bingo: !res.bingo, blackout: !res.blackout });
         // Drain with the action's own folded cells (see broadcastWinVerdict) —
@@ -507,8 +509,9 @@ export default function Board() {
   // ONE helper, synchronously after its last await, before acting on anything it
   // captured earlier — the invariant is structural, not per-call-site. Two
   // separable answers, used by need:
-  //   • `generationUnchanged` — no unmark or observed fall interleaved for the
-  //     ACTED account since `capturedGeneration`: a stale action never acts.
+  //   • `generationUnchanged` — no OBSERVED BINGO FALL interleaved for the ACTED
+  //     account since `capturedGeneration` (round 4: non-falling unmarks and
+  //     blackout-only falls do not bump): a stale action never acts.
   //     (Omit the argument where the action itself just bumped, e.g. an unmark.)
   //   • `isCurrentAccount` — the acted account still drives this Board. Required
   //     for steps that touch the CURRENT context (draining with the current
@@ -561,7 +564,8 @@ export default function Board() {
     // P1): the player can unmark and LOSE the bingo while the read is in flight.
     // The continuation therefore re-checks through the shared post-await
     // revalidation: the captured ACTION GENERATION must be unchanged (every
-    // unmark and observed fall bumps it). It is deliberately NOT gated on the
+    // OBSERVED BINGO FALL bumps it — round 4: a non-falling unmark does not,
+    // so it cannot suppress a ceremony whose bingo stands continuously). It is deliberately NOT gated on the
     // pending bingo flag (round 2 finding 2: a concurrent drain can legitimately
     // FIRE the plain bingo mid-read — that clear says the win STOOD) and NOT
     // gated on the current account (round 3 finding D: the queue is uid-keyed,

@@ -238,24 +238,29 @@ describe('the pending-Moment queue — module state that survives Board unmounts
 
 describe('the action generation + fall-driven drops (Codex P1/P2, PR #110)', () => {
   // The generation is the token Board's witness continuation checks: captured
-  // before the async durable-witness read, compared after. Every unmark and every
-  // observed win-fall bumps it (dropPendingWins), so a stale continuation from
-  // before an interleaved action can never re-enqueue the ceremonial candidate.
+  // before the async durable-witness read, compared after. It bumps ONLY on an
+  // OBSERVED BINGO FALL (round 4 narrowed it): its sole consumers are the
+  // ceremonial machinery, and only what changes whether the bingo stands may
+  // stale them — a non-falling unmark or a blackout-only fall preserves a
+  // legitimate ceremony mid-witness-read.
 
-  it('starts at 0, bumps on every dropPendingWins call — a FIRE-clear never bumps', () => {
+  it('starts at 0, bumps ONLY on an actual bingo fall — never on a fire-clear, a no-drop unmark, or a blackout-only fall (round 4)', () => {
     expect(pendingActionGeneration('u1')).toBe(0);
 
     enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
     clearPendingMoment('u1', 'bingo'); // a drain fired it: the win stood, not a fall
     expect(pendingActionGeneration('u1')).toBe(0); // fires do not invalidate continuations
 
-    dropPendingWins('u1', { bingo: true }); // a fall (unmark verdict / passive falling edge)
-    expect(pendingActionGeneration('u1')).toBe(1);
-
-    // ANY unmark bumps — even one that dropped no win — so a continuation from an
-    // earlier mark is invalidated by whatever action interleaved.
+    // An unmark that dropped NO win (another line still standing) must not stale
+    // a ceremony whose bingo stands continuously (the round-4 finding)…
     dropPendingWins('u1', {});
-    expect(pendingActionGeneration('u1')).toBe(2);
+    expect(pendingActionGeneration('u1')).toBe(0);
+    // …and a blackout-only fall does not touch whether the BINGO stands either.
+    dropPendingWins('u1', { blackout: true });
+    expect(pendingActionGeneration('u1')).toBe(0);
+
+    dropPendingWins('u1', { bingo: true }); // an ACTUAL bingo fall
+    expect(pendingActionGeneration('u1')).toBe(1);
   });
 
   it('dropPendingWins clears the fallen kinds — a bingo fall also drops the ceremonial candidate', () => {
@@ -283,14 +288,24 @@ describe('the action generation + fall-driven drops (Codex P1/P2, PR #110)', () 
     expect(pendingActionGeneration('u1')).toBe(0);
   });
 
-  it('stamps the ceremonial candidate at enqueue — a moved generation makes it STALE (round 2 finding 3)', () => {
+  it('a NON-falling drop preserves the candidate as CURRENT; a bingo fall clears it (round 4 corrected round 2 finding 3)', () => {
     enqueueFirstBingoMoment('u1');
     expect(firstBingoCandidateCurrent('u1')).toBe(true);
 
-    dropPendingWins('u1', {}); // an unmark that dropped nothing still bumps
-    // The candidate flag itself survived (nothing fell)…
+    // A no-drop unmark and a blackout-only fall leave the candidate BOTH queued
+    // and current — the bingo it accompanies still stands, nothing was
+    // un-witnessed, and the ceremony must survive (the round-4 finding: the old
+    // unconditional bump made exactly this candidate stale).
+    dropPendingWins('u1', {});
+    dropPendingWins('u1', { blackout: true });
     expect(peekPendingMoments('u1').firstBingo).toBe(true);
-    // …but it is STALE now: the drain must KILL it, never fire it.
+    expect(firstBingoCandidateCurrent('u1')).toBe(true);
+
+    // An actual bingo fall clears the candidate outright (and bumps): after it,
+    // nothing is queued and nothing is current. Every in-app bump site also
+    // clears, so the stamp's stale-kill is belt-and-braces for future bump sites.
+    dropPendingWins('u1', { bingo: true });
+    expect(peekPendingMoments('u1').firstBingo).toBe(false);
     expect(firstBingoCandidateCurrent('u1')).toBe(false);
 
     // A fresh re-enqueue at the new generation is current again.
