@@ -51,6 +51,10 @@ vi.mock('./ConfirmWinMoments', () => ({
     return null;
   },
 }));
+// AuthProvider also mounts the pool-recovery watcher (#70), whose real pool
+// subscription this suite does not wire; stub it — this suite is about the attestation
+// gate, not the watcher (its own suite is ./w1-deal-auto-retry.test.tsx).
+vi.mock('./PoolRecoveryWatcher', () => ({ default: () => null }));
 
 const FAKE_USER = { uid: 'sailor-1', displayName: 'Sailor', photoURL: null };
 

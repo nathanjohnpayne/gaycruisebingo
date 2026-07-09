@@ -55,12 +55,23 @@ function useColSub<T>(q: Query<T> | null, key: string) {
   // server-backed observation from a stale cache replay (e.g. `useMyClaims` seeding
   // the confirm-path freshness witness, #41 / Codex #116 R2 finding 2) read this.
   const [fromCache, setFromCache] = useState(true);
+  // `hasPendingWrites` is the LATEST snapshot's OPTIMISTIC-write flag (per-snapshot):
+  // true when the snapshot reflects a LOCAL write this client issued that the server
+  // has NOT yet acked. It is the OTHER half of the `{ includeMetadataChanges: true }`
+  // discipline — `fromCache` is cache-vs-server, `hasPendingWrites` is
+  // local-optimistic-vs-server-committed. A snapshot is fully SERVER-COMMITTED only
+  // when both are false. The pool-recovery watcher (#70, Codex P2 on PR #124 round 2)
+  // needs this: a local optimistic prompt-add arrives with `fromCache === false` AND
+  // `hasPendingWrites === true`, so a `fromCache`-only gate would treat that
+  // not-yet-committed local echo as a server crossing and fire before the write acks.
+  const [hasPendingWrites, setHasPendingWrites] = useState(false);
   useEffect(() => {
     // Drop the previous query's rows when the key changes so stale results can't
     // render against the new subscription.
     setData([]);
     setHasServerData(false);
     setFromCache(true);
+    setHasPendingWrites(false);
     if (!q) {
       setLoading(false);
       return;
@@ -73,6 +84,7 @@ function useColSub<T>(q: Query<T> | null, key: string) {
         setData(snap.docs.map((d) => d.data() as T));
         setLoading(false);
         setFromCache(snap.metadata.fromCache);
+        setHasPendingWrites(snap.metadata.hasPendingWrites);
         if (!snap.metadata.fromCache) setHasServerData(true);
       },
       () => setLoading(false),
@@ -80,7 +92,7 @@ function useColSub<T>(q: Query<T> | null, key: string) {
     return unsub;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
-  return { data, loading, hasServerData, fromCache };
+  return { data, loading, hasServerData, fromCache, hasPendingWrites };
 }
 
 export function useEventDoc(enabled = true) {
@@ -149,7 +161,7 @@ export function useItems(enabled = true) {
   // just the query) so the effect re-subscribes if `enabled` flips back to
   // true — mirrors useEventDoc's pre-auth gate above.
   const { threshold, bannedUids } = useEventModeration();
-  const { data, loading, hasServerData } = useColSub<ItemDoc>(
+  const { data, loading, hasServerData, fromCache, hasPendingWrites } = useColSub<ItemDoc>(
     enabled ? itemsCol() : null,
     enabled ? 'items' : 'items:disabled',
   );
@@ -168,7 +180,14 @@ export function useItems(enabled = true) {
         !isBanned(i.createdBy, bannedUids),
     )
     .sort((a, b) => a.createdAt - b.createdAt);
-  return { items, loading, hasServerData };
+  // `hasServerData` is the LIFETIME latch (has a server snapshot EVER arrived);
+  // `fromCache` and `hasPendingWrites` are THIS snapshot's per-snapshot metadata. The
+  // pool-recovery watcher (#70) needs the per-snapshot flags, not the latch: once
+  // latched, a later cache/local replay would otherwise read as a server-confirmed
+  // pool crossing (Codex P2 on PR #124 round 1), so the edge detector gates on
+  // `!fromCache && !hasPendingWrites` — fully server-committed, no local optimistic
+  // prompt-add echo (Codex P2 round 2). Other `useItems` consumers ignore both.
+  return { items, loading, hasServerData, fromCache, hasPendingWrites };
 }
 
 export function useBoard(uid: string | undefined) {
