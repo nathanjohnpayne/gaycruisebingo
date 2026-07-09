@@ -12,6 +12,7 @@ import {
 import { track } from '../analytics';
 import SignIn from '../components/SignIn';
 import ConfirmWinMoments from '../components/ConfirmWinMoments';
+import PoolRecoveryWatcher from '../components/PoolRecoveryWatcher';
 
 // Connectivity probe for the boot path (#115). The auth bootstrap and the deal
 // are both network-bound: a create-once transaction (ensureUserProfile) and a
@@ -40,6 +41,10 @@ interface AuthContextValue {
   // Player-worded, retryable failure on the path to a dealt Board — a failed
   // join/deal, or a failed attestation bootstrap (#112 round 2) — null once dealt.
   dealError: string | null;
+  // Why `dealError` is set — the typed marker the pool-recovery auto-retry (#70)
+  // arms on. Set in lockstep with `dealError`; null whenever `dealError` is null, so
+  // a stale reason can never arm the watcher after the error clears.
+  dealErrorReason: DealErrorReason | null;
   // True while a join/deal (initial or retry) or the bootstrap retry that
   // precedes a deferred deal is in flight.
   dealing: boolean;
@@ -60,6 +65,7 @@ const AuthContext = createContext<AuthContextValue>({
   profileReady: false,
   needsAttestation: false,
   dealError: null,
+  dealErrorReason: null,
   dealing: false,
   signIn: async () => {},
   signOutUser: async () => {},
@@ -67,20 +73,45 @@ const AuthContext = createContext<AuthContextValue>({
   retryDeal: () => {},
 });
 
+// A pool-shortfall deal failure (the ADR 0003/0004 below-floor guard) vs any other
+// deal/bootstrap failure. `joinAndDeal` → `dealBoard` throws "…24 prompts…" when the
+// FILTERED active pool is under MIN_POOL; every other deal or bootstrap rejection is a
+// connectivity/permission failure. This is the TYPED discriminator the pool-recovery
+// auto-retry (#70) arms on: only a pool-shortfall is fixable by adding Prompts, so only
+// it should watch the pool for recovery — a connection error must never arm the watcher.
+// Kept as the SINGLE classifier `dealErrorMessage` and the reason marker both read, so
+// the Player-worded copy and the typed reason can never disagree about the cause.
+function isPoolShortfall(err: unknown): boolean {
+  const raw = err instanceof Error ? err.message : String(err);
+  return /\b24 prompts\b/.test(raw);
+}
+
 // Player-facing copy for a deal failure. The main case (ADR 0003/0004) is
 // `dealBoard` throwing when the active non-free pool is below the 24 a Board needs.
 function dealErrorMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  if (/\b24 prompts\b/.test(raw)) {
+  if (isPoolShortfall(err)) {
     return "We couldn't deal your card yet — the prompt pool is below the 24 a card needs. Ask an admin to add a few prompts, then retry.";
   }
   return "We couldn't deal your bingo card. Check your connection and retry.";
 }
 
+// Why the current `dealError` happened — the TYPED marker the pool-recovery auto-retry
+// (#70) arms on, so the watcher never keys off the Player-worded string. 'pool-shortfall'
+// is the ADR 0003/0004 below-floor guard (fixable by adding Prompts → worth watching the
+// pool); 'connection' is any other deal/bootstrap failure (a connectivity/permission blip
+// the pool can never fix). Non-null exactly when `dealError` is non-null (set/cleared in
+// lockstep — see `failDeal`/`clearDealError`).
+export type DealErrorReason = 'pool-shortfall' | 'connection';
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [dealError, setDealError] = useState<string | null>(null);
+  // The typed cause of `dealError` (#70), mirrored into context so the pool-recovery
+  // watcher arms on the reason, never the Player-worded copy. Maintained ONLY through
+  // `failDeal`/`clearDealError` below so it can never drift out of lockstep with the
+  // message: every deal/bootstrap failure sets both, every clear clears both.
+  const [dealErrorReason, setDealErrorReason] = useState<DealErrorReason | null>(null);
   const [dealing, setDealing] = useState(false);
   // False from the moment a signed-in User is published until THAT User's
   // ensureUserProfile bootstrap settles (#77) — see the interface note.
@@ -149,6 +180,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // so no rows are created for a User whose durable stamp does not exist.
   const attestCommittedUidsRef = useRef<Set<string>>(new Set());
 
+  // Set / clear `dealError` and its typed reason in LOCKSTEP (#70). Every deal or
+  // bootstrap failure routes through `failDeal` (which classifies pool-shortfall vs
+  // connection via the single `isPoolShortfall`) and every clear through
+  // `clearDealError`, so the reason can never drift from the message — the
+  // pool-recovery watcher arms on the reason, so a stale/desynced reason would arm
+  // (or silently fail to arm) it wrongly. Stable identities (`[]` deps: they touch
+  // only stable state setters + module-scope classifiers), so wiring them into the
+  // deal/bootstrap callbacks' deps below does not change those callbacks' identity —
+  // no #117 effect re-runs.
+  const failDeal = useCallback((err: unknown) => {
+    setDealError(dealErrorMessage(err));
+    setDealErrorReason(isPoolShortfall(err) ? 'pool-shortfall' : 'connection');
+  }, []);
+  const clearDealError = useCallback(() => {
+    setDealError(null);
+    setDealErrorReason(null);
+  }, []);
+
   // The connectivity-aware profile/attestation bootstrap, run OFF the render path
   // (#115). The cache lifts the gate PROVISIONALLY offline; the server read is
   // AUTHORITATIVE when it arrives. Two mutually-exclusive branches:
@@ -211,7 +260,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Board whenever dealError is non-null, so a prior online failure would
         // otherwise strand this proven-18+ User on the error panel instead of the
         // cached Board this branch is meant to render.
-        setDealError(null);
+        clearDealError();
       }
       // else UNKNOWN → hold on "Loading…" (do NOT release), never render un-proven.
       // A stale dealError left set here keeps the retry surface RETRYABLE offline
@@ -261,11 +310,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const failure = bootstrapFailure.err;
         void hasCachedBoard(u.uid).then((boarded) => {
           if (profileAttemptRef.current === attempt && !boarded) {
-            setDealError(dealErrorMessage(failure));
+            failDeal(failure);
           }
         });
       } else {
-        setDealError(dealErrorMessage(bootstrapFailure.err));
+        failDeal(bootstrapFailure.err);
       }
     } else {
       // Authoritative read SETTLED. UI: the server stamp, or an optimistic attest
@@ -279,12 +328,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // reconnect this clears an error left by a prior offline/failed attempt so the
       // Board (or re-prompt) renders, not the stale panel. A confirmed-attested User
       // then deals, and a genuine re-deal failure re-sets dealError from runDeal.
-      setDealError(null);
+      clearDealError();
     }
     setProfileReady(true);
     // Online gate resolved — release the "Loading…" hold and render (finding B).
     setLoading(false);
-  }, []);
+  }, [failDeal, clearDealError]);
 
   useEffect(() => {
     return onAuthStateChanged(auth, (u) => {
@@ -292,7 +341,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // clear its stale state so a late result can't clobber the incoming User (P2).
       const profileAttempt = (profileAttemptRef.current += 1);
       dealAttemptRef.current += 1;
-      setDealError(null);
+      clearDealError();
       setDealing(false);
       // The incoming User's profile bootstrap has not settled yet (#77), so the
       // 18+ attestation is UNKNOWN — never `false` — until it does (#23), and its
@@ -320,7 +369,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // an onAuthStateChanged callback's return value).
       return bootstrapUser(u, profileAttempt);
     });
-  }, [bootstrapUser]);
+  }, [bootstrapUser, clearDealError]);
 
   // Mirror connectivity into React state AND complete the DEFERRED offline
   // bootstrap when the network returns (#115). `online` flipping true re-runs the
@@ -398,7 +447,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const dealt = await joinAndDeal(u);
       if (dealAttemptRef.current !== attempt) return;
-      setDealError(null);
+      clearDealError();
       // Record `join_event` ONLY on an actual join — a NEW board (Codex #117 round
       // 8, finding B). runDeal re-fires on every online/authority flip, and
       // joinAndDeal no-ops (returns false) for an already-boarded Player, so a
@@ -406,11 +455,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (dealt) track('join_event');
     } catch (err) {
       if (dealAttemptRef.current !== attempt) return;
-      setDealError(dealErrorMessage(err));
+      failDeal(err);
     } finally {
       if (dealAttemptRef.current === attempt) setDealing(false);
     }
-  }, []);
+  }, [failDeal, clearDealError]);
 
   // Deal a Board only once the 18+ attestation is settled TRUE (#23, Finding 1):
   // the gate must gate the SIDE EFFECT, not just the UI. A signed-in returning
@@ -474,15 +523,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // No authority: a definite server-null with no committed attest (re-prompt),
         // or an uncommitted optimistic attest (UI-attested, no deal). Either way no
         // deal fires, so settle the retry surface here rather than spin forever.
-        setDealError(null);
+        clearDealError();
         setDealing(false);
       }
     } catch (err) {
       if (profileAttemptRef.current !== attempt) return;
-      setDealError(dealErrorMessage(err));
+      failDeal(err);
       setDealing(false);
     }
-  }, []);
+  }, [failDeal, clearDealError]);
 
   // Retry the current User's path to a dealt Board, in place (no reload). The
   // manual retry must honor the SAME write-safety gate as the automatic deal
@@ -586,6 +635,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profileReady,
         needsAttestation,
         dealError,
+        dealErrorReason,
         dealing,
         signIn,
         signOutUser,
@@ -603,6 +653,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           any parked ceremony across the remount. Renders nothing; scoped to the
           mount location only — the attestation gate itself is #117's surface. */}
       {user && <ConfirmWinMoments />}
+      {/* The pool-recovery auto-retry watcher (#70), mounted HERE — above the tab
+          Router, beside the attestation gate — for the same reason ConfirmWinMoments
+          is: it must survive the exact recovery path. The Card-route DealError panel
+          UNMOUNTS when the Player navigates to /items to add Prompts, so a watcher
+          living there dies mid-recovery (PR #66 finding 3542374455). Mounted at the
+          shell it observes the whole below-floor → above-floor journey. It only opens
+          a pool subscription while a pool-shortfall deal error is up (it renders null
+          otherwise), and fires the SAME retryDeal a manual Retry does — so it inherits
+          #117's online && attestedAuthoritative deal gate rather than re-deriving it. */}
+      {user && <PoolRecoveryWatcher />}
       {needsAttestation ? <SignIn /> : children}
     </AuthContext.Provider>
   );

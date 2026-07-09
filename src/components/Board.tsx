@@ -667,9 +667,12 @@ export default function Board() {
     // whose server state is a healthy pool or an existing Board — so the alert
     // additionally requires both subscriptions' hasServerData latch (a
     // server-confirmed snapshot has arrived). Cache-only data keeps the neutral
-    // state below. (The pool-recovery auto-retry is deliberately deferred to
-    // #70 — recovery is manual (the DealError panel's Retry). This empty state
-    // only explains the shortage; it must not promise automatic dealing.)
+    // state below. (Pool-recovery has TWO recovery paths once a deal has failed:
+    // the DealError panel's manual Retry, and the shell-level auto-retry that fires
+    // when the pool crosses MIN_POOL upward — #70, src/components/PoolRecoveryWatcher.tsx.
+    // This pre-deal empty state only explains the shortage; the auto-retry watches
+    // the post-failure DealError state, not this one, so this copy still must not
+    // promise automatic dealing here.)
     const activePool = items.filter((i) => !i.isFreeSpace);
     if (
       !boardLoading &&
