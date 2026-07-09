@@ -65,13 +65,14 @@ function deferred<T>() {
 let ctxSignIn: () => Promise<void> = async () => {};
 let ctxRetryDeal: () => void = () => {};
 function Probe() {
-  const { user, loading, signIn, retryDeal } = useAuth();
+  const { user, loading, dealError, signIn, retryDeal } = useAuth();
   ctxSignIn = signIn;
   ctxRetryDeal = retryDeal;
   return (
     <div>
       <span data-testid="loading">{loading ? 'loading' : 'ready'}</span>
       <span data-testid="uid">{user?.uid ?? 'none'}</span>
+      {dealError ? <p role="alert">{dealError}</p> : null}
       <span data-testid="board">board</span>
     </div>
   );
@@ -81,6 +82,9 @@ function Probe() {
 // "Loading…" while `loading`). The offline-unknown state (finding B).
 const boardHeld = () => screen.getByTestId('loading').textContent === 'loading';
 const boardRendered = () => screen.getByTestId('loading').textContent === 'ready';
+// App.tsx renders the DealError panel over the Board whenever dealError is set, so
+// a stale error observed here means the Board would NOT render (round 4).
+const dealErrorShown = () => screen.queryByRole('alert') !== null;
 
 function setOnline(value: boolean) {
   Object.defineProperty(navigator, 'onLine', { configurable: true, value });
@@ -310,33 +314,60 @@ describe('offline cold boot (#115)', () => {
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
   });
 
-  it('finding A: a retry OFFLINE or on a PROVISIONAL cache attestation re-bootstraps and never deals; a retry ONLINE + authoritative deals', async () => {
-    // Offline cold boot, cache-attested: attested is provisionally true, but NOT
-    // authoritative. A retry here must NOT joinAndDeal — it must re-run bootstrap.
+  it('finding A (round 4): an OFFLINE retry settles CACHE-FIRST without awaiting the transaction bootstrap (no hang), never deals; an ONLINE retry runs the full bootstrap + deal', async () => {
+    // Offline cold boot, cache-attested. ensureUserProfile is a NEVER promise —
+    // the offline Firestore transaction that does not queue. If the retry routed
+    // into retryBootstrap it would await this and HANG in "Dealing…"; the fix
+    // routes it to the cache-first path, which never touches the transaction.
     setOnline(false);
     mocks.readAdultAttestationFromCache.mockResolvedValue(1);
-    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.ensureUserProfile.mockReturnValue(NEVER);
     mocks.readAdultAttestation.mockResolvedValue(1);
 
     mount();
     await coldBoot(RETURNING_USER);
     expect(boardRendered()).toBe(true); // cache-attested → Board renders offline
+    expect(mocks.ensureUserProfile).not.toHaveBeenCalled(); // offline never awaits the txn
 
     await act(async () => {
       ctxRetryDeal();
     });
-    // Offline / provisional → routed to the bootstrap, never a deal.
+    // OFFLINE retry → cache-first: NO transaction awaited, NO deal, still rendered
+    // (retryable) — never a hang.
+    expect(mocks.ensureUserProfile).not.toHaveBeenCalled();
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
-    expect(mocks.ensureUserProfile).toHaveBeenCalled(); // re-bootstrapped instead
+    expect(boardRendered()).toBe(true);
 
-    // Reconnect: the authoritative read confirms → attested becomes authoritative,
-    // and the deferred deal fires once. NOW a retry deals (online + authoritative).
+    // Reconnect ONLINE: now the full transaction bootstrap runs and the deal fires
+    // once; and an ONLINE retry re-deals in place.
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
     await reconnect();
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+    expect(mocks.ensureUserProfile).toHaveBeenCalled(); // online path runs the txn
     await act(async () => {
       ctxRetryDeal();
     });
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(2));
+  });
+
+  it('finding B (round 4): an online deal error, then going OFFLINE with a cached attestation, CLEARS the stale error and renders the cached Board (not the error panel)', async () => {
+    // Online: the bootstrap succeeds but the DEAL fails → dealError is set, so
+    // App.tsx would render the DealError panel over the Board.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockResolvedValue(1);
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestation.mockResolvedValue(1);
+    mocks.joinAndDeal.mockRejectedValue(new Error('network request failed'));
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    await waitFor(() => expect(dealErrorShown()).toBe(true)); // online deal failed → error panel
+
+    // Go OFFLINE with a cached attestation: the cache-first success proves 18+ and
+    // must CLEAR the stale dealError so the cached Board renders, not the panel.
+    await goOffline();
+    await waitFor(() => expect(dealErrorShown()).toBe(false));
+    expect(boardRendered()).toBe(true);
   });
 
   it('finding C: an ONLINE bootstrap that loses connectivity mid-flight is SUPERSEDED — loading releases via the cache path (not stranded), and the late online resolution cannot clobber it', async () => {

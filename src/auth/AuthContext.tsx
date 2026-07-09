@@ -185,8 +185,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (hasCacheStamp || attestedUidsRef.current.has(u.uid)) {
         setAttested(true);
         setLoading(false); // proof of 18+ → render the cached Board offline
+        // A successful cache-first settle SUPERSEDES a stale online dealError
+        // (Codex #117 round 4, finding B): App renders DealError instead of the
+        // Board whenever dealError is non-null, so a prior online failure would
+        // otherwise strand this proven-18+ User on the error panel instead of the
+        // cached Board this branch is meant to render.
+        setDealError(null);
       }
       // else UNKNOWN → hold on "Loading…" (do NOT release), never render un-proven.
+      // A stale dealError left set here keeps the retry surface RETRYABLE offline
+      // (there is nothing to render without proof-of-18+) — reconnect resolves it.
       return;
     }
 
@@ -223,6 +231,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // SETTLED, so the deal may now fire for a confirmed-attested User (round 2).
       setAttested(attestedSticky ? true : attestedRead);
       setAttestedAuthoritative(true);
+      // An authoritative settle SUPERSEDES any stale dealError (round 4 audit): on
+      // reconnect this clears an error left by a prior offline/failed attempt so the
+      // Board (or re-prompt) renders, not the stale panel. A confirmed-attested User
+      // then deals, and a genuine re-deal failure re-sets dealError from runDeal.
+      setDealError(null);
     }
     setProfileReady(true);
     // Online gate resolved — release the "Loading…" hold and render (finding B).
@@ -400,9 +413,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // effect) only once that confirms.
   const retryDeal = useCallback(() => {
     if (!user) return;
-    if (online && attestedAuthoritative && attested === true) void runDeal(user);
-    else void retryBootstrap(user);
-  }, [user, online, attestedAuthoritative, attested, runDeal, retryBootstrap]);
+    if (!isOnline()) {
+      // OFFLINE Retry → the CACHE-FIRST path, NEVER the transaction bootstrap
+      // (Codex #117 round 4, finding A): retryBootstrap awaits ensureUserProfile —
+      // a Firestore transaction that never resolves offline — so it would strand
+      // the button in "Dealing…" for the whole dead zone. bootstrapUser's offline
+      // branch instead settles from cache immediately (proof-of-18+ → render the
+      // cached Board and clear the stale error; else stay held/retryable), and
+      // never awaits the transaction. It also never deals (offline gate).
+      void bootstrapUser(user, (profileAttemptRef.current += 1));
+    } else if (attestedAuthoritative && attested === true) {
+      // Online + authoritative → re-deal in place.
+      void runDeal(user);
+    } else {
+      // Online but not yet authoritative → re-run the full transaction bootstrap.
+      void retryBootstrap(user);
+    }
+  }, [user, attestedAuthoritative, attested, runDeal, retryBootstrap, bootstrapUser]);
 
   // Persist the current User's honor-system 18+ self-attestation (ADR 0001) and
   // lift the re-prompt gate at once. Optimistic: the local flag flips before the

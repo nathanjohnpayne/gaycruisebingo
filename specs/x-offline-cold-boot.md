@@ -20,22 +20,25 @@ This ticket makes auth bootstrap a **connectivity/attestation state machine** wh
 
 ### State-machine contract (completeness matrix)
 
-Every cell of `{boot-offline, boot-online} × {cache-attested, cache-unknown, same-session-attested} × {stays, connectivity flips mid-bootstrap}` resolves to: render only with proof-of-18+; deal only `online && attestedAuthoritative`; `loading` always eventually released (never permanently stranded on a hung transaction); the authoritative server read always wins over the provisional cache when it lands.
+Every cell of `{boot-offline, boot-online} × {cache-attested, cache-unknown, same-session-attested} × {stays, connectivity flips mid-bootstrap}` resolves to: render only with proof-of-18+; deal only `online && attestedAuthoritative`; `loading` always eventually released (never permanently stranded on a hung transaction); the authoritative server read always wins over the provisional cache when it lands; and `dealError` is CLEARED on any recovery that renders the Board or re-prompts (App renders the DealError panel over the Board whenever `dealError` is set, so a stale error must never linger over a state that should render/re-prompt), and set only on a genuine online failure.
 
-| Boot | Proof | Transition | Render Board? | Deal fires? | Loading | Re-prompt? | Authoritative downgrade? |
-|---|---|---|---|---|---|---|---|
-| Offline | cache-attested | stays | YES (cached) | no (offline) | released | no | n/a offline |
-| Offline | cache-attested | → online (reconnect) | yes | once, IFF server confirms & no board | released | if server NULL | server NULL ⇒ re-prompt |
-| Offline | cache-attested | → offline (already) | yes | no | released | no | n/a |
-| Offline | cache-unknown | stays | NO — HELD | no | HELD until reconnect | no (can't offline) | n/a |
-| Offline | cache-unknown | → online (reconnect) | iff server confirms | once iff confirms & no board | released on reconnect | if server NULL | server settles def. |
-| Offline | same-session-attested | stays | YES (sticky proof) | no (offline) | released | no | sticky is authoritative |
-| Online | cache-attested | stays | after read confirms | once, iff no board | released after read | if server NULL | server NULL ⇒ re-prompt |
-| Online | cache-unknown | stays | after read confirms | once iff confirms & no board | released after read | if server NULL | server settles def. |
-| Online | same-session-attested | stays | yes (sticky) | once, iff no board | released | no | sticky wins over NULL |
-| Online | any | → offline mid-bootstrap | render iff cache-attested, else HELD | no (offline) | released via cache path (not stranded) | no (offline) | superseded; late online resolve dropped |
+| Boot | Proof | Transition | Render Board? | Deal fires? | Loading | Re-prompt? | Authoritative downgrade? | dealError |
+|---|---|---|---|---|---|---|---|---|
+| Offline | cache-attested | stays | YES (cached) | no (offline) | released | no | n/a offline | cleared on cache-first settle |
+| Offline | cache-attested | → online (reconnect) | yes | once, IFF server confirms & no board | released | if server NULL | server NULL ⇒ re-prompt | cleared on authoritative settle / deal |
+| Offline | cache-attested | → offline (already) | yes | no | released | no | n/a | cleared on cache-first settle |
+| Offline | cache-unknown | stays | NO — HELD | no | HELD until reconnect | no (can't offline) | n/a | left set ⇒ RETRYABLE (nothing to render) |
+| Offline | cache-unknown | → online (reconnect) | iff server confirms | once iff confirms & no board | released on reconnect | if server NULL | server settles def. | cleared on authoritative settle |
+| Offline | same-session-attested | stays | YES (sticky proof) | no (offline) | released | no | sticky is authoritative | cleared on cache-first settle |
+| Online | cache-attested | stays | after read confirms | once, iff no board | released after read | if server NULL | server NULL ⇒ re-prompt | cleared on authoritative settle; re-set iff deal fails |
+| Online | cache-unknown | stays | after read confirms | once iff confirms & no board | released after read | if server NULL | server settles def. | cleared on authoritative settle; re-set iff deal fails |
+| Online | same-session-attested | stays | yes (sticky) | once, iff no board | released | no | sticky wins over NULL | cleared on authoritative settle; re-set iff deal fails |
+| Online | any | → offline mid-bootstrap | render iff cache-attested, else HELD | no (offline) | released via cache path (not stranded) | no (offline) | superseded; late online resolve dropped | cleared iff cache-attested, else left retryable |
+| Online (bootstrap or deal fails) | — | stays | no — error panel | no | released | no | — | SET (genuine online failure) |
+| Retry (`retryDeal`) | offline | — | via cache-first | no (offline) | via cache path | no | — | cleared iff cache-attested, else retryable; NEVER awaits the txn (finding A) |
+| Retry (`retryDeal`) | online + authoritative | — | — | deals in place | — | — | — | cleared on deal success, re-set on deal failure |
 
-Invariants that hold in EVERY cell: (1) offline never blocks render **for a cache-attested User**; (2) render never happens without proof-of-18+ (cached OR same-session); (3) the deal never fires offline or on a provisional attestation; (4) `loading` is never permanently stranded (offline-unknown is HELD pending reconnect — the correct offline-no-proof state, with the printed-card fallback for total failure — never a hung transaction); (5) the authoritative server read downgrades a stale cache lift when it lands; (6) #112 same-session optimistic attest stays sticky AND is authoritative.
+Invariants that hold in EVERY cell: (1) offline never blocks render **for a cache-attested User**; (2) render never happens without proof-of-18+ (cached OR same-session); (3) the deal never fires offline or on a provisional attestation; (4) `loading` is never permanently stranded (offline-unknown is HELD pending reconnect — the correct offline-no-proof state, with the printed-card fallback for total failure — never a hung transaction); (5) the authoritative server read downgrades a stale cache lift when it lands; (6) #112 same-session optimistic attest stays sticky AND is authoritative; (7) `dealError` never lingers over a state that should render the Board or re-prompt — a cache-first offline settle (finding B) and an authoritative online settle both clear it, and an OFFLINE `retryDeal` uses the cache-first path, never the offline-hanging transaction bootstrap (finding A).
 
 ## Design invariants preserved
 
@@ -55,7 +58,8 @@ Unit tests: `src/auth/x-offline-cold-boot.test.tsx` (the REAL `AuthProvider` und
 - **Given** an offline cold boot whose STALE cached stamp provisionally lifted the gate, **when** the network returns with the authoritative read held in flight and it then reports NO stamp, **then** no deal fires in the reconnect window (no durable rows for a server-un-attested User) and the settled null DOWNGRADES to a re-prompt, still never dealing. → `finding D + round-2 P1: a HELD authoritative read that returns NO stamp downgrades the stale cache lift to a re-prompt, and never deals — not even in the reconnect window`.
 - **Given** a same-session optimistic attest (#112 Finding 3), **when** a later auth callback's server read does not yet see the write (returns no stamp), **then** the gate stays attested (sticky), NOT downgraded. → `#112 preserved: a same-session optimistic attest stays sticky even when the server read returns no stamp`.
 - **Given** an OFFLINE cold boot with NO cached attestation (cache miss / unstamped), **then** the Board is HELD behind the App Loading gate (never rendered, never fail-open), no deal, no offline re-prompt; and on reconnect a genuinely-un-attested server read settles a definite re-prompt, never a deal. → `finding B: offline cold boot with NO cached attestation does NOT render the Board — it HOLDS (never fail-open), then reconnect settles a definite re-prompt with no deal`.
-- **Given** a manual retry (`retryDeal`), **when** the User is offline or on a PROVISIONAL cache attestation, **then** it re-runs the bootstrap and never `joinAndDeal`; **when** online + authoritative-attested, it deals. → `finding A: a retry OFFLINE or on a PROVISIONAL cache attestation re-bootstraps and never deals; a retry ONLINE + authoritative deals`.
+- **Given** a manual retry (`retryDeal`) while OFFLINE, **then** it settles CACHE-FIRST without awaiting the transaction bootstrap (never hangs in "Dealing…"), never deals, and stays retryable/rendered; an ONLINE retry runs the full bootstrap and deal. → `finding A (round 4): an OFFLINE retry settles CACHE-FIRST without awaiting the transaction bootstrap (no hang), never deals; an ONLINE retry runs the full bootstrap + deal`.
+- **Given** an online deal error is surfaced, **when** the browser goes OFFLINE with a cached attestation, **then** the cache-first success CLEARS the stale `dealError` and renders the cached Board (not the error panel). → `finding B (round 4): an online deal error, then going OFFLINE with a cached attestation, CLEARS the stale error and renders the cached Board (not the error panel)`.
 - **Given** an ONLINE bootstrap held in flight (loading gated), **when** connectivity is lost mid-flight, **then** the offline handler supersedes the pending online attempt and releases loading via the cache path (cache-attested → Board, not stranded), the late online resolution cannot clobber the newer offline state, and a later reconnect settles authoritatively and deals once. → `finding C: an ONLINE bootstrap that loses connectivity mid-flight is SUPERSEDED — loading releases via the cache path (not stranded), and the late online resolution cannot clobber it`.
 - **Given** an ONLINE genuinely-new attested User, **then** the deal still fires as before. → `online: a genuinely-new attested User still deals`.
 
