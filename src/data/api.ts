@@ -224,10 +224,19 @@ export async function readAdultAttestationFromServer(uid: string): Promise<numbe
   return typeof v === 'number' ? v : null;
 }
 
-/** Deal a frozen board + create the player row the first time a user joins. */
-export async function joinAndDeal(u: User): Promise<void> {
+/**
+ * Deal a frozen board + create the player row the first time a user joins.
+ *
+ * Returns `true` when it dealt a NEW board (an actual join), `false` when the
+ * board already existed and it early-returned a no-op. The caller gates the
+ * `join_event` analytic on this so a reconnect that re-runs the deal for an
+ * already-boarded Player records nothing (Codex #117 round 8, finding B) —
+ * `runDeal` re-fires on every online/authority flip, and an existing-board no-op
+ * is not a join.
+ */
+export async function joinAndDeal(u: User): Promise<boolean> {
   const existing = await getDoc(rawBoard(u.uid));
-  if (existing.exists()) return;
+  if (existing.exists()) return false;
 
   // Denormalize the Player's SAVED identity, not the raw Google one (Codex P2
   // on PR #67, the join-side half): a Player who customized their users/{uid}
@@ -308,6 +317,7 @@ export async function joinAndDeal(u: User): Promise<void> {
     { merge: true },
   );
   await batch.commit();
+  return true; // dealt a NEW board — an actual join
 }
 
 /**

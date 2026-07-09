@@ -91,7 +91,7 @@ describe('AuthContext deal-error hardening', () => {
   it('surfaces the pool-below-24 failure and Retry re-invokes joinAndDeal, clearing it', async () => {
     mocks.joinAndDeal
       .mockRejectedValueOnce(new Error('dealBoard needs at least 24 prompts, received 5.'))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce(true); // retry deals a NEW board → join_event fires (round 8)
     mount();
     await signInUser();
 

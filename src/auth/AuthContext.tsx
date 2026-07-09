@@ -374,10 +374,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const attempt = (dealAttemptRef.current += 1);
     setDealing(true);
     try {
-      await joinAndDeal(u);
+      const dealt = await joinAndDeal(u);
       if (dealAttemptRef.current !== attempt) return;
       setDealError(null);
-      track('join_event');
+      // Record `join_event` ONLY on an actual join — a NEW board (Codex #117 round
+      // 8, finding B). runDeal re-fires on every online/authority flip, and
+      // joinAndDeal no-ops (returns false) for an already-boarded Player, so a
+      // ship-wifi reconnect must record nothing rather than inflate join analytics.
+      if (dealt) track('join_event');
     } catch (err) {
       if (dealAttemptRef.current !== attempt) return;
       setDealError(dealErrorMessage(err));
@@ -514,11 +518,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       attestCommittedUidsRef.current.add(u.uid);
       if (auth.currentUser?.uid === u.uid) setAttestedAuthoritative(true);
     } catch {
-      // The write rejected (or never resolved) — keep the session optimistically
-      // attested for the UI (#112: retries next sign-in), but deal authority is NOT
-      // granted, so no deal fires and no rows are created for a User whose durable
-      // stamp does not exist. The next server-only read confirms authority normally
-      // once the stamp really lands.
+      // The write REJECTED (round 8 finding A). Deal authority was never granted
+      // (no committed stamp), so no deal fired — but leaving the optimistic UI lift
+      // in place would STRAND the User: the re-prompt is dismissed (attested true),
+      // yet joinAndDeal never runs, so a first-time User with no board sits on
+      // "Dealing…" with no way to re-attest. Roll the optimistic lift BACK so the
+      // re-prompt returns and they can retry in session. Remove the optimistic
+      // sticky too, so a later bootstrap settle does not silently re-lift the
+      // dismissed prompt. (A never-resolving offline attest never reaches here, so
+      // the #112 offline-optimistic behavior — and the no-flicker SUCCESS path —
+      // are untouched; this is the genuine-failure recovery only.)
+      attestedUidsRef.current.delete(u.uid);
+      if (auth.currentUser?.uid === u.uid) setAttested(false);
     }
   }, []);
 

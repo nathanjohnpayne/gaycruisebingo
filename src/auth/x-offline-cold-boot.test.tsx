@@ -602,9 +602,9 @@ describe('offline cold boot (#115)', () => {
     expect(boardRendered()).toBe(true);
   });
 
-  it('finding (round 7): an OPTIMISTIC attest that does NOT commit grants deal authority to NOBODY (no rows); a COMMITTED attest deals once, with no #112 re-prompt flicker', async () => {
-    // Online signed-in User; the SERVER read is HELD so the app is gated (Probe
-    // stays rendered → ctxAttest capturable) and no re-prompt has flashed yet.
+  it('finding A (round 8): an attest whose write REJECTS grants no authority AND is not stranded — the re-prompt returns for an in-session retry; a subsequent COMMITTED attest deals once (no #112 flicker on success)', async () => {
+    // Online signed-in User whose SERVER row has no stamp; the read is HELD so the
+    // app is gated (Probe stays rendered → ctxAttest capturable).
     setOnline(true);
     mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
     mocks.ensureUserProfile.mockResolvedValue(undefined);
@@ -615,34 +615,57 @@ describe('offline cold boot (#115)', () => {
     mount();
     await coldBoot(RETURNING_USER);
 
-    // The User attests, but the attestAdult WRITE REJECTS (offline / permission).
+    // The User attests, but the attestAdult WRITE REJECTS (permission / failed txn).
     mocks.attestAdult.mockRejectedValueOnce(new Error('permission denied'));
     await act(async () => {
       await ctxAttest();
     });
-    // Optimistic-UI lift: no re-prompt flicker (#112). But deal authority is NOT
-    // granted (the write never committed) → NO deal, NO rows.
-    expect(rePromptShown()).toBe(false);
+    // Deal authority is NOT granted (the write never committed) → NO deal, NO rows.
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
 
-    // The held server read settles NULL (the stamp never landed). Still no deal —
-    // authority requires a server stamp OR a COMMITTED attest, neither of which
-    // holds. The optimistic sticky keeps the UI attested (no re-prompt).
+    // The held server read settles NULL. The failed attest rolled the optimistic
+    // lift back (round 8 finding A), so the re-prompt RETURNS — the User is NOT
+    // stranded attested-but-unauthorized on "Dealing…" — and still no deal.
     await act(async () => {
       serverRead.settle(null);
       await serverRead.promise;
     });
-    expect(rePromptShown()).toBe(false);
+    await waitFor(() => expect(rePromptShown()).toBe(true));
     expect(mocks.joinAndDeal).not.toHaveBeenCalled();
 
-    // Now the User attests again and the write COMMITS → durable authority → the
-    // deal fires exactly once (the round-5 "same-session attest deals" case is a
-    // COMMITTED attest, preserved).
+    // The User re-attests in session and the write COMMITS → durable authority →
+    // the deal fires exactly once (the round-5 committed-attest-deals case).
     mocks.attestAdult.mockResolvedValueOnce(undefined);
     await act(async () => {
       await ctxAttest();
     });
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+    expect(rePromptShown()).toBe(false);
+  });
+
+  it('finding B (round 8): a reconnect that re-runs the deal for an already-boarded Player records NO join_event (existing-board no-op); an actual first join records exactly one', async () => {
+    // Genuinely-new attested User, online → the FIRST deal creates a NEW board.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1);
+    mocks.joinAndDeal.mockResolvedValueOnce(true); // first call: dealt a NEW board (a join)
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+    expect(mocks.track).toHaveBeenCalledWith('join_event'); // exactly one real join
+    expect(mocks.track.mock.calls.filter(([e]) => e === 'join_event')).toHaveLength(1);
+
+    // A ship-wifi flap: offline then online. The deal effect re-fires, but the
+    // board already exists so joinAndDeal no-ops (returns false) — and NO further
+    // join_event is recorded (the reconnect is not a join).
+    mocks.joinAndDeal.mockResolvedValue(false); // existing board → no-op
+    await goOffline();
+    await reconnect();
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(2));
+    // Still exactly ONE join_event — the reconnect no-op recorded nothing.
+    expect(mocks.track.mock.calls.filter(([e]) => e === 'join_event')).toHaveLength(1);
   });
 
   it('online: a genuinely-new attested User still deals', async () => {
