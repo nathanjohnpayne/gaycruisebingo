@@ -1,6 +1,6 @@
-**Track:** backend · **Phase:** 1 · **Wave:** 4 · **Size:** M · **ADR(s):** 0004
-**Epic:** #__NUM_epic-backend__
-**Labels:** agent-action, track:backend, phase-1, wave-4, size:M, needs-phase-4, decision-needed
+**Track:** backend · **Phase:** 2 (hardening) · **Wave:** 4 · **Size:** M · **ADR(s):** 0004
+**Epic:** #__NUM_epic-phase2-hardening__ (moved from #__NUM_epic-backend__, the Phase 1 backend epic)
+**Labels:** agent-action, track:backend, phase-2, hardening, wave-4, size:M, needs-phase-4, decision-needed
 
 ## Context & scope
 

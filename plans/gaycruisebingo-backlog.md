@@ -12,8 +12,8 @@ Decomposition of the locked design into a complete, parallelizable ticket backlo
 ## Field & label legend
 
 - **Status** (board column): `Backlog` (new) · `Ready` (unblocked Wave-0) · `In progress` (claimed) · `In review` (PR open) · `Done` (merged).
-- **Project fields**: `Track` · `Phase` (0 / 1 / hardening) · `Wave` (0–4) · `Size` (S/M/L) · `ADR` (which ADR it implements).
-- **Labels**: `track:*` · `phase-0` / `phase-1` / `hardening` · `wave-0…4` · `size:S|M|L` · `needs-phase-4` (protected-path / likely >300-line PR — keep small, expect external review) · `reconciliation` · `decision-needed` (repo's existing label; = the task's "needs-human-decision") · `agent-action` · `epic`.
+- **Project fields**: `Track` · `Phase` (0 / 1 / 2 / hardening) · `Wave` (0–4) · `Size` (S/M/L) · `ADR` (which ADR it implements).
+- **Labels**: `track:*` · `phase-0` / `phase-1` / `phase-2` / `hardening` · `wave-0…4` · `size:S|M|L` · `needs-phase-4` (protected-path / likely >300-line PR — keep small, expect external review) · `reconciliation` · `decision-needed` (repo's existing label; = the task's "needs-human-decision") · `agent-action` · `epic`.
 - **Phase-4 reality** (from `.github/review-policy.yml`): the merge-blocking label is `needs-external-review`, applied automatically when a PR is ≥ 300 changed lines or touches `src/auth/**`, `**/*secret*`, `**/*credential*`, or `.github/**`. `firestore.rules` / `storage.rules` / `functions/` are **not** protected paths today (they only escalate at ≥300 lines) — the `needs-phase-4` label here is a planning marker meaning "keep this PR small / expect Phase 4." `w3-security-hardening` proposes adding those globs to `external_review_paths`.
 
 ## Definition of Done (every ticket)
@@ -37,6 +37,7 @@ Issue numbers are filled in after creation (see the slug → issue map at the bo
 | **epic-moderation** | Epic: Moderation, analytics & scaffold reconciliation | — | moderation | 0 | 2 | — | — | — | Backlog |
 | **epic-backend** | Epic: Phase 1 backend & infra | — | backend | 1 | 4 | — | — | — | Backlog |
 | **epic-launch** | Epic: Launch, e2e & cross-cutting | — | launch | hardening | 3 | — | — | — | Backlog |
+| **epic-phase2-hardening** | Epic: Phase 2 — Hardening (Cloud Vision, App Check, archive) | — | backend | 2 | 4 | — | — | — | Backlog |
 | w0-test-harness | Wire the test harness (vitest jsdom + RTL, emulator rules tests, Playwright e2e, CI) | foundation | foundation | 0 | 0 | L | 0001,0002 | — | **Ready** |
 | w0-type-contract | Reconcile the domain type contract (rename `verified`→`admin_confirmed`, drop `blackoutEnabled`, add Tally/Doubt/Moment/attestation types) | foundation | foundation | 0 | 0 | M | 0001,0002,0004 | — | **Ready** |
 | w0-app-shell | App shell & bottom-tab navigation (stable route mount points) | foundation | foundation | 0 | 0 | M | — | — | **Ready** |
@@ -65,9 +66,12 @@ Issue numbers are filled in after creation (see the slug → issue map at the bo
 | w3-claim-modes | Claim Modes (honor / proof_required / **admin_confirmed**) + Claims + admin confirm/reject | social | claims | 0 | 3 | L | 0001 | w2-admin-console, w2-proof-capture, w0-type-contract | Backlog |
 | w3-security-hardening | Security & rules hardening: noindex, acceptable-use page, self-writable-by-design docs, protected-path policy | moderation | security | hardening | 3 | M | 0001,0002,0004 | w0-firestore-rules | Backlog |
 | w4-phase1-functions | Phase 1 functions: server-authoritative hide (flip `status` at threshold) + keep Vision extreme-only + sharp thumbs | backend | backend | 1 | 4 | L | 0004 | w2-admin-console, w0-firestore-rules | Backlog |
-| w4-app-check | App Check enforcement (reCAPTCHA Enterprise): provision key + enforce | backend | backend | 1 | 4 | M | 0004 | w1-auth-google | Backlog |
+| w4-app-check | App Check enforcement (reCAPTCHA Enterprise): provision key + enforce | phase2-hardening | backend | 2 | 4 | M | 0004 | w1-auth-google | Backlog |
 | w4-infra-domain | Infra: Cloudflare → Firebase Hosting custom domain + SSL (DNS-only) + headers | backend | infra | hardening | 4 | M | — | — | Backlog |
 | w4-infra-blaze-budget | Infra: Blaze upgrade + budget alert before enabling Phase 1 | backend | infra | 1 | 4 | S | — | — | Backlog |
+| p2-vision-proof | Cloud Vision (proof): re-enable the gated `moderateProof` SafeSearch scanner + thumbnails | phase2-hardening | proof | 2 | 4 | M | 0004 | w2-proof-capture, w4-infra-blaze-budget | Backlog |
+| p2-vision-moderation | Cloud Vision (moderation): auto-hide extreme/illegal Vision flags (extend shipped autohide) | phase2-hardening | moderation | 2 | 4 | M | 0004 | p2-vision-proof, w2-admin-console | Backlog |
+| p2-archive | Post-sailing archive: freeze the Event + durable Leaderboard / First-to-BINGO hall of fame | phase2-hardening | launch | 2 | 4 | M | 0001,0003 | w2-leaderboard, w2-feed-moments | Backlog |
 | x-e2e-happy-path | E2E happy-path (join → mark → BINGO → leaderboard) + offline-mark test against the emulator | launch | launch | hardening | 3 | M | 0006 | w1-board-mark-win, w2-leaderboard, w0-test-harness | Backlog |
 | x-launch-checklist | Cross-device matrix + launch checklist + printed-PDF fallback | launch | launch | hardening | 4 | M | — | x-e2e-happy-path | Backlog |
 | x-multi-event-schema | Multi-event schema readiness (P2, design-only) | launch | schema | hardening | 4 | S | 0003 | — | Backlog |
@@ -149,6 +153,16 @@ Each expands into a full templated issue body (`scripts/gh-projects/examples/gay
 
 **w4-infra-blaze-budget** *(needs-phase-4, phase-1, decision-needed)* — Upgrade to Blaze (gates Functions + Cloud Vision) and set a budget alert **before** enabling Phase 1 (PRD mitigation). Decision: budget threshold $.
 
+### Phase 2 — Hardening (post-launch)
+
+Epic [#131](https://github.com/nathanjohnpayne/gaycruisebingo/issues/131). The post-launch server-side hardening pass, added 2026-07-09. Context that supersedes the Wave-4 rows above: the Phase-1 backend infra has largely merged — `w4-infra-blaze-budget` (#46), `w4-infra-domain` (#45), and the server-authoritative report-count auto-hide from `w4-phase1-functions` (#43 → PR #127, `functions/src/autohide.ts`) are all **Done**. Cloud Vision (`moderateProof`) was then deliberately **gated off** by a human decision ([#126](https://github.com/nathanjohnpayne/gaycruisebingo/issues/126) → PR #128 — an off-by-default `ENABLE_VISION_MODERATION` flag, `functions/src/visionGate.ts`) so the #101 email notifiers could deploy without `moderateProof`'s us-central1/us-east1 region mismatch blocking the whole `functions/` deploy. This epic re-enables Vision and finishes hardening; `w4-app-check` moved here from `epic-backend`.
+
+**p2-vision-proof** *(needs-phase-4, phase-2, Blaze)* — The **producer** half of Cloud Vision: reverse the #126 deferral. Resolve the us-central1/us-east1 region mismatch so `moderateProof` validates, enable the Cloud Vision API, set `ENABLE_VISION_MODERATION=true` in `functions/.env.<projectId>`, deploy and verify SafeSearch on a real Proof upload — extreme/illegal-only, never raciness — plus the `sharp` thumbnail. `moderateProofHandler` logic is unchanged. Files: `functions/src/index.ts` (`:40` handler, `:81` gated export), `functions/.env.<projectId>`, `docs/app/phase-1-deploy.md`, `specs/cloud-vision-proof.md`.
+
+**p2-vision-moderation** *(needs-phase-4, phase-2)* — The **consumer** half: promote an extreme/illegal `visionFlag` to a server-authoritative `status:'hidden'`. The shipped report-count auto-hide (`functions/src/autohide.ts`, #43) is *active-only* and deliberately leaves `flagged` docs alone, so today nothing auto-hides a Vision flag. Add the Vision-flag → hide path without regressing that invariant, and mark Vision-flagged items in the moderation queue (reason + restore). Files: `functions/src/autohide.ts` (or sibling), `firestore.rules`, `components/Admin.tsx`, `hooks/useData.ts`, `specs/cloud-vision-moderation.md`.
+
+**p2-archive** *(needs-phase-4 — touches `firestore.rules`)* — The PRD "remember the winners" end state: after the sailing, freeze the Event to read-only and persist the final Leaderboard + First-to-BINGO hall of fame. `EventDoc.status` already types `'archived'` (`src/types.ts:28`) but nothing sets or reacts to it. Files: `src/types.ts` (`archivedAt` + snapshot), `firestore.rules` (deny gameplay writes when archived; admin-only toggle), `components/Leaderboard.tsx`, `data/admin.ts`, `specs/post-sailing-archive.md`.
+
 ### Cross-cutting / launch
 
 **x-e2e-happy-path** — Playwright e2e (harness from `w0`) against the emulator: a full round join → mark → BINGO → leaderboard with zero coordination (PRD metric), plus the offline-mark-survives-reload assertion (ADR 0006).
@@ -169,7 +183,7 @@ Each expands into a full templated issue body (`scripts/gh-projects/examples/gay
 | Phone-native — installable PWA iOS+Android, Lighthouse ≥ 90, one-handed | w1-pwa, w0-app-shell, x-launch-checklist |
 | Make it theirs — community-editable pool, 8 themes, add/switch < 5 s | w1-prompt-pool, w1-themes |
 | Shareable — on-device Share Cards, ≥ 25 share events | w2-share-cards, w2-ga4-events |
-| Remember winners — durable Leaderboard + First to BINGO, archive | w2-leaderboard, w2-feed-moments, x-multi-event-schema |
+| Remember winners — durable Leaderboard + First to BINGO, archive | w2-leaderboard, w2-feed-moments, x-multi-event-schema, p2-archive |
 
 ### PRD Non-Goals → enforcing tickets
 
@@ -205,10 +219,10 @@ Each expands into a full templated issue body (`scripts/gh-projects/examples/gay
 
 | ADR | Tickets |
 |---|---|
-| **0001** honor-system (client-authoritative; self-writable intentional; no recompute-as-anti-cheat) | w0-type-contract, w0-firestore-rules, w1-board-mark-win, w2-leaderboard, w2-tally, w2-doubts, w3-claim-modes, recon-recompute-stats, w3-security-hardening |
+| **0001** honor-system (client-authoritative; self-writable intentional; no recompute-as-anti-cheat) | w0-type-contract, w0-firestore-rules, w1-board-mark-win, w2-leaderboard, w2-tally, w2-doubts, w3-claim-modes, recon-recompute-stats, w3-security-hardening, p2-archive |
 | **0002** Mark visibility (private Board, public per-Prompt Tally; bare Mark posts nothing) | w2-tally, w2-feed-moments, w2-proof-capture, w0-firestore-rules, w3-security-hardening |
-| **0003** pool is pre-cruise (freeze at join; dense; no re-deal) | w1-prompt-pool, w1-board-deal-join, w1-event-seed, x-multi-event-schema |
-| **0004** reactive moderation (report → threshold → hide; client Phase 0 → server Phase 1; remove `blackoutEnabled`; guard pool<24) | w2-admin-console, w4-phase1-functions, w0-firestore-rules, w0-type-contract, w1-event-seed, w1-board-deal-join, w0-storage-rules |
+| **0003** pool is pre-cruise (freeze at join; dense; no re-deal) | w1-prompt-pool, w1-board-deal-join, w1-event-seed, x-multi-event-schema, p2-archive |
+| **0004** reactive moderation (report → threshold → hide; client Phase 0 → server Phase 1; remove `blackoutEnabled`; guard pool<24) | w2-admin-console, w4-phase1-functions, w0-firestore-rules, w0-type-contract, w1-event-seed, w1-board-deal-join, w0-storage-rules, p2-vision-proof, p2-vision-moderation |
 | **0005** client-side Share Cards (on-device; drop Cloud Run OG + `share` pages; keep static og-default) | w2-share-cards, recon-share-og |
 | **0006** offline resilience (`persistentLocalCache` + durable Mark queue; shell precached) | w0-offline-persistence, w1-board-mark-win, w1-pwa, x-e2e-happy-path |
 
@@ -223,8 +237,9 @@ Created 2026-07-07 on [Project #7](https://github.com/users/nathanjohnpayne/proj
 | epic-play | 10 | w1-board-deal-join 26 · w1-board-mark-win 27 · w1-prompt-pool 28 · w1-themes 29 · w1-pwa 30 |
 | epic-social | 11 | w2-tally 31 · w2-proof-capture 32 · w2-doubts 33 · w2-feed-moments 34 · w2-leaderboard 35 · w2-share-cards 36 · w3-claim-modes 41 |
 | epic-moderation | 12 | w2-admin-console 37 · w2-ga4-events 38 · recon-share-og 39 · recon-recompute-stats 40 · w3-security-hardening 42 |
-| epic-backend | 13 | w4-phase1-functions 43 · w4-app-check 44 · w4-infra-domain 45 · w4-infra-blaze-budget 46 |
+| epic-backend | 13 | w4-phase1-functions 43 · w4-infra-domain 45 · w4-infra-blaze-budget 46 |
 | epic-launch | 14 | x-e2e-happy-path 47 · x-launch-checklist 48 · x-multi-event-schema 49 |
+| epic-phase2-hardening | 131 | w4-app-check 44 (moved from epic-backend) · p2-vision-proof 132 · p2-vision-moderation 133 · p2-archive 134 |
 | _(standalone)_ | — | x-decisions-needed 15 |
 
 Board driver: [`scripts/gh-projects/examples/gaycruisebingo/create-issues.sh`](../scripts/gh-projects/examples/gaycruisebingo/create-issues.sh) (idempotent; re-runnable) + [`set-fields.sh`](../scripts/gh-projects/examples/gaycruisebingo/set-fields.sh); templated bodies under [`bodies/`](../scripts/gh-projects/examples/gaycruisebingo/bodies/).

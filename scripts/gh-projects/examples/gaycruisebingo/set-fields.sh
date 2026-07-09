@@ -9,6 +9,12 @@
 # Status mapping: new → Backlog; unblocked Wave-0 → Ready (w0-test-harness,
 # w0-type-contract, w0-app-shell). Everything else Backlog.
 #
+# CAUTION: the Status column FORCES Status on every listed issue each run. After
+# tickets have progressed (In review / Done), a wholesale re-run resets them to
+# the TSV value — prefer a targeted `gh project item-edit` for a handful of
+# issues, or refresh this Status column before a full re-run. Phase 2 rows carry
+# Phase `2`, a Phase single-select option added 2026-07-09.
+#
 # Usage:
 #   eval "$(scripts/op-preflight.sh --agent claude --mode all)"
 #   export GH_TOKEN="$OP_PREFLIGHT_AUTHOR_PAT"
@@ -33,6 +39,7 @@ epic-social|feed|0|2|-|-|Backlog
 epic-moderation|moderation|0|2|-|-|Backlog
 epic-backend|backend|1|4|-|-|Backlog
 epic-launch|launch|hardening|3|-|-|Backlog
+epic-phase2-hardening|backend|2|4|-|-|Backlog
 x-decisions-needed|launch|0|0|S|-|Backlog
 w0-test-harness|foundation|0|0|L|0001, 0002|Ready
 w0-type-contract|foundation|0|0|M|0001, 0002, 0004|Ready
@@ -62,9 +69,12 @@ recon-recompute-stats|reconciliation|0|2|S|0001|Backlog
 w3-claim-modes|claims|0|3|L|0001|Backlog
 w3-security-hardening|security|hardening|3|M|0001, 0002, 0004|Backlog
 w4-phase1-functions|backend|1|4|L|0004|Backlog
-w4-app-check|backend|1|4|M|0004|Backlog
+w4-app-check|backend|2|4|M|0004|Backlog
 w4-infra-domain|infra|hardening|4|M|-|Backlog
 w4-infra-blaze-budget|infra|1|4|S|-|Backlog
+p2-vision-proof|proof|2|4|M|0004|Backlog
+p2-vision-moderation|moderation|2|4|M|0004|Backlog
+p2-archive|launch|2|4|M|0001, 0003|Backlog
 x-e2e-happy-path|launch|hardening|3|M|0006|Backlog
 x-launch-checklist|launch|hardening|4|M|-|Backlog
 x-multi-event-schema|schema|hardening|4|S|0003|Backlog
