@@ -119,14 +119,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // from dealAttemptRef on purpose: runDeal bumps dealAttemptRef mid-sign-in,
   // which must not read as the profile bootstrap being superseded.
   const profileAttemptRef = useRef(0);
-  // Per-uid record that this session has already called `attest()` for a User
-  // (#23, Finding 3). `attest()` flips `attested` true optimistically, but the
-  // auth-state callback re-arms `attested` to UNKNOWN on every change and then
-  // settles it from a fresh `readAdultAttestation`. If that read lands BEFORE the
-  // attest transaction is visible, the settle would DOWNGRADE a just-attested User
-  // back to a re-prompt. The attest transaction's success is authoritative — it
-  // wrote the stamp — so a uid recorded here is never settled back to `false`.
+  // TWO-TIER same-session attestation (Codex #117 round 7): keep the OPTIMISTIC-UI
+  // tier and the DURABLE-AUTHORITY tier strictly separate — optimistic-for-UI is
+  // NOT authoritative-for-writes.
+  //
+  // (1) OPTIMISTIC-UI (`attestedUidsRef`, #23 Finding 3): a uid `attest()` was
+  // CALLED for THIS session. `attest()` flips `attested` true optimistically before
+  // the write resolves, and the auth callback re-arms `attested` to UNKNOWN then
+  // re-settles it from a fresh server read — so a uid recorded here is never settled
+  // back to `false` (no re-prompt flicker on a not-yet-visible write). UI ONLY: it
+  // suppresses the re-prompt and lifts the offline render; it does NOT grant deal
+  // authority.
   const attestedUidsRef = useRef<Set<string>>(new Set());
+  // (2) DURABLE-AUTHORITY (`attestCommittedUidsRef`): a uid whose `attestAdult`
+  // transaction actually COMMITTED this session. Only THIS grants deal authority
+  // (`attestedAuthoritative`) for a same-session attest — a durable
+  // `users/{uid}.attestedAdultAt` now exists, so a deal may create board/player
+  // rows. If the attest write rejects or never resolves (offline/permission), the
+  // uid stays out of this set: the UI is optimistically attested but NO deal fires,
+  // so no rows are created for a User whose durable stamp does not exist.
+  const attestCommittedUidsRef = useRef<Set<string>>(new Set());
 
   // The connectivity-aware profile/attestation bootstrap, run OFF the render path
   // (#115). The cache lifts the gate PROVISIONALLY offline; the server read is
@@ -215,26 +227,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       bootstrapFailure = { err };
     }
     if (profileAttemptRef.current !== attempt) return;
-    const attestedSticky = attestedUidsRef.current.has(u.uid);
+    // OPTIMISTIC-UI vs DURABLE-AUTHORITY (round 7): the optimistic sticky only keeps
+    // the UI attested (no re-prompt); ONLY a COMMITTED same-session attest grants
+    // deal authority when the server read cannot.
+    const optimisticSticky = attestedUidsRef.current.has(u.uid);
+    const committedSticky = attestCommittedUidsRef.current.has(u.uid);
     if (bootstrapFailure) {
-      // Not authoritative — keep the same-session optimistic attest if any (its
-      // own transaction succeeded THIS session, so it IS authoritative and may
-      // deal), else surface the retryable error and leave attestation UNKNOWN /
-      // provisional (no downgrade, and no deal, on a mere network blip). The Retry
-      // re-runs this whole bootstrap.
-      if (attestedSticky) {
+      // Server read failed (not authoritative). A COMMITTED same-session attest is
+      // durable authority and may deal; an OPTIMISTIC-only attest keeps the UI
+      // attested (no re-prompt) but grants NO authority; otherwise surface the
+      // retryable error and leave attestation UNKNOWN (no downgrade on a blip).
+      if (committedSticky) {
         setAttested(true);
         setAttestedAuthoritative(true);
+      } else if (optimisticSticky) {
+        setAttested(true);
       } else {
         setDealError(dealErrorMessage(bootstrapFailure.err));
       }
     } else {
-      // Authoritative: a same-session optimistic attest wins (its transaction
-      // succeeded), otherwise the server value is definitive — INCLUDING
-      // downgrading a stale cache lift to a re-prompt (finding D). The read
-      // SETTLED, so the deal may now fire for a confirmed-attested User (round 2).
-      setAttested(attestedSticky ? true : attestedRead);
-      setAttestedAuthoritative(true);
+      // Authoritative read SETTLED. UI: the server stamp, or an optimistic attest
+      // (don't re-prompt on a not-yet-visible write). AUTHORITY: the server stamp,
+      // or a COMMITTED same-session attest — NEVER an optimistic pre-commit lift
+      // (round 7). A definite server-null with no attest downgrades to a re-prompt
+      // (finding D).
+      setAttested(attestedRead || optimisticSticky);
+      if (attestedRead || committedSticky) setAttestedAuthoritative(true);
       // An authoritative settle SUPERSEDES any stale dealError (round 4 audit): on
       // reconnect this clears an error left by a prior offline/failed attempt so the
       // Board (or re-prompt) renders, not the stale panel. A confirmed-attested User
@@ -329,9 +347,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // `online` before the fresh read finishes, so a stale `attestedAuthoritative`
       // would let the deal effect create rows during the reconnect window. Re-arm
       // it false so the reconnect deal waits for the FRESH server read — UNLESS a
-      // same-session optimistic attest proves it (#112: its transaction succeeded
-      // THIS session, durable authority, not a stale cross-offline read).
-      if (!attestedUidsRef.current.has(u.uid)) setAttestedAuthoritative(false);
+      // COMMITTED same-session attest proves it (round 7: its transaction actually
+      // succeeded THIS session, durable authority, not a stale cross-offline read
+      // and not a merely optimistic pre-commit lift).
+      if (!attestCommittedUidsRef.current.has(u.uid)) setAttestedAuthoritative(false);
       // A mid-bootstrap connectivity LOSS SUPERSEDES the in-flight ONLINE bootstrap
       // (whose ensureUserProfile transaction may never settle offline and would
       // otherwise strand "Loading…") and switches to the cache-first path: release
@@ -415,13 +434,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // not authorize a deal from a cache-served getDoc either.
       const read = (await readAdultAttestationFromServer(u.uid)) !== null;
       if (profileAttemptRef.current !== attempt) return;
-      const attestedSticky = attestedUidsRef.current.has(u.uid);
-      // Authoritative settle (finding D): the server read is definitive — only a
-      // same-session optimistic attest is sticky, never a prior provisional value.
-      // The read SETTLED, so this settle is authoritative and may fire the deal.
-      setAttested(attestedSticky ? true : read);
-      setAttestedAuthoritative(true);
-      if (!read && !attestedSticky) {
+      const optimisticSticky = attestedUidsRef.current.has(u.uid);
+      const committedSticky = attestCommittedUidsRef.current.has(u.uid);
+      // UI: server stamp OR optimistic attest (no re-prompt). AUTHORITY: server
+      // stamp OR a COMMITTED same-session attest — never an optimistic pre-commit
+      // lift (round 7).
+      setAttested(read || optimisticSticky);
+      if (read || committedSticky) {
+        // Authority granted → let the deferred deal fire and OWN `dealing` (keep it
+        // up for seamless progress; the deal's own settle replaces dealError — P3).
+        setAttestedAuthoritative(true);
+      } else {
+        // No authority: a definite server-null with no committed attest (re-prompt),
+        // or an uncommitted optimistic attest (UI-attested, no deal). Either way no
+        // deal fires, so settle the retry surface here rather than spin forever.
         setDealError(null);
         setDealing(false);
       }
@@ -470,22 +496,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const attest = useCallback(async () => {
     const u = auth.currentUser;
     if (!u) return;
-    // Mark this uid attested for the session BEFORE the optimistic flip so a
-    // later auth-state callback can never settle it back to a re-prompt on a
-    // stale read (#23, Finding 3). Pass the full User so a create-race win writes
-    // the COMPLETE profile, not just the stamp (Finding 2).
+    // OPTIMISTIC-UI tier (#23, Finding 3): record + flip attested true BEFORE the
+    // write so a later auth-state callback can never settle a re-prompt on a stale
+    // read, and the UI proceeds with no flicker. This does NOT grant deal authority.
     attestedUidsRef.current.add(u.uid);
     setAttested(true);
-    // A same-session attest IS authoritative (the User asserted 18+ this session
-    // and its transaction is the source of truth), so it may fire the deal — the
-    // deal effect gates on `attestedAuthoritative`, and this is the immediate-
-    // deal-after-attest path (Codex #117 round 2). The `online` gate still keeps a
-    // just-attested User from dealing until connected.
-    setAttestedAuthoritative(true);
     try {
+      // Pass the full User so a create-race win writes the COMPLETE profile, not
+      // just the stamp (Finding 2).
       await attestAdult(u);
+      // DURABLE-AUTHORITY tier (round 7): the write COMMITTED — a durable
+      // users/{uid}.attestedAdultAt now exists — so this same-session attest is
+      // authoritative and may fire the deal. Grant it ONLY here, in the success
+      // path, and only if this is still the current User (a sign-out/switch during
+      // the await already re-armed the flag false). Never before the commit: an
+      // optimistic pre-commit lift is UI-only.
+      attestCommittedUidsRef.current.add(u.uid);
+      if (auth.currentUser?.uid === u.uid) setAttestedAuthoritative(true);
     } catch {
-      /* keep the session optimistically attested; the write retries next sign-in */
+      // The write rejected (or never resolved) — keep the session optimistically
+      // attested for the UI (#112: retries next sign-in), but deal authority is NOT
+      // granted, so no deal fires and no rows are created for a User whose durable
+      // stamp does not exist. The next server-only read confirms authority normally
+      // once the stamp really lands.
     }
   }, []);
 

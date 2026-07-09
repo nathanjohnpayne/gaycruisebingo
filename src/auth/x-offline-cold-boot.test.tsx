@@ -78,10 +78,12 @@ function deferred<T>() {
 // captured to drive the same-session optimistic-attest path (#112 Finding 3).
 let ctxSignIn: () => Promise<void> = async () => {};
 let ctxRetryDeal: () => void = () => {};
+let ctxAttest: () => Promise<void> = async () => {};
 function Probe() {
-  const { user, loading, dealError, dealing, signIn, retryDeal } = useAuth();
+  const { user, loading, dealError, dealing, signIn, retryDeal, attest } = useAuth();
   ctxSignIn = signIn;
   ctxRetryDeal = retryDeal;
+  ctxAttest = attest;
   return (
     <div>
       <span data-testid="loading">{loading ? 'loading' : 'ready'}</span>
@@ -146,6 +148,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   emitAuth = () => {};
   ctxSignIn = async () => {};
+  ctxAttest = async () => {};
   mocks.auth.currentUser = null;
   setOnline(true);
   mocks.onAuthStateChanged.mockImplementation((_a: unknown, cb: (u: unknown) => unknown) => {
@@ -597,6 +600,49 @@ describe('offline cold boot (#115)', () => {
     });
     expect(dealErrorShown()).toBe(false);
     expect(boardRendered()).toBe(true);
+  });
+
+  it('finding (round 7): an OPTIMISTIC attest that does NOT commit grants deal authority to NOBODY (no rows); a COMMITTED attest deals once, with no #112 re-prompt flicker', async () => {
+    // Online signed-in User; the SERVER read is HELD so the app is gated (Probe
+    // stays rendered → ctxAttest capturable) and no re-prompt has flashed yet.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    const serverRead = deferred<number | null>();
+    mocks.readAdultAttestationFromServer.mockReturnValue(serverRead.promise);
+    mocks.auth.currentUser = RETURNING_USER;
+
+    mount();
+    await coldBoot(RETURNING_USER);
+
+    // The User attests, but the attestAdult WRITE REJECTS (offline / permission).
+    mocks.attestAdult.mockRejectedValueOnce(new Error('permission denied'));
+    await act(async () => {
+      await ctxAttest();
+    });
+    // Optimistic-UI lift: no re-prompt flicker (#112). But deal authority is NOT
+    // granted (the write never committed) → NO deal, NO rows.
+    expect(rePromptShown()).toBe(false);
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+
+    // The held server read settles NULL (the stamp never landed). Still no deal —
+    // authority requires a server stamp OR a COMMITTED attest, neither of which
+    // holds. The optimistic sticky keeps the UI attested (no re-prompt).
+    await act(async () => {
+      serverRead.settle(null);
+      await serverRead.promise;
+    });
+    expect(rePromptShown()).toBe(false);
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+
+    // Now the User attests again and the write COMMITS → durable authority → the
+    // deal fires exactly once (the round-5 "same-session attest deals" case is a
+    // COMMITTED attest, preserved).
+    mocks.attestAdult.mockResolvedValueOnce(undefined);
+    await act(async () => {
+      await ctxAttest();
+    });
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
   });
 
   it('online: a genuinely-new attested User still deals', async () => {
