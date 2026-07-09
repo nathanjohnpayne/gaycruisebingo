@@ -9,7 +9,7 @@ Client code is already wired (proof capture, feed, admin console, App Check hook
 - Upgrade the `gaycruisebingo` project to Blaze (set a budget alert first).
 - Enable APIs: **Cloud Vision**, **Cloud Functions**, **Cloud Run**, **Cloud Build**, **Artifact Registry**.
 
-## 1. Cloud Functions (moderation, thumbnails)
+## 1. Cloud Functions (moderation, thumbnails, notifications)
 
 Build the functions package, then deploy through the wrapper:
 
@@ -18,11 +18,31 @@ cd functions && npm install && npm run build && cd ..
 op-firebase-deploy --only functions
 ```
 
-Deploys: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail) — now the only export. Player stats are **not** server-recomputed — they stay client-authoritative by design (ADR 0001).
+Deploys three exports: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail), and the two moderation-notification triggers `notifyProofModeration` and `notifyItemModeration` (`onDocumentWritten` on `events/{eventId}/proofs/{proofId}` and `.../items/{itemId}` → email the Event admins when a Proof/Prompt transitions into `flagged`/`hidden`; #101). Player stats are **not** server-recomputed — they stay client-authoritative by design (ADR 0001).
+
+**The two notifier functions need the `RESEND_API_KEY` secret set BEFORE (or they will deploy but fail to send).** See § 1a below for the one-time secret + the `EMAIL_FROM` / `ADMIN_NOTIFY_EMAIL` / `APP_BASE_URL` params; after setting the secret, (re)deploy the bound functions so the binding takes effect (`op-firebase-deploy --only functions`).
 
 **If a previously deployed project still carries `recomputeStats` and/or `share`:** this deploy is what deletes them — Firebase discovers exports removed from the source and prompts to confirm deleting each live function. Two exports have been removed since the scaffold: `recomputeStats` (#40, ADR 0001 — self-writable player stats need no server recompute) and `share` (#39, ADR 0005 — the crawler OG page is replaced by on-device Share Cards). A project deployed before either removal will prompt to delete whichever it still carries. The wrapper always runs `firebase deploy --non-interactive`, which stalls on that prompt, so the one-time cleanup deploy must pass the force flag through: `op-firebase-deploy --only functions --force` (extra args pass straight through to `firebase deploy`). Both deletions are expected and required; do not recreate the function in either case. Deleting `share` from Functions does **not** remove the separate Cloud Run OG renderer — that retirement is step 3 below.
 
 **Moderation note:** SafeSearch is tuned to flag only extreme/violent content, **not** raciness (raciness is expected here). It cannot detect minors — user reporting + the admin console remain the primary control. Flagged proofs appear in **Admin → Flagged**.
+
+### 1a. Email notifications (Resend) — one-time secret + params (#101)
+
+The two notifier functions send transactional email via [Resend](https://resend.com). The API key is a **Google Secret Manager secret**, not a plain env var — set it once (value from the 1Password item **"Resend API Key (gaycruisebingo)"**):
+
+```bash
+firebase functions:secrets:set RESEND_API_KEY
+# …or pipe from 1Password (confirm the field name when you fetch it):
+op read "op://Private/<ITEM-UDID>/<field>" | firebase functions:secrets:set RESEND_API_KEY --data-file -
+```
+
+Binding the secret to the functions grants the runtime service account `secretmanager.secretAccessor`; `op-firebase-setup` already grants `roles/secretmanager.viewer` (see `DEPLOYMENT.md`). **After setting the secret, (re)deploy `--only functions`** so the two bound triggers pick it up, then send a live smoke-test to confirm delivery.
+
+The rest of the email config is **non-secret** `firebase-functions/params` (safe defaults baked in; override only if needed). These load from the **Functions source directory**, not the repo-root `.env`: `firebase.json` sets `functions.source: "functions"`, so Functions v2 reads `functions/.env` (all environments) or `functions/.env.<projectId>` (here `functions/.env.gaycruisebingo`). Setting them in the repo-root `.env` has **no effect** on the deployed functions. A committed template lives at `functions/.env.example`:
+
+- `EMAIL_FROM` — default `Gay Cruise Bingo <gaycruisebingo@nathanpayne.com>`. Sends from the **already-verified `nathanpayne.com`** Resend domain (free-plan single-domain limit — **no new DNS**). This is independent of the `gaycruisebingo.com` Hosting domain.
+- `ADMIN_NOTIFY_EMAIL` — optional comma-separated shared-inbox override; empty ⇒ notify the Event `admins` roster (resolved to verified Google emails) only.
+- `APP_BASE_URL` — default `https://gaycruisebingo.com`; base for the Admin-console deep link in the email body.
 
 ## 2. App Check (abuse protection)
 

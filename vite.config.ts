@@ -30,10 +30,14 @@ export default defineConfig({
     })
   ],
   // Vitest "app" layer: jsdom so React Testing Library can mount components.
-  // Only src/ unit + component specs run here; the Firestore-emulator rules
-  // layer lives in vitest.rules.config.ts (node env) and the Playwright e2e
-  // layer in playwright.config.ts, so `npm test` never needs a running
-  // emulator or browser.
+  // Only src/ specs run here — self-contained on ROOT deps alone (CI runs just
+  // `npm ci` at the root). The functions specs (tests/functions/) import
+  // functions/src, which pulls resend/firebase-admin declared only in
+  // functions/package.json, so they run separately via `npm run test:functions`
+  // (vitest.functions.config.ts, which installs functions deps first). The
+  // emulator rules layer lives in vitest.rules.config.ts and the Playwright e2e
+  // layer in playwright.config.ts, so `npm test` never needs a functions
+  // install, a running emulator, or a browser.
   test: {
     globals: true,
     environment: 'jsdom',

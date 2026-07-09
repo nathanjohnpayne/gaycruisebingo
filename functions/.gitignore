@@ -1,3 +1,7 @@
 node_modules
 lib
 *.log
+# Functions v2 loads params/dotenv from here; never commit real env files.
+.env
+.env.*
+!.env.example
