@@ -1,11 +1,12 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, connectAuthEmulator } from 'firebase/auth';
 import {
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
+  connectFirestoreEmulator,
 } from 'firebase/firestore';
-import { getStorage } from 'firebase/storage';
+import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import { getAnalytics, isSupported, type Analytics } from 'firebase/analytics';
 
@@ -31,6 +32,27 @@ export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
 });
 export const storage = getStorage(app);
+
+// Local Emulator Suite wiring for the Playwright e2e layer
+// (specs/x-e2e-happy-path.md). The suite serves a `vite build --mode e2e` +
+// `vite preview` of the app rather than `vite dev`, because the ADR 0006
+// offline case reloads the page while offline and can only be served by the
+// precaching service worker vite-plugin-pwa emits for a build (never for
+// `vite dev`). So this gate keys off `import.meta.env.MODE === 'e2e'`, NOT
+// `import.meta.env.DEV` (which is `false` in ANY build). `MODE` is a built-in
+// Vite env var statically substituted at build time, so the real production
+// build (`npm run build`, `MODE === 'production'`) folds this to
+// `'production' === 'e2e'` → `false` and dead-code-eliminates the whole branch —
+// the shipped bundle carries no emulator import or host string (verified by the
+// dist/ grep in specs/x-e2e-happy-path.md's Testing section). The `demo-`
+// project-id check is belt-and-suspenders (the same emulator-only convention
+// tests/offline and tests/rules use). Ports mirror firebase.json's `emulators`
+// block (auth 9099, firestore 8080, storage 9199) and tests/e2e/support/env.ts.
+if (import.meta.env.MODE === 'e2e' && import.meta.env.VITE_FIREBASE_PROJECT_ID?.startsWith('demo-')) {
+  connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+  connectFirestoreEmulator(db, '127.0.0.1', 8080);
+  connectStorageEmulator(storage, '127.0.0.1', 9199);
+}
 
 // App Check (abuse protection). No-op unless a reCAPTCHA Enterprise site key is set.
 if (import.meta.env.VITE_RECAPTCHA_SITE_KEY) {

@@ -81,6 +81,16 @@ test.describe('x-e2e-happy-path', () => {
     const targetText = (await target.textContent())?.trim();
     if (!targetText) throw new Error('No unmarked, non-free Square available to Mark offline.');
 
+    // The offline reload below re-fetches the app shell, which — offline — only
+    // resolves from the PWA service worker's precache; that same precache also
+    // serves the JS that re-initializes the Firestore SDK so it can recover the
+    // durable queue. The suite serves a real `vite build` + `vite preview`
+    // (playwright.config.ts) so that SW exists; wait until it is active
+    // (precache complete) before cutting the network.
+    await page.evaluate(async () => {
+      await navigator.serviceWorker.ready;
+    });
+
     // 1. Go offline — a ship-wifi dead zone.
     await context.setOffline(true);
 
@@ -90,19 +100,34 @@ test.describe('x-e2e-happy-path', () => {
     await tapCellByText(page, targetText);
     await expect(markedCellLocator(page, targetText)).toHaveClass(/marked/);
 
-    // 3. The "reload", still offline and before any sync is even possible:
-    // the Mark must survive from the durable local queue, not memory.
+    // 3. "Reload" while STILL offline: memory is wiped and the whole app
+    // re-initializes from scratch, so anything that survives came from the
+    // durable IndexedDB queue, not memory. The SW serves the shell + JS
+    // offline, so the Firestore SDK re-initializes and RECOVERS the pending
+    // Mark from that queue. (The app's UI cannot cold-boot fully offline — its
+    // auth bootstrap awaits a Firestore transaction, ensureUserProfile, that
+    // needs the network, so App.tsx holds on "Loading…" until reconnect — but
+    // the SDK-level queue recovery, the ADR 0006 property under test, does not
+    // depend on the UI having rendered.)
     await page.reload();
-    await expect(markedCellLocator(page, targetText)).toHaveClass(/marked/);
 
-    // 4. Reconnect — the queued write drains to the emulator.
+    // 4. Reconnect — the recovered queue drains to the emulator.
     await context.setOffline(false);
 
-    // 5. Ground truth via an independent observer (never this tab's own
-    // cache): the emulator now has the synced write.
+    // 5. Ground truth via an INDEPENDENT observer (never this reloaded tab's
+    // own cache): the emulator now has the Mark. It was made offline and never
+    // synced before the reload, so the ONLY path it could reach the emulator is
+    // the durable IndexedDB queue surviving the reload and draining on
+    // reconnect — proving the Mark outlived memory (ADR 0006), not merely
+    // latency compensation.
     await expect(async () => {
       expect(await anyBoardHasMarkedText(testEnv, targetText)).toBe(true);
     }).toPass({ timeout: 20_000 });
+
+    // 6. End-to-end: the reloaded, now-online app finishes booting and renders
+    // the Mark from its recovered cache — the durable Mark reaches the UI too,
+    // not just storage.
+    await expect(markedCellLocator(page, targetText)).toHaveClass(/marked/, { timeout: 15_000 });
   });
 });
 

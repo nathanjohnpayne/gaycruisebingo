@@ -98,14 +98,21 @@ export async function anyBoardHasMarkedText(
   testEnv: RulesTestEnvironment,
   text: string,
 ): Promise<boolean> {
-  return testEnv.withSecurityRulesDisabled(async (context) => {
+  // `withSecurityRulesDisabled` is typed `(cb) => Promise<void>` and DISCARDS the
+  // callback's return value, so the result must be captured in this outer scope
+  // — `return testEnv.withSecurityRulesDisabled(async () => …)` would always
+  // resolve to `undefined`. (tsconfig typechecks only src/, so tsc never flags
+  // it, and Playwright strips types without checking.)
+  let found = false;
+  await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
     const snap = await getDocs(collection(db, 'events', EVENT_ID, 'boards'));
-    return snap.docs.some((d) => {
+    found = snap.docs.some((d) => {
       const cells = (d.data() as { cells?: Array<{ text: string; marked: boolean }> }).cells ?? [];
       return cells.some((c) => c.text === text && c.marked === true);
     });
   });
+  return found;
 }
 
 // Re-exported so the spec can assert the payload it just wrote matches the

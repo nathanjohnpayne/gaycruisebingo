@@ -5,30 +5,29 @@
 import { expect, type Page } from '@playwright/test';
 
 /**
- * KNOWN LIMITATION (see specs/x-e2e-happy-path.md "Known limitation"): this
- * drives the REAL "Continue with Google" control, which calls
- * `signInWithPopup(auth, googleProvider)` against the `auth` singleton
- * `src/firebase.ts` exports. That module has no emulator branch — no
- * `connectAuthEmulator` / `connectFirestoreEmulator` call exists anywhere in
- * `src/**`, and `src/firebase.test.ts` pins the config as production-only
- * ("ADR 0006 source guard ... firebase.ts runs getAuth(app) at import").
- * `src/**` is off-limits to this ticket (it proves behavior, it does not
- * change it), so there is no code path in this checkout that points the
- * browser's Firebase client at the Local Emulator Suite this suite seeds.
- * The assertion below is expected to fail here for that reason, with this
- * message — not a Playwright timeout — as the diagnostic. It is written as
- * the real join a Player takes so it starts passing the moment a future
- * ticket adds the emulator branch to `src/firebase.ts`, with no rewrite.
+ * Drive the Firebase Auth Emulator's account-chooser popup that
+ * `signInWithPopup(auth, googleProvider)` opens once `src/firebase.ts` has
+ * connected its `auth` singleton to the Local Emulator Suite (the env-gated
+ * `connectAuthEmulator` branch, active for the `demo-` e2e project — see
+ * specs/x-e2e-happy-path.md). No real Google OAuth is involved: the emulator
+ * widget (node_modules/firebase-tools .../auth/widget_ui.js) lets us add a new
+ * auto-generated account and submit it, which resolves the popup and signs the
+ * Player in. Selectors are the widget's own stable ids/classes.
  */
-const EMULATOR_WIRING_GAP =
-  'App did not leave the sign-in screen after "Continue with Google". ' +
-  'This exercises a REAL Firebase Auth Emulator sign-in, which needs ' +
-  'src/firebase.ts to connect its `auth`/`db` singletons to the Local ' +
-  'Emulator Suite (connectAuthEmulator/connectFirestoreEmulator) when ' +
-  'VITE_FIREBASE_PROJECT_ID is the demo- e2e project. That wiring does not ' +
-  'exist yet (src/firebase.ts is production-only by source-level design, ' +
-  'guarded by src/firebase.test.ts) and src/** is out of this ticket\'s file ' +
-  'boundaries. See specs/x-e2e-happy-path.md "Known limitation".';
+async function completeEmulatorSignIn(popup: Page): Promise<void> {
+  // "Add new account" can be visible-but-inert for a beat: the widget wires its
+  // click handlers in an inline <script> that runs only after an external
+  // material-components script loads, so a click that lands before that is a
+  // no-op. Retry the toggle until the add-account form (its autogen button)
+  // actually appears, then fill a random valid identity and submit.
+  const autogen = popup.locator('#autogen-button');
+  await expect(async () => {
+    if (!(await autogen.isVisible())) await popup.locator('.js-new-account').click();
+    await expect(autogen).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 15000 });
+  await autogen.click(); // fill a random valid identity
+  await popup.locator('#sign-in').click(); // submit → popup closes, sign-in resolves
+}
 
 /** Best-effort dismiss of the analytics disclosure banner — it never blocks
  * the sign-in control, but clearing it keeps the viewport tidy for later
@@ -52,10 +51,15 @@ export async function joinViaSharedLink(page: Page): Promise<void> {
 
   await expect(page.getByRole('heading', { name: 'GAY CRUISE BINGO' })).toBeVisible();
   await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: 'Continue with Google' }).click();
 
-  await expect(
-    page.getByRole('navigation', { name: 'Primary' }),
-    EMULATOR_WIRING_GAP,
-  ).toBeVisible({ timeout: 15000 });
+  // "Continue with Google" calls signInWithPopup against the Auth Emulator, so
+  // wait for the popup the click opens, then drive the emulator's widget.
+  const popupPromise = page.waitForEvent('popup');
+  await page.getByRole('button', { name: 'Continue with Google' }).click();
+  await completeEmulatorSignIn(await popupPromise);
+
+  // Signed in: App.tsx has moved past <SignIn /> to the signed-in shell (the
+  // Primary tab bar). A failure here now means the emulator sign-in did not
+  // resolve, not the retired src/firebase.ts wiring gap.
+  await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible({ timeout: 15000 });
 }
