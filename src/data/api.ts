@@ -83,6 +83,21 @@ export function seedFromUid(uid: string): number {
 }
 
 /**
+ * The create-only bootstrap payload for a `users/{uid}` profile row: the
+ * Google-sourced identity defaults `ensureUserProfile` writes on first sign-in.
+ * Extracted as the ONE source of truth for the bootstrap shape so the attestation
+ * transaction can write the SAME payload when it wins the create race on an absent
+ * row (Codex P2, PR #112) — no duplicated shape to drift out of sync.
+ */
+function bootstrapProfile(u: User, now: number = Date.now()) {
+  return {
+    displayName: u.displayName ?? 'Anonymous',
+    photoURL: u.photoURL ?? null,
+    createdAt: now,
+  };
+}
+
+/**
  * Create the global user profile on first sign-in — create-only, it must NEVER
  * overwrite an existing row. The transaction's read of `users/{uid}` is part of
  * the commit's optimistic-concurrency check: the exists-check no-ops when the doc
@@ -100,11 +115,7 @@ export async function ensureUserProfile(u: User): Promise<void> {
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (snap.exists()) return;
-    tx.set(ref, {
-      displayName: u.displayName ?? 'Anonymous',
-      photoURL: u.photoURL ?? null,
-      createdAt: Date.now(),
-    });
+    tx.set(ref, bootstrapProfile(u));
   });
 }
 
@@ -118,15 +129,31 @@ export async function ensureUserProfile(u: User): Promise<void> {
  * Create-only for the field, inside a transaction like `ensureUserProfile`: an
  * existing EARLIER stamp is NEVER overwritten, so re-attesting — a fresh sign-in
  * after a prior one, or the returning-User re-prompt — keeps the first timestamp
- * (the no-overwrite case in specs/w1-attestation.md). The stamp merges into the
- * profile row without disturbing its other fields; if the row is somehow absent
- * the merge creates a minimal one the owner may write.
+ * (the no-overwrite case in specs/w1-attestation.md).
+ *
+ * The row may be ABSENT: during first-time sign-in this transaction can win the
+ * create race with `ensureUserProfile` on the not-yet-written `users/{uid}` row.
+ * Writing ONLY `attestedAdultAt` then would leave a PARTIAL profile — the
+ * create-only `ensureUserProfile` retry sees `exists()` and no-ops, so
+ * displayName/photoURL/createdAt would be missing forever (Codex P2, PR #112). So
+ * on an absent row we write the FULL `bootstrapProfile` payload `ensureUserProfile`
+ * would have written PLUS the stamp (one create, the shared bootstrap shape); on a
+ * PRESENT row we merge ONLY the stamp so no other field is clobbered. The
+ * transaction's read makes this race-safe: a concurrent `ensureUserProfile` create
+ * invalidates this attempt's read set and Firestore re-runs onto the now-present
+ * row, which then takes the merge-only branch.
  */
-export async function attestAdult(uid: string, now: number = Date.now()): Promise<void> {
-  const ref = rawUser(uid);
+export async function attestAdult(u: User, now: number = Date.now()): Promise<void> {
+  const ref = rawUser(u.uid);
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
-    const existing = snap.exists() ? (snap.data() as Partial<UserDoc>).attestedAdultAt : undefined;
+    if (!snap.exists()) {
+      // Won the create race on an absent row — write the complete profile, not a
+      // stamp-only stub, so the create-only bootstrap retry cannot strand it.
+      tx.set(ref, { ...bootstrapProfile(u, now), attestedAdultAt: now });
+      return;
+    }
+    const existing = (snap.data() as Partial<UserDoc>).attestedAdultAt;
     if (typeof existing === 'number') return; // keep the FIRST attestation, never overwrite
     tx.set(ref, { attestedAdultAt: now }, { merge: true });
   });
