@@ -49,6 +49,7 @@ epic-social|Epic: Social core — Tally, Doubts, Proof, Feed/Moments, Leaderboar
 epic-moderation|Epic: Moderation, analytics & scaffold reconciliation|-|epic,track:moderation,phase-0
 epic-backend|Epic: Phase 1 backend & infra|-|epic,track:backend,phase-1
 epic-launch|Epic: Launch, e2e & cross-cutting|-|epic,track:launch,hardening
+epic-phase2-hardening|Epic: Phase 2 — Hardening (Cloud Vision, App Check, archive)|-|epic,track:backend,phase-2,hardening
 x-decisions-needed|Decisions needed: open operational/config choices blocking specific tickets|-|decision-needed,track:launch,phase-0,wave-0,size:S
 w0-test-harness|Wire the test harness (vitest jsdom + RTL, emulator rules tests, Playwright e2e, CI)|epic-foundation|agent-action,track:foundation,phase-0,wave-0,size:L
 w0-type-contract|Reconcile the domain type contract (verified→admin_confirmed, drop blackoutEnabled, add Tally/Doubt/Moment/attestation types)|epic-foundation|agent-action,track:foundation,phase-0,wave-0,size:M,reconciliation
@@ -78,9 +79,12 @@ recon-recompute-stats|Reconciliation: remove recomputeStats as anti-cheat + fix 
 w3-claim-modes|Claim Modes (honor / proof_required / admin_confirmed) + Claims + admin confirm/reject|epic-social|agent-action,track:claims,phase-0,wave-3,size:L
 w3-security-hardening|Security & rules hardening: noindex, acceptable-use page, self-writable-by-design docs, protected-path policy|epic-moderation|agent-action,track:security,hardening,wave-3,size:M,needs-phase-4
 w4-phase1-functions|Phase 1 functions: server-authoritative hide (flip status at threshold) + keep Vision extreme-only + sharp thumbs|epic-backend|agent-action,track:backend,phase-1,wave-4,size:L,needs-phase-4
-w4-app-check|App Check enforcement (reCAPTCHA Enterprise): provision key + enforce|epic-backend|agent-action,track:backend,phase-1,wave-4,size:M,needs-phase-4,decision-needed
+w4-app-check|App Check enforcement (reCAPTCHA Enterprise): provision key + enforce|epic-phase2-hardening|agent-action,track:backend,phase-2,hardening,wave-4,size:M,needs-phase-4,decision-needed
 w4-infra-domain|Infra: Cloudflare → Firebase Hosting custom domain + SSL (DNS-only) + headers|epic-backend|agent-action,track:infra,hardening,wave-4,size:M,needs-phase-4
 w4-infra-blaze-budget|Infra: Blaze upgrade + budget alert before enabling Phase 1|epic-backend|agent-action,track:infra,phase-1,wave-4,size:S,needs-phase-4,decision-needed
+p2-vision-proof|Cloud Vision (proof): re-enable the gated moderateProof SafeSearch scanner + thumbnails|epic-phase2-hardening|agent-action,track:proof,phase-2,hardening,wave-4,size:M,needs-phase-4
+p2-vision-moderation|Cloud Vision (moderation): auto-hide extreme/illegal Vision flags (extend shipped autohide)|epic-phase2-hardening|agent-action,track:moderation,phase-2,hardening,wave-4,size:M,needs-phase-4
+p2-archive|Post-sailing archive: freeze the Event + durable Leaderboard / First-to-BINGO hall of fame|epic-phase2-hardening|agent-action,track:launch,phase-2,hardening,wave-4,size:M
 x-e2e-happy-path|E2E happy-path (join → mark → BINGO → leaderboard) + offline-mark test against the emulator|epic-launch|agent-action,track:launch,hardening,wave-3,size:M
 x-launch-checklist|Cross-device matrix + launch checklist + printed-PDF fallback|epic-launch|agent-action,track:launch,hardening,wave-4,size:M
 x-multi-event-schema|Multi-event schema readiness (P2, design-only)|epic-launch|agent-action,track:schema,hardening,wave-4,size:S
