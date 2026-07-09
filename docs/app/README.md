@@ -4,9 +4,9 @@
 
 Live, multiplayer bingo PWA. React (Vite) + TypeScript + Firebase. Ships the pre-cruise MVP from the PRD: Google sign-in, a randomized card from a community-editable prompt pool, honor-system marking, BINGO/blackout detection, a leaderboard, all eight party themes, PWA install, GA4, and a static share image. The printed PDFs are the offline fallback.
 
-Phase 1 (proof system, dynamic Playwright OG images, moderation console, App Check) can land as live updates during the sailing without reworking this — see [`phase-1-deploy.md`](phase-1-deploy.md).
+Phase 1 (proof system, moderation console, App Check) can land as live updates during the sailing without reworking this — see [`phase-1-deploy.md`](phase-1-deploy.md).
 
-> **Live (2026-07-07):** Phase 0 is deployed at **https://gaycruisebingo.web.app** (Firestore rules/indexes + Storage rules + hosting). The event `events/med-2026` is seeded (honor mode, `neon-playground` theme, 32 prompts). The custom domain `gaycruisebingo.com` is registered with Hosting and its DNS is set (SSL auto-provisioning). The Phase-1 backend (`functions`, Cloud Run OG renderer) is intentionally not deployed yet — it is Blaze-gated and lands later per [`phase-1-deploy.md`](phase-1-deploy.md). Sections 1–6 below are the runbook to reproduce or re-run any of this.
+> **Live (2026-07-07):** Phase 0 is deployed at **https://gaycruisebingo.web.app** (Firestore rules/indexes + Storage rules + hosting). The event `events/med-2026` is seeded (honor mode, `neon-playground` theme, 32 prompts). The custom domain `gaycruisebingo.com` is registered with Hosting and its DNS is set (SSL auto-provisioning). The Phase-1 backend (`functions`) is intentionally not deployed yet — it is Blaze-gated and lands later per [`phase-1-deploy.md`](phase-1-deploy.md). Sections 1–6 below are the runbook to reproduce or re-run any of this.
 
 ## Stack
 
@@ -102,7 +102,7 @@ GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcb-sa.json op-firebase-deploy --only hostin
 rm -f /tmp/gcb-sa.json    # wipe the key when done
 ```
 
-Phase 0 deploys rules/indexes/storage + hosting only. The Phase-1 backend (`functions` and the Cloud Run OG renderer) deploys separately once Blaze features are live — see [`phase-1-deploy.md`](phase-1-deploy.md). The `firebase.json` `/s/**` → `share` rewrite targets the Phase-1 `share` function, so that route 404s until Phase 1 is deployed; Phase-0 hosting is otherwise unaffected.
+Phase 0 deploys rules/indexes/storage + hosting only. The Phase-1 backend (`functions`) deploys separately once Blaze features are live — see [`phase-1-deploy.md`](phase-1-deploy.md).
 
 ## 6. Custom domain (→ Firebase Hosting)
 
@@ -141,8 +141,7 @@ src/
   hooks/useData.ts       # real-time Firestore hooks
   components/            # SignIn, Nav, Board, Leaderboard, ItemPool, ThemeSwitcher, Celebration, Avatar, Admin, Proof*
 firestore.rules · storage.rules · firestore.indexes.json
-functions/               # Phase 1 Cloud Functions (Vision, thumbnails, share)
-cloud-run/og-renderer/   # Phase 1 Playwright OG image service
+functions/               # Phase 1 Cloud Functions (Vision, thumbnails)
 scripts/seed.mjs
 ```
 
@@ -154,11 +153,11 @@ Public app with user-generated content, so even under minimal gating: a one-time
 
 - Stats are client-written (honor-system game). Trivially spoofable; that is the accepted ADR-0001 trade-off — they never move server-side (`recomputeStats` was removed as anti-cheat, #40).
 - Boards are frozen at deal time; prompts added later feed *future* deals only.
-- OG image is static; per-share dynamic images are Phase 1.
+- OG image is static (`og-default.png`); there are no server-rendered per-share images — Share Cards are generated on-device instead (ADR 0005, #36).
 
 ## Phase 1 (scaffolded — see [`phase-1-deploy.md`](phase-1-deploy.md))
 
-Phase 1 is scaffolded in this same repo and wired into the client: proof system (`ProofSheet` + live Proof Feed), admin console (`/admin`), verified mode, `functions/` (Vision moderation, thumbnails, crawler `share` page — stats stay client-authoritative, ADR 0001), `cloud-run/og-renderer/` (Playwright OG images), and an App Check hook in `src/firebase.ts`. Backend deploy steps are in [`phase-1-deploy.md`](phase-1-deploy.md).
+Phase 1 is scaffolded in this same repo and wired into the client: proof system (`ProofSheet` + live Proof Feed), admin console (`/admin`), verified mode, `functions/` (Vision moderation, thumbnails — stats stay client-authoritative, ADR 0001), and an App Check hook in `src/firebase.ts`. Backend deploy steps are in [`phase-1-deploy.md`](phase-1-deploy.md).
 
 ## Verified
 

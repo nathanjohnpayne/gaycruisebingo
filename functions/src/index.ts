@@ -1,6 +1,5 @@
 import { setGlobalOptions } from 'firebase-functions/v2';
 import { onObjectFinalized } from 'firebase-functions/v2/storage';
-import { onRequest } from 'firebase-functions/v2/https';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
@@ -55,44 +54,4 @@ export const moderateProof = onObjectFinalized({ memory: '512MiB' }, async (even
   } catch {
     /* Vision optional; reporting still covers moderation */
   }
-});
-
-/** Escape user-supplied text before interpolating it into the HTML response. */
-const escapeHtml = (s: string): string =>
-  s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-
-/**
- * Crawler-facing share page. Firebase Hosting rewrites /s/** here so link unfurls
- * get real OG meta (SPAs can't, since crawlers don't run JS). Humans are redirected
- * into the app. Set OG_RENDERER_URL to your Cloud Run service.
- */
-export const share = onRequest({ cors: true }, (req, res) => {
-  const og = process.env.OG_RENDERER_URL || '';
-  const kind = String(req.query.kind || 'win');
-  const name = String(req.query.name || '');
-  const theme = String(req.query.theme || 'neon-playground');
-  const rawTitle = kind === 'leaderboard' ? 'The Leaderboard' : name ? `${name} got BINGO` : 'I got BINGO';
-  const title = escapeHtml(rawTitle);
-  // With a renderer configured, use the dynamic OG image; otherwise fall back to
-  // the absolute static default. Social crawlers require an absolute image URL —
-  // a bare '/og.png' would resolve relative to the crawler, not this site.
-  const img = og
-    ? `${og}/og.png?kind=${encodeURIComponent(kind)}&title=${encodeURIComponent(rawTitle)}&theme=${encodeURIComponent(theme)}`
-    : 'https://gaycruisebingo.com/og-default.png';
-  res.set('Cache-Control', 'public, max-age=3600');
-  res.status(200).send(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8">` +
-      `<title>${title} · Gay Cruise Bingo</title>` +
-      `<meta property="og:title" content="${title}">` +
-      `<meta property="og:description" content="Trieste to Barcelona. Mark it if you see it.">` +
-      `<meta property="og:image" content="${img}">` +
-      `<meta property="og:image:width" content="2400"><meta property="og:image:height" content="1260">` +
-      `<meta name="twitter:card" content="summary_large_image">` +
-      `<meta http-equiv="refresh" content="0; url=/"></head><body>Redirecting…</body></html>`,
-  );
 });

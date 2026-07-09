@@ -12,7 +12,9 @@
     <title>Gay Cruise Bingo</title>
     <meta name="description" content="Live multiplayer bingo for the high seas. Trieste to Barcelona, July 2026." />
 
-    <!-- Static default Open Graph (Phase 0). Phase 1 swaps per-share dynamic images. -->
+    <!-- Static default Open Graph for bare-URL unfurl (ADR 0005). No server-rendered
+         per-share images — Share Cards are generated on-device (#36) and handed to
+         the native share sheet instead. -->
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Gay Cruise Bingo" />
     <meta property="og:title" content="Gay Cruise Bingo" />

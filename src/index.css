@@ -829,8 +829,8 @@ body.install-prompt-visible .profile-trigger {
 }
 .share-card-title {
   /* color was hardcoded #fff (Codex P2, PR #111 finding 4): invisible on
-     summer-white's light --bg (#f6f1e7), the same failure mode
-     specs/og-theme-parity.md already fixed for the OG renderer's own
+     summer-white's light --bg (#f6f1e7), the same failure mode issue #71
+     already fixed for the (since-removed, #39/ADR 0005) OG renderer's own
      `.title` by following the theme ink instead — mirrored here. The
      text-shadow's #fff stays: it is a glow/bloom layered around the fill,
      not the fill itself, the same choice the OG renderer's fixed `.title`
