@@ -107,6 +107,28 @@ describe('dealBoard — spicyRatio config', () => {
   });
 });
 
+describe('dealBoard — clamps a malformed spicyRatio instead of corrupting the slice math (Codex P2, PR #135)', () => {
+  it('falls back to the default 0.4 for NaN (e.g. a non-numeric event settings field slipping past the join-side typeof check)', () => {
+    const cells = dealBoard(fullPool, FREE_TEXT, 20260715, NaN);
+    const nonFree = nonFreeCells(cells);
+    expect(nonFree).toHaveLength(24);
+    const spicyCount = nonFree.filter((c) => c.itemId && spicyById.get(c.itemId)).length;
+    expect(spicyCount).toBe(10);
+  });
+
+  it('clamps an out-of-range ratio into 0..1 rather than propagating negative/over-24 slice counts', () => {
+    const over = nonFreeCells(dealBoard(fullPool, FREE_TEXT, 20260715, 5));
+    expect(over).toHaveLength(24);
+    const overSpicy = over.filter((c) => c.itemId && spicyById.get(c.itemId)).length;
+    expect(overSpicy).toBe(24); // clamped to 1.0 -> all 24 non-free cells spicy
+
+    const under = nonFreeCells(dealBoard(fullPool, FREE_TEXT, 20260715, -1));
+    expect(under).toHaveLength(24);
+    const underSpicy = under.filter((c) => c.itemId && spicyById.get(c.itemId)).length;
+    expect(underSpicy).toBe(0); // clamped to 0.0 -> all 24 non-free cells tame
+  });
+});
+
 describe('scripts/seed.mjs — replace semantics (no Firestore/emulator; plain import assertions)', () => {
   it('exports the same 87-entry { text, spicy } pool as src/data/seed.ts SEED_ITEMS', () => {
     expect(SCRIPT_ITEMS.length).toBe(87);

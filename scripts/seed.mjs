@@ -205,20 +205,20 @@ async function seed() {
 
   const col = eventRef.collection('items');
 
-  // Replace semantics, not append (w1-seed-and-composition): delete every
-  // existing item doc first, so a reseed leaves exactly the current ITEMS —
-  // never a superset of old + new prompts. 87 docs comfortably fits a single
-  // batch's 500-op limit, so both the delete pass and the write pass below
-  // run as one batch each with no chunking.
+  // Replace semantics, not append (w1-seed-and-composition): every existing
+  // item doc is deleted and the current ITEMS are (re)written in ONE atomic
+  // batch (Codex P2, PR #135) — not a delete batch committed separately from
+  // the write batch, which would leave events/{id}/items genuinely empty
+  // (and joinAndDeal unable to deal a board) if the process died or the
+  // write batch failed between the two commits. A doc whose id is unchanged
+  // across reseeds (same text) gets a delete followed by a set within the
+  // same batch; Firestore applies per-document batch ops in order, so the
+  // set is what lands. 87 deletes + 87 sets is 174 ops, comfortably under a
+  // single batch's 500-op limit.
   const existing = await col.get();
-  if (!existing.empty) {
-    const deleteBatch = db.batch();
-    for (const doc of existing.docs) deleteBatch.delete(doc.ref);
-    await deleteBatch.commit();
-  }
-
   const now = Date.now();
   const batch = db.batch();
+  for (const doc of existing.docs) batch.delete(doc.ref);
   for (const { text, spicy } of ITEMS) {
     // Deterministic doc id (content hash of the text only) so re-running the
     // seed upserts the same prompt docs instead of creating duplicates

@@ -88,7 +88,14 @@ export function dealBoard(
     throw new Error(`dealBoard needs at least ${MIN_POOL} prompts, received ${pool.length}.`);
   }
   const rnd = mulberry32(seed);
-  const picks = stratifiedPicks(pool, spicyRatio, rnd);
+  // A malformed events/{id}.settings.spicyRatio (join-side only checks
+  // typeof === 'number', so NaN/Infinity/out-of-0..1 values can reach here)
+  // must not corrupt the slice math below (Math.round(NaN) etc. would starve
+  // both categories and let MIN_POOL pass while the board still gets blank
+  // non-free cells, Codex #135). Clamp to a finite 0..1, falling back to the
+  // default ratio when the value isn't usably numeric at all.
+  const ratio = Number.isFinite(spicyRatio) ? Math.min(1, Math.max(0, spicyRatio)) : 0.4;
+  const picks = stratifiedPicks(pool, ratio, rnd);
   const cells: Cell[] = [];
   let p = 0;
   for (let i = 0; i < 25; i++) {
