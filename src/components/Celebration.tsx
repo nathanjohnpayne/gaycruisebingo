@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { track } from '../analytics';
 import { useEventDoc } from '../hooks/useData';
 import { renderBingoShareCard, shareCardBlob, SHARE_CARD_APP_NAME } from './ShareCard';
@@ -69,30 +69,51 @@ export default function Celebration({
   // resolves to null — never an unhandled rejection when the Player closes
   // without ever tapping Share — and shareCardBlob then degrades to the
   // text/URL leg rather than ever sharing an empty/partial grid.
+  //
+  // `cardReady` completes the design (Codex P2, PR #111 round 3 finding 1):
+  // pre-starting the render narrows the race but a tap can still land while
+  // the mount render is UNSETTLED on a slow phone — the tap's await then
+  // burns the activation window all the same. So the Share button stays
+  // DISABLED until the cached promise SETTLES (resolved blob OR the caught
+  // null — "settled", not "blob exists": a failed render must still enable
+  // the button so the text/URL fallback stays reachable). A tap can then
+  // only ever await an already-settled promise, keeping navigator.share
+  // inside its activation window structurally. Visually this reuses the
+  // exact identity-gate disable (round 2 finding 1). The `cardBlob.current
+  // === promise` check keeps a STALE effect's settle (inputs changed, a new
+  // render is in flight) from opening the gate for the newer render.
   const cardBlob = useRef<Promise<Blob | null> | null>(null);
+  const [cardReady, setCardReady] = useState(false);
   useEffect(() => {
     if (playerName == null) {
       // Identity not yet known (round 2 finding 1): nothing to pre-render —
       // the Share affordance is disabled until Board resolves the saved name.
       cardBlob.current = null;
+      setCardReady(false);
       return;
     }
-    cardBlob.current = renderBingoShareCard({ kind, playerName, eventName, cells }).catch(
+    setCardReady(false);
+    const promise = renderBingoShareCard({ kind, playerName, eventName, cells }).catch(
       () => null,
     );
+    cardBlob.current = promise;
+    void promise.then(() => {
+      if (cardBlob.current === promise) setCardReady(true);
+    });
   }, [kind, playerName, eventName, cells]);
 
   const share = async () => {
-    if (playerName == null) return; // the disabled button is the real gate; belt-and-braces
+    const pending = cardBlob.current;
+    // The disabled button (identity known + render settled) is the real
+    // gate; this is belt-and-braces against a programmatic call.
+    if (playerName == null || pending == null) return;
     const text = celebrationCopy(kind);
     const url = window.location.origin;
 
-    // Usually the mount-time pre-render, already settled. The lazy fallback
-    // only covers a tap that somehow precedes the effect (not reachable
-    // through the DOM — effects flush before the browser can deliver a
-    // click — but cheap to keep correct).
-    const blob = await (cardBlob.current ??
-      renderBingoShareCard({ kind, playerName, eventName, cells }).catch(() => null));
+    // Settled by construction: the button only enables once `pending`
+    // settled, so this await resolves on the microtask queue and
+    // navigator.share below runs within the tap's activation window.
+    const blob = await pending;
 
     try {
       await shareCardBlob({
@@ -122,7 +143,7 @@ export default function Celebration({
           You've seen some things.
         </p>
         <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 14 }}>
-          <button className="btn primary" onClick={share} disabled={playerName == null}>
+          <button className="btn primary" onClick={share} disabled={playerName == null || !cardReady}>
             Share
           </button>
           <button className="btn" onClick={onClose}>

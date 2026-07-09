@@ -844,6 +844,13 @@ body.install-prompt-visible .profile-trigger {
   font-size: 10px;
   font-weight: 600;
   line-height: 1.05;
+  /* Same wrapping rules as the on-screen .cell, and for the same reason
+     (Codex P3, PR #111 round 3 finding 2): `overflow: hidden` alone CLIPS a
+     long unbroken token — an 80-char URL-ish prompt would lose most of its
+     text on the shared image, worse than on the live Board. Break/hyphenate
+     first; the overflow hide below then only trims genuine excess. */
+  word-break: break-word;
+  hyphens: auto;
   overflow: hidden;
 }
 .share-card-cell.free {

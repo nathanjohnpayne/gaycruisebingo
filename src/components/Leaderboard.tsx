@@ -129,6 +129,16 @@ export default function Leaderboard() {
   // promise: a render failure resolves null (shareCardBlob degrades to the
   // text/URL leg) and can never surface as an unhandled rejection from a
   // hover that was never followed by a tap.
+  //
+  // No Celebration-style settled-gate here (Codex P2, PR #111 round 3
+  // finding 1, decided): Celebration can disable Share until its MOUNT
+  // render settles because a render always exists; here no render exists
+  // until intent, so disabled-until-settled would present a permanently
+  // disabled button that nothing warms (and a disable between pointerdown
+  // and click would swallow the very tap that warmed it). The round-2
+  // stated cold/stale-tap residual therefore stands — warm-on-intent makes
+  // an unsettled-at-tap await rare (hover/focus/press starts the render
+  // before the click can land).
   const warmShareCard = (): Promise<Blob | null> => {
     const eventName = event?.name ?? SHARE_CARD_APP_NAME;
     const cached = warmedCard.current;

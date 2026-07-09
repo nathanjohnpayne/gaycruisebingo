@@ -258,6 +258,35 @@ describe('ShareCard CSS — .share-card-title contrast', () => {
     expect(rule![1]).toMatch(/color:\s*var\(--ink\)/);
     expect(rule![1]).not.toMatch(/color:\s*#fff/);
   });
+
+  // Codex P3, PR #111 round 3 finding 2: `.share-card-cell` hid overflow
+  // WITHOUT the word-break/hyphenation the on-screen `.cell` uses, so a
+  // long unbroken token (an 80-char URL-ish prompt) lost most of its text
+  // on the shared image. jsdom computes no layout, so the wrap behavior is
+  // pinned at the CSS source (same technique as the title test above) and
+  // the DOM half proves the renderer hands the full token through untrimmed.
+  it('carries .cell’s wrapping rules on .share-card-cell so a long unbroken prompt breaks instead of clipping', async () => {
+    const rule = indexCss.match(/\.share-card-cell\s*\{([^}]*)\}/);
+    expect(rule, '.share-card-cell rule not found in src/index.css').not.toBeNull();
+    expect(rule![1]).toMatch(/word-break:\s*break-word/);
+    expect(rule![1]).toMatch(/hyphens:\s*auto/);
+    // Same pair the on-screen .cell rule carries — the card must not drift
+    // from the Board's own wrapping semantics.
+    const cellRule = indexCss.match(/^\.cell\s*\{([^}]*)\}/m);
+    expect(cellRule, '.cell rule not found in src/index.css').not.toBeNull();
+    expect(cellRule![1]).toMatch(/word-break:\s*break-word/);
+    expect(cellRule![1]).toMatch(/hyphens:\s*auto/);
+
+    // DOM half: the full unbroken token reaches the cell node untrimmed —
+    // no renderer-side truncation is layered on top of the CSS wrapping.
+    const longToken = `${'w'.repeat(60)}.example/very-long-unbroken-url-ish-prompt`;
+    const cells = makeCells();
+    cells[0] = { ...cells[0], text: longToken };
+    await renderBingoShareCard({ kind: 'bingo', playerName: 'A', eventName: 'E', cells });
+    const cellNode = toBlobNode().querySelectorAll('.share-card-cell')[0];
+    expect(cellNode).toHaveClass('share-card-cell');
+    expect(cellNode.textContent).toBe(longToken);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -510,6 +539,17 @@ describe('Celebration — image share + fallback', () => {
   // rather than resolved through Celebration-local listeners.
   const cells = makeCells([0, 1, 2]);
 
+  // The Share button under the round-3 ready gate (Codex P2, PR #111 round
+  // 3 finding 1): it stays disabled until the mount-time pre-render
+  // SETTLES, so every tap below first waits for it to enable — mirroring
+  // exactly what a real Player can do. A settled-null render (failure /
+  // validity-gate refusal) also enables it: "settled", not "blob exists".
+  async function readyShareButton(): Promise<HTMLElement> {
+    const btn = screen.getByRole('button', { name: 'Share' });
+    await waitFor(() => expect(btn).toBeEnabled());
+    return btn;
+  }
+
   beforeEach(() => {
     // The STALE auth fallback a returning Player has customized away — a
     // poisoned value the card must never show (round 2 finding 1).
@@ -524,7 +564,7 @@ describe('Celebration — image share + fallback', () => {
     const user = userEvent.setup();
 
     render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: 'Share' }));
+    await user.click(await readyShareButton());
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     const shareArg = shareMock.mock.calls[0][0];
@@ -546,10 +586,11 @@ describe('Celebration — image share + fallback', () => {
   // OWN useBoard(uid) listener, which — per the permanently-empty stub in
   // the ../hooks/useData mock above — never resolves any data. Had that code
   // path survived this fix, `board?.cells ?? []` would be `[]` here and the
-  // card would share a ZERO-cell grid despite the Share tap happening
-  // "instantly" (no waiting on any async board load). It shares the FULL
-  // grid because `cells` now comes from the prop, available synchronously
-  // from the very first render — there is no listener left to race.
+  // card would share a ZERO-cell grid on the earliest tap the UI allows (the
+  // round-3 ready gate waits only for the mount pre-render to settle — never
+  // for any board load; the useBoard stub here never loads anything). It
+  // shares the FULL grid because `cells` comes from the prop, available
+  // synchronously from the very first render — no listener left to race.
   it('renders the full 25-cell grid on an immediate Share tap, even though useBoard reports no data', async () => {
     const shareMock = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(window.navigator, 'canShare', { value: () => true, configurable: true });
@@ -557,7 +598,7 @@ describe('Celebration — image share + fallback', () => {
     const user = userEvent.setup();
 
     render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: 'Share' }));
+    await user.click(await readyShareButton());
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     expect(toBlobNode().querySelectorAll('.share-card-cell')).toHaveLength(25);
@@ -582,7 +623,7 @@ describe('Celebration — image share + fallback', () => {
     const user = userEvent.setup();
 
     render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: 'Share' }));
+    await user.click(await readyShareButton());
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     const node = toBlobNode();
@@ -623,19 +664,22 @@ describe('Celebration — image share + fallback', () => {
     // Eager: the render was already underway BEFORE any tap.
     expect(toBlobMock).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole('button', { name: 'Share' }));
+    await user.click(await readyShareButton());
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     expect(toBlobMock).toHaveBeenCalledTimes(1); // reused the mount-time render — no second rasterize
     expect(shareMock.mock.calls[0][0].files).toHaveLength(1);
   });
 
-  // Codex P2, PR #111 round 2 finding 2: the slow-rasterize shape itself —
-  // the tap lands while the mount-time rasterization is STILL in flight.
-  // The share handler awaits the pre-started promise (never starts a second
-  // render) and shares the moment it settles; before this fix the render
-  // would only have STARTED at the tap, burning the activation window.
-  it('a tap that lands mid-rasterization still shares the pre-started render', async () => {
+  // Codex P2, PR #111 round 3 finding 1 — the slow-rasterize shape under
+  // the ready gate: on a slow phone the mount render can still be UNSETTLED
+  // when the Player goes to tap; round 2 had the tap await it, which burned
+  // the activation window all the same. Now the Share button stays DISABLED
+  // until the cached promise settles — a premature tap does nothing at all
+  // (no share, no analytics) — and the settle enables the button, so the
+  // tap that lands can only ever await an already-settled promise and
+  // navigator.share runs within ITS OWN activation window.
+  it('keeps Share disabled while the mount render is unsettled, then enables on settle — a tap only ever shares a ready blob', async () => {
     let resolveRaster!: (b: Blob | null) => void;
     toBlobMock.mockReset();
     toBlobMock.mockImplementation(
@@ -649,13 +693,20 @@ describe('Celebration — image share + fallback', () => {
     render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
     expect(toBlobMock).toHaveBeenCalledTimes(1); // pre-render started at mount
 
-    await user.click(screen.getByRole('button', { name: 'Share' }));
-    expect(shareMock).not.toHaveBeenCalled(); // still rasterizing — share waits, chain untouched
+    const btn = screen.getByRole('button', { name: 'Share' });
+    expect(btn).toBeDisabled(); // unsettled render → the tap cannot land yet
+    await user.click(btn); // a premature tap is inert
+    expect(shareMock).not.toHaveBeenCalled();
+    expect(track).not.toHaveBeenCalled();
 
     resolveRaster(new Blob(['late-png'], { type: 'image/png' }));
+    await waitFor(() => expect(btn).toBeEnabled()); // the settle opens the gate
+
+    await user.click(btn);
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
-    expect(toBlobMock).toHaveBeenCalledTimes(1); // the tap awaited the cached render, no re-render
+    expect(toBlobMock).toHaveBeenCalledTimes(1); // the tap reused the settled mount render
     expect(shareMock.mock.calls[0][0].files).toHaveLength(1);
+    expect(track).toHaveBeenCalledTimes(1); // only the REAL tap counted
   });
 
   // Codex P2, PR #111 finding 1: the renderer's validity gate is the
@@ -672,7 +723,9 @@ describe('Celebration — image share + fallback', () => {
     const user = userEvent.setup();
 
     render(<Celebration kind="bingo" cells={[]} playerName="Deck Daddy" onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: 'Share' }));
+    // The gate-refused pre-render still SETTLES (to null), so the ready
+    // gate enables Share and the text/URL fallback stays reachable.
+    await user.click(await readyShareButton());
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     expect(toBlobMock).not.toHaveBeenCalled(); // no rasterization ever attempted
@@ -689,7 +742,7 @@ describe('Celebration — image share + fallback', () => {
     const user = userEvent.setup();
 
     render(<Celebration kind="blackout" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: 'Share' }));
+    await user.click(await readyShareButton());
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     const shareArg = shareMock.mock.calls[0][0];
@@ -710,7 +763,10 @@ describe('Celebration — image share + fallback', () => {
     const user = userEvent.setup();
 
     render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: 'Share' }));
+    // A FAILED render still settles the cached promise (to null), so the
+    // ready gate enables Share — a broken rasterizer must never dead-end
+    // the affordance; the text/URL fallback stays reachable.
+    await user.click(await readyShareButton());
 
     await waitFor(() => expect(track).toHaveBeenCalledTimes(1));
     expect(track).toHaveBeenCalledWith('share_click', { surface: 'celebration' });
@@ -724,7 +780,7 @@ describe('Celebration — image share + fallback', () => {
     const user = userEvent.setup();
 
     render(<Celebration kind="bingo" cells={cells} playerName="Deck Daddy" onClose={vi.fn()} />);
-    await user.click(screen.getByRole('button', { name: 'Share' }));
+    await user.click(await readyShareButton());
 
     await waitFor(() => expect(toBlobMock).toHaveBeenCalledTimes(1));
     // Assert on the `.share-card-event` node specifically, not just
