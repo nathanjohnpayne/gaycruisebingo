@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { attachProof } from '../data/proofs';
+import { attachProof, type AttachProofResult } from '../data/proofs';
 import { track } from '../analytics';
 import { safeMediaUrl } from './safeMediaUrl';
 import type { Cell, ClaimMode, ProofType } from '../types';
@@ -12,11 +12,16 @@ interface Props {
   cell: Cell;
   claimMode: ClaimMode;
   currentFirstBingoAt: number | null;
+  // Reports a successful attach's win verdict back to Board (PR #110 round 2
+  // finding 1), so a proofed Mark completing a BINGO/Blackout broadcasts its Feed
+  // Moment exactly like an honor Mark — the sheet itself never touches the
+  // moments queue. Optional: standalone renders (tests) omit it.
+  onAttached?: (res: AttachProofResult) => void;
   onClose: () => void;
 }
 
 export default function ProofSheet(props: Props) {
-  const { uid, displayName, photoURL, cells, cell, claimMode, currentFirstBingoAt, onClose } = props;
+  const { uid, displayName, photoURL, cells, cell, claimMode, currentFirstBingoAt, onAttached, onClose } = props;
   const [type, setType] = useState<ProofType>('photo');
   const [photo, setPhoto] = useState<Blob | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -73,7 +78,7 @@ export default function ProofSheet(props: Props) {
           : type === 'audio'
             ? { type, blob: audio ?? undefined }
             : { type, text: text.trim() };
-      await attachProof({
+      const res = await attachProof({
         uid,
         displayName,
         photoURL,
@@ -86,6 +91,10 @@ export default function ProofSheet(props: Props) {
         proof,
       });
       track('attach_proof', { type });
+      // Report the win verdict AFTER the transaction committed and BEFORE closing,
+      // so Board enqueues the Moment for a proofed win (PR #110 round 2 finding 1).
+      // Truthiness-guarded: suites stub attachProof to resolve undefined.
+      if (res) onAttached?.(res);
       onClose();
     } catch {
       setBusy(false);
