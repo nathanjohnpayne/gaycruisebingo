@@ -347,13 +347,22 @@ export function useDoubts(itemId: string | null | undefined) {
  * the Board-wide `useProofFeed` the badge used to consume — a Card mount no longer
  * opens an all-Players proof stream. Pass `null`/`undefined` (signed-out) to open
  * no subscription.
+ *
+ * Applies the SAME ADR 0004 community auto-hide as `useProofFeed` (`isReportHidden`
+ * against `useReportHideThreshold` — Codex P2, PR #106 round 4): a Proof the group
+ * can no longer see in the public Feed must not satisfy a Doubt either, or the
+ * badge would clear ("answered") on evidence nobody can inspect — if the group
+ * cannot see the proof, it cannot answer the accusation. Fail-open like #107: a
+ * missing/non-positive threshold filters nothing.
  */
 export function useMyProofs(uid: string | null | undefined) {
+  const threshold = useReportHideThreshold();
   const { data, loading, hasServerData } = useColSub<ProofDoc>(
     uid ? query(proofsCol(), where('uid', '==', uid), where('status', '==', 'active')) : null,
     uid ? `proofs:mine:${uid}` : 'proofs:mine:none',
   );
-  return { proofs: data, loading, hasServerData };
+  const proofs = data.filter((p) => !isReportHidden(p.reportCount, threshold));
+  return { proofs, loading, hasServerData };
 }
 
 /**
@@ -365,13 +374,21 @@ export function useMyProofs(uid: string | null | undefined) {
  * required. Mounted only WHILE the sheet is open (the sheet renders this hook), so
  * no proof listener exists per-cell or Board-wide. Pass `null`/`undefined` to open
  * no subscription.
+ *
+ * Applies the SAME ADR 0004 community auto-hide as `useProofFeed` (`isReportHidden`
+ * against `useReportHideThreshold` — Codex P2, PR #106 round 4): the sheet must not
+ * render "Proof shown ✓" for a Proof the public Feed has community-hidden — if the
+ * group cannot see the proof, it cannot answer the accusation. Fail-open like
+ * #107: a missing/non-positive threshold filters nothing.
  */
 export function useProofsForItemText(itemText: string | null | undefined) {
+  const threshold = useReportHideThreshold();
   const { data, loading, hasServerData } = useColSub<ProofDoc>(
     itemText
       ? query(proofsCol(), where('itemText', '==', itemText), where('status', '==', 'active'))
       : null,
     itemText ? `proofs:item:${itemText}` : 'proofs:item:none',
   );
-  return { proofs: data, loading, hasServerData };
+  const proofs = data.filter((p) => !isReportHidden(p.reportCount, threshold));
+  return { proofs, loading, hasServerData };
 }
