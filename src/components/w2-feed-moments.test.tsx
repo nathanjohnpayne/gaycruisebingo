@@ -731,35 +731,165 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
   });
 
-  it('a ceremonial candidate held across an unmount does NOT mint the singleton for a regained line — the drain-time witness suppresses it (PR #110 round 2 finding 3)', async () => {
-    // Identity known, roster UNCONFIRMED: the plain bingo fires, the ceremonial holds.
+  // Latency-compensation-faithful witness (PR #110 round 3): a REAL getDocFromCache
+  // sees this tab's own just-written Moments immediately, so the faithful model is
+  // "witnessed ⟺ a bingo Moment for that uid was already broadcast". Round 2's
+  // stubbed always-false/always-true witness hid finding A; these tests use the
+  // faithful model wherever the cache behavior is what is being pinned.
+  function useLatencyFaithfulWitness() {
+    H.hasPriorBingoWitness.mockImplementation((uid: string) =>
+      Promise.resolve(
+        H.broadcastBingo.mock.calls.some((c) => (c[0] as { uid: string }).uid === uid),
+      ),
+    );
+  }
+
+  it('a roster-held ORIGINAL win fires its ceremonial once the roster opens — no self-suppression by its own plain bingo (PR #110 round 3 finding A)', async () => {
+    useLatencyFaithfulWitness();
+    // Identity known, roster UNCONFIRMED: the win passes its BIRTH-TIME witness
+    // (nothing posted yet), the plain bingo fires in this earlier drain pass, and
+    // the ceremonial candidate holds at the roster gate.
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.board = boardWith([0, 1, 2, 3]);
+    const { rerender } = render(<Board />);
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // its Moment is now IN THE CACHE
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // roster-held
+
+    // The roster opens with no competitor. Under round 2's drain-time witness
+    // re-read, the faithful cache now returned TRUE (this pipeline's own bingo!)
+    // and suppressed the original win's ceremony. The prior-win question was
+    // answered at BIRTH; the publish decision is synchronous — it must FIRE.
+    H.board = boardWith(ROW0);
+    rerender(<Board />);
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+  });
+
+  it('a ceremonial candidate surviving an unmount + unobserved fall + same-load regain fires as the ORIGINAL win’s claim (round 2 finding 3, re-analyzed in round 3)', async () => {
+    useLatencyFaithfulWitness();
+    // Identity known, roster UNCONFIRMED: birth-time witness clean → candidate
+    // enqueued; the plain bingo fires and is cached.
     H.rosterConfirmed = false;
     H.players = [];
     H.board = boardWith([0, 1, 2, 3]);
     const { unmount } = render(<Board />);
     await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
-    expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // posted — its immutable doc IS the witness now
-    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // roster-held candidate
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // roster-held
 
-    // The Player leaves the Card route (the candidate survives — that is the #104
-    // fix), the win FALLS without this tab ever observing it (no snapshot showed
-    // the fall, so no generation bump), and a line is REGAINED in the same page
-    // load. The posted bingo Moment is in the local cache:
+    // Unmount; the win falls UNOBSERVED (no snapshot, no bump); the player regains
+    // the line in the same page load. The REGAIN mints no fresh candidate — its
+    // birth-time witness (faithful cache) sees the posted bingo. The surviving
+    // candidate is the ORIGINAL win's claim: in-tab, an unobserved fall is by
+    // definition indistinguishable from the win having stood the whole time
+    // (finding A), so the claim fires — crediting the same player whose real,
+    // birth-witnessed first win raised it; a competing player is still caught by
+    // the publish-time roster below, and the singleton create-once backstop holds.
     unmount();
-    H.hasPriorBingoWitness.mockResolvedValue(true);
-
-    // Remount with the regained line standing and the roster now confirmed. The
-    // stale candidate passes revalidation (a bingo STANDS) and its generation
-    // never moved — but the DRAIN-TIME witness sees the original win's Moment and
-    // suppresses the ceremony: a regain must not mint the event singleton.
     H.rosterConfirmed = true;
     H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
-    H.board = boardWith(ROW0);
-    render(<Board />);
+    H.board = boardWith([0, 1, 2, 3]); // remount pre-regain: no line standing
+    const { rerender } = render(<Board />);
     await flushAsync();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // held: no bingo stands yet
+
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0)); // the regain
+    await flushAsync();
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1); // the original claim, exactly once
+    expect(H.hasPriorBingoWitness).toHaveBeenCalledTimes(2); // birth-time only: one per completing mark
+    rerender(<Board />);
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('the publish-time roster gate drops a claim that went stale while the witness read was in flight (PR #110 round 3 finding B)', async () => {
+    // Roster UNCONFIRMED at the winning tap; the birth witness read HANGS.
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.board = boardWith([0, 1, 2, 3]);
+    const { rerender } = render(<Board />);
+    let resolveWitness!: (v: boolean) => void;
+    H.hasPriorBingoWitness.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { resolveWitness = resolve; }),
+    );
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
+
+    // While the read is in flight the leaderboard delivers ANOTHER player's
+    // EARLIER firstBingoAt (roster confirms). The decision must be made against
+    // THIS roster — at publish time — not the empty one the tap saw.
+    H.board = boardWith(ROW0);
+    rerender(<Board />);
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'someone-else', firstBingoAt: 123 } as unknown as PlayerDoc];
+    rerender(<Board />);
+    await flushAsync();
+
+    resolveWitness(false); // witness clean — but the ceremony is no longer theirs
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // their own bingo still posts
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // decided-and-lost at publish
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('the per-cell ＋ proof button is inert on a STALE previous-uid board (PR #110 round 3 finding C)', async () => {
+    // u1's board (with a marked cell, so the ＋ renders) is still exposed for a
+    // render after the account switches to u2. The button stops propagation past
+    // `toggle`, so it must carry the attribution guard itself.
+    H.claimMode = 'proof_required';
+    H.board = boardWith([0, 1, 2, 3], 'u1');
+    const { rerender } = render(<Board />);
+    H.user = { uid: 'u2', displayName: 'Sailor', photoURL: null } as unknown as User;
+    H.player = { displayName: 'Second Sailor', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+    rerender(<Board />);
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByTitle('Add proof')[0]); // p0's ＋ (first marked cell)
+    });
+    await flushAsync();
+    // No sheet opened → the mocked sheet's submit trigger is absent, and nothing
+    // could attach or broadcast under u2 off u1's card.
+    expect(screen.queryByText('submit-proof')).toBeNull();
+    expect(peekPendingMoments('u2')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('an account switch mid-witness-read loses nothing: the candidate waits, uid-keyed, and drains on the acted account’s return (PR #110 round 3 finding D)', async () => {
+    // u1 completes a win; the birth witness read HANGS.
+    H.board = boardWith([0, 1, 2, 3]);
+    const { rerender } = render(<Board />);
+    let resolveWitness!: (v: boolean) => void;
+    H.hasPriorBingoWitness.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { resolveWitness = resolve; }),
+    );
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
+
+    // The account switches to u2 while the read is in flight…
+    H.user = { uid: 'u2', displayName: 'Sailor', photoURL: null } as unknown as User;
+    H.player = { displayName: 'Second Sailor', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+    rerender(<Board />);
+
+    // …and the read resolves under u2. The continuation ENQUEUES for u1 (the
+    // queue is uid-keyed — nothing can leak to u2) but SKIPS the drain (the
+    // current actor/gates belong to u2). Nothing publishes, nothing is lost.
+    resolveWitness(false);
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled();
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
-    expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // not re-fired either (drained pre-unmount)
-    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false }); // candidate consumed
+    expect(peekPendingMoments('u1')).toEqual({ bingo: true, blackout: false, firstBingo: true });
+    expect(peekPendingMoments('u2')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+
+    // u1 returns (same page load): the held win drains with u1's own identity.
+    H.user = { uid: 'u1', displayName: 'Sailor', photoURL: null } as unknown as User;
+    H.player = { displayName: 'Deck Daddy', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+    H.board = boardWith(ROW0, 'u1');
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null });
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
   });
 });
 

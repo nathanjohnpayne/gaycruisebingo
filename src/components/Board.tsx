@@ -296,36 +296,6 @@ export default function Board() {
     const bingoNow = hasBingo(cellsNow);
     const blackoutNow = isBlackout(cellsNow);
     const actor = { uid: cUid, displayName: cName, photoURL: cPhoto };
-    // Ceremonial decision — HOISTED before the plain-bingo fire below (PR #110
-    // round 2 finding 3): the drain-time witness read must be SCHEDULED before
-    // this pass's own bingo Moment write, or a legitimate first win would
-    // witness-suppress its own ceremony (Firestore resolves cache reads/writes in
-    // scheduling order, and writeMomentOnce's setDoc lands after this read).
-    let ceremonialWitness: Promise<boolean> | null = null;
-    let ceremonialGeneration = 0;
-    if (pending.firstBingo && bingoNow && rosterOk) {
-      if (!firstBingoCandidateCurrent(cUid)) {
-        // Stale candidate (finding 3a): an unmark or observed fall bumped the
-        // generation since this candidate was enqueued — the win context it
-        // described no longer holds. KILLED, never fired.
-        clearPendingMoment(cUid, 'firstBingo');
-      } else {
-        // Ceremonial + self-reported (ADR 0001): claim First-to-BINGO only when,
-        // as far as this client's CONFIRMED known-players view shows, no OTHER
-        // Player has bingoed yet — and only while the underlying bingo still
-        // STANDS. The race (two clients briefly both believing they are first)
-        // resolves to one Moment per Event via the singleton doc id. The flag is
-        // consumed NOW (decided-and-lost, killed-stale, and decision-in-flight
-        // are all clears, not falls) so a racing second drain cannot
-        // double-decide the singleton.
-        const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
-        clearPendingMoment(cUid, 'firstBingo');
-        if (!othersBingoed) {
-          ceremonialGeneration = pendingActionGeneration(cUid);
-          ceremonialWitness = hasPriorBingoWitness(cUid);
-        }
-      }
-    }
     if (pending.bingo && bingoNow) {
       broadcastBingo(actor);
       clearPendingMoment(cUid, 'bingo');
@@ -334,19 +304,39 @@ export default function Board() {
       broadcastBlackout(actor);
       clearPendingMoment(cUid, 'blackout');
     }
-    if (ceremonialWitness) {
-      void ceremonialWitness.then((witnessed) => {
-        // Drain-time witness (finding 3b): if the plain bingo of the ORIGINAL win
-        // ever posted, its immutable `${uid}-bingo` doc is the durable witness —
-        // read from the cache as it stood BEFORE this pass's own bingo write — and
-        // it suppresses a candidate that outlived a fall this tab never observed
-        // (the regain must not mint the singleton). If it never posted, firing is
-        // exactly what a fresh re-enqueue would have legitimately done.
-        if (witnessed) return;
-        // A fall observed while the read was in flight bumps the generation: drop.
-        if (pendingActionGeneration(cUid) !== ceremonialGeneration) return;
-        broadcastFirstBingo(actor);
-      });
+    // Ceremonial decision — fully SYNCHRONOUS at publish time (PR #110 round 3
+    // findings A + B). Round 2 re-read the witness here, which was WRONG: a
+    // roster-held original win fires its plain bingo in an EARLIER drain pass, so
+    // by the time the roster opens, the re-read sees this pipeline's own
+    // `${uid}-bingo` Moment in the local cache and suppresses the very ceremony
+    // that win legitimately raised (finding A). The prior-win question belongs to
+    // BIRTH time (the enqueue gauntlet in broadcastWinVerdict) — the only moment
+    // "is this a regain?" is answerable without self-interference; observed
+    // falls/unmarks kill candidates via the generation stamp besides. And with no
+    // async read between the roster decision and the write, a competing
+    // firstBingoAt delivered mid-decision can no longer slip past (finding B):
+    // `roster` here is feedCtx.current as of THIS synchronous drain, re-read on
+    // every attempt — gate-open, snapshot, and action drains alike.
+    if (pending.firstBingo && bingoNow && rosterOk) {
+      if (!firstBingoCandidateCurrent(cUid)) {
+        // Stale candidate (round 2 finding 3a): an unmark or observed fall bumped
+        // the generation since this candidate was enqueued — the win context it
+        // described no longer holds. KILLED, never fired.
+        clearPendingMoment(cUid, 'firstBingo');
+      } else {
+        // Ceremonial + self-reported (ADR 0001): claim First-to-BINGO only when,
+        // as far as this client's CONFIRMED known-players view shows AT PUBLISH
+        // TIME, no OTHER Player has bingoed yet — and only while the underlying
+        // bingo still STANDS. The race (two clients briefly both believing they
+        // are first) resolves to one Moment per Event via the singleton doc id.
+        // CONSUME-ON-DECISION: fired and decided-and-lost both clear here, in the
+        // same synchronous block as the decision — no async gap can strand a
+        // consumed-but-unpublished candidate, and HOLD paths (identity, roster,
+        // board, standing-ness) never consume.
+        const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
+        if (!othersBingoed) broadcastFirstBingo(actor);
+        clearPendingMoment(cUid, 'firstBingo');
+      }
     }
   }, []);
 
@@ -495,8 +485,10 @@ export default function Board() {
         // flag is a harmless no-op (the Moment is immutable + once-only besides).
         dropPendingWins(uid, { bingo: !res.bingo, blackout: !res.blackout });
         // Drain with the action's own folded cells (see broadcastWinVerdict) —
-        // skipped if the account switched while the await was in flight.
-        if (feedCtx.current.uid === uid) drainMoments(res.cells);
+        // skipped if the account switched while the await was in flight (the
+        // shared post-await revalidation; no generation to compare — this very
+        // action just bumped it).
+        if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells);
       }
     } catch {
       /* Neither an offline Mark nor an online write REJECTION lands here:
@@ -510,15 +502,36 @@ export default function Board() {
     }
   };
 
+  // The shared POST-AWAIT revalidation (PR #110 round 3, findings B + D): every
+  // async continuation in the broadcast pipeline re-checks the world through this
+  // ONE helper, synchronously after its last await, before acting on anything it
+  // captured earlier — the invariant is structural, not per-call-site. Two
+  // separable answers, used by need:
+  //   • `generationUnchanged` — no unmark or observed fall interleaved for the
+  //     ACTED account since `capturedGeneration`: a stale action never acts.
+  //     (Omit the argument where the action itself just bumped, e.g. an unmark.)
+  //   • `isCurrentAccount` — the acted account still drives this Board. Required
+  //     for steps that touch the CURRENT context (draining with the current
+  //     actor/gates). Deliberately NOT required for ENQUEUES (finding D chosen
+  //     semantics): the queue is uid-keyed, so a candidate enqueued for the acted
+  //     uid under a switched account cannot leak — it simply waits, and drains
+  //     when that account returns. A skipped drain therefore destroys nothing:
+  //     consumption happens only at the drain's synchronous decision point.
+  const revalidateAfterAwait = (actedUid: string, capturedGeneration?: number) => ({
+    generationUnchanged:
+      capturedGeneration === undefined || pendingActionGeneration(actedUid) === capturedGeneration,
+    isCurrentAccount: feedCtx.current.uid === actedUid,
+  });
+
   // ONE completing-action broadcast pipeline for BOTH mark paths (issue #104 +
   // PR #110 round 2 finding 1): the bare honor Mark (doMark → setMark) and the
   // proofed Mark (ProofSheet → attachProof) return the SAME win verdict shape.
-  // Enqueue the Moment(s) the verdict reports, run the ceremonial witness +
-  // generation gauntlet, then drain with the action's own folded cells — the
-  // authoritative post-action board (the render-current snapshot has usually not
-  // echoed yet), so the drain's fire-time revalidation sees the state this
-  // verdict came from. Whatever gate is still closed stays queued (surviving an
-  // unmount / route change) and drains on the next gate-open. This covers the
+  // Enqueue the Moment(s) the verdict reports, run the ceremonial BIRTH-TIME
+  // witness + generation gauntlet, then drain with the action's own folded cells
+  // — the authoritative post-action board (the render-current snapshot has
+  // usually not echoed yet), so the drain's fire-time revalidation sees the state
+  // this verdict came from. Whatever gate is still closed stays queued (surviving
+  // an unmount / route change) and drains on the next gate-open. This covers the
   // OFFLINE honor win for free: setMark computes the transition from the local
   // cache and the Moment `setDoc` pends durably (ADR 0006). attachProof cannot
   // run offline at all (its transaction rejects), so its verdict is always an
@@ -533,37 +546,36 @@ export default function Board() {
       bingoTransition: res.bingoTransition,
       blackoutTransition: res.blackoutTransition,
     });
-    // The ceremonial First-to-BINGO candidate is gated by the durable prior-win
-    // witness FIRST (round 2 finding D): a regained line whose owner already has
-    // a `${uid}-bingo` Moment in the local cache must NOT re-claim the event
-    // singleton. A cache miss (fresh device) resolves false, so the drain's
-    // roster gate is the fallback (the narrowed residual the spec documents).
+    // The BIRTH-TIME witness (round 2 finding D; made the SOLE witness site by
+    // round 3 finding A): the prior-win question — "is this win a regain?" — is
+    // answerable only HERE, at the moment the win happened, before this
+    // pipeline's own plain bingo posts. (Round 2's drain-time re-read saw that
+    // just-written `${uid}-bingo` doc when a roster-held ceremony finally
+    // drained, and suppressed the original win's own ceremony — finding A.) A
+    // regained line whose owner already has a `${uid}-bingo` Moment in the local
+    // cache never mints a candidate; a cache miss (fresh device) resolves false,
+    // so the drain's publish-time roster gate is the fallback (the narrowed
+    // residual the spec documents).
     //
-    // The read is ASYNC, and the pending win can change inside that gap (Codex
-    // P1, PR #110): the player can unmark and LOSE the bingo while the witness
-    // read is in flight — the unmark verdict drops the queued flags — and a
-    // continuation that re-enqueued on the uid check alone would let a later
-    // drain publish the IMMUTABLE event singleton for a win that no longer
-    // stands. So the continuation is gated on: the uid still being the acting
-    // account (the queue is uid-keyed), AND the per-uid ACTION GENERATION
-    // captured before the await being unchanged — every unmark and observed fall
-    // bumps it, so the token catches interleaved actions. Deliberately NOT gated
-    // on the pending bingo flag (PR #110 round 2 finding 2 corrected round 1's
-    // over-tight dual check): a concurrent gate-open/snapshot drain can
-    // legitimately FIRE the plain bingo mid-read — a clear that says the win
-    // STOOD, not that it fell — and must not forfeit the ceremony. Whether the
-    // win still stands at publish is the drain's fire-time revalidation
-    // (bingoNow), not the continuation's job.
+    // The read is ASYNC, and the pending win can change inside that gap (round 1
+    // P1): the player can unmark and LOSE the bingo while the read is in flight.
+    // The continuation therefore re-checks through the shared post-await
+    // revalidation: the captured ACTION GENERATION must be unchanged (every
+    // unmark and observed fall bumps it). It is deliberately NOT gated on the
+    // pending bingo flag (round 2 finding 2: a concurrent drain can legitimately
+    // FIRE the plain bingo mid-read — that clear says the win STOOD) and NOT
+    // gated on the current account (round 3 finding D: the queue is uid-keyed,
+    // so the enqueue cannot leak — the candidate waits for the acted account).
     if (res.bingoTransition) {
       const generation = pendingActionGeneration(uid);
       const witnessed = await hasPriorBingoWitness(uid);
-      if (!witnessed && feedCtx.current.uid === uid && pendingActionGeneration(uid) === generation) {
+      if (!witnessed && revalidateAfterAwait(uid, generation).generationUnchanged) {
         enqueueFirstBingoMoment(uid);
       }
     }
-    // Skipped if the account switched while the awaits were in flight — the
-    // queue keeps the flags for this uid until its own next drain.
-    if (feedCtx.current.uid === uid) drainMoments(res.cells);
+    // Draining touches the CURRENT actor/gates, so it does require the acted
+    // account to still be active; the queue keeps the flags otherwise.
+    if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells);
   };
 
   const toggle = (c: Cell) => {
@@ -618,7 +630,13 @@ export default function Board() {
                 className="proofbtn"
                 title="Add proof"
                 onClick={(e) => {
+                  // stopPropagation bypasses `toggle`, so this handler needs the
+                  // shared attribution guard itself (PR #110 round 3 finding C):
+                  // during an account switch this cell can belong to the PREVIOUS
+                  // uid's board, and a sheet opened from it would attach a proof
+                  // (and broadcast a Moment) for the current uid off the wrong card.
                   e.stopPropagation();
+                  if (!cellsAttributable) return;
                   setProofTarget(c);
                 }}
               >
@@ -626,7 +644,14 @@ export default function Board() {
               </button>
             )}
             {c.marked && !c.free && c.itemId && (
-              <TallyBadge itemId={c.itemId} onOpen={() => setTallyTarget(c)} />
+              // Same guard for the Tally who-list (finding C sweep): read-only, but
+              // a stale render must not open another board's Prompt sheet either.
+              <TallyBadge
+                itemId={c.itemId}
+                onOpen={() => {
+                  if (cellsAttributable) setTallyTarget(c);
+                }}
+              />
             )}
           </div>
         ))}
