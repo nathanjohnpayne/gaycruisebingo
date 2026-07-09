@@ -79,6 +79,21 @@ export interface PendingMomentFlags {
 }
 const pendingMoments = new Map<string, PendingMomentFlags>();
 
+// The per-uid ACTION GENERATION (Codex P1 on PR #110): a monotonically increasing
+// token bumped by every unmark and every observed win-fall (`dropPendingWins`).
+// Board's ceremonial First-to-BINGO enqueue crosses an async gap (the durable-
+// witness cache read), and the pending win can change inside that gap: the player
+// unmarks and loses the bingo, the unmark verdict drops the queued flags — and a
+// stale continuation that re-enqueued on the uid check alone would let a later
+// drain publish the IMMUTABLE event-level singleton for a win that no longer
+// stands. The continuation therefore captures the generation BEFORE the await and
+// enqueues ONLY if it is unchanged after AND the pending bingo flag still stands
+// (the token catches interleaved actions; the flag recheck catches clears). Kept
+// in a SEPARATE map from the flags: the flags entry is deleted when empty, and a
+// deleted-then-recreated entry must not reset the token to a value a stale
+// continuation already captured.
+const pendingGenerations = new Map<string, number>();
+
 // Key by app + uid (mirrors `markChains` in api.ts). The moment writers always
 // use the module `db` singleton, so the app segment is effectively constant here;
 // keying on uid is what actually isolates two identities sharing a browser (a
@@ -139,10 +154,47 @@ export function peekPendingMoments(uid: string): PendingMomentFlags {
 }
 
 /**
- * Clear one drained kind so a later drain cannot re-fire it. An UNMARK that drops
- * the win before its gate opens also calls this (Board.doMark's action-driven
- * falling edge) — the win no longer stands, so its still-held broadcast is dropped.
- * The map entry is deleted once empty to keep it from growing per uid.
+ * The current action generation for `uid` (see `pendingGenerations` above).
+ * Board's doMark captures this immediately before the async durable-witness read
+ * and re-reads it in the continuation: a mismatch means an unmark or an observed
+ * win-fall interleaved, so the ceremonial enqueue is refused (Codex P1, PR #110).
+ */
+export function pendingActionGeneration(uid: string): number {
+  return pendingGenerations.get(pendingKey(uid)) ?? 0;
+}
+
+/**
+ * Record that a win FELL (or that an unmark action happened at all): clears the
+ * corresponding still-held flags — a bingo fall also drops the ceremonial
+ * candidate, which cannot outlive the win it accompanies — and ALWAYS bumps the
+ * action generation, invalidating any in-flight witness continuation (Codex P1,
+ * PR #110). Two callers, both observers of reality: Board.doMark's unmark path
+ * (the local verdict shows the win no longer stands) and Board's cells effect on
+ * a PASSIVE falling-edge snapshot (bingo/blackout true→false in listener data —
+ * a cross-tab unmark or a rules rollback that produces no local verdict; Codex
+ * P2, PR #110 finding 3). Distinct from `clearPendingMoment` (a drain FIRE-clear,
+ * or a decided-and-lost ceremony), which does NOT bump: a fire means the win
+ * stood and was published, not that the action window changed.
+ */
+export function dropPendingWins(uid: string, fell: { bingo?: boolean; blackout?: boolean }): void {
+  const key = pendingKey(uid);
+  pendingGenerations.set(key, (pendingGenerations.get(key) ?? 0) + 1);
+  const flags = pendingMoments.get(key);
+  if (!flags) return;
+  if (fell.bingo) {
+    flags.bingo = false;
+    flags.firstBingo = false;
+  }
+  if (fell.blackout) flags.blackout = false;
+  if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
+}
+
+/**
+ * Clear one DRAINED kind so a later drain cannot re-fire it: the drain either
+ * published the Moment (the win stood at fire time) or decided-and-lost the
+ * ceremony against a confirmed roster. Not for falls — a win that no longer
+ * stands is dropped via `dropPendingWins`, which also bumps the action
+ * generation. The map entry is deleted once empty to keep it from growing per uid.
  */
 export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags): void {
   const key = pendingKey(uid);
@@ -153,12 +205,16 @@ export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags):
 }
 
 /**
- * Drop the ENTIRE pending queue. Exported for test isolation only: the queue is
- * module state that (by design) persists across component unmounts, so a suite that
- * exercises the hold→drain path must reset it between cases. Not used by app code.
+ * Drop the ENTIRE pending queue and its action generations. Exported for test
+ * isolation only: both maps are module state that (by design) persist across
+ * component unmounts, so a suite that exercises the hold→drain path must reset
+ * them between cases. Not used by app code. (A continuation captured before a
+ * reset sees generation 0 again, but its flag recheck fails against the cleared
+ * flags — the dual check covers the wraparound.)
  */
 export function resetPendingMoments(): void {
   pendingMoments.clear();
+  pendingGenerations.clear();
 }
 
 /**

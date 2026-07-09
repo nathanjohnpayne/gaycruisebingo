@@ -82,7 +82,9 @@ vi.mock('./Celebration', () => ({ default: () => null }));
 
 import Board from './Board';
 import ProofFeed from './ProofFeed';
-import { resetPendingMoments } from '../data/moments';
+// Real (importOriginal keeps the actual queue): peekPendingMoments lets these tests
+// assert the module queue state directly, alongside the behavioral broadcast spies.
+import { resetPendingMoments, peekPendingMoments } from '../data/moments';
 
 // A dealt board with `marked` non-free Squares on (plus the always-on free centre).
 function dealtWith(marked: number[]): Cell[] {
@@ -118,8 +120,12 @@ const NO_WIN: Verdict = { bingo: false, blackout: false, bingoTransition: false,
 // non-marked Square marks, a marked Square unmarks. setMark is stubbed, so the
 // board does NOT auto-advance — a test rerenders H.board to simulate the live
 // listener's next snapshot, or clicks another Square for a further action.
-async function clickMark(label: string, verdict: Partial<Verdict> = {}) {
-  H.setMark.mockResolvedValueOnce({ cells: [], ...NO_WIN, ...verdict });
+// `cellsAfter` is the FOLDED post-action board setMark returns (res.cells): the
+// drain revalidates the just-enqueued win against it at fire time (PR #110
+// finding 3), so a winning click must return cells in which the win stands.
+// Defaults to the currently rendered board — adequate for non-winning actions.
+async function clickMark(label: string, verdict: Partial<Verdict> = {}, cellsAfter?: Cell[]) {
+  H.setMark.mockResolvedValueOnce({ cells: cellsAfter ?? H.board?.cells ?? [], ...NO_WIN, ...verdict });
   await act(async () => {
     fireEvent.click(screen.getByText(label));
   });
@@ -158,8 +164,9 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     // whose bingo already stood mustn't re-announce it.
     expect(H.broadcastBingo).not.toHaveBeenCalled();
 
-    // The player's tap completes the line → setMark's bingoTransition verdict fires it.
-    await clickMark('p4', { bingo: true, bingoTransition: true });
+    // The player's tap completes the line → setMark's bingoTransition verdict fires it
+    // (the folded res.cells carry the standing win the drain revalidates against).
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
     expect(H.broadcastBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null });
 
@@ -180,11 +187,11 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
   });
 
-  it('claims First-to-BINGO when the roster shows no other Player has bingoed yet', async () => {
+  it('claims First-to-BINGO when the roster shows no other Player has bingoed yet — the clean witness path enqueues exactly once (PR #110 finding 1 pair)', async () => {
     H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
     H.board = boardWith([0, 1, 2, 3]);
     render(<Board />);
-    await clickMark('p4', { bingo: true, bingoTransition: true });
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
     expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1'); // the witness-gated candidate
@@ -194,7 +201,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.players = [{ uid: 'someone-else', firstBingoAt: 123 } as unknown as PlayerDoc];
     H.board = boardWith([0, 1, 2, 3]);
     render(<Board />);
-    await clickMark('p4', { bingo: true, bingoTransition: true });
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // their own first BINGO still posts
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // but not the ceremonial first
   });
@@ -202,13 +209,13 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
   it('broadcasts a Blackout on the full-card MARK, without re-firing the BINGO', async () => {
     H.board = boardWith([0, 1, 2, 3]);
     const { rerender } = render(<Board />);
-    await clickMark('p4', { bingo: true, bingoTransition: true }); // BINGO edge first
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0)); // BINGO edge first
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
 
     // The listener echoes the mark, then the player fills the rest of the card.
     H.board = boardWith(FULL_CARD.filter((i) => i !== 24));
     rerender(<Board />);
-    await clickMark('p24', { bingo: true, blackout: true, blackoutTransition: true });
+    await clickMark('p24', { bingo: true, blackout: true, blackoutTransition: true }, dealtWith(FULL_CARD));
     expect(H.broadcastBlackout).toHaveBeenCalledTimes(1);
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // not re-announced (bingoTransition false)
   });
@@ -224,8 +231,15 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.board = boardWith([0, 1, 2, 3]);
     const { rerender } = render(<Board />);
 
-    await clickMark('p4', { bingo: true, bingoTransition: true });
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastBingo).not.toHaveBeenCalled(); // held — not the stale name
+
+    // The listener echoes the win (the held flag revalidates against these cells
+    // when the gate opens — a HELD WIN STILL STANDING drains; PR #110 finding 3).
+    H.board = boardWith(ROW0);
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // still held: identity is the gate
 
     // Identity resolves to the SAVED name → the gate-open drain fires it ONCE.
     H.playerLoading = false;
@@ -243,7 +257,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.player = null;
     H.board = boardWith([0, 1, 2, 3]);
     const { unmount } = render(<Board />);
-    await clickMark('p4', { bingo: true, bingoTransition: true });
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastBingo).not.toHaveBeenCalled(); // held
 
     // …the Player navigates off the Card route: Board UNMOUNTS. The old
@@ -272,9 +286,14 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.players = [];
     H.board = boardWith([0, 1, 2, 3]);
     const { rerender } = render(<Board />);
-    await clickMark('p4', { bingo: true, bingoTransition: true });
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // own BINGO posts
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // ceremonial claim HELD, not guessed
+
+    // The listener echoes the win; the held ceremonial candidate revalidates
+    // against these cells when the roster gate opens.
+    H.board = boardWith(ROW0);
+    rerender(<Board />);
 
     // Roster confirms — and another Player already had a firstBingoAt: not first.
     H.rosterConfirmed = true;
@@ -289,8 +308,11 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.players = [];
     H.board = boardWith([0, 1, 2, 3]);
     const { rerender } = render(<Board />);
-    await clickMark('p4', { bingo: true, bingoTransition: true });
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // held while unconfirmed
+
+    H.board = boardWith(ROW0); // the listener echoes the standing win
+    rerender(<Board />);
 
     H.rosterConfirmed = true;
     H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc]; // only self
@@ -305,14 +327,15 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.board = boardWith([0, 1, 2, 3]);
     const { rerender } = render(<Board />);
 
-    await clickMark('p4', { bingo: true, bingoTransition: true }); // held
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0)); // held
     expect(H.broadcastBingo).not.toHaveBeenCalled();
 
     // The player unmarks a Square and LOSES the win while still held. The unmark's
     // verdict (no standing bingo) DROPS the queued broadcast — the ACTION-path
-    // replacement for PR #99 round 2 finding A's snapshot falling edge + fire-time
-    // revalidation.
+    // replacement for PR #99 round 2 finding A's snapshot falling edge — and the
+    // queue is verifiably empty afterwards.
     await clickMark('p0', { bingo: false, bingoTransition: false });
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
 
     // Identity resolves: the queue is empty, so nothing fires.
     H.playerLoading = false;
@@ -330,10 +353,13 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.board = boardWith([0, 1, 2, 3]);
     const { rerender } = render(<Board />);
 
-    await clickMark('p4', { bingo: true, bingoTransition: true }); // queue while held
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0)); // queue while held
     await clickMark('p0', { bingo: false, bingoTransition: false }); // unmark drops it
-    await clickMark('p4', { bingo: true, bingoTransition: true }); // remark re-queues
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0)); // remark re-queues
     expect(H.broadcastBingo).not.toHaveBeenCalled(); // still held (identity unknown)
+
+    H.board = boardWith(ROW0); // the listener echoes the regained win
+    rerender(<Board />);
 
     H.playerLoading = false;
     H.playerConfirmed = true;
@@ -347,7 +373,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     // First win: no witness yet — both the bingo and the ceremonial first post.
     H.board = boardWith([0, 1, 2, 3]);
     render(<Board />);
-    await clickMark('p4', { bingo: true, bingoTransition: true });
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
     expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1');
@@ -360,7 +386,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     // Regaining a line still attempts the plain bingo Moment (skipped by the writer's
     // write-once cache pre-check, or denied server-side on a cold cache — fine), but
     // must NOT re-queue the ceremonial event singleton: the player was not first EVER.
-    await clickMark('p4', { bingo: true, bingoTransition: true });
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastBingo).toHaveBeenCalledTimes(2); // plain bingo write still attempted
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1); // NOT re-claimed
   });
@@ -373,7 +399,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.boardConfirmed = false;
     H.board = boardWith([0, 1, 2, 3]);
     const { rerender } = render(<Board />);
-    await clickMark('p4', { bingo: true, bingoTransition: true });
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
     expect(H.broadcastBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null });
 
@@ -400,7 +426,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
 
     H.board = boardWith([0, 1, 2, 3]); // listener echoes the first tap
     rerender(<Board />);
-    await clickMark('p4', { bingo: true, bingoTransition: true }); // the winning tap
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0)); // the winning tap
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
   });
 
@@ -439,20 +465,21 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
   });
 
-  it('a held blackout fires from its completing mark’s verdict — the round 3 finding B vacuous isBlackout([]) hazard cannot arise', async () => {
-    // The drain never recomputes isBlackout from cells (the decision was the mark's
-    // verdict), so the empty-board vacuous-truth bug is structurally impossible. A
-    // blackout completed while identity is unknown holds, and fires from the QUEUE
-    // when identity resolves — even if the board doc has since vanished (a passive
-    // deletion is not an unmark, so it does not clear the queued win).
+  it('a held blackout with the board GONE at gate-open publishes NOTHING — no vacuous isBlackout([]) adjudication (round 3 finding B, preserved on the drain path — PR #110 finding 3)', async () => {
+    // The drain revalidates against the CURRENT attributable cells at fire time and
+    // requires a NON-EMPTY board before ANY publish: isBlackout([]) is vacuously
+    // TRUE ([].every(Boolean)), so adjudicating an empty board would publish a
+    // blackout for a board that no longer exists. A held win with no board is HELD
+    // (never fired, never vacuously dropped); it fires only when a board showing
+    // the win standing is back.
     H.playerLoading = true;
     H.player = null;
     H.board = boardWith(FULL_CARD.filter((i) => i !== 24));
     const { rerender } = render(<Board />);
-    await clickMark('p24', { bingo: true, blackout: true, blackoutTransition: true });
+    await clickMark('p24', { bingo: true, blackout: true, blackoutTransition: true }, dealtWith(FULL_CARD));
     expect(H.broadcastBlackout).not.toHaveBeenCalled(); // held (identity unknown)
 
-    H.board = null; // the board doc disappears (a passive deletion)
+    H.board = null; // the board doc disappears (deleted / not yet delivered)
     rerender(<Board />);
 
     H.playerLoading = false;
@@ -460,7 +487,105 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.player = { displayName: 'Deck Daddy', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
     rerender(<Board />);
     await flushAsync();
-    expect(H.broadcastBlackout).toHaveBeenCalledTimes(1); // from the verdict, no vacuous recompute
+    // Gate open, but NO attributable board: the drain must neither fire (vacuous
+    // isBlackout([])) nor drop (the win may still stand server-side). Nothing posts.
+    expect(H.broadcastBlackout).not.toHaveBeenCalled();
+
+    // The board returns with the blackout still standing: the snapshot drain
+    // revalidates against real cells and fires exactly once.
+    H.board = boardWith(FULL_CARD);
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBlackout).toHaveBeenCalledTimes(1);
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // no bingo transition was ever queued
+  });
+
+  it('does NOT enqueue First-to-BINGO when the win falls while the witness read is in flight — the action generation invalidates the stale continuation (PR #110 finding 1, P1)', async () => {
+    // Identity is KNOWN throughout (the drain is live) — the hazard is purely the
+    // async gap between `await hasPriorBingoWitness()` and its continuation.
+    H.board = boardWith([0, 1, 2, 3]);
+    render(<Board />);
+
+    // The witness read HANGS: the winning tap enqueues the bingo and suspends
+    // before the ceremonial enqueue AND before doMark's drain.
+    let resolveWitness!: (v: boolean) => void;
+    H.hasPriorBingoWitness.mockImplementationOnce(
+      () => new Promise<boolean>((resolve) => { resolveWitness = resolve; }),
+    );
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // suspended at the witness read
+
+    // The player unmarks and LOSES the bingo while the read is still in flight:
+    // the unmark verdict drops the queued flags and bumps the action generation.
+    await clickMark('p0', { bingo: false, bingoTransition: false });
+
+    // The stale continuation resolves (no witness): the generation changed and the
+    // pending bingo flag is gone — it must NOT re-enqueue the ceremonial candidate,
+    // or a later drain would publish the IMMUTABLE event singleton for a win that
+    // no longer stands. (The clean-path pair — witness resolves with no interleaved
+    // action → enqueues exactly once — is the "claims First-to-BINGO" test above.)
+    resolveWitness(false);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // the fallen win published nothing
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('a tap on a STALE previous-uid board is a NO-OP — no setMark write, no enqueue (PR #110 finding 2)', async () => {
+    // u1's board renders under u1…
+    H.board = boardWith([0, 1, 2, 3], 'u1');
+    const { rerender } = render(<Board />);
+
+    // …then the account switches to u2 while the subscription still exposes u1's
+    // board for this render. A tap here would fold u1's cells into u2's board
+    // write and feed its verdict into a Moment attributed to u2 — doMark must
+    // bail on the shared attribution guard before calling setMark at all.
+    H.user = { uid: 'u2', displayName: 'Sailor', photoURL: null } as unknown as User;
+    H.player = { displayName: 'Second Sailor', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+    rerender(<Board />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('p4'));
+    });
+    await flushAsync();
+    expect(H.setMark).not.toHaveBeenCalled(); // the write itself would be wrong — never issued
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+    expect(peekPendingMoments('u2')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+    expect(H.broadcastBingo).not.toHaveBeenCalled();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('a held win unmarked from ANOTHER SOURCE (passive falling-edge snapshot) never publishes — the queued flag is cleared (PR #110 finding 3)', async () => {
+    // The win holds behind the identity gate…
+    H.playerLoading = true;
+    H.player = null;
+    H.board = boardWith([0, 1, 2, 3]);
+    const { rerender } = render(<Board />);
+    await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // held
+
+    // …the listener echoes the standing win…
+    H.board = boardWith(ROW0);
+    rerender(<Board />);
+    await flushAsync();
+
+    // …then ANOTHER TAB unmarks it: the fall arrives as a PASSIVE snapshot
+    // (bingo true→false in listener data) with no local unmark verdict. The
+    // falling-edge observer clears the queued flags (and bumps the generation).
+    H.board = boardWith([0, 1, 2, 3]);
+    rerender(<Board />);
+    await flushAsync();
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+
+    // Identity resolves: the drain finds nothing — no Moment for a fallen win.
+    H.playerLoading = false;
+    H.playerConfirmed = true;
+    H.player = { displayName: 'Deck Daddy', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
+    rerender(<Board />);
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+    expect(H.broadcastBlackout).not.toHaveBeenCalled();
   });
 });
 

@@ -51,6 +51,8 @@ import {
   enqueueFirstBingoMoment,
   peekPendingMoments,
   clearPendingMoment,
+  dropPendingWins,
+  pendingActionGeneration,
   resetPendingMoments,
 } from './moments';
 import { hasCanonicalMomentId, mergeFeed } from '../hooks/useData';
@@ -230,6 +232,54 @@ describe('the pending-Moment queue — module state that survives Board unmounts
     resetPendingMoments();
     expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
     expect(peekPendingMoments('u2')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+});
+
+describe('the action generation + fall-driven drops (Codex P1/P2, PR #110)', () => {
+  // The generation is the token Board's witness continuation checks: captured
+  // before the async durable-witness read, compared after. Every unmark and every
+  // observed win-fall bumps it (dropPendingWins), so a stale continuation from
+  // before an interleaved action can never re-enqueue the ceremonial candidate.
+
+  it('starts at 0, bumps on every dropPendingWins call — a FIRE-clear never bumps', () => {
+    expect(pendingActionGeneration('u1')).toBe(0);
+
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    clearPendingMoment('u1', 'bingo'); // a drain fired it: the win stood, not a fall
+    expect(pendingActionGeneration('u1')).toBe(0); // fires do not invalidate continuations
+
+    dropPendingWins('u1', { bingo: true }); // a fall (unmark verdict / passive falling edge)
+    expect(pendingActionGeneration('u1')).toBe(1);
+
+    // ANY unmark bumps — even one that dropped no win — so a continuation from an
+    // earlier mark is invalidated by whatever action interleaved.
+    dropPendingWins('u1', {});
+    expect(pendingActionGeneration('u1')).toBe(2);
+  });
+
+  it('dropPendingWins clears the fallen kinds — a bingo fall also drops the ceremonial candidate', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: true });
+    enqueueFirstBingoMoment('u1');
+    dropPendingWins('u1', { bingo: true });
+    // The ceremonial candidate cannot outlive the bingo it accompanies.
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: true, firstBingo: false });
+    dropPendingWins('u1', { blackout: true });
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('the generation SURVIVES the flags entry being emptied — a stale continuation cannot false-match a recreated entry', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    dropPendingWins('u1', { bingo: true }); // empties + deletes the flags entry
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false }); // recreated
+    expect(pendingActionGeneration('u1')).toBe(1); // monotonic — not reset by the delete
+  });
+
+  it('generations are per-uid; resetPendingMoments clears them (test-support)', () => {
+    dropPendingWins('u1', { bingo: true });
+    expect(pendingActionGeneration('u1')).toBe(1);
+    expect(pendingActionGeneration('u2')).toBe(0); // isolated
+    resetPendingMoments();
+    expect(pendingActionGeneration('u1')).toBe(0);
   });
 });
 
