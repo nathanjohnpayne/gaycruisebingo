@@ -34,6 +34,7 @@ vi.mock('../data/api', () => ({
   // point it at the same spy this suite already configures for the settled read.
   readAdultAttestationFromServer: mocks.readAdultAttestation,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
+  hasCachedBoard: vi.fn().mockResolvedValue(true),
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));

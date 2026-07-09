@@ -225,6 +225,25 @@ export async function readAdultAttestationFromServer(uid: string): Promise<numbe
 }
 
 /**
+ * True when THIS device already has the User's Event board in the persistent
+ * cache — i.e. they are a RETURNING, already-boarded Player (Codex #117 round 9,
+ * finding A). Cache-only (`getDocFromCache`, no network) and never rejects: a
+ * genuine cache MISS (a first-time User with no board yet) resolves `false`.
+ * AuthContext uses it to scope the "bootstrap failed" retryable error to the
+ * BOARDLESS case: a returning User with a cached board renders it (they need no
+ * deal), while a first-time User whose online bootstrap failed on an
+ * optimistic-only attestation gets a Retry instead of being stranded on
+ * "Dealing…".
+ */
+export async function hasCachedBoard(uid: string): Promise<boolean> {
+  try {
+    return (await getDocFromCache(rawBoard(uid))).exists();
+  } catch {
+    return false; // not in this device's cache → no local board
+  }
+}
+
+/**
  * Deal a frozen board + create the player row the first time a user joins.
  *
  * Returns `true` when it dealt a NEW board (an actual join), `false` when the

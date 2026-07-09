@@ -34,6 +34,7 @@ vi.mock('../data/api', () => ({
   // AuthContext's authority read is server-only now (#117 r6); same spy.
   readAdultAttestationFromServer: mocks.readAdultAttestation,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
+  hasCachedBoard: vi.fn().mockResolvedValue(true),
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));

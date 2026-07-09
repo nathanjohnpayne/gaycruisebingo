@@ -4,6 +4,7 @@ import { auth, googleProvider } from '../firebase';
 import {
   attestAdult,
   ensureUserProfile,
+  hasCachedBoard,
   joinAndDeal,
   readAdultAttestationFromCache,
   readAdultAttestationFromServer,
@@ -110,6 +111,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // deal until the authoritative read confirms the stamp. Re-armed false per auth
   // change; never set true offline (the cache lift is provisional).
   const [attestedAuthoritative, setAttestedAuthoritative] = useState(false);
+  // A ref mirror of `attestedAuthoritative` so async code (attest()'s catch) can
+  // read the LATEST value without a stale closure (Codex #117 round 9, finding B):
+  // the attest-failure rollback must NOT downgrade a User the bootstrap already
+  // SERVER-CONFIRMED as attested. Synced from state below.
+  const attestedAuthoritativeRef = useRef(false);
+  useEffect(() => {
+    attestedAuthoritativeRef.current = attestedAuthoritative;
+  }, [attestedAuthoritative]);
   // Monotonic id of the latest deal attempt; runDeal captures it and re-checks
   // before each setState so a superseded attempt's late result is dropped (P2).
   const dealAttemptRef = useRef(0);
@@ -241,7 +250,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAttested(true);
         setAttestedAuthoritative(true);
       } else if (optimisticSticky) {
+        // Optimistic-only attest + server-read FAILURE (Codex #117 round 9, finding
+        // A): keep the UI attested (no re-prompt), but the deal is gated off (no
+        // authority). A returning User WITH a cached board renders it (no deal
+        // needed); a BOARDLESS User would otherwise sit on "Dealing…" with no
+        // control — so give THEM a retryable error whose Retry re-runs the
+        // bootstrap. Fire-and-forget the cache check so it never delays the loading
+        // release; guard on the attempt.
         setAttested(true);
+        const failure = bootstrapFailure.err;
+        void hasCachedBoard(u.uid).then((boarded) => {
+          if (profileAttemptRef.current === attempt && !boarded) {
+            setDealError(dealErrorMessage(failure));
+          }
+        });
       } else {
         setDealError(dealErrorMessage(bootstrapFailure.err));
       }
@@ -518,18 +540,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       attestCommittedUidsRef.current.add(u.uid);
       if (auth.currentUser?.uid === u.uid) setAttestedAuthoritative(true);
     } catch {
-      // The write REJECTED (round 8 finding A). Deal authority was never granted
-      // (no committed stamp), so no deal fired — but leaving the optimistic UI lift
-      // in place would STRAND the User: the re-prompt is dismissed (attested true),
-      // yet joinAndDeal never runs, so a first-time User with no board sits on
-      // "Dealing…" with no way to re-attest. Roll the optimistic lift BACK so the
-      // re-prompt returns and they can retry in session. Remove the optimistic
-      // sticky too, so a later bootstrap settle does not silently re-lift the
-      // dismissed prompt. (A never-resolving offline attest never reaches here, so
-      // the #112 offline-optimistic behavior — and the no-flicker SUCCESS path —
-      // are untouched; this is the genuine-failure recovery only.)
+      // The write REJECTED. Roll the OPTIMISTIC-ONLY lift back so a stranded
+      // first-time User (re-prompt dismissed, no authority, no board, stuck on
+      // "Dealing…") gets the re-prompt back to retry in session (round 8 finding A).
+      // BUT never downgrade a User the bootstrap already SERVER-CONFIRMED as
+      // attested (Codex #117 round 9, finding B): a returning User with a valid
+      // server stamp whose redundant signIn-attest transaction merely dropped the
+      // network must NOT be re-prompted despite authoritative proof. So roll back
+      // ONLY when this uid is NOT authoritatively attested (no server stamp, no
+      // committed attest). A never-resolving offline attest never reaches here, so
+      // the #112 offline-optimistic behavior and the no-flicker SUCCESS path are
+      // untouched.
+      if (auth.currentUser?.uid !== u.uid) return;
+      if (attestedAuthoritativeRef.current || attestCommittedUidsRef.current.has(u.uid)) return;
       attestedUidsRef.current.delete(u.uid);
-      if (auth.currentUser?.uid === u.uid) setAttested(false);
+      setAttested(false);
     }
   }, []);
 

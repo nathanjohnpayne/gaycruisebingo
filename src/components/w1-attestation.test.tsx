@@ -38,6 +38,7 @@ vi.mock('../data/api', () => ({
   // this suite already configures for the settled gate read to it.
   readAdultAttestationFromServer: mocks.readAdultAttestation,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
+  hasCachedBoard: vi.fn().mockResolvedValue(true),
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));

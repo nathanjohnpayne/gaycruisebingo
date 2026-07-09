@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   readAdultAttestation: vi.fn(),
   readAdultAttestationFromServer: vi.fn(),
   readAdultAttestationFromCache: vi.fn(),
+  hasCachedBoard: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
   // Mutable so the reconnect handler / attest() read the signed-in User (Firebase
@@ -45,6 +46,7 @@ vi.mock('../data/api', () => ({
   readAdultAttestation: mocks.readAdultAttestation,
   readAdultAttestationFromServer: mocks.readAdultAttestationFromServer,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
+  hasCachedBoard: mocks.hasCachedBoard,
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));
@@ -162,6 +164,7 @@ beforeEach(() => {
   // sets it distinctly to model getDoc serving a stale cached stamp.
   mocks.readAdultAttestation.mockResolvedValue(1);
   mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+  mocks.hasCachedBoard.mockResolvedValue(false); // default: no local board (first-time)
   mocks.attestAdult.mockResolvedValue(undefined);
   mocks.joinAndDeal.mockResolvedValue(undefined);
   mocks.signInWithPopup.mockResolvedValue({});
@@ -680,5 +683,82 @@ describe('offline cold boot (#115)', () => {
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
     expect(rePromptShown()).toBe(false);
     expect(screen.getByTestId('board')).toBeInTheDocument();
+  });
+
+  it('finding A (round 9): an optimistic-only attest + online server-read FAILURE gives a BOARDLESS User a Retry (not stuck on Dealing), and Retry recovers', async () => {
+    // First-time User clicks 18+ (optimistic, write still PENDING so not committed),
+    // then the auth callback's SERVER read REJECTS (ship/captive wifi), no board.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestationFromServer.mockRejectedValue(new Error('server unreachable'));
+    mocks.hasCachedBoard.mockResolvedValue(false); // boardless (first-time)
+    mocks.attestAdult.mockReturnValue(NEVER); // optimistic-only: never commits
+    mocks.auth.currentUser = RETURNING_USER;
+
+    mount();
+    await act(async () => {
+      void ctxAttest(); // optimistic sticky set; attestAdult pending (uncommitted)
+    });
+    await coldBoot(RETURNING_USER);
+
+    // Boardless + optimistic-only + server-read failure → a retryable error, NOT a
+    // silent Board with a gated-off deal that strands the User on "Dealing…".
+    await waitFor(() => expect(dealErrorShown()).toBe(true));
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+
+    // Retry recovers: the server read now returns a stamp → authority → deal once.
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1);
+    await act(async () => {
+      ctxRetryDeal();
+    });
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+  });
+
+  it('finding A (round 9): a returning User WITH a cached board renders on an optimistic-only server-read failure (no error, no deal)', async () => {
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestationFromServer.mockRejectedValue(new Error('server unreachable'));
+    mocks.hasCachedBoard.mockResolvedValue(true); // returning, has a board
+    mocks.attestAdult.mockReturnValue(NEVER);
+    mocks.auth.currentUser = RETURNING_USER;
+
+    mount();
+    await act(async () => {
+      void ctxAttest();
+    });
+    await coldBoot(RETURNING_USER);
+
+    // A boarded User renders their cached Board (no deal needed) — no error panel.
+    await waitFor(() => expect(boardRendered()).toBe(true));
+    expect(dealErrorShown()).toBe(false);
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+  });
+
+  it('finding B (round 9): a redundant attest that REJECTS does NOT downgrade a server-CONFIRMED returning User (no re-prompt)', async () => {
+    // Returning User with a valid SERVER stamp signs in; the bootstrap CONFIRMS the
+    // stamp (attestedAuthoritative true). signIn's redundant attest() then REJECTS
+    // (network drop). The confirmed attestation must survive — no re-prompt.
+    setOnline(true);
+    mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
+    mocks.ensureUserProfile.mockResolvedValue(undefined);
+    mocks.readAdultAttestationFromServer.mockResolvedValue(1); // server: confirmed attested
+    mocks.hasCachedBoard.mockResolvedValue(true);
+    mocks.auth.currentUser = RETURNING_USER;
+
+    mount();
+    await coldBoot(RETURNING_USER);
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalled()); // authority → deal
+    expect(rePromptShown()).toBe(false);
+
+    // The redundant attest REJECTS AFTER the server confirmed the stamp.
+    mocks.attestAdult.mockRejectedValueOnce(new Error('network drop'));
+    await act(async () => {
+      await ctxAttest();
+    });
+
+    // The server-confirmed User is NOT rolled back to a re-prompt.
+    expect(rePromptShown()).toBe(false);
   });
 });
