@@ -1,0 +1,59 @@
+# Theme on-color contrast: no hardcoded `#fff`, gradient-tinted backdrops checked (issue #72)
+
+Follow-up to `specs/w1-themes.md` (issue #29 / PR #63), which shipped the 8-Theme token system and its WCAG AA contrast contract but explicitly deferred two pre-existing `src/index.css` defects: hardcoded `#fff` text/border fills that never adapted to `[data-theme]` (**Scope A**), and `--primary`/`--secondary` text sitting directly on `body`'s gradient-tinted backdrop, a surface w1-themes.md's contract carved out as a documented "Known bound" (**Scope B**). This spec fixes both and retires that carve-out.
+
+## Scope A — hardcoded `#fff` text/border fills
+
+Four `src/index.css` rules used to fill text or a border with a literal `#fff` instead of a theme token, so they never adapted to the active Theme:
+
+- `.cell.marked` / `.cell.marked::after` — the Prompt text, ✓ glyph, and cell border once a Square is Marked, painted over `linear-gradient(145deg, var(--primary), var(--secondary))`.
+- `.celebrate .big` — the BINGO/BLACKOUT hero text, painted over `.celebrate`'s own `radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--primary) 34%, transparent), color-mix(in srgb, var(--bg) 92%, transparent))` backdrop.
+- `.signin h1` — the sign-in hero text, painted directly on `body`'s background (no intervening `--panel`; see below).
+
+Bonus fix, same file, same defect class, not separately enumerated in issue #72 but promised by a PR #111 code comment that named it as tracked here: `.share-card-cell.marked` (the off-screen Share Card renderer, `src/components/ShareCard.tsx`) mirrors `.cell.marked`'s gradient exactly and got the same fix.
+
+`.proofbtn`'s `#fff` (a badge over a fixed `rgba(0, 0, 0, 0.35)` photo-scrim on a Proof thumbnail) is a deliberate, documented exemption — theme-independent by design, not a theme-token surface. It is the only intentional hardcoded-`#fff` text fill left in `src/index.css`.
+
+### Fix: `--on-gradient`
+
+`src/theme/themes.css` adds one new custom property per `[data-theme]` block, `--on-gradient`, used as the `color` for `.cell.marked` / `.cell.marked::after` / `.share-card-cell.marked`. It is chosen per Theme to clear the WCAG AA 4.5:1 normal-text floor (1.4.3) against **both** endpoints of the gradient it sits on — `--primary` and `--secondary` — independently, which is a stricter, position-independent bound than sampling any single point along the gradient (every interior point's luminance falls between its two endpoints' luminance under sRGB linear interpolation, so clearing both endpoints clears every point between them). The ✓ glyph is a graphical object and the border would be a UI-component boundary (WCAG 1.4.11, 3:1 floor), but `--on-gradient` clears the stricter 4.5:1 bound everywhere, so one token covers both floors.
+
+For 7 of the 8 Themes, `--primary`/`--secondary` are bright, saturated colors on a near-black `--bg`, so black text (`--on-gradient: #000`) reads clearly against both endpoints (5.7:1–20.1:1). `summer-white` inverts this: its `--primary`/`--secondary` are the deepened dark golds `specs/w1-themes.md`'s own contract already tunes to work as *text* against its light `--bg` (see that spec), so black-on-dark-gold only reaches 3.6:1–3.9:1 (under the 4.5:1 floor) while white clears both endpoints at 5.46:1 / 5.80:1 — so `summer-white` alone gets `--on-gradient: #fff`.
+
+The `.cell.marked` / `.share-card-cell.marked` **border** deliberately does *not* use `--on-gradient` — it stays on `--ink`. The border's job is to stay visible against the page background surrounding the cell (`--bg`), not the gradient fill it encloses; reusing `--on-gradient` there would silently reintroduce the summer-white vanishing-border defect this ticket fixes (white text works against the gradient, but white against summer-white's light `--bg` is 1.13:1 — the original defect). `--ink` already clears WCAG AA against `--bg` in every Theme (`specs/w1-themes.md`'s contract), so it satisfies the border's 3:1 floor with a large margin (15.7:1–18.8:1) for free, with no new token needed.
+
+`.celebrate .big` and `.signin h1` switch from `#fff` to `--ink`:
+
+- `.signin h1` has no ancestor background between it and `body` (`App.tsx` renders `<SignIn/>` directly; `.signin` sets layout only), so this is exactly the `--ink`/`--bg` pair `specs/w1-themes.md`'s contract already holds to 4.5:1 in every Theme.
+- `.celebrate .big` sits on `.celebrate`'s own composited backdrop. Treating `color-mix(in srgb, var(--primary) 34%, transparent)` as an alpha-34% `--primary` layer painted over the opaque `--bg` base (mixing toward `transparent` only scales alpha, so this composites identically to mixing straight toward `--bg` at the same weight — see `src/theme/contrast.ts`'s `mixSrgb`), `--ink` clears 4.5:1 against that composite in every Theme (7.3:1–11.5:1 — checked at the gradient's hottest, most-saturated point, its center, where `.big` renders).
+
+Decorative `text-shadow` glows that still reference `#fff` (`.celebrate .big`, `.share-card-title`) are untouched: a glow layered around a fill is not the fill itself and does not count toward contrast — the same treatment `specs/w1-themes.md`'s Scope A originally gave `.signin h1`'s glow.
+
+## Scope B — retiring the "Known bound" (gradient-tinted backdrops)
+
+`specs/w1-themes.md`'s WCAG AA contrast contract checked `--primary`/`--secondary` against the flat `--bg` token only, and explicitly carved out `body`'s real background (`src/index.css`) as unchecked: two radial-gradient tints layered over `--bg` — `color-mix(in srgb, var(--primary) 32%, transparent)` near the top-left, `color-mix(in srgb, var(--secondary) 26%, transparent)` near the top-right. `.brand b` and `.bingo-head span` (the B-I-N-G-O header) filled text with `--primary` directly; `.count b` filled with `--secondary` directly — both a self-referential trap, since the same custom property both tints the backdrop *and* is the text sitting on it. Verified independently in this ticket: at the gradient's actual maximum strength (32%/26%), that self-fill already drops under 4.5:1 in 6 of the 8 Themes (not just `summer-white`, the theme `specs/w1-themes.md`'s carve-out led with) — e.g. `neon-playground`'s `--primary` on its own 32% tint is 3.93:1, `duty-free` 3.84:1, `revival-disco` 3.83:1 on `--secondary`.
+
+Per Finding B (PR #63 Phase 4a escalation), the fix is a text-safe color choice, not a further token darkening — darkening `--primary`/`--secondary` further would darken the tint by the same amount (same custom property), chasing its own tint with no stable fixed point. `.brand b`, `.bingo-head span`, and `.count b` all switch to `--ink` instead — decoupled from the tint, and already the app's base body-text color. `--ink` clears 4.5:1 against the composited tint at its actual maximum strength in every Theme (7.8:1–12.5:1 for the 32% `--primary` tint; 8.5:1–12.5:1 for the 26% `--secondary` tint), checked the same way as `.celebrate .big` above. This is a deliberate visual trade-off — these three spots lose their `--primary`/`--secondary` accent color in favor of uniform `--ink`, in every Theme, in exchange for a guaranteed-safe fixed point instead of a self-referential one.
+
+Bonus fix, same defect class: `.share-card-bhead span` (the Share Card's own B-I-N-G-O header) sits on `.share-card`'s own near-identical radial-gradient tint (30% `--primary` / 24% `--secondary`) and gets the same `--ink` fix, checked against its own tint weight.
+
+`specs/w1-themes.md`'s "Known bound: gradient-tinted backdrops are not checked" carve-out is retired by this fix — see that spec's WCAG AA contrast contract section.
+
+## Acceptance criteria
+
+- **Given** any of the 8 Themes **when** a Square is Marked **then** the Prompt text and ✓ glyph meet WCAG AA 4.5:1 against both endpoints of the marked-cell gradient, and the border meets the 3:1 UI-component floor against `--bg`.
+- **Given** any of the 8 Themes **when** the sign-in screen or the BINGO/BLACKOUT celebration renders **then** the hero text meets WCAG AA 4.5:1 against its real backdrop (flat `--bg` for sign-in; the composited celebrate gradient at its hottest point for the celebration).
+- **Given** any of the 8 Themes **when** `.brand b` / `.bingo-head span` / `.count b` render over `body`'s gradient-tinted background **then** the text meets WCAG AA 4.5:1 against the tint at its actual maximum strength.
+- No text/border fill in `src/index.css` is a hardcoded `#fff`, except the documented `.proofbtn` photo-scrim exemption.
+- All checks are computed contrast assertions across all 8 `[data-theme]` blocks, parsed straight out of `themes.css` — zero hand-transcribed colors.
+
+## Test coverage
+
+`src/theme/theme-on-color-contrast.test.tsx` (Vitest), sharing its WCAG relative-luminance/contrast-ratio math and `themes.css` parser with `src/theme/w1-themes.test.tsx` via `src/theme/contrast.ts` (extracted by this ticket so the two suites can never drift apart on how they compute a contrast ratio):
+
+- Parses each of the five fixed `src/index.css` rules (`.cell.marked`, `.cell.marked::after`, `.celebrate .big`, `.signin h1`, `.share-card-cell.marked`) straight out of the file and asserts none fills `color`/`border-color` with a literal `#fff` (comments and decorative `text-shadow` glows excluded). Pins the pre-fix `summer-white` regression (`#fff` vs `--bg` was ~1.13:1) as a documentation assertion.
+- Asserts every `ThemeId` defines `--on-gradient`, and that it meets 4.5:1 against both `--primary` and `--secondary` independently.
+- Asserts `--ink` meets the 3:1 UI-component floor against `--bg` (the `.cell.marked` border) and 4.5:1 against `--bg` directly (`.signin h1`).
+- Computes the composited celebrate backdrop (34% `--primary` mix over `--bg`) and the composited `body`/`.share-card` gradient tints (32%/26% and 30%/24% `--primary`/`--secondary` mixes over `--bg`) via `mixSrgb`, and asserts `--ink` meets 4.5:1 against each, for every Theme. Pins a pre-fix regression assertion (the old self-referential `--primary` fill already failing 4.5:1 against its own tint for `neon-playground`).
+
+`src/theme/w1-themes.test.tsx`'s own `TEXT_PAIRS` table drops the `primary/bg` and `secondary/bg` *text* pairs (no remaining `src/index.css` call site fills text with `--primary`/`--secondary` directly on flat `--bg`; `.row .rank` / `.share-card-rank` still use `--primary` but on `--panel`, already covered) and its "Known bound" comment is replaced with a pointer to this spec.

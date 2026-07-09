@@ -1,6 +1,24 @@
 /* Theme token sets. Every color in the app reads from these variables, so
    switching [data-theme] on <html> reskins the entire UI. */
 
+/* --on-gradient (issue #72, specs/theme-on-color-contrast.md): the text/glyph
+   color for content painted directly on the `.cell.marked` /
+   `.share-card-cell.marked` linear-gradient(var(--primary), var(--secondary))
+   fill. Chosen per theme to clear WCAG AA 4.5:1 against BOTH gradient
+   endpoints (the stricter, position-independent bound — see the spec), not
+   just one hand-picked point on the gradient. For every theme except
+   summer-white, --primary/--secondary are bright, saturated colors on a
+   near-black --bg, so black text reads clearly against both (5.7:1-20:1);
+   summer-white inverts this — its --primary/--secondary are deepened dark
+   golds designed to work as *text* against its light --bg (see that block's
+   own comment below), so black-on-dark-gold fails 4.5:1 (3.6-3.9:1) and
+   white is the one that clears both endpoints (5.46:1 / 5.80:1). The
+   `.cell.marked` / `.share-card-cell.marked` *border* deliberately does NOT
+   use this token — it stays on --ink (already WCAG AA vs --bg for every
+   theme) because the border's job is to stay visible against the page
+   background surrounding the cell, not the gradient fill inside it; using
+   --on-gradient there would silently reintroduce the summer-white
+   vanishing-border defect this ticket fixes (white-on-light-bg). */
 :root,
 [data-theme='neon-playground'] {
   --bg: #07060d;
@@ -13,6 +31,7 @@
   --cell: #120c22;
   --border: rgba(0, 230, 255, 0.35);
   --shadow: rgba(255, 45, 149, 0.45);
+  --on-gradient: #000;
 }
 
 [data-theme='get-sporty'] {
@@ -26,6 +45,7 @@
   --cell: #0f1712;
   --border: rgba(57, 255, 136, 0.35);
   --shadow: rgba(57, 255, 136, 0.4);
+  --on-gradient: #000;
 }
 
 [data-theme='duty-free'] {
@@ -39,6 +59,7 @@
   --cell: #101827;
   --border: rgba(58, 160, 255, 0.35);
   --shadow: rgba(58, 160, 255, 0.4);
+  --on-gradient: #000;
 }
 
 [data-theme='glamiators'] {
@@ -52,6 +73,7 @@
   --cell: #16120c;
   --border: rgba(232, 200, 106, 0.35);
   --shadow: rgba(232, 200, 106, 0.4);
+  --on-gradient: #000;
 }
 
 [data-theme='summer-white'] {
@@ -74,6 +96,11 @@
   --cell: #fffdf8;
   --border: rgba(32, 23, 15, 0.18);
   --shadow: rgba(217, 164, 65, 0.35);
+  /* --on-gradient inverts the other 7 themes' choice (see the top-of-file
+     comment): black text on this theme's deepened dark-gold --primary/
+     --secondary only reaches 3.85:1 / 3.62:1 (fails the 4.5:1 text floor),
+     while white clears both endpoints at 5.46:1 / 5.80:1. */
+  --on-gradient: #fff;
 }
 
 [data-theme='dog-tag'] {
@@ -87,6 +114,7 @@
   --cell: #14170f;
   --border: rgba(181, 193, 90, 0.35);
   --shadow: rgba(181, 193, 90, 0.4);
+  --on-gradient: #000;
 }
 
 [data-theme='revival-disco'] {
@@ -100,6 +128,7 @@
   --cell: #1b1020;
   --border: rgba(192, 75, 255, 0.35);
   --shadow: rgba(192, 75, 255, 0.4);
+  --on-gradient: #000;
 }
 
 [data-theme='seriously-pink'] {
@@ -113,4 +142,5 @@
   --cell: #260a1c;
   --border: rgba(255, 79, 176, 0.45);
   --shadow: rgba(255, 79, 176, 0.45);
+  --on-gradient: #000;
 }

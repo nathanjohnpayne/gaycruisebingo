@@ -6,59 +6,17 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { THEMES } from './themes';
 import { ThemeProvider, useTheme } from './ThemeContext';
+import { parseThemeBlocks, contrastRatio } from './contrast';
 
 // Covers specs/w1-themes.md: WCAG AA contrast across all 8 [data-theme]
 // blocks, ThemeContext's persistence + async-default invariants, the <5s PRD
 // switch-latency metric, and the "no Atlantis marks" non-goal.
-
-// ---------------------------------------------------------------------------
-// Contrast utilities — WCAG 2.1 relative luminance + contrast ratio, computed
-// over [data-theme] blocks parsed straight out of themes.css so this test can
-// never drift from the CSS it polices (no hand-transcribed color table).
-// ---------------------------------------------------------------------------
-
-type ThemeVars = Record<string, string>;
-
-function parseThemeBlocks(source: string): Record<string, ThemeVars> {
-  const blocks: Record<string, ThemeVars> = {};
-  // Matches ":root, [data-theme='x']" or a bare "[data-theme='x']" (optionally
-  // comma-chained with more theme selectors) followed by its declaration body.
-  const blockRe =
-    /((?:\[data-theme='[\w-]+'\]|:root)(?:\s*,\s*\[data-theme='[\w-]+'\])*)\s*\{([^}]*)\}/g;
-  for (const match of source.matchAll(blockRe)) {
-    const ids = [...match[1].matchAll(/data-theme='([\w-]+)'/g)].map((m) => m[1]);
-    const vars: ThemeVars = {};
-    for (const decl of match[2].matchAll(/--([\w-]+):\s*([^;]+);/g)) {
-      vars[decl[1]] = decl[2].trim();
-    }
-    for (const id of ids) blocks[id] = { ...(blocks[id] ?? {}), ...vars };
-  }
-  return blocks;
-}
-
-function hexToRgb(hex: string): [number, number, number] {
-  const h = hex.trim().replace('#', '');
-  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
-  const num = parseInt(full, 16);
-  return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
-}
-
-/** WCAG 2.1 relative luminance of an sRGB color. https://www.w3.org/TR/WCAG21/#dfn-relative-luminance */
-function relativeLuminance([r, g, b]: [number, number, number]): number {
-  const [R, G, B] = [r, g, b].map((c) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  });
-  return 0.2126 * R + 0.7152 * G + 0.0722 * B;
-}
-
-/** WCAG 2.1 contrast ratio between two sRGB hex colors. https://www.w3.org/TR/WCAG21/#dfn-contrast-ratio */
-function contrastRatio(hexA: string, hexB: string): number {
-  const lA = relativeLuminance(hexToRgb(hexA));
-  const lB = relativeLuminance(hexToRgb(hexB));
-  const [lighter, darker] = lA >= lB ? [lA, lB] : [lB, lA];
-  return (lighter + 0.05) / (darker + 0.05);
-}
+//
+// The WCAG relative-luminance/contrast-ratio math and the parse-themes.css
+// approach live in ./contrast.ts (extracted by issue #72,
+// specs/theme-on-color-contrast.md) so this suite and
+// src/theme/theme-on-color-contrast.test.tsx share one implementation and
+// can never drift apart on how they compute a contrast ratio.
 
 // `join(dirname(fileURLToPath(import.meta.url)), ...)` rather than
 // `new URL('./themes.css', import.meta.url)`: Vite statically rewrites the
@@ -71,34 +29,33 @@ const themeBlocks = parseThemeBlocks(readFileSync(cssPath, 'utf-8'));
 // values — see specs/w1-themes.md § WCAG AA contrast contract for the
 // call-site inventory.
 //
-// Every one of --ink/--dim/--primary/--secondary/--accent is used as a real
-// text fill somewhere in src/index.css (not merely a border or glow), so
-// every pair below is held to the 4.5:1 normal-text floor (WCAG 1.4.3)
-// rather than the looser 3:1 non-text/UI-component floor (1.4.11):
-// --primary and --accent each drive a border/box-shadow *and* a text fill
-// with the identical custom-property value, so the stricter bar is the
-// binding constraint for the variable either way. Border/glow-only call
-// sites that reuse these same pairs (.btn.primary / .chip.active / .cell.free
-// borders, etc.) are covered for free since they share the checked value.
+// Every one of --ink/--dim/--accent is used as a real text fill somewhere in
+// src/index.css (not merely a border or glow), so every pair below is held
+// to the 4.5:1 normal-text floor (WCAG 1.4.3) rather than the looser 3:1
+// non-text/UI-component floor (1.4.11): --accent drives a border/box-shadow
+// *and* a text fill with the identical custom-property value, so the
+// stricter bar is the binding constraint for the variable either way.
+// Border/glow-only call sites that reuse these same pairs (.cell.free
+// border, etc.) are covered for free since they share the checked value.
 //
-// Known bound (see specs/w1-themes.md § WCAG AA contrast contract, "Known
-// bound"): the primary/bg and secondary/bg checks below are against the flat
-// --bg token only. body's real background (src/index.css) layers
-// primary/secondary-tinted radial-gradient stops over --bg, so the
-// composited backdrop behind .brand b / the B-I-N-G-O header and .count b
-// can be more saturated than --bg near a gradient's center — verified to
-// drop as low as 3.15:1 for summer-white's --primary. This suite
-// deliberately does not chase that surface here; see the spec for why and
-// for the tracked follow-up.
+// primary/bg and secondary/bg (issue #72, specs/theme-on-color-contrast.md):
+// retired as *text* pairs here. .brand b / .bingo-head span (the B-I-N-G-O
+// header) and .count b used to fill text with --primary/--secondary
+// directly on body's gradient-tinted background — the former "Known bound"
+// this suite deliberately didn't chase (verified to drop as low as 3.15:1
+// for summer-white's --primary against its own tint) — and now use --ink
+// instead; see theme-on-color-contrast.test.tsx for that fix's coverage.
+// --primary/--secondary still back border/box-shadow-only call sites
+// (.btn.primary, .chip.active, .row .rank text on --panel, etc.) at the
+// looser 3:1 UI-component floor or on --panel, not --bg, so no pair below
+// is needed to cover them.
 const TEXT_PAIRS: [fg: string, bg: string][] = [
-  ['ink', 'bg'], // body text
+  ['ink', 'bg'], // body text; .signin h1; .celebrate .big (flat-bg floor — see theme-on-color-contrast.test.tsx for the composited-backdrop checks)
   ['ink', 'panel'], // .row .name, .input text
   ['ink', 'cell'], // .cell text
   ['dim', 'bg'], // .muted, .count, .ack, inactive .tab
   ['dim', 'panel'], // .row .sub
-  ['primary', 'bg'], // .brand b; .bingo-head span (the B-I-N-G-O header — normal text below ~400px viewports)
   ['primary', 'panel'], // .row .rank (leaderboard rank numbers, 22px normal weight)
-  ['secondary', 'bg'], // .count b
   ['accent', 'cell'], // .cell.free text ("FREE")
   ['accent', 'panel'], // .badge ("1st BINGO")
 ];
