@@ -69,11 +69,13 @@ A Proof is queued when it needs admin attention: **reported** (`reportCount > 0`
 
 **Shape:** `useReportedProofs` subscribes to the whole proofs collection (no `where()` — the broad admin read the rules permit) and filters **client-side**, so the three-arm OR adds no second subscription and no composite index; it is one predicate over the existing listener. The Admin's Phase-0 overrides are the `status` hard-hide (`hideProof`/`hideItem`) and restore; the **Clear reports** control (`clearProofReports`/`clearItemReports`) that lifts the community auto-hide by zeroing `reportCount` (see § Lifting the community auto-hide); and deletion, which removes a row entirely. Server-authoritative removal/lift is still #43.
 
-## Deferred: the Admin ban (→ a rules-owned follow-up)
+## Deferred: the Admin ban (→ a rules-owned follow-up) — LANDED by #113
 
-The issue asked for a `banUser` write "inside the rules landed by #18", with a banned User's content filtered presentationally in the same read hooks. **Reading the CURRENT `firestore.rules` (the staleness rule), no ban surface exists** — there is no `banned` field, no `bannedUids`, and no `ban` anywhere in the rules or `src/types.ts`. `users/{uid}` is **owner-only** for create/update (`isOwner(uid)`, plus the `attestedAdultAt` guard), so an Admin cannot write a ban flag to another Player's profile at all; the only admin-writable per-user surface is `players/{uid}`, which carries no ban field or contract. The `#18` ban write the issue assumed was never landed.
+At the time PR #107 shipped, the Admin ban #37 assumed had **no surface anywhere** — no `banned`/`bannedUids` field in `src/types.ts`, no ban write in `firestore.rules`, and `users/{uid}` owner-only — so this ticket **skipped** the ban rather than smuggle it into a feature-consumer PR (the #103 pattern: rules changes get their own reviewed PR). That deferral is now **resolved by #113**, which lands the rules + type contract in its own dedicated `needs-phase-4` PR: `bannedUids: string[]` on `EventDoc` (a presentational, event-scoped hide/mute roster per ADR 0004 Phase 0 — **not** hard access revocation, which stays #43/#44), the admin-only write path + validation on the **event doc** (not a new write into owner-only `users/{uid}`), a converter default to `[]` for legacy/fresh event docs (the seed deliberately does **not** write `bannedUids`, so a reseed never clobbers a live ban list), and the full allow/deny rules matrix. The design and claim→test mapping live in [`specs/w2-banned-uids.md`](w2-banned-uids.md).
 
-Per the ticket's own staleness guidance and the #103 pattern (rules changes get their own reviewed PR), the ban write is **skipped** here rather than smuggled in by editing `firestore.rules` or `src/types.ts` (both off-limits to this ticket, and the type contract is owned elsewhere). This ticket delivers the threshold hide + report queue **fully**; a follow-up must (a) add a `banned`/`bannedUids` contract to `EventDoc` or `UserDoc`, (b) add the admin-only ban write path + validation to `firestore.rules`, then (c) add `banUser` to `data/admin.ts`, a ban control to the queue, and the presentational banned-content filter to these same read hooks. The rules test below **pins the gap**: an Admin ban write to a foreign `users/{uid}` doc is denied today, so the follow-up rules PR is the thing that opens it.
+The client consumers remain the **#108** follow-up: `banUser`/`unbanUser` in `data/admin.ts` (via `arrayUnion`/`arrayRemove`), a ban control in this console's report queue, and the presentational banned-content filter in these same read hooks, mirroring the landed `isReportHidden` auto-hide.
+
+The pinned rules test below moved with #113: it now asserts the **new** reality — an Admin **can** set `bannedUids` on the event doc, and `users/{uid}` **stays owner-only** (the anti-schema-smuggling guarantee) — rather than the old blanket ban-surface denial.
 
 ## Claim → test
 
@@ -121,7 +123,7 @@ Runner: `npm run test:rules` (Firestore emulator). Test: `tests/rules/w2-admin-c
 - A non-admin report increments `reportCount` by exactly 1 on a Prompt and a Proof; a jump (`+2`), a decrement, a bundled field change, and a `status` flip are each denied.
 - An Admin moderates freely: hard-hide (`status`), restore, clear `reportCount` (lifting an auto-hide), and delete — Prompt and Proof.
 - `reportHideThreshold` is admin-only, numeric config: an admin sets it, a non-admin is denied, and a non-numeric value is denied.
-- **No ban surface**: an Admin cannot flag another Player as `banned` — a create and an update against a foreign `users/{uid}` doc are both denied (owner-only), pinning the gap the follow-up rules PR must open.
+- **Ban surface is the event doc, users/{uid} stays owner-only** (#113): an Admin **can** set `bannedUids` on the event doc, and an Admin still **cannot** flag `banned` on a foreign `users/{uid}` doc (create and update both denied — the anti-schema-smuggling guarantee). The full ban allow/deny matrix (list/cap/`admins`-overlap validation, non-admin denial, `arrayUnion`/`arrayRemove` updates) lives in `tests/rules/w2-banned-uids.test.ts` — see [`specs/w2-banned-uids.md`](w2-banned-uids.md).
 
 ## Test-mock updates required by the surface change (stated honestly)
 
@@ -143,4 +145,4 @@ The Feed suite `src/components/w2-proof-capture-feed.test.tsx` is UNAFFECTED: it
 - The report queue is ONE list ordered most-reported-first across Proofs and Prompts — the component suite (finding 4).
 - Report queue surfaced in `Admin.tsx` via `useReportedProofs` (+ reported Prompts) — the component suite.
 - Phase 0 hide documented as bypassable-by-design; server enforcement deferred to #43 — this spec.
-- The Admin ban is deferred with the gap pinned (no ban surface in the rules) — this spec's § Deferred + the rules suite's no-ban-surface denial.
+- The Admin ban rules + type contract landed in the dedicated #113 PR (`bannedUids` on the event doc; `users/{uid}` stays owner-only); the client console control is the #108 follow-up — this spec's § Deferred + [`specs/w2-banned-uids.md`](w2-banned-uids.md) + the rules suites (`tests/rules/w2-banned-uids.test.ts`, and the pinned event-doc-ban / owner-only assertion in `tests/rules/w2-admin-console.test.ts`).

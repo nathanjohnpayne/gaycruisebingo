@@ -25,6 +25,7 @@ const baseEvent: Omit<EventDoc, 'claimMode'> = {
   status: 'active',
   defaultTheme: 'neon-playground',
   admins: [],
+  bannedUids: [],
   settings: { reportHideThreshold: 4 },
 };
 
@@ -63,6 +64,26 @@ describe('eventConverter (migration applied on read)', () => {
     const event = eventConverter.fromFirestore(snapshotOf({ ...baseEvent, claimMode: 'verified' }));
     const written = eventConverter.toFirestore(event) as { claimMode: ClaimMode };
     expect(written.claimMode).toBe('admin_confirmed');
+  });
+
+  it('defaults a missing bannedUids (legacy event doc, pre-#113) to []', () => {
+    // Event docs seeded before the ban surface landed carry no bannedUids; the
+    // converter fills it with [] so consumers never branch on undefined.
+    const legacy = { ...baseEvent, claimMode: 'honor' as const };
+    delete (legacy as { bannedUids?: string[] }).bannedUids;
+    const event = eventConverter.fromFirestore(snapshotOf(legacy));
+    expect(event.bannedUids).toEqual([]);
+  });
+
+  it('preserves a present bannedUids roster and coerces a malformed value to []', () => {
+    const banned = eventConverter.fromFirestore(
+      snapshotOf({ ...baseEvent, claimMode: 'honor', bannedUids: ['bob'] }),
+    );
+    expect(banned.bannedUids).toEqual(['bob']);
+    const malformed = eventConverter.fromFirestore(
+      snapshotOf({ ...baseEvent, claimMode: 'honor', bannedUids: 'bob' }),
+    );
+    expect(malformed.bannedUids).toEqual([]);
   });
 });
 

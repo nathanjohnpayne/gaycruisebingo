@@ -29,6 +29,14 @@ export interface EventDoc {
   defaultTheme: ThemeId;
   claimMode: ClaimMode;
   admins: string[];
+  // Presentational, event-scoped hide/mute of a Player's content (ADR 0004
+  // Phase 0) — NOT hard access revocation. An admin-maintained roster of banned
+  // uids kept on the (already admin-writable) event doc; a follow-up (#108) will
+  // filter their content client-side, mirroring the reportHideThreshold
+  // auto-hide, never gate posting or reads server-side (that is #43/#44). Required
+  // in the contract so consumers never branch on undefined; `eventConverter`
+  // defaults a missing legacy field (event docs seeded before #113) to [].
+  bannedUids: string[];
   settings: {
     reportHideThreshold: number;
   };

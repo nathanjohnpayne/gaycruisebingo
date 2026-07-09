@@ -31,6 +31,15 @@ export const EVENT_SEED = {
   status: 'active',
   defaultTheme: 'neon-playground',
   claimMode: 'honor', // 'honor' | 'proof_required' | 'admin_confirmed'
+  // NOTE: `bannedUids` (#113) is deliberately NOT seeded. This payload is written
+  // with { merge: true } and the seed is documented as safe to re-run (to add
+  // admins / refresh prompts), so writing bannedUids here would clobber a live ban
+  // list back to [] on every reseed once #108 starts populating it — silent data
+  // loss (unbanning everyone) on a routine op. A brand-new event never carries the
+  // field and reads as [] via eventConverter's missing-field default (converters.ts),
+  // and a reseed leaves the existing bannedUids untouched because this merge write
+  // never mentions it. The follow-up (#108) fills it via banUser/unbanUser
+  // (arrayUnion/arrayRemove) on the admin-writable event doc, never users/{uid}.
   // reportHideThreshold is the only settings key — it is load-bearing (ADR 0004
   // reactive moderation: auto-hide at 4 distinct reports; value pending final
   // confirmation via #15). ADR 0004 removed the event's other Phase-0 flag as dead

@@ -25,9 +25,12 @@ import { deleteDoc, doc, setDoc, updateDoc } from 'firebase/firestore';
 //      an auto-hide. The console ships status hide/restore/delete; #43 owns the
 //      server-authoritative hide.
 //   3. reportHideThreshold is admin-only, numeric config.
-//   4. NO ban surface: the natural ban location — an admin-controlled per-user
-//      flag — is NOT writable, because users/{uid} is owner-only. The ban write
-//      is deferred to a rules-owned follow-up.
+//   4. Ban surface (#113): the ban now lives on the admin-writable EVENT doc as
+//      `bannedUids` (presentational event-scoped hide/mute, ADR 0004 Phase 0) —
+//      an Admin can set it, and users/{uid} stays owner-only (no admin write path
+//      was opened there — the anti-schema-smuggling guarantee). The full ban
+//      allow/deny matrix (list/cap/admins-overlap validation, non-admin denial,
+//      arrayUnion-shaped updates) lives in tests/rules/w2-banned-uids.test.ts.
 // The PERMISSION_DENIED lines the SDK logs are the expected assertFails denials.
 
 const RULES_PATH = fileURLToPath(new URL('../../firestore.rules', import.meta.url));
@@ -133,11 +136,16 @@ describe('firestore.rules — moderation surface (specs/w2-admin-console.md)', (
     await assertFails(updateDoc(eventDoc(db(ADMIN)), { settings: { reportHideThreshold: 'high' } })); // non-numeric
   });
 
-  it('has NO ban surface — an Admin cannot flag another Player as banned (deferred to a rules PR)', async () => {
-    // users/{uid} is owner-only (create/update if isOwner(uid)); there is no
-    // admin write path and no `banned`/`bannedUids` field anywhere in the rules,
-    // so the ban location the ticket assumed does not exist. Pin the denial so a
-    // future rules PR is the thing that opens it.
+  it('ban surface is the EVENT doc (bannedUids), and users/{uid} stays owner-only (#113)', async () => {
+    // The ban now lives on the admin-writable event doc as `bannedUids` — a
+    // presentational event-scoped hide/mute roster (ADR 0004 Phase 0), NOT hard
+    // access revocation. An Admin can set it (full matrix in
+    // tests/rules/w2-banned-uids.test.ts).
+    await assertSucceeds(updateDoc(eventDoc(db(ADMIN)), { bannedUids: [BOB] }));
+    // users/{uid} is STILL owner-only: opening the ban surface on the event doc
+    // did NOT open any admin write path into a foreign user profile — the
+    // anti-schema-smuggling guarantee. An Admin still cannot flag `banned` on
+    // another Player's users/{uid} doc, by create or update.
     await assertFails(
       setDoc(doc(db(ADMIN), 'users', BOB), { displayName: 'Bob', photoURL: null, createdAt: Date.now(), banned: true }),
     );
