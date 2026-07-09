@@ -75,6 +75,28 @@ const mountWithCapture = () =>
     </AuthProvider>,
   );
 
+// Surfaces the retryable error state for the bootstrap-failure tests (#112 round
+// 2). dealError/dealing/retryDeal are the DealError panel's exact inputs — App
+// renders that panel on the Card tab when dealError is set — so this probe
+// mirrors the App-level contract without mounting the full App shell.
+function ErrorProbe() {
+  const { dealError, dealing, retryDeal } = useAuth();
+  return (
+    <div>
+      {dealError ? <p role="alert">{dealError}</p> : null}
+      <span data-testid="dealing">{dealing ? 'dealing' : 'idle'}</span>
+      <button onClick={() => retryDeal()}>retry</button>
+    </div>
+  );
+}
+const mountWithProbe = () =>
+  render(
+    <AuthProvider>
+      <ErrorProbe />
+      <div>{BOARD}</div>
+    </AuthProvider>,
+  );
+
 const signIn = (u: unknown) => act(async () => void emitAuth(u));
 const boardShown = () => screen.queryByText(BOARD) !== null;
 const rePrompted = () =>
@@ -194,6 +216,74 @@ describe('attestation gates the deal side effect + sticky optimistic attest (#23
     // 2. The auth-state callback lands with the still-stale (null) read.
     await signIn(FAKE_USER);
     expect(rePrompted()).toBe(false);
+    expect(boardShown()).toBe(true);
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+  });
+});
+
+// Codex round 2 on PR #112 (3548428646): with the deal gated on attested === true
+// (Finding 1), a THROWN ensureUserProfile/readAdultAttestation left the
+// attestation UNKNOWN forever — no deal, no re-prompt, no error: the Board's
+// endless "Dealing your card…". A failed bootstrap is now an explicit ERROR
+// terminal state on the retryable dealError surface (#61 precedent), whose Retry
+// re-attempts the bootstrap — never joinAndDeal while the attestation is
+// unsettled. Genuine in-flight loading is unchanged (the "does not flash" test).
+describe('a FAILED attestation bootstrap is a retryable error, never a silent stall (#112 round 2)', () => {
+  it('surfaces a thrown bootstrap read as the retryable deal error — no deal, no re-prompt, no spinner', async () => {
+    mocks.readAdultAttestation.mockRejectedValue(new Error('network request failed'));
+    mountWithProbe();
+    await signIn(FAKE_USER);
+
+    // The honest terminal state: the Player-worded retry surface — not the
+    // indefinite dealing state, and never a re-prompt for an UNKNOWN attestation.
+    expect(screen.getByRole('alert')).toHaveTextContent(/connection/i);
+    expect(rePrompted()).toBe(false);
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+    expect(screen.getByTestId('dealing')).toHaveTextContent('idle');
+  });
+
+  it('Retry re-runs the bootstrap: repeat failure keeps the error; success settles attested and deals once', async () => {
+    mocks.readAdultAttestation
+      .mockRejectedValueOnce(new Error('network request failed')) // initial bootstrap fails
+      .mockRejectedValueOnce(new Error('network request failed')) // first Retry fails too
+      .mockResolvedValue(1_720_000_000_000); // second Retry settles: attested
+    mountWithProbe();
+    await signIn(FAKE_USER);
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    // A Retry that fails again keeps the honest error+retry surface.
+    await userEvent.click(screen.getByText('retry'));
+    await waitFor(() => expect(mocks.readAdultAttestation).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('alert')).toHaveTextContent(/connection/i);
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+
+    // A Retry that succeeds settles the attestation; the deferred deal fires
+    // exactly once via the attested gate and its settle clears the error.
+    await userEvent.click(screen.getByText('retry'));
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    expect(boardShown()).toBe(true);
+    expect(rePrompted()).toBe(false);
+  });
+
+  it('a Retry that settles UNATTESTED hands over to the re-prompt gate, then attesting deals once', async () => {
+    mocks.readAdultAttestation
+      .mockRejectedValueOnce(new Error('network request failed')) // initial bootstrap fails
+      .mockResolvedValue(null); // Retry settles: DEFINITELY no stamp
+    mocks.auth.currentUser = FAKE_USER;
+    mountWithProbe();
+    await signIn(FAKE_USER);
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+
+    // The retry read is definite: unattested → the full-screen re-prompt takes
+    // over (the stale deal error is dropped with it); still no deal.
+    await userEvent.click(screen.getByText('retry'));
+    await waitFor(() => expect(rePrompted()).toBe(true));
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+
+    // Attesting from the re-prompt lifts the gate and fires the deferred deal once.
+    await userEvent.click(screen.getByRole('checkbox'));
+    await userEvent.click(screen.getByRole('button', { name: /enter the event/i }));
     expect(boardShown()).toBe(true);
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
   });

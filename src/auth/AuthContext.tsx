@@ -19,13 +19,21 @@ interface AuthContextValue {
   // Never true mid-bootstrap: it is gated on profileReady, so an attestation that
   // is still UNKNOWN during load can't flash the prompt.
   needsAttestation: boolean;
-  dealError: string | null; // Player-worded deal failure, or null once the Board dealt.
-  dealing: boolean; // True while a join/deal (initial or retry) is in flight.
+  // Player-worded, retryable failure on the path to a dealt Board — a failed
+  // join/deal, or a failed attestation bootstrap (#112 round 2) — null once dealt.
+  dealError: string | null;
+  // True while a join/deal (initial or retry) or the bootstrap retry that
+  // precedes a deferred deal is in flight.
+  dealing: boolean;
   signIn: () => Promise<void>;
   signOutUser: () => Promise<void>;
   // Persist the current User's 18+ self-attestation (ADR 0001) and lift the gate.
   attest: () => Promise<void>;
-  retryDeal: () => void; // Re-run joinAndDeal for the current User, no reload.
+  // Retry the current User's path to a dealt Board in place (no reload): re-runs
+  // joinAndDeal when the attestation is settled true, else re-attempts the FAILED
+  // ensureUserProfile + readAdultAttestation bootstrap (#112 round 2) — never the
+  // deal itself while the attestation is unsettled (Finding 1).
+  retryDeal: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -97,6 +105,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAttested(undefined);
       setUser(u);
       let attestedRead: boolean | undefined;
+      // A THROWN bootstrap must not stall silently (#112 round 2): with the deal
+      // gated on attested === true (Finding 1), an attestation left UNKNOWN by a
+      // transient Firestore failure would otherwise strand the User on the
+      // Board's endless "Dealing your card…" — no deal, no re-prompt, no error.
+      // Capture the failure and surface it through the retryable dealError below.
+      let bootstrapFailure: { err: unknown } | null = null;
       if (u) {
         try {
           await ensureUserProfile(u);
@@ -104,8 +118,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // present/absent, not the pre-create absence; a thrown read stays
           // UNKNOWN below (no re-prompt), so only a definite miss gates.
           attestedRead = (await readAdultAttestation(u.uid)) !== null;
-        } catch {
-          /* profile bootstrap can retry later; attestation stays UNKNOWN */
+        } catch (err) {
+          bootstrapFailure = { err };
         }
       }
       // Only the latest auth change settles this bootstrap: a superseded callback
@@ -120,6 +134,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const attestedSticky = u != null && attestedUidsRef.current.has(u.uid);
         setAttested((prev) => (prev === true || attestedSticky ? true : attestedRead));
         setProfileReady(true);
+        // Surface a failed bootstrap as the SAME Player-worded, retryable error a
+        // failed deal gets (the #61 surface): App renders the DealError panel on
+        // the Card tab, and its Retry re-attempts the bootstrap (retryDeal picks
+        // the bootstrap path while the attestation is unsettled). A sticky-
+        // attested User needs no surface here — their gate settles true above, so
+        // the deferred deal fires and reports any genuine failure itself.
+        if (bootstrapFailure && !attestedSticky) {
+          setDealError(dealErrorMessage(bootstrapFailure.err));
+        }
       }
       setLoading(false);
     });
@@ -159,9 +182,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (user && attested === true) void runDeal(user);
   }, [user, attested, runDeal]);
 
+  // Re-attempt a FAILED attestation bootstrap (#112 round 2): re-runs
+  // ensureUserProfile + readAdultAttestation under profileAttemptRef — the same
+  // guard as the auth callback whose work it re-runs — so a newer auth change
+  // supersedes it. On success the attestation settles: `true` fires the deferred
+  // deal via the attested gate (keep `dealing` up so the retry surface shows
+  // seamless progress, and let the deal's OWN settle replace dealError — the P3
+  // discipline: never clear before settle); a definite `false` hands over to the
+  // full-screen re-prompt, so the stale error and in-flight flag are dropped. A
+  // repeat failure re-arms the same honest error+retry surface — never the
+  // silent spinner this replaces.
+  const retryBootstrap = useCallback(async (u: User) => {
+    const attempt = (profileAttemptRef.current += 1);
+    setDealing(true);
+    try {
+      await ensureUserProfile(u);
+      const read = (await readAdultAttestation(u.uid)) !== null;
+      if (profileAttemptRef.current !== attempt) return;
+      const attestedSticky = attestedUidsRef.current.has(u.uid);
+      setAttested((prev) => (prev === true || attestedSticky ? true : read));
+      if (!read && !attestedSticky) {
+        setDealError(null);
+        setDealing(false);
+      }
+    } catch (err) {
+      if (profileAttemptRef.current !== attempt) return;
+      setDealError(dealErrorMessage(err));
+      setDealing(false);
+    }
+  }, []);
+
+  // Retry the current User's path to a dealt Board, in place (no reload): the
+  // deal itself once the attestation is settled true, else the failed bootstrap —
+  // never joinAndDeal while the attestation is unsettled (Finding 1's gate).
   const retryDeal = useCallback(() => {
-    if (user) void runDeal(user);
-  }, [user, runDeal]);
+    if (!user) return;
+    if (attested === true) void runDeal(user);
+    else void retryBootstrap(user);
+  }, [user, attested, runDeal, retryBootstrap]);
 
   // Persist the current User's honor-system 18+ self-attestation (ADR 0001) and
   // lift the re-prompt gate at once. Optimistic: the local flag flips before the

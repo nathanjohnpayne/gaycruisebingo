@@ -165,7 +165,9 @@ export async function attestAdult(u: User, now: number = Date.now()): Promise<vo
  * DEFINITIVELY without one (missing doc or missing field). A single point read of
  * `users/{uid}`; AuthContext calls it once per auth change AFTER `ensureUserProfile`
  * has settled the row, and treats a THROWN read (offline / permission) as UNKNOWN
- * — never a re-prompt — so only a definite `null` gates a signed-in User.
+ * — never a re-prompt — so only a definite `null` gates a signed-in User. An
+ * UNKNOWN is not a silent stall either: AuthContext surfaces the failure through
+ * its retryable deal-error panel, whose Retry re-runs this read (#112 round 2).
  */
 export async function readAdultAttestation(uid: string): Promise<number | null> {
   const snap = await getDoc(rawUser(uid));
