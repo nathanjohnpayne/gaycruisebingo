@@ -571,7 +571,27 @@ export default function Board() {
       <div className="count">
         Marked <b>{countMarked(cells)}</b> · Bingos <b>{player?.bingoCount ?? 0}</b>
       </div>
-      {celebrate && <Celebration kind={celebrate} onClose={() => setCelebrate(null)} />}
+      {/* `cells` fixes the empty-card share race (Codex P2, PR #111 finding
+          1): Celebration used to open its own useBoard(uid) listener and
+          could render/share before that listener's own first snapshot
+          arrived. Board already has the loaded `cells` right here
+          (guaranteed by the `!board` early-return above), so handing them
+          down as a prop removes the race instead of letting Celebration
+          re-fetch what this component already has. `playerName` is the
+          identity twin (round 2 finding 1): the SAME resolved public name
+          the Tally/Proof/Moment paths carry, gated by the SAME identityKnown
+          tri-state — null while the saved row is unknown, so Celebration
+          disables Share instead of ever stamping the stale auth fallback
+          onto a card (mirrors doMark's `identityKnown ? displayName :
+          undefined`). */}
+      {celebrate && (
+        <Celebration
+          kind={celebrate}
+          cells={cells}
+          playerName={identityKnown ? displayName : null}
+          onClose={() => setCelebrate(null)}
+        />
+      )}
       {proofTarget && user && (
         <ProofSheet
           uid={uid}
