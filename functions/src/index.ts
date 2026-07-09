@@ -17,15 +17,17 @@ setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
 const db = getFirestore();
 const visionClient = new vision.ImageAnnotatorClient();
 
-// Cloud Vision (moderateProof) is deferred (#126): the gate defaults OFF so
-// Firebase never validates or deploys the moderateProof export, which lets
-// the #101 notifiers deploy without tripping moderateProof's us-central1
-// (function region) vs us-east1 (default Storage bucket region) mismatch —
-// firebase validates every trigger in the module at deploy-plan time, so an
-// unresolved mismatch on ANY export blocks the whole functions deploy. The
-// gate is `functions/.env.<projectId>` (ENABLE_VISION_MODERATION=true),
-// honored at BOTH deploy trigger-discovery and runtime; see visionGate.ts for
-// why a raw process.env / param read alone is NOT visible at discovery.
+// Cloud Vision (moderateProof) stays deferred by default (#126): the gate keeps
+// the export OFF until Vision is deliberately enabled (Cloud Vision API on +
+// ENABLE_VISION_MODERATION=true), so a proof scanner isn't stood up before it's
+// wanted. moderateProof is a Storage trigger on the default (us-east1) bucket,
+// so the export below is pinned to `region: 'us-east1'`: a us-central1 function
+// (the global default) on a us-east1 bucket is an invalid pairing that fails
+// deploy-plan validation and would block the whole functions deploy, so the
+// trigger region MUST match the bucket for the enabled path to deploy. The gate
+// is `functions/.env.<projectId>` (ENABLE_VISION_MODERATION=true), honored at
+// BOTH deploy trigger-discovery and runtime; see visionGate.ts for why a raw
+// process.env / param read alone is NOT visible at discovery.
 const VISION_ENABLED = visionModerationEnabled();
 
 const LIKELIHOOD = ['UNKNOWN', 'VERY_UNLIKELY', 'UNLIKELY', 'POSSIBLE', 'LIKELY', 'VERY_LIKELY'];
@@ -77,9 +79,12 @@ async function moderateProofHandler(event: StorageEvent): Promise<void> {
 // walks Object.entries(module) and registers an export only when
 // `typeof val === 'function' && val.__endpoint` — an `undefined` export fails
 // that check and is silently skipped, so it is never validated or deployed.
-// When the flag is on, this is byte-identical to the prior unconditional
-// export.
-export const moderateProof = VISION_ENABLED ? onObjectFinalized({ memory: '512MiB' }, moderateProofHandler) : undefined;
+// `region: 'us-east1'` pins the trigger to the default Storage bucket's region
+// (the global default stays us-central1 for the Firestore-triggered notifiers)
+// so the deploy-plan region check passes when the gate is on.
+export const moderateProof = VISION_ENABLED
+  ? onObjectFinalized({ memory: '512MiB', region: 'us-east1' }, moderateProofHandler)
+  : undefined;
 
 /**
  * Email Event admins when a Proof/Prompt transitions INTO a moderation state
