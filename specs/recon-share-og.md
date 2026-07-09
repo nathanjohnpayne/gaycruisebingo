@@ -38,15 +38,16 @@ ADR 0005 supersedes the scaffolded server-side Open Graph pipeline: Share Cards 
 
 - **Given** a crawler fetches a bare URL **when** `index.html` and `public/og-default.png` are read **then** both are present and the static OG `<meta property="og:image">` still points at `og-default.png`. (Test: "keeps public/og-default.png and the static index.html OG meta".)
 
-## Docs no longer point at removed code
+## Docs no longer instruct deploying or configuring the removed pipeline
 
-`docs/app/README.md` and `docs/app/phase-1-deploy.md` no longer describe the Cloud Run OG renderer, the `share` Function, or `OG_RENDERER_URL` as something to deploy or configure.
+No live doc or operator-facing spec describes the Cloud Run OG renderer, the `share` Function, or `OG_RENDERER_URL` as something to build, deploy, or configure. The two exceptions are historical/operational-completeness, not instructions to use the removed pipeline: `docs/app/phase-1-deploy.md` names the removed surfaces exactly twice — a cleanup note that the next `functions` deploy will prompt to delete the `share` export (alongside `recomputeStats`), and a one-time retirement step to delete the already-deployed Cloud Run service (`gcloud run services delete og-renderer`), since that service was stood up outside Firebase and Firebase deploys will not remove it. The static planning tables in `plans/**` and the ADR itself may keep their historical mentions.
 
-- **Given** an operator following the Phase 1 deploy guide **when** `docs/app/phase-1-deploy.md` is read **then** it contains no `OG_RENDERER_URL`, no Cloud Run OG renderer deploy section, and no mention of the `share` Function. (Test: "phase-1-deploy.md drops the Cloud Run OG renderer section and OG_RENDERER_URL".)
-- **Given** the same operator reading the app guide **when** `docs/app/README.md` is read **then** the Project Structure block no longer lists `cloud-run/og-renderer/`, and the guide contains no `OG_RENDERER_URL` or Cloud Run OG renderer mention. (Test: "README.md drops the cloud-run/og-renderer references".)
+- **Given** an operator following the Phase 1 deploy guide **when** `docs/app/phase-1-deploy.md` is read **then** it configures no `OG_RENDERER_URL`, carries no `gcloud run deploy og-renderer` create step, and instead carries the `gcloud run services delete og-renderer` retirement step and names `share` in the forced-`--force` cleanup note. (Test: "phase-1-deploy.md configures no OG_RENDERER_URL and retires the Cloud Run service instead of deploying it".)
+- **Given** the same operator reading the app guide **when** `docs/app/README.md` (and the root `README.md`) are read **then** neither lists `cloud-run/og-renderer/` nor mentions `OG_RENDERER_URL`, dynamic/Playwright-rendered OG images, or a Cloud Run OG renderer as a live surface. (Test: "README.md drops the cloud-run/og-renderer references".)
+- **Given** the design-only `specs/x-multi-event-schema.md` **when** its Cloud-Functions and branding-sweep guidance is read **then** it describes the `share` Function as removed (ADR 0005, #39) rather than instructing operators to edit and redeploy it. (Test: "x-multi-event-schema.md no longer instructs redeploying the removed share Function".)
 
 ## Acceptance criteria
 
 - **Given** the merged removal, **when** `npm run build` runs, **then** it is green.
-- **Given** the merged removal, **when** the repo is grepped for `og-renderer`, `OG_RENDERER_URL`, `/s/**`, or the `share` Function, **then** no live code path, config, doc, or test still depends on them.
+- **Given** the merged removal, **when** the repo is grepped for `og-renderer`, `OG_RENDERER_URL`, `/s/**`, or the `share` Function, **then** the only remaining hits are intentional-historical (the ADR, the `plans/**` planning tables, the `scripts/gh-projects/examples/**` issue-authoring scaffolding, this spec/test, and the two `phase-1-deploy.md` cleanup/retirement mentions above) — no live code path, config, or operator-facing doc/spec still instructs deploying, configuring, or depending on the pipeline.
 - **Given** a bare URL pasted into chat, **when** a crawler fetches it, **then** the static `index.html` OG + `og-default.png` still unfurl with no server involved.

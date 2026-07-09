@@ -8,12 +8,12 @@ A live, multiplayer bingo web app (PWA) to play with your friends on a gay cruis
 
 - A randomized 5×5 card dealt from a community-editable prompt pool; the free center square is always marked.
 - Honor-system marking with BINGO + blackout detection and a live leaderboard (client-sorted in Phase 0).
-- Google sign-in with an 18+ acknowledgment, eight party themes, GA4, and a static share image.
-- **Phase 1** (scaffolded, not yet deployed): a photo/audio proof system with a live feed, an admin moderation console with Cloud Vision flagging, verified-claim mode, App Check, and dynamic Playwright-rendered OG share images — designed to land as live updates during the sailing. See [`docs/app/phase-1-deploy.md`](docs/app/phase-1-deploy.md).
+- Google sign-in with an 18+ acknowledgment, eight party themes, GA4, and a static share image for bare-URL unfurl. Shareable win/leaderboard cards are rendered on-device and handed to the native share sheet (ADR 0005) — no server.
+- **Phase 1** (scaffolded, not yet deployed): a photo/audio proof system with a live feed, an admin moderation console with Cloud Vision flagging, verified-claim mode, and App Check — designed to land as live updates during the sailing. See [`docs/app/phase-1-deploy.md`](docs/app/phase-1-deploy.md).
 
 ## Stack
 
-Vite + React 18 + TypeScript (strict) · Firebase (Auth · Firestore · Storage · Hosting · Analytics) · `vite-plugin-pwa` · Cloud Functions + a Cloud Run OG renderer (Phase 1).
+Vite + React 18 + TypeScript (strict) · Firebase (Auth · Firestore · Storage · Hosting · Analytics) · `vite-plugin-pwa` · Cloud Functions (Vision moderation + thumbnails, Phase 1).
 
 ## Quick start
 
@@ -34,7 +34,7 @@ Deploys go through `op-firebase-deploy` (1Password-backed service-account impers
 | Doc | What |
 |---|---|
 | [`docs/app/README.md`](docs/app/README.md) | App guide + deploy / seed / custom-domain runbook |
-| [`docs/app/phase-1-deploy.md`](docs/app/phase-1-deploy.md) | Phase-1 backend deploy (Functions, Cloud Run, App Check) |
+| [`docs/app/phase-1-deploy.md`](docs/app/phase-1-deploy.md) | Phase-1 backend deploy (Functions, App Check) |
 | [`docs/projects/gaycruisebingo/prds/gaycruisebingo.md`](docs/projects/gaycruisebingo/prds/gaycruisebingo.md) | Product requirements (PRD) |
 | [`docs/adr/`](docs/adr/) · [`docs/architecture/`](docs/architecture/) | Architecture decision records |
 | [`DEPLOYMENT.md`](DEPLOYMENT.md) | Deploy tooling + 1Password credential model |

@@ -23,6 +23,7 @@ const indexHtml = read('../index.html');
 const rootReadme = read('../README.md');
 const appReadme = read('../docs/app/README.md');
 const deployGuide = read('../docs/app/phase-1-deploy.md');
+const multiEventSpec = read('../specs/x-multi-event-schema.md');
 
 describe('recon: cloud-run/og-renderer is gone (#39, ADR 0005)', () => {
   it('cloud-run/ does not exist', () => {
@@ -64,18 +65,45 @@ describe('recon: bare-URL unfurl keeps working with no server', () => {
   });
 });
 
-describe('recon: docs drop references to the removed pipeline', () => {
-  it('phase-1-deploy.md drops the Cloud Run OG renderer section and OG_RENDERER_URL', () => {
+describe('recon: docs no longer instruct deploying/configuring the removed pipeline', () => {
+  it('phase-1-deploy.md configures no OG_RENDERER_URL and retires the Cloud Run service instead of deploying it', () => {
+    // No configure-it step: the share Function that read this env var is gone.
     expect(deployGuide).not.toMatch(/OG_RENDERER_URL/);
-    expect(deployGuide).not.toMatch(/Cloud Run OG renderer/);
-    expect(deployGuide).not.toMatch(/og-renderer/);
-    expect(deployGuide).not.toMatch(/`share`\s*\(HTTP/);
+    // No CREATE step for the renderer (the old `gcloud run deploy og-renderer`).
+    expect(deployGuide).not.toMatch(/gcloud run deploy og-renderer/);
+    // Finding 3: a one-time RETIRE step for the separately-deployed Cloud Run
+    // service must be present (Firebase deploys never remove it).
+    expect(deployGuide).toMatch(/gcloud run services delete og-renderer/);
+    // Finding 2: the forced-cleanup note must name `share` (not just
+    // recomputeStats) so an operator knows the functions deploy prompts to
+    // delete it and needs --force.
+    expect(deployGuide).toMatch(/recomputeStats/);
+    expect(deployGuide).toMatch(/`share`/);
+    expect(deployGuide).toMatch(/--force/);
   });
 
   it('README.md drops the cloud-run/og-renderer references', () => {
+    // Root README and app guide: no live surface for the removed pipeline.
     expect(rootReadme).not.toMatch(/cloud-run\/og-renderer/);
     expect(rootReadme).not.toMatch(/OG_RENDERER_URL/);
+    expect(rootReadme).not.toMatch(/Cloud Run OG renderer/);
+    expect(rootReadme).not.toMatch(/Playwright-rendered OG/);
     expect(appReadme).not.toMatch(/cloud-run\/og-renderer/);
     expect(appReadme).not.toMatch(/OG_RENDERER_URL/);
+    expect(appReadme).not.toMatch(/Cloud Run OG renderer/);
+  });
+
+  it('x-multi-event-schema.md no longer instructs redeploying the removed share Function', () => {
+    // Finding 1: the design-only spec described the share Function as a live
+    // surface (query-param OG endpoint, a branding-sweep --only functions
+    // redeploy exception). It must now describe it as removed, and never as
+    // something to edit/redeploy.
+    expect(multiEventSpec).not.toMatch(/OG_RENDERER_URL/);
+    // The old present-tense instruction phrasings that treated share as a live,
+    // editable/redeployable surface must be gone.
+    expect(multiEventSpec).not.toMatch(/does redeploy a Function/);
+    expect(multiEventSpec).not.toMatch(/share Function['’]s OG (description|copy)/);
+    // It should acknowledge the removal by ADR/issue reference.
+    expect(multiEventSpec).toMatch(/ADR 0005/);
   });
 });

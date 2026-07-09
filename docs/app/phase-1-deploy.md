@@ -18,9 +18,9 @@ cd functions && npm install && npm run build && cd ..
 op-firebase-deploy --only functions
 ```
 
-Deploys: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail). Player stats are **not** server-recomputed — they stay client-authoritative by design (ADR 0001).
+Deploys: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail) — now the only export. Player stats are **not** server-recomputed — they stay client-authoritative by design (ADR 0001).
 
-**If a previously deployed project still carries `recomputeStats`:** this deploy is what deletes it — Firebase discovers exports removed from the source and prompts to confirm deleting the live function. The wrapper always runs `firebase deploy --non-interactive`, which stalls on that prompt, so the one-time cleanup deploy must pass the force flag through: `op-firebase-deploy --only functions --force` (extra args pass straight through to `firebase deploy`). The deletion is expected and required (#40, ADR 0001); do not recreate the function.
+**If a previously deployed project still carries `recomputeStats` and/or `share`:** this deploy is what deletes them — Firebase discovers exports removed from the source and prompts to confirm deleting each live function. Two exports have been removed since the scaffold: `recomputeStats` (#40, ADR 0001 — self-writable player stats need no server recompute) and `share` (#39, ADR 0005 — the crawler OG page is replaced by on-device Share Cards). A project deployed before either removal will prompt to delete whichever it still carries. The wrapper always runs `firebase deploy --non-interactive`, which stalls on that prompt, so the one-time cleanup deploy must pass the force flag through: `op-firebase-deploy --only functions --force` (extra args pass straight through to `firebase deploy`). Both deletions are expected and required; do not recreate the function in either case. Deleting `share` from Functions does **not** remove the separate Cloud Run OG renderer — that retirement is step 3 below.
 
 **Moderation note:** SafeSearch is tuned to flag only extreme/violent content, **not** raciness (raciness is expected here). It cannot detect minors — user reporting + the admin console remain the primary control. Flagged proofs appear in **Admin → Flagged**.
 
@@ -31,7 +31,25 @@ Deploys: `moderateProof` (Storage trigger → SafeSearch flag + thumbnail). Play
 3. Set `VITE_RECAPTCHA_SITE_KEY` in `.env.local`, rebuild, redeploy hosting.
 4. In App Check, **enforce** on Cloud Firestore and Cloud Storage once traffic looks healthy.
 
-## 3. Storage & rules
+## 3. Retire the old Cloud Run OG renderer (one-time, only if you deployed it before)
+
+The server-side OG renderer was removed (ADR 0005, #39): its source (`cloud-run/og-renderer/`) and the `share` Function that pointed at it are gone from this repo, and Share Cards are now generated on-device. But the renderer was deployed **separately** — a container on Cloud Run via `gcloud run deploy`, **outside** Firebase Hosting/Functions — so deleting the source and running the Firebase deploys above does **not** remove the live service. If you ran the old Phase 1 instructions, the container stays publicly reachable and billable until you delete it explicitly:
+
+```bash
+# Service name/region the removed cloud-run/og-renderer/README.md deployed with.
+gcloud run services delete og-renderer --region us-central1 --project gaycruisebingo
+```
+
+If you deployed it under a different name or region, list your services first and delete the right one:
+
+```bash
+gcloud run services list --project gaycruisebingo
+gcloud run services delete <service-name> --region <region> --project gaycruisebingo
+```
+
+This is a one-time retirement step for anyone who previously stood the renderer up; on a project that never deployed it there is nothing to delete.
+
+## 4. Storage & rules
 
 `storage.rules` already restricts proof/avatar uploads by owner, MIME type, and size. Deploy:
 
@@ -41,7 +59,7 @@ op-firebase-deploy --only storage,firestore:rules,firestore:indexes
 
 **Do not lock player-stat writes — they stay client-authoritative by design (ADR 0001).** The honor system makes `players/{uid}` self-writable: each Player owns its own `bingoCount`, `squaresMarked`, `firstBingoAt`, and `blackout`. There is no server-side stat recompute to make those fields authoritative, so there is nothing to "harden" toward — do **not** tighten the `players/{uid}` rule to profile-fields-only / admins-only. Such a lock has nothing backing it and would break the client stat writes in `joinAndDeal` and `setMark` (`src/data/api.ts`) and in `attachProof` (`src/data/proofs.ts`), making joins and marks **fail** with a permission error.
 
-## 4. What each Phase 1 piece gives you
+## 5. What each Phase 1 piece gives you
 
 - **Proof capture** (`ProofSheet`) — photo (camera), audio (MediaRecorder), or a text callout; images are downscaled client-side before upload.
 - **Proof Feed** — live activity stream; report/delete.
