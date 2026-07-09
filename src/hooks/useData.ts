@@ -161,17 +161,24 @@ export function useItems(enabled = true) {
   // just the query) so the effect re-subscribes if `enabled` flips back to
   // true — mirrors useEventDoc's pre-auth gate above.
   const { threshold, bannedUids } = useEventModeration();
+  // Scoped `where('status','==','active')` so every matched doc satisfies the item
+  // read rule (#43 F4): non-admins may read only active Prompts, so an unconstrained
+  // collection listen would now be DENIED — the SAME pattern the proof feed uses
+  // (useProofFeed). A single-field equality — no composite index. `useAllItems`
+  // (Admin) stays unconstrained and reads all statuses via the isAdmin arm.
   const { data, loading, hasServerData, fromCache, hasPendingWrites } = useColSub<ItemDoc>(
-    enabled ? itemsCol() : null,
+    enabled ? query(itemsCol(), where('status', '==', 'active')) : null,
     enabled ? 'items' : 'items:disabled',
   );
-  // Three hides drop a Prompt from the live pool: the Admin hard-hide (`status`
-  // flipped off 'active', the Phase-0 override); the ADR 0004 Phase 0 community
-  // auto-hide once `reportCount` reaches `reportHideThreshold`; and the Admin ban
-  // (#108) — a Prompt authored by a banned uid (`createdBy` on `bannedUids`) is
-  // hidden by its OWNER, mirroring `isReportHidden`. `useAllItems` (Admin) applies
-  // NONE of the three, so an Admin can still reach and restore/unban a banned or
-  // threshold-hidden Prompt. Presentational only — the doc is untouched.
+  // Two further presentational hides drop a Prompt from the live pool on top of the
+  // now server-authoritative `status` gate (#43): the ADR 0004 community auto-hide
+  // once `reportCount` reaches `reportHideThreshold` (the Phase-0 fallback that runs
+  // before the Cloud Function catches up), and the Admin ban (#108) — a Prompt
+  // authored by a banned uid (`createdBy` on `bannedUids`) is hidden by its OWNER,
+  // mirroring `isReportHidden`. `useAllItems` (Admin) applies NEITHER, so an Admin
+  // can still reach and restore/unban a threshold-hidden or banned Prompt. The
+  // `status === 'active'` re-check is redundant with the query but harmless (guards
+  // a stale cache row). Presentational only — the doc is untouched.
   const items = data
     .filter(
       (i) =>

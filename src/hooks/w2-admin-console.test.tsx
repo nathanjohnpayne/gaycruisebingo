@@ -214,7 +214,9 @@ describe('useItems — the live Prompt pool excludes threshold-hidden Prompts', 
     const { result } = renderHook(() => useItems());
 
     cap.fireDoc(eventSnap(4));
-    cap.fireCol(
+    // Since #43 F4 the player pool is a status=='active' query, so it arrives on
+    // the query channel (like useProofFeed), not the bare collection channel.
+    cap.fireQuery(
       colSnap([
         item('i1', 4), // AT → hidden
         item('i2', 6), // over → hidden
