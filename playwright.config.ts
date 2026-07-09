@@ -71,6 +71,18 @@ export default defineConfig({
         VITE_FIREBASE_MESSAGING_SENDER_ID: '000000000000',
         VITE_FIREBASE_APP_ID: '1:000000000000:web:0000000000000000000000',
         VITE_EVENT_ID: EVENT_ID,
+        // Hermetic build (Codex P2 on PR #114 round 3): explicitly BLANK every
+        // optional analytics / App Check var so an e2e build on a real
+        // developer checkout can never inherit a live key from `.env.local` or
+        // the parent env and initialize real GA4 / PostHog / App Check — which
+        // would emit synthetic login/mark/bingo/pageview events or load
+        // reCAPTCHA. An already-set (even empty) process-env var wins over
+        // `.env*` in Vite, so these win; each gate is `if (measurementId)` /
+        // `if (!key) return` / `if (VITE_RECAPTCHA_SITE_KEY)`, so blank = off.
+        VITE_FIREBASE_MEASUREMENT_ID: '',
+        VITE_POSTHOG_KEY: '',
+        VITE_POSTHOG_HOST: '',
+        VITE_RECAPTCHA_SITE_KEY: '',
       },
     },
   ],

@@ -22,6 +22,20 @@ export async function readDealtCellTexts(page: Page): Promise<string[]> {
   return cells.allTextContents();
 }
 
+/**
+ * Block until the Board has its FIRST server-backed snapshot — the
+ * `data-server-confirmed="true"` latch Board.tsx sets from useBoard's
+ * `hasServerData` (see there). Marking a winning line while the board is still
+ * cache-only would leave it already in BINGO state when the Celebration
+ * baseline initializes on the first server snapshot, so the transition edge
+ * never fires and the `BINGO!` assertion times out despite the Mark working.
+ * Waiting on the app's own confirmation signal makes the win deterministic —
+ * not a fixed sleep (Codex P2 on PR #114 round 3).
+ */
+export async function waitForBoardServerConfirmed(page: Page): Promise<void> {
+  await expect(page.locator('.grid')).toHaveAttribute('data-server-confirmed', 'true');
+}
+
 /** Tap a Square by its dealt prompt text — the exact text a Player reads, and
  * the same text `readDealtCellTexts` returned for this index. */
 export async function tapCellByText(page: Page, text: string): Promise<void> {

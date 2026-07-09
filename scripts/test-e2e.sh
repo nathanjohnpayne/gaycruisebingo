@@ -15,9 +15,19 @@ set -euo pipefail
 # bare `npx playwright test` requires emulators already running (see
 # specs/x-e2e-happy-path.md).
 
+# The emulator's project id MUST match the browser bundle and the seed helper's
+# PROJECT_ID (tests/e2e/support/env.ts: demo-gaycruisebingo-e2e). Without
+# --project, emulators:exec adopts the .firebaserc default (gaycruisebingo, a
+# real project), so the emulator would evaluate Auth-backed Firestore rules
+# under a DIFFERENT project than the signed-in app writes as — inviting
+# permission-denied / unauthenticated rule evaluations on the app's own
+# board/player writes. Made explicit rather than trusting emulator leniency
+# (Codex P2 on PR #114 round 3). Keep this literal in lockstep with env.ts.
+PROJECT_ID='demo-gaycruisebingo-e2e'
+
 cmd="npx playwright test"
 for arg in "$@"; do
   cmd+=" $(printf '%q' "$arg")"
 done
 
-exec npx firebase emulators:exec --only auth,firestore,storage "$cmd"
+exec npx firebase emulators:exec --only auth,firestore,storage --project "$PROJECT_ID" "$cmd"

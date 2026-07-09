@@ -13,7 +13,12 @@ import {
   userAttested,
 } from './support/seed';
 import { joinViaSharedLink, signedInUid } from './support/join';
-import { LINE_INDICES_EXCLUDING_CENTER, readDealtCellTexts, tapCellByText } from './support/board';
+import {
+  LINE_INDICES_EXCLUDING_CENTER,
+  readDealtCellTexts,
+  tapCellByText,
+  waitForBoardServerConfirmed,
+} from './support/board';
 
 test.describe('x-e2e-happy-path', () => {
   let testEnv: RulesTestEnvironment;
@@ -42,6 +47,11 @@ test.describe('x-e2e-happy-path', () => {
     await expect(page.locator('.card-meta')).toContainText(EVENT_SEED.name);
 
     const dealtTexts = await readDealtCellTexts(page);
+    // Wait for the FIRST server-backed board snapshot before marking the line:
+    // a BINGO completed while the board is still cache-only is swallowed as the
+    // Celebration's initial baseline, not an animated edge, so the BINGO!
+    // assertion below would flake without this (see waitForBoardServerConfirmed).
+    await waitForBoardServerConfirmed(page);
     // Complete the middle row [10,11,12,13,14] — one of the four lines that
     // runs through the free centre (index 12), so the AC's "centre free space
     // counts" needs only 4 taps, not 5.
