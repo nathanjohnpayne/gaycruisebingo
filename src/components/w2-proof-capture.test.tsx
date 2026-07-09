@@ -45,11 +45,25 @@ vi.mock('../hooks/useData', () => ({
 // getAuth() into this suite, which does not stub ../firebase.
 // hasPriorBingoWitness (the finding-D durable-witness check) is stubbed to the
 // no-witness default for the same reason; with no edge crossed it is never called.
+// The pending-Moment queue exports (issue #104) are stubbed too: Board's drain runs
+// on mount and doMark enqueues on every honor mark, so peekPendingMoments must
+// resolve to an empty triple (these gating tests never cross an edge, so the stubs'
+// behaviour is inert — no broadcast fires).
 vi.mock('../data/moments', () => ({
   broadcastBingo: vi.fn(),
   broadcastBlackout: vi.fn(),
   broadcastFirstBingo: vi.fn(),
   hasPriorBingoWitness: vi.fn(() => Promise.resolve(false)),
+  enqueueWinMoments: vi.fn(),
+  enqueueFirstBingoMoment: vi.fn(),
+  peekPendingMoments: vi.fn(() => ({ bingo: false, blackout: false, firstBingo: false })),
+  clearPendingMoment: vi.fn(),
+  // PR #110 hardening: doMark drops fallen wins on every unmark (dropPendingWins),
+  // reads the action generation around the witness await, and the drain checks the
+  // ceremonial candidate's enqueue stamp (firstBingoCandidateCurrent); inert here.
+  dropPendingWins: vi.fn(),
+  pendingActionGeneration: vi.fn(() => 0),
+  firstBingoCandidateCurrent: vi.fn(() => false),
 }));
 // Board resolves the caller's display name via resolveDisplayName (fed the player
 // row) for BOTH the Tally marker and ProofSheet (#31/#78). Stub it here to mirror

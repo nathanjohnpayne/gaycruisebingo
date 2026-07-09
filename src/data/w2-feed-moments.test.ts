@@ -47,6 +47,14 @@ import {
   broadcastFirstBingo,
   hasPriorBingoWitness,
   FIRST_BINGO_MOMENT_ID,
+  enqueueWinMoments,
+  enqueueFirstBingoMoment,
+  peekPendingMoments,
+  clearPendingMoment,
+  dropPendingWins,
+  pendingActionGeneration,
+  firstBingoCandidateCurrent,
+  resetPendingMoments,
 } from './moments';
 import { hasCanonicalMomentId, mergeFeed } from '../hooks/useData';
 import { addDoc, runTransaction } from 'firebase/firestore';
@@ -61,6 +69,9 @@ beforeEach(() => {
   // Cache-miss default: getDocFromCache REJECTS when the doc is not cached, which
   // is the fresh-state norm — the write-once pre-check then lets the write proceed.
   getDocFromCacheSpy.mockRejectedValue(new Error('unavailable'));
+  // The pending-Moment queue is MODULE state (it survives unmounts on purpose,
+  // issue #104), so reset it between cases for isolation.
+  resetPendingMoments();
 });
 
 describe('moments broadcasts — the Feed beat writer (specs/w2-feed-moments.md)', () => {
@@ -170,6 +181,142 @@ describe('hasPriorBingoWitness — the durable prior-win witness (PR #99 round 2
     // spec documents.
     getDocFromCacheSpy.mockRejectedValue(new Error('unavailable'));
     await expect(hasPriorBingoWitness('u1')).resolves.toBe(false);
+  });
+});
+
+describe('the pending-Moment queue — module state that survives Board unmounts (issue #104)', () => {
+  it('enqueues a bingo/blackout win off the mark transition verdict; peek reads it back', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    expect(peekPendingMoments('u1')).toEqual({ bingo: true, blackout: false, firstBingo: false });
+
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true });
+    expect(peekPendingMoments('u1')).toEqual({ bingo: true, blackout: true, firstBingo: false });
+  });
+
+  it('a no-op enqueue (neither transition) leaves the queue untouched — never resurrects a drained flag', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: false });
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('enqueues the ceremonial First-to-BINGO candidate separately (Board gates it on the witness first)', () => {
+    enqueueFirstBingoMoment('u1');
+    expect(peekPendingMoments('u1').firstBingo).toBe(true);
+  });
+
+  it('is keyed per-uid: a held win for one account never leaks into another', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    expect(peekPendingMoments('u2')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('SURVIVES across calls — the state lives in module scope, so an unmount cannot lose it', () => {
+    // The headline #104 fix: enqueue is one call (a mark in doMark), peek is a
+    // LATER call (a drain from a fresh Board mount). Module state bridges them.
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    enqueueFirstBingoMoment('u1');
+    // …a Board unmount / remount happens between enqueue and drain in the app; here
+    // the two calls are simply separated, and the flags are still queued.
+    expect(peekPendingMoments('u1')).toEqual({ bingo: true, blackout: false, firstBingo: true });
+  });
+
+  it('clears one drained kind and drops the entry once empty', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: true });
+    clearPendingMoment('u1', 'bingo');
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: true, firstBingo: false });
+    clearPendingMoment('u1', 'blackout');
+    // Empty now → peek still returns a stable empty triple (the map entry is gone).
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('resetPendingMoments drops the whole queue (test-support)', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    enqueueWinMoments({ uid: 'u2', bingoTransition: false, blackoutTransition: true });
+    resetPendingMoments();
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+    expect(peekPendingMoments('u2')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+});
+
+describe('the action generation + fall-driven drops (Codex P1/P2, PR #110)', () => {
+  // The generation is the token Board's witness continuation checks: captured
+  // before the async durable-witness read, compared after. It bumps ONLY on an
+  // OBSERVED BINGO FALL (round 4 narrowed it): its sole consumers are the
+  // ceremonial machinery, and only what changes whether the bingo stands may
+  // stale them — a non-falling unmark or a blackout-only fall preserves a
+  // legitimate ceremony mid-witness-read.
+
+  it('starts at 0, bumps ONLY on an actual bingo fall — never on a fire-clear, a no-drop unmark, or a blackout-only fall (round 4)', () => {
+    expect(pendingActionGeneration('u1')).toBe(0);
+
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    clearPendingMoment('u1', 'bingo'); // a drain fired it: the win stood, not a fall
+    expect(pendingActionGeneration('u1')).toBe(0); // fires do not invalidate continuations
+
+    // An unmark that dropped NO win (another line still standing) must not stale
+    // a ceremony whose bingo stands continuously (the round-4 finding)…
+    dropPendingWins('u1', {});
+    expect(pendingActionGeneration('u1')).toBe(0);
+    // …and a blackout-only fall does not touch whether the BINGO stands either.
+    dropPendingWins('u1', { blackout: true });
+    expect(pendingActionGeneration('u1')).toBe(0);
+
+    dropPendingWins('u1', { bingo: true }); // an ACTUAL bingo fall
+    expect(pendingActionGeneration('u1')).toBe(1);
+  });
+
+  it('dropPendingWins clears the fallen kinds — a bingo fall also drops the ceremonial candidate', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: true });
+    enqueueFirstBingoMoment('u1');
+    dropPendingWins('u1', { bingo: true });
+    // The ceremonial candidate cannot outlive the bingo it accompanies.
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: true, firstBingo: false });
+    dropPendingWins('u1', { blackout: true });
+    expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+
+  it('the generation SURVIVES the flags entry being emptied — a stale continuation cannot false-match a recreated entry', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    dropPendingWins('u1', { bingo: true }); // empties + deletes the flags entry
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false }); // recreated
+    expect(pendingActionGeneration('u1')).toBe(1); // monotonic — not reset by the delete
+  });
+
+  it('generations are per-uid; resetPendingMoments clears them (test-support)', () => {
+    dropPendingWins('u1', { bingo: true });
+    expect(pendingActionGeneration('u1')).toBe(1);
+    expect(pendingActionGeneration('u2')).toBe(0); // isolated
+    resetPendingMoments();
+    expect(pendingActionGeneration('u1')).toBe(0);
+  });
+
+  it('a NON-falling drop preserves the candidate as CURRENT; a bingo fall clears it (round 4 corrected round 2 finding 3)', () => {
+    enqueueFirstBingoMoment('u1');
+    expect(firstBingoCandidateCurrent('u1')).toBe(true);
+
+    // A no-drop unmark and a blackout-only fall leave the candidate BOTH queued
+    // and current — the bingo it accompanies still stands, nothing was
+    // un-witnessed, and the ceremony must survive (the round-4 finding: the old
+    // unconditional bump made exactly this candidate stale).
+    dropPendingWins('u1', {});
+    dropPendingWins('u1', { blackout: true });
+    expect(peekPendingMoments('u1').firstBingo).toBe(true);
+    expect(firstBingoCandidateCurrent('u1')).toBe(true);
+
+    // An actual bingo fall clears the candidate outright (and bumps): after it,
+    // nothing is queued and nothing is current. Every in-app bump site also
+    // clears, so the stamp's stale-kill is belt-and-braces for future bump sites.
+    dropPendingWins('u1', { bingo: true });
+    expect(peekPendingMoments('u1').firstBingo).toBe(false);
+    expect(firstBingoCandidateCurrent('u1')).toBe(false);
+
+    // A fresh re-enqueue at the new generation is current again.
+    enqueueFirstBingoMoment('u1');
+    expect(firstBingoCandidateCurrent('u1')).toBe(true);
+  });
+
+  it('firstBingoCandidateCurrent is false when no candidate is queued', () => {
+    expect(firstBingoCandidateCurrent('u1')).toBe(false);
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    expect(firstBingoCandidateCurrent('u1')).toBe(false); // a plain bingo is not a candidate
   });
 });
 
