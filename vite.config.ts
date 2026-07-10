@@ -73,7 +73,13 @@ export default defineConfig(({ command, mode }) => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
-          navigateFallback: 'index.html'
+          navigateFallback: 'index.html',
+          // Never intercept Firebase Hosting's reserved /__/* namespace: the
+          // Google sign-in popup navigates to /__/auth/handler (same origin),
+          // and without this denylist the navigation fallback serves the SPA
+          // shell into the popup instead of the OAuth handler, dead-ending
+          // sign-in for every SW-controlled signed-out client (#182).
+          navigateFallbackDenylist: [/^\/__\//]
         }
       })
     ],
