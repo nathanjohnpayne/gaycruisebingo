@@ -137,12 +137,12 @@ export default function Celebration({
 
   return (
     <div className="celebrate" onClick={onClose}>
-      <div onClick={(e) => e.stopPropagation()}>
+      <div className="celebrate-card" onClick={(e) => e.stopPropagation()}>
         <div className="big">{kind === 'blackout' ? 'BLACKOUT' : 'BINGO!'}</div>
         <p className="muted" style={{ letterSpacing: '0.14em', textTransform: 'uppercase' }}>
           You've seen some things.
         </p>
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 14 }}>
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginTop: 14, flexWrap: 'wrap' }}>
           <button className="btn primary" onClick={share} disabled={playerName == null || !cardReady}>
             Share
           </button>

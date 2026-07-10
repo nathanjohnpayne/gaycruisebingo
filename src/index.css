@@ -499,9 +499,24 @@ a {
      src/theme/theme-on-color-contrast.test.tsx. */
   background: radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--primary) 34%, var(--bg)), var(--bg));
 }
+/* The centered celebration content. `max-width: 100%` keeps the card (and so
+   the hero word) within the padded viewport — the grid `place-items: center`
+   above would otherwise let a hero wider than the screen overflow and clip on
+   the right (#147). */
+.celebrate .celebrate-card {
+  max-width: 100%;
+}
 .celebrate .big {
   font-family: 'Bebas Neue', sans-serif;
-  font-size: clamp(64px, 22vw, 150px);
+  /* Was clamp(64px, 22vw, 150px): the 22vw hero (and its 64px floor) rendered
+     "BLACKOUT" wider than a phone viewport, clipping it on the right (#147). A
+     gentler fluid range fits the longest word ("BLACKOUT") across supported
+     widths, and `max-width: 100%` + `overflow-wrap: anywhere` are the hard
+     guarantee — the single word breaks rather than ever overflowing the
+     viewport, even at large text-zoom or the widest fallback font. */
+  font-size: clamp(44px, 15vw, 140px);
+  max-width: 100%;
+  overflow-wrap: anywhere;
   line-height: 0.9;
   /* --ink, not #fff (issue #72, specs/theme-on-color-contrast.md): #fff
      washed out on summer-white's light backdrop. Now that .celebrate's
