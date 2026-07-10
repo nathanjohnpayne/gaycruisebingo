@@ -45,10 +45,10 @@ function ThemedApp() {
   return (
     <ThemeProvider defaultTheme={defaultTheme}>
       <App />
-      {/* The Card route renders Guidelines under its tally. Keep the same
+      {/* The Card route renders Guidelines from Board. Keep the same
           policy affordance reachable on every other signed-in route without
-          duplicating it on Card (#143 review): it stays in normal flow rather
-          than returning to the overlapping fixed bottom-right chrome. */}
+          duplicating it on Card: the fixed bottom-left control sits opposite
+          the bug reporter on the right. */}
       {location.pathname !== '/' && <AcceptableUse />}
     </ThemeProvider>
   );

@@ -70,7 +70,11 @@ export default function AcceptableUse() {
         aria-haspopup="dialog"
         onClick={() => setOpen(true)}
       >
-        18+ · Guidelines
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="9.25" />
+          <path d="M7.5 10.25h2.15v5.25M7.5 15.5h4.2M14.1 9v6.5M11.85 11.25h4.5" />
+        </svg>
+        <span>Guidelines</span>
       </button>
 
       {open && (
