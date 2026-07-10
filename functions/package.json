@@ -7,7 +7,7 @@
   },
   "main": "lib/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp src/bugReportContract.cjs lib/bugReportContract.cjs",
     "serve": "npm run build && firebase emulators:start --only functions",
     "deploy": "npm run build && op-firebase-deploy --only functions"
   },

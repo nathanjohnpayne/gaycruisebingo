@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BugReportInputError, nextRateState, validateBugReportInput } from '../../functions/src/bugReportCore';
 
-const png = `data:image/png;base64,${Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]).toString('base64')}`;
+const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 const valid = () => ({
   schemaVersion: 1,

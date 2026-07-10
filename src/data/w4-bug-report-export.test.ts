@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { archiveReport, exportReports, recordDisposition } from '../../scripts/bug-reports-lib.mjs';
 
-const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1]);
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 let root: string;
 
 const report = (id = 'report_123') => ({
@@ -42,7 +42,15 @@ describe('local bug-report export', () => {
 
   it('removes partial output when a screenshot is malformed', async () => {
     const summary = await exportReports({ reports: [report()], downloadScreenshot: async () => Buffer.from('bad'), root });
-    expect(summary.failed[0].error).toContain('not a PNG');
+    expect(summary.failed[0].error).toContain('valid PNG');
+    await expect(stat(path.join(root, 'inbox/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects screenshot evidence over the shared 5 MiB limit', async () => {
+    const oversized = Buffer.alloc(5 * 1024 * 1024 + 1);
+    PNG.copy(oversized);
+    const summary = await exportReports({ reports: [report()], downloadScreenshot: async () => oversized, root });
+    expect(summary.failed[0].error).toContain('5 MiB');
     await expect(stat(path.join(root, 'inbox/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -50,7 +58,7 @@ describe('local bug-report export', () => {
     const incomplete = report();
     delete (incomplete as Partial<typeof incomplete>).browser;
     const summary = await exportReports({ reports: [incomplete], downloadScreenshot: async () => PNG, root });
-    expect(summary.failed[0].error).toContain('browser');
+    expect(summary.failed[0].error).toContain('Browser');
     await expect(stat(path.join(root, 'inbox/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
