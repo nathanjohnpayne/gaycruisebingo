@@ -646,7 +646,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // unreliable `navigator.onLine` boot signal is sidestepped (Codex P2 on #165).
     const canonical = canonicalRedirectUrl(window.location);
     if (canonical) {
-      window.location.assign(canonical);
+      // replace(), not assign(): the alias page is a signed-out throwaway, so it
+      // must not stay the Back target — after the Player authenticates on the
+      // canonical origin, Back would otherwise return to the alias origin, where
+      // Firebase Auth persistence is origin-scoped (they would look signed out and
+      // could bounce back through this redirect). (Codex P2 on #165.)
+      window.location.replace(canonical);
       return;
     }
     try {

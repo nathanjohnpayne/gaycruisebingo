@@ -161,13 +161,13 @@ describe('AuthContext deal-error hardening', () => {
   });
 
   it('redirects to the canonical origin instead of opening the popup when signing in from a Firebase alias origin (#162/#165)', async () => {
-    const assign = vi.fn();
+    const replace = vi.fn();
     vi.stubGlobal('location', {
       hostname: 'gaycruisebingo.web.app',
       pathname: '/card',
       search: '',
       hash: '',
-      assign,
+      replace,
     });
 
     let signIn!: () => Promise<void>;
@@ -183,8 +183,9 @@ describe('AuthContext deal-error hardening', () => {
 
     await signIn();
 
-    // Alias origin → send the player to the canonical origin to sign in there…
-    expect(assign).toHaveBeenCalledWith('https://gaycruisebingo.com/card');
+    // Alias origin → send the player to the canonical origin to sign in there,
+    // via replace() so the alias page is not left as the Back target…
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.com/card');
     // …and do NOT hit the cross-origin OAuth handler from the alias origin.
     expect(mocks.signInWithPopup).not.toHaveBeenCalled();
     expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
