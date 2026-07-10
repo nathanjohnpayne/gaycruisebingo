@@ -891,11 +891,14 @@ a {
   backdrop-filter: blur(6px);
   border-top: 1px solid var(--border);
 }
-/* If both banners are ever up at once, the pending update takes precedence and
-   covers the install banner rather than trying to stack a third fixed bar — a
-   reload re-fires beforeinstallprompt, so the install offer isn't lost. */
-.update-prompt {
-  z-index: 56;
+/* If both banners are ever up at once, the pending update takes precedence:
+   the install banner is fully suppressed (display: none removes it from the
+   tab order and accessibility tree, not just from view — a z-index overlay
+   would leave keyboard/screen-reader users hitting invisible Install controls
+   underneath) rather than stacking a third fixed bar. A reload re-fires
+   beforeinstallprompt, so the install offer isn't lost. */
+body.update-prompt-visible .install-prompt {
+  display: none;
 }
 .install-prompt p,
 .update-prompt p {
