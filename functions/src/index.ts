@@ -18,10 +18,15 @@ setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
 
 const db = getFirestore();
 const visionClient = new vision.ImageAnnotatorClient();
+const BUG_REPORT_RUNTIME_SERVICE_ACCOUNT = 'firebase-adminsdk-fbsvc@gaycruisebingo.iam.gserviceaccount.com';
 
-/** Private, authenticated bug intake; App Check enforcement follows #44's toggle. */
+/**
+ * Private, authenticated bug intake; App Check enforcement follows #44's
+ * toggle. Pin the runtime identity: the project's default Gen2 compute account
+ * deliberately has no Firestore or Storage data-plane access.
+ */
 export const submitBugReport = onCall(
-  { maxInstances: 10, timeoutSeconds: 30 },
+  { maxInstances: 10, timeoutSeconds: 30, serviceAccount: BUG_REPORT_RUNTIME_SERVICE_ACCOUNT },
   (request) => handleSubmitBugReport(request, BUG_REPORT_APP_CHECK.value()),
 );
 

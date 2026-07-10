@@ -170,4 +170,11 @@ describe('moderateProof export gating (#126)', () => {
     expect(typeof on.notifyProofModeration).toBe('function');
     expect(typeof on.notifyItemModeration).toBe('function');
   });
+
+  it('pins bug-report intake to the Firebase Admin runtime identity', async () => {
+    const mod = await importIndex();
+    expect(mod.submitBugReport.__endpoint.serviceAccountEmail).toBe(
+      'firebase-adminsdk-fbsvc@gaycruisebingo.iam.gserviceaccount.com',
+    );
+  });
 });
