@@ -9,6 +9,7 @@ import type { ThemeId } from './types';
 import App from './App';
 import ConsentNotice from './components/ConsentNotice';
 import InstallPrompt from './components/InstallPrompt';
+import AcceptableUse from './components/AcceptableUse';
 import './theme/themes.css';
 import './index.css';
 
@@ -44,10 +45,11 @@ function ThemedApp() {
   return (
     <ThemeProvider defaultTheme={defaultTheme}>
       <App />
-      {/* ProfileEditor now renders inline as the Nav header avatar (tap your
-          photo to edit) and AcceptableUse renders under the Card tally line
-          (#143) — both moved out of the floating app chrome so they no longer
-          collide in the bottom-right corner. */}
+      {/* The Card route renders Guidelines under its tally. Keep the same
+          policy affordance reachable on every other signed-in route without
+          duplicating it on Card (#143 review): it stays in normal flow rather
+          than returning to the overlapping fixed bottom-right chrome. */}
+      {location.pathname !== '/' && <AcceptableUse />}
     </ThemeProvider>
   );
 }
