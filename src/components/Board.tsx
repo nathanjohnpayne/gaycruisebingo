@@ -847,8 +847,11 @@ export default function Board() {
       doMark(c, false); // unmark is always instant
       return;
     }
-    if (claimMode === 'honor') doMark(c, true);
-    else setProofTarget(c); // proof_required / admin_confirmed capture proof first
+    // EVERY claim opens the ProofSheet (issue #181) — honor included, which
+    // used to mark instantly here. In honor mode the sheet's 🎖️ Cross My Heart
+    // pledge (onPledge below) is the one-tap path back to that same bare Mark;
+    // proof_required / admin_confirmed still require a real capture.
+    setProofTarget(c);
   };
 
   return (
@@ -1012,6 +1015,22 @@ export default function Board() {
           // stays #41's.) Fire-and-forget: the sheet closes without waiting on
           // the witness read.
           onAttached={(res: AttachProofResult) => void broadcastWinVerdict(res)}
+          // The 🎖️ Cross My Heart pledge (issue #181), offered only on a CLAIM
+          // open — an unmarked Square's tap. It is the bare honor Mark the tap
+          // used to make directly: doMark carries the verdict through the same
+          // broadcast pipeline, and the mark queues offline exactly as before
+          // (ADR 0006 — a pledge is a setMark, never a transaction). A ＋-button
+          // proof-add open (marked cell) omits it: the Square is already
+          // claimed, so ProofSheet hides the row entirely.
+          onPledge={
+            proofTarget.marked
+              ? undefined
+              : () => {
+                  const target = proofTarget;
+                  setProofTarget(null);
+                  void doMark(target, true);
+                }
+          }
           onClose={() => setProofTarget(null)}
         />
       )}

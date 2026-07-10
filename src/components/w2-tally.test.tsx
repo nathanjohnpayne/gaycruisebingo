@@ -32,7 +32,8 @@ vi.mock('../auth/AuthContext', () => ({
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
-  // honor mode so a tap marks directly through setMark (no ProofSheet detour).
+  // honor mode: a claim tap opens ProofSheet and its 🎖️ pledge marks through
+  // setMark (issue #181) — the mocked sheet below exposes the pledge trigger.
   useEventDoc: () => ({ data: { claimMode: 'honor' }, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
@@ -55,7 +56,13 @@ vi.mock('../data/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../data/api')>();
   return { ...actual, setMark: H.setMark };
 });
-vi.mock('./ProofSheet', () => ({ default: () => null }));
+// The honor claim routes through ProofSheet's 🎖️ pledge (issue #181), so the
+// mock exposes the onPledge trigger Board wires to the bare Mark; the real
+// sheet's own behavior is w2-proof-capture.test.tsx / w4-honor-pledge.test.tsx.
+vi.mock('./ProofSheet', () => ({
+  default: (props: { onPledge?: () => void }) =>
+    props.onPledge ? <button onClick={props.onPledge}>pledge</button> : null,
+}));
 
 import Board from './Board';
 
@@ -82,8 +89,11 @@ beforeEach(() => {
 });
 
 async function tapFirstSquare() {
-  const { container } = render(<Board />);
+  const { container, getByText } = render(<Board />);
   fireEvent.click(container.querySelectorAll('.grid .cell')[0]);
+  // The claim tap opens the (mocked) sheet; the 🎖️ pledge completes the honor
+  // Mark (issue #181) — the same bare setMark the tap used to make directly.
+  fireEvent.click(getByText('pledge'));
   await waitFor(() => expect(H.setMark).toHaveBeenCalledTimes(1));
   return H.setMark.mock.calls[0][0] as { displayName?: string };
 }

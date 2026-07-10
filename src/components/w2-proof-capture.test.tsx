@@ -12,7 +12,8 @@ import type { BoardDoc, Cell, EventDoc, PlayerDoc } from '../types';
 //   2. Board proof-to-mark gating — in proof_required an unmarked Square opens
 //      ProofSheet instead of marking (friction, not trust — ADR 0001), a
 //      cancelled sheet leaves it unmarked, and unmark stays instant; in honor a
-//      Square marks directly with NO sheet (a Proof never gates credit).
+//      claim tap opens the sheet too, where the 🎖️ pledge marks WITHOUT any
+//      Proof (issue #181 — the full pledge matrix is w4-honor-pledge.test.tsx).
 // attachProof / setMark are stubbed so the assertions are about the flow, not
 // the write (that is w2-proof-capture.test.ts / w1-board-mark-win.test.ts).
 
@@ -182,6 +183,9 @@ describe('ProofSheet — each capture type produces a valid submit and closes', 
     const props = baseProps();
     const { container } = render(<ProofSheet {...props} />);
 
+    // No type is pre-selected (issue #181 — the sheet opens compact), so the
+    // photo capture body renders only once Photo is chosen.
+    await user.click(screen.getByRole('button', { name: /photo/i }));
     const file = new File(['img'], 'proof.jpg', { type: 'image/jpeg' });
     await user.upload(container.querySelector('input[type="file"]') as HTMLInputElement, file);
 
@@ -247,6 +251,7 @@ describe('ProofSheet — each capture type produces a valid submit and closes', 
     const props = baseProps();
     const { container } = render(<ProofSheet {...props} />);
 
+    await user.click(screen.getByRole('button', { name: /photo/i }));
     const file = new File(['img'], 'proof.jpg', { type: 'image/jpeg' });
     await user.upload(container.querySelector('input[type="file"]') as HTMLInputElement, file);
 
@@ -319,15 +324,25 @@ describe('Board — proof-to-mark gating (ADR 0001: friction, not trust)', () =>
     expect(screen.queryByText(/proof for/i)).toBeNull(); // no sheet on unmark
   });
 
-  it('honor: tapping an unmarked Square marks directly with NO sheet (a Proof never gates credit)', async () => {
+  it('honor: a claim tap opens the sheet, and the 🎖️ pledge marks WITHOUT any Proof (issue #181; a Proof never gates credit)', async () => {
+    const user = userEvent.setup();
     H.event = { claimMode: 'honor' } as EventDoc;
     H.board = { uid: 'u1', seed: 1, createdAt: 0, cells: dealt() };
 
     render(<Board />);
     clickCell(0);
 
+    // The sheet opens instead of the old instant mark…
+    expect(await screen.findByText(/proof for/i)).toBeInTheDocument();
+    expect(H.setMark).not.toHaveBeenCalled();
+
+    // …and the pledge IS the claim: one tap marks through the bare setMark
+    // (no attachProof — the pledge writes no Proof doc) and closes the sheet.
+    await user.click(screen.getByRole('button', { name: /cross my heart/i }));
+
     await waitFor(() => expect(H.setMark).toHaveBeenCalledTimes(1));
     expect(H.setMark.mock.calls[0][0]).toMatchObject({ index: 0, nextMarked: true, claimMode: 'honor' });
-    expect(screen.queryByText(/proof for/i)).toBeNull();
+    expect(H.attachProof).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(/proof for/i)).toBeNull());
   });
 });

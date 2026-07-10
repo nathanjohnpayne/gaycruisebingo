@@ -1,0 +1,227 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import type { BoardDoc, Cell, EventDoc, PlayerDoc } from '../types';
+
+// specs/w4-honor-pledge.md (issue #181), RTL-jsdom. EVERY claim tap opens the
+// ProofSheet — honor included, which used to mark instantly — and honor mode
+// gets the one-tap 🎖️ Cross My Heart pledge inside it: the same bare setMark
+// the honor tap always made (no Proof doc, no Feed entry, offline-durable per
+// ADR 0006), so a Proof stays flavour, never enforcement (ADR 0001). Stricter
+// modes render the pledge DISABLED (a teaser, not a path); a proof-add open
+// (the ＋ on an already-marked Square) hides the row entirely. setMark and
+// attachProof are stubbed: the flow is under test, not the writes.
+
+const H = vi.hoisted(() => ({
+  user: { uid: 'u1', displayName: 'Deck Daddy', photoURL: null } as {
+    uid: string;
+    displayName: string | null;
+    photoURL: string | null;
+  },
+  board: null as BoardDoc | null,
+  player: null as PlayerDoc | null,
+  event: null as EventDoc | null,
+  setMark: vi.fn(),
+  attachProof: vi.fn(),
+  track: vi.fn(),
+}));
+
+vi.mock('../hooks/useData', () => ({
+  useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
+  useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
+  useEventDoc: () => ({ data: H.event, loading: false }),
+  useItems: () => ({ items: [], loading: false, hasServerData: true }),
+  useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
+  useLeaderboard: () => ({ players: [], loading: false }),
+  useDoubts: () => ({ doubts: [], count: 0, loading: false, hasServerData: true }),
+  useMyProofs: () => ({ proofs: [], loading: false, hasServerData: true }),
+  useProofsForItemText: () => ({ proofs: [], loading: false, hasServerData: true }),
+}));
+// The Moment machinery is inert here (no test crosses a win edge); stubbing the
+// module also keeps the prod ../firebase singleton out of this suite — the same
+// isolation w2-proof-capture.test.tsx documents.
+vi.mock('../data/moments', () => ({
+  broadcastBingo: vi.fn(),
+  broadcastBlackout: vi.fn(),
+  broadcastFirstBingo: vi.fn(),
+  hasPriorBingoWitness: vi.fn(() => Promise.resolve(false)),
+  enqueueWinMoments: vi.fn(),
+  enqueueFirstBingoMoment: vi.fn(),
+  peekPendingMoments: vi.fn(() => ({ bingo: false, blackout: false, firstBingo: false })),
+  clearPendingMoment: vi.fn(),
+  dropPendingWins: vi.fn(),
+  pendingActionGeneration: vi.fn(() => 0),
+  firstBingoCandidateCurrent: vi.fn(() => false),
+}));
+vi.mock('../data/doubts', () => ({
+  raiseDoubt: vi.fn(),
+  openDoubts: () => [],
+  doubtStatusFor: () => 'none',
+}));
+vi.mock('../data/api', () => ({
+  setMark: H.setMark,
+  resolveDisplayName: (
+    profile: { displayName?: unknown } | null | undefined,
+    fallback: string | null | undefined,
+  ) =>
+    typeof profile?.displayName === 'string' && profile.displayName.trim().length > 0
+      ? profile.displayName
+      : (fallback ?? 'Anonymous'),
+}));
+vi.mock('../data/proofs', () => ({ attachProof: H.attachProof }));
+vi.mock('../analytics', () => ({ track: H.track }));
+vi.mock('../auth/AuthContext', () => ({
+  useAuth: () => ({ user: H.user, loading: false, signIn: vi.fn(), signOutUser: vi.fn() }),
+}));
+
+import Board from './Board';
+
+// A dealt board: every non-free Square unmarked, the free centre (12) "on".
+function dealt(): Cell[] {
+  return Array.from({ length: 25 }, (_, index) => ({
+    index,
+    itemId: index === 12 ? null : `i${index}`,
+    text: index === 12 ? 'FREE' : `Prompt ${index}`,
+    free: index === 12,
+    marked: index === 12,
+    markedAt: null,
+  }));
+}
+
+const PLEDGE = /cross my heart/i;
+
+const clickCell = (index: number) => {
+  fireEvent.click(document.querySelectorAll('.grid .cell')[index]);
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  H.user = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null };
+  H.event = { claimMode: 'honor' } as EventDoc;
+  H.board = { uid: 'u1', seed: 1, createdAt: 0, cells: dealt() };
+  H.player = null;
+  H.setMark.mockResolvedValue({ cells: [], bingo: false, blackout: false });
+  H.attachProof.mockResolvedValue(undefined);
+});
+
+describe('honor mode — the claim opens the sheet; the pledge IS the claim', () => {
+  it('tapping an unmarked Square opens the sheet without marking; the pledge marks in one tap and closes it', async () => {
+    const user = userEvent.setup();
+    render(<Board />);
+    clickCell(0);
+
+    expect(await screen.findByText(/proof for/i)).toBeInTheDocument();
+    expect(H.setMark).not.toHaveBeenCalled();
+
+    const pledge = screen.getByRole('button', { name: PLEDGE });
+    expect(pledge).toBeEnabled();
+    await user.click(pledge);
+
+    await waitFor(() => expect(H.setMark).toHaveBeenCalledTimes(1));
+    expect(H.setMark.mock.calls[0][0]).toMatchObject({
+      index: 0,
+      nextMarked: true,
+      claimMode: 'honor',
+    });
+    // A pledge writes NO Proof doc — no Feed entry, no Doubt satisfaction.
+    expect(H.attachProof).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(/proof for/i)).toBeNull());
+  });
+
+  it('Cancel leaves the Square unmarked; unmarking a marked Square stays instant with no sheet', async () => {
+    const user = userEvent.setup();
+    const cells = dealt();
+    cells[1] = { ...cells[1], marked: true, markedAt: 1, status: 'confirmed' };
+    H.board = { uid: 'u1', seed: 1, createdAt: 0, cells };
+    render(<Board />);
+
+    clickCell(0);
+    await screen.findByText(/proof for/i);
+    await user.click(screen.getByRole('button', { name: /cancel/i }));
+    await waitFor(() => expect(screen.queryByText(/proof for/i)).toBeNull());
+    expect(H.setMark).not.toHaveBeenCalled();
+    expect(H.attachProof).not.toHaveBeenCalled();
+
+    clickCell(1); // marked → instant unmark, never a sheet
+    await waitFor(() => expect(H.setMark).toHaveBeenCalledTimes(1));
+    expect(H.setMark.mock.calls[0][0]).toMatchObject({ index: 1, nextMarked: false });
+    expect(screen.queryByText(/proof for/i)).toBeNull();
+  });
+
+  it('opens compact — no capture body until a proof type is selected — and the pledge row fits one line (nowrap, full width)', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<Board />);
+    clickCell(0);
+    await screen.findByText(/proof for/i);
+
+    // Tightened sheet: nothing pre-selected, so no capture body renders…
+    expect(container.querySelector('.proof-body')).toBeNull();
+    expect(container.querySelector('input[type="file"]')).toBeNull();
+    // …and Mark it cannot submit a nothing-proof.
+    expect(screen.getByRole('button', { name: /mark it/i })).toBeDisabled();
+
+    // The pledge is its own full-width, single-line row (specs/w4-honor-pledge.md):
+    // .pledge-btn carries width:100% + white-space:nowrap in src/index.css.
+    const pledge = screen.getByRole('button', { name: PLEDGE });
+    expect(pledge.className).toContain('pledge-btn');
+
+    // Choosing a type expands its capture body.
+    await user.click(screen.getByRole('button', { name: /photo/i }));
+    expect(container.querySelector('input[type="file"]')).toBeInTheDocument();
+  });
+
+  it('a REAL proof still works from a claim open — the pledge is optional, not forced', async () => {
+    const user = userEvent.setup();
+    render(<Board />);
+    clickCell(0);
+    await screen.findByText(/proof for/i);
+
+    await user.click(screen.getByRole('button', { name: /callout/i }));
+    await user.type(screen.getByRole('textbox'), 'saw it myself');
+    await user.click(screen.getByRole('button', { name: /mark it/i }));
+
+    await waitFor(() => expect(H.attachProof).toHaveBeenCalledTimes(1));
+    expect(H.attachProof.mock.calls[0][0]).toMatchObject({
+      cellIndex: 0,
+      claimMode: 'honor',
+      proof: { type: 'text', text: 'saw it myself' },
+    });
+    expect(H.setMark).not.toHaveBeenCalled();
+  });
+});
+
+describe('stricter modes — the pledge is a disabled teaser', () => {
+  it.each(['proof_required', 'admin_confirmed'] as const)(
+    '%s: the claim-open sheet renders the pledge DISABLED and pressing it does nothing',
+    async (mode) => {
+      H.event = { claimMode: mode } as EventDoc;
+      render(<Board />);
+      clickCell(0);
+      await screen.findByText(/proof for/i);
+
+      const pledge = screen.getByRole('button', { name: PLEDGE });
+      expect(pledge).toBeDisabled();
+      fireEvent.click(pledge); // a disabled control swallows the click
+      expect(H.setMark).not.toHaveBeenCalled();
+      expect(screen.getByText(/proof for/i)).toBeInTheDocument(); // still open
+    },
+  );
+});
+
+describe('proof-add opens — no pledge on an already-claimed Square', () => {
+  it.each(['honor', 'proof_required'] as const)(
+    '%s: the ＋ proof-add sheet hides the pledge row entirely',
+    async (mode) => {
+      H.event = { claimMode: mode } as EventDoc;
+      const cells = dealt();
+      cells[0] = { ...cells[0], marked: true, markedAt: 1, status: 'confirmed' };
+      H.board = { uid: 'u1', seed: 1, createdAt: 0, cells };
+      render(<Board />);
+
+      fireEvent.click(screen.getAllByTitle('Add proof')[0]);
+      await screen.findByText(/proof for/i);
+
+      expect(screen.queryByRole('button', { name: PLEDGE })).toBeNull();
+    },
+  );
+});

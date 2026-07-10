@@ -572,6 +572,24 @@ a {
   font-weight: 600;
   margin-bottom: 12px;
 }
+/* The 🎖️ Cross My Heart pledge (issue #181): its own full-width row above the
+   proof-type segments — never a fourth segment — so the label stays on one
+   line at 320px. Enabled (glowing like a selected segment) only in honor
+   mode; stricter modes render it disabled as a teaser for the honor path. */
+.pledge-btn {
+  width: 100%;
+  white-space: nowrap;
+  margin-bottom: 12px;
+  border-color: var(--primary);
+  box-shadow: 0 0 10px var(--shadow);
+  font-weight: 600;
+}
+.pledge-btn:disabled {
+  opacity: 0.45;
+  border-color: var(--border);
+  box-shadow: none;
+  cursor: not-allowed;
+}
 .seg {
   display: flex;
   gap: 6px;

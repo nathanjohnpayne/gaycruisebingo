@@ -36,10 +36,15 @@ export async function waitForBoardServerConfirmed(page: Page): Promise<void> {
   await expect(page.locator('.grid')).toHaveAttribute('data-server-confirmed', 'true');
 }
 
-/** Tap a Square by its dealt prompt text — the exact text a Player reads, and
- * the same text `readDealtCellTexts` returned for this index. */
-export async function tapCellByText(page: Page, text: string): Promise<void> {
+/** Claim a Square by its dealt prompt text — the exact text a Player reads, and
+ * the same text `readDealtCellTexts` returned for this index. A claim tap opens
+ * the ProofSheet in every Claim Mode (issue #181); in honor mode — this suite's
+ * seeded mode — the 🎖️ Cross My Heart pledge completes the claim as the same
+ * bare offline-durable Mark the tap used to make directly, so the offline case
+ * (ADR 0006) drives this exact flow too. */
+export async function claimCellByText(page: Page, text: string): Promise<void> {
   await page.getByText(text, { exact: true }).click();
+  await page.getByRole('button', { name: /cross my heart/i }).click();
 }
 
 /** The 4 non-free indices of a line through the centre (the free space
