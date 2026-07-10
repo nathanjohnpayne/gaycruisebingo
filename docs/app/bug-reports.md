@@ -65,10 +65,10 @@ Group reports that describe the same defect into one issue (keep every source re
 
 Privacy: **do not attach report screenshots to public GitHub issues.** This repo is public, and captures may contain other players' names and photos plus app NSFW content; a GitHub attachment would publish that world-readably and is hard to retract. GitHub image attachments also have no REST API, so `gh issue create` cannot upload them anyway. Instead, give every issue a **`## Screenshot evidence`** section that makes the private evidence retrievable by report ID, so whoever picks up the ticket knows exactly how to see it:
 
-```markdown
+````markdown
 ## Screenshot evidence
 
-Not attached (public repo; capture may contain other players' names/photos and app NSFW content). Retained privately in Firebase (≤90 days) and retrievable by report ID:
+Not attached (public repo; capture may contain other players' names/photos and app NSFW content). Retained privately in Firebase (normally up to 90 days; an active linked issue may extend that) and retrievable by report ID:
 
 1. From a `gaycruisebingo` checkout, load Firebase deploy credentials and run the exporter (§ steps 1–2 above):
 
@@ -79,7 +79,7 @@ Not attached (public repo; capture may contain other players' names/photos and a
 2. Open `.github/bug-reports/inbox/<report-id>/screenshot.png` (gitignored). If already imported on that machine, it is at `.github/bug-reports/imported/<report-id>/screenshot.png` instead.
 
 Source report ID(s): `<report-id>`
-```
+````
 
 The pull is idempotent and Firebase keeps the reports immutable, so a fresh checkout (with no local ledger) re-materializes every still-retained report — the report ID stays a durable pointer to the evidence for the retention window.
 
@@ -110,11 +110,13 @@ Call it once per report. Note that the login shell here is **zsh**, which does n
 
 ### 7. Verify and clean up
 
-Confirm the inbox is empty, every `imported/<id>/github-issue.json` receipt exists, and `git status --porcelain .github/` is clean (the inbox/imported trees are gitignored — `git check-ignore` should confirm). Then purge the fetched deploy credentials: `scripts/op-preflight.sh --agent <agent> --purge`.
+Confirm every report is accounted for: each imported report has an `imported/<id>/github-issue.json` receipt, and any report you could not import stays in the inbox with a `disposition.json` (step 6) — a valid partial run leaves failed/ambiguous reports behind on purpose, so "empty inbox" is not the check; "no un-actioned report left over" is. Confirm `git status --porcelain .github/` is clean (the inbox/imported trees are gitignored — `git check-ignore` should confirm). Then purge the fetched deploy credentials: `scripts/op-preflight.sh --agent <agent> --purge`.
 
 ## Daily scheduled import
 
-A local scheduled task (`import-bug-reports`, managed via this app's scheduled tasks) runs the runbook above once per day. Because scheduled runs execute in the local app environment, they can reach the gh keyring and 1Password exactly as an interactive session does; each run starts with a fresh context, so its prompt points back at this runbook. If the app is closed when the task is due, it runs on next launch. The task pulls fresh reports and, when the inbox is non-empty, follows the review → dedup → draft → create → archive flow. Whether it creates issues autonomously or pauses for human approval before any GitHub write is set in the task's own prompt.
+A local scheduled task (`import-bug-reports`, managed via this app's scheduled tasks) runs once per day. It is **approval-gated**: each run performs only the read-only half of the runbook — load credentials, pull, review, deduplicate, and draft — then presents the drafts and stops. It makes **no** GitHub writes and runs no `bugs:archive` / `bugs:disposition`; creating the issues and archiving is a human-approved follow-up (steps 5–6). This satisfies the #146 requirement of human confirmation before any GitHub write.
+
+Scheduled runs execute in the local app environment, so they use the same credential path as an interactive session; each run starts with a fresh context, so its prompt is self-contained and points back at this runbook. If the app is closed when the task is due, it runs on next launch. Note that the pull needs a 1Password biometric unlock (step 1): an unattended run while 1Password is locked cannot pull, so the task is written to detect that, report it, and stop rather than proceed without credentials. No non-interactive credential path is configured today — if daily unattended pulls become a requirement, provision a 1Password service-account token (or an injected Firebase service-account key) and adapt step 1 accordingly.
 
 ## Privacy and retention
 
