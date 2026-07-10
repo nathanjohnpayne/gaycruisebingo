@@ -120,8 +120,9 @@ describe('W4 bug-report inbox', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Report a bug' }));
     await screen.findByText(/Screenshot unavailable/);
     const textarea = screen.getByLabelText('What happened?');
+    fireEvent.change(textarea, { target: { value: 'The board froze.' } });
     const send = screen.getByRole('button', { name: 'Send report' });
-    send.removeAttribute('disabled');
+    expect(send).toBeEnabled();
     send.focus();
     fireEvent.keyDown(document, { key: 'Tab' });
     expect(textarea).toHaveFocus();

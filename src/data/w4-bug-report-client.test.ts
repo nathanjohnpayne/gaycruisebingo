@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../firebase', () => ({ EVENT_ID: 'med-2026', functions: {} }));
 
 import { buildBugReportInput } from './bugReports';
+
+afterEach(() => window.history.replaceState({}, '', '/'));
 
 describe('bug-report client diagnostics', () => {
   it('records the screen path without potentially sensitive query parameters', () => {
