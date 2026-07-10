@@ -7,7 +7,7 @@ status: accepted
 
 **Claim Mode is the Event-wide setting for how much friction a Mark carries — a friction/vibe knob, NOT a trust level (ADR 0001).** It is a dispute/ceremony tool, never anti-cheat. There are three modes:
 
-- **`honor`** (default, least friction) — a tap marks INSTANTLY. The square is `confirmed` and counts toward stats and wins the moment it is marked.
+- **`honor`** (default, least friction) — a claim tap opens the ProofSheet, where the 🎖️ Cross My Heart pledge marks in ONE tap (issue #181, `specs/w4-honor-pledge.md`; before #181 the tap itself marked with no sheet). The pledge is the same bare `setMark` an honor tap always took: the square is `confirmed` and counts toward stats and wins the moment it is marked, and the data-layer semantics below are unchanged.
 - **`proof_required`** — a Mark needs a Proof first: the ProofSheet opens, and on attach the square marks `confirmed` (it counts). The Proof is flavour, not enforcement (ADR 0001) — it enriches the Feed, it does not make the Mark more trustworthy.
 - **`admin_confirmed`** (renamed from the misleading `verified`) — a Mark starts **pending**: the square is `marked` but `status: 'pending'`, excluded from the win mask (`game/logic`: `marked && status !== 'pending'`), so it does NOT count. A Claim is raised for an Admin to **confirm** (the square becomes `confirmed`, credited, and its pending Proof is published) or **reject** (the square is unmarked and its Tally marker removed; the Proof stays admin-only). Admin-confirmed is a dispute/ceremony tool, NOT anti-cheat — do not frame or build it as one.
 

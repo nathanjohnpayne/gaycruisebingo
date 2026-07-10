@@ -17,12 +17,21 @@ interface Props {
   // Moment exactly like an honor Mark — the sheet itself never touches the
   // moments queue. Optional: standalone renders (tests) omit it.
   onAttached?: (res: AttachProofResult) => void;
+  // The 🎖️ Cross My Heart pledge (issue #181): present only on CLAIM opens (an
+  // unmarked Square's tap), where Board wires it to the bare honor Mark. Absent
+  // on proof-add opens (the ＋ on an already-marked Square) — the Square is
+  // already claimed, so the row does not render at all. Enabled only in honor
+  // mode; stricter modes show it disabled so Players learn the option exists.
+  onPledge?: () => void;
   onClose: () => void;
 }
 
 export default function ProofSheet(props: Props) {
-  const { uid, displayName, photoURL, cells, cell, claimMode, currentFirstBingoAt, onAttached, onClose } = props;
-  const [type, setType] = useState<ProofType>('photo');
+  const { uid, displayName, photoURL, cells, cell, claimMode, currentFirstBingoAt, onAttached, onPledge, onClose } = props;
+  // No proof type is pre-selected (issue #181): the sheet opens on EVERY claim
+  // now, so it opens compact — the capture body below renders only once a type
+  // is chosen, keeping the pledge/segments in immediate thumb reach.
+  const [type, setType] = useState<ProofType | null>(null);
   const [photo, setPhoto] = useState<Blob | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [audio, setAudio] = useState<Blob | null>(null);
@@ -66,10 +75,17 @@ export default function ProofSheet(props: Props) {
     setRecording(false);
   };
 
-  const valid = type === 'photo' ? !!photo : type === 'audio' ? !!audio : text.trim().length > 0;
+  const valid =
+    type === null
+      ? false
+      : type === 'photo'
+        ? !!photo
+        : type === 'audio'
+          ? !!audio
+          : text.trim().length > 0;
 
   const submit = async () => {
-    if (!valid) return;
+    if (!valid || type === null) return;
     setBusy(true);
     try {
       const proof =
@@ -114,6 +130,27 @@ export default function ProofSheet(props: Props) {
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>
         <div className="sheet-title">Proof for “{cell.text}”</div>
+        {onPledge && (
+          // The one-tap honor pledge (issue #181): its own full-width row —
+          // never a fourth segment — so the label always fits on one line at
+          // 320px. Pressing it IS the claim: Board marks the Square (the same
+          // bare setMark an honor tap used to make) and closes the sheet. In
+          // stricter modes it renders disabled: those modes require a real
+          // proof, and the greyed row teaches that honor mode has a fast path.
+          <button
+            className="btn pledge-btn"
+            // `busy` too (Codex P2, PR #184): in honor mode a player can pick a
+            // REAL proof and submit — while that attachProof transaction is in
+            // flight, a pledge tap would fire the bare setMark path in parallel
+            // and race the transaction's full-cell write. One in-flight claim
+            // per sheet: the pledge locks while a submit is saving.
+            disabled={claimMode !== 'honor' || busy}
+            title={claimMode !== 'honor' ? 'Available when the event runs honor mode' : undefined}
+            onClick={onPledge}
+          >
+            🎖️ Cross My Heart
+          </button>
+        )}
         <div className="seg">
           {tabs.map((t) => (
             <button key={t} className={'seg-btn' + (type === t ? ' on' : '')} onClick={() => setType(t)}>

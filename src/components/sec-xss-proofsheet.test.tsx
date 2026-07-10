@@ -157,7 +157,9 @@ describe('ProofSheet — text callout is inert; photo preview still renders', ()
     const user = userEvent.setup();
     const { container } = render(<ProofSheet {...sheetProps()} />);
 
-    // Photo tab is the default; uploading a file sets a blob: preview URL.
+    // No type is pre-selected (issue #181): choose Photo, then uploading a
+    // file sets a blob: preview URL.
+    await user.click(screen.getByRole('button', { name: /photo/i }));
     const file = new File(['img'], 'proof.jpg', { type: 'image/jpeg' });
     await user.upload(container.querySelector('input[type="file"]') as HTMLInputElement, file);
 

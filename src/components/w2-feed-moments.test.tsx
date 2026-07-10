@@ -32,9 +32,10 @@ const H = vi.hoisted(() => ({
   players: [] as PlayerDoc[],
   rosterConfirmed: true,
   feedEntries: [] as FeedEntry[],
-  // 'honor' marks straight through doMark; 'proof_required' routes an unmarked tap
-  // to ProofSheet (mocked below with a submit trigger) so the proofed completion
-  // path (PR #110 round 2 finding 1) is drivable too.
+  // EVERY claim tap opens ProofSheet now (issue #181): in 'honor' the mocked
+  // sheet's pledge trigger completes the bare doMark; 'proof_required' uses its
+  // submit trigger so the proofed completion path (PR #110 round 2 finding 1)
+  // is drivable too.
   claimMode: 'honor' as 'honor' | 'proof_required' | 'admin_confirmed',
   // What the mocked ProofSheet reports via onAttached — the attachProof verdict.
   proofAttachResult: null as unknown,
@@ -96,16 +97,31 @@ vi.mock('../data/proofs', () => ({
 // real attachProof returns — then closes, exactly like the real sheet's submit.
 // The real capture/submit flow is w2-proof-capture.test.tsx; here only the
 // verdict hand-off to Board matters.
+// It also exposes the 🎖️ pledge trigger (issue #181): Board passes onPledge on
+// every CLAIM open, and the mock mirrors the real sheet's honor-only gate by
+// disabling it in stricter modes (a disabled button swallows the click).
 vi.mock('./ProofSheet', () => ({
-  default: (props: { onAttached?: (res: unknown) => void; onClose: () => void }) => (
-    <button
-      onClick={() => {
-        if (H.proofAttachResult) props.onAttached?.(H.proofAttachResult);
-        props.onClose();
-      }}
-    >
-      submit-proof
-    </button>
+  default: (props: {
+    claimMode: 'honor' | 'proof_required' | 'admin_confirmed';
+    onAttached?: (res: unknown) => void;
+    onPledge?: () => void;
+    onClose: () => void;
+  }) => (
+    <>
+      {props.onPledge && (
+        <button disabled={props.claimMode !== 'honor'} onClick={props.onPledge}>
+          pledge
+        </button>
+      )}
+      <button
+        onClick={() => {
+          if (H.proofAttachResult) props.onAttached?.(H.proofAttachResult);
+          props.onClose();
+        }}
+      >
+        submit-proof
+      </button>
+    </>
   ),
 }));
 vi.mock('./Celebration', () => ({ default: () => null }));
@@ -159,6 +175,14 @@ async function clickMark(label: string, verdict: Partial<Verdict> = {}, cellsAft
   await act(async () => {
     fireEvent.click(screen.getByText(label));
   });
+  // A CLAIM tap opens the sheet now (issue #181); the 🎖️ pledge completes the
+  // honor Mark. An UNMARK tap stays instant — no sheet, so no trigger renders.
+  const pledge = screen.queryByText('pledge');
+  if (pledge) {
+    await act(async () => {
+      fireEvent.click(pledge);
+    });
+  }
   await flushAsync(); // settle doMark's setMark → witness → enqueue → drain chain
 }
 

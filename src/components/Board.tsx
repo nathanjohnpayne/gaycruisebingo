@@ -435,6 +435,24 @@ export default function Board() {
   // tallyTarget null.
   if (tallyTarget && !tallySourceLive(tallyTarget)) setTallyTarget(null);
 
+  // ProofSheet's SOURCE Square is live only while the CURRENT account's board
+  // still holds the SAME Prompt at that cell in the SAME marked state the sheet
+  // opened against (Codex P2, PR #184 — the tallySourceLive class applied to the
+  // proof/pledge surface). An account switch can land the NEW uid's board under
+  // an OPEN sheet: `cellsAttributable` alone then passes, and a pledge would
+  // mark the captured index on the WRONG card. The marked-state check also
+  // closes a claim sheet whose Square another tab claimed meanwhile (its pledge
+  // has nothing left to claim) and a proof-add sheet whose Mark fell. Note the
+  // sheet's own attachProof success races its board echo here: the echo flips
+  // the cell to marked and this close can fire just before submit's onClose —
+  // both paths null the same state, so the double-close is idempotent.
+  const proofSourceLive = (target: Cell): boolean => {
+    if (!cellsAttributable) return false;
+    const cell = cells.find((c) => c.index === target.index);
+    return cell != null && !cell.free && cell.itemId === target.itemId && cell.marked === target.marked;
+  };
+  if (proofTarget && !proofSourceLive(proofTarget)) setProofTarget(null);
+
   // The latest identity + roster + gate signals + CURRENT attributable cells for
   // Moment broadcasts, stored in a ref so `drainMoments` (a stable callback)
   // always reads the CURRENT actor, gate state, and board, never a stale render's
@@ -847,8 +865,11 @@ export default function Board() {
       doMark(c, false); // unmark is always instant
       return;
     }
-    if (claimMode === 'honor') doMark(c, true);
-    else setProofTarget(c); // proof_required / admin_confirmed capture proof first
+    // EVERY claim opens the ProofSheet (issue #181) — honor included, which
+    // used to mark instantly here. In honor mode the sheet's 🎖️ Cross My Heart
+    // pledge (onPledge below) is the one-tap path back to that same bare Mark;
+    // proof_required / admin_confirmed still require a real capture.
+    setProofTarget(c);
   };
 
   return (
@@ -1012,6 +1033,28 @@ export default function Board() {
           // stays #41's.) Fire-and-forget: the sheet closes without waiting on
           // the witness read.
           onAttached={(res: AttachProofResult) => void broadcastWinVerdict(res)}
+          // The 🎖️ Cross My Heart pledge (issue #181), offered only on a CLAIM
+          // open — an unmarked Square's tap. It is the bare honor Mark the tap
+          // used to make directly: doMark carries the verdict through the same
+          // broadcast pipeline, and the mark queues offline exactly as before
+          // (ADR 0006 — a pledge is a setMark, never a transaction). A ＋-button
+          // proof-add open (marked cell) omits it: the Square is already
+          // claimed, so ProofSheet hides the row entirely.
+          onPledge={
+            proofTarget.marked
+              ? undefined
+              : () => {
+                  const target = proofTarget;
+                  setProofTarget(null);
+                  // Write-time twin of the render-time proofSourceLive close
+                  // above (Codex P2, PR #184) — the same belt-and-braces split
+                  // as toggle + doMark: a tap queued before the closing render
+                  // commits must not mark a captured target the current board
+                  // no longer backs. Dead source → close only, write nothing.
+                  if (!proofSourceLive(target)) return;
+                  void doMark(target, true);
+                }
+          }
           onClose={() => setProofTarget(null)}
         />
       )}

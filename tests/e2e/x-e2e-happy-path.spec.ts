@@ -17,7 +17,7 @@ import { joinViaSharedLink, signedInUid } from './support/join';
 import {
   LINE_INDICES_EXCLUDING_CENTER,
   readDealtCellTexts,
-  tapCellByText,
+  claimCellByText,
   waitForBoardServerConfirmed,
 } from './support/board';
 import { EVENT_ID } from './support/env';
@@ -58,7 +58,7 @@ test.describe('x-e2e-happy-path', () => {
     // runs through the free centre (index 12), so the AC's "centre free space
     // counts" needs only 4 taps, not 5.
     for (const index of LINE_INDICES_EXCLUDING_CENTER) {
-      await tapCellByText(page, dealtTexts[index]);
+      await claimCellByText(page, dealtTexts[index]);
     }
 
     // The celebration headline (Celebration.tsx `.big`), targeted by class +
@@ -129,7 +129,7 @@ test.describe('x-e2e-happy-path', () => {
     // 2. Mark it. setMark's commit() never resolves while offline (ADR 0006),
     // but the write lands in the persistent (IndexedDB) cache synchronously
     // via latency compensation, so the UI reflects it at once.
-    await tapCellByText(page, targetText);
+    await claimCellByText(page, targetText);
     await expect(markedCellLocator(page, targetText)).toHaveClass(/marked/);
 
     // 3. "Reload" while STILL offline: memory is wiped and the whole app

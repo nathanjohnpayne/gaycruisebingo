@@ -23,7 +23,7 @@ Every claim below maps to a real assertion. Layers and runners: `src/data/w2-pro
 - In `proof_required`, tapping an unmarked Square opens `ProofSheet` and writes no Mark until a Proof is attached — `src/components/w2-proof-capture.test.tsx`.
 - A cancelled sheet leaves the Square unmarked (no `attachProof`, no `setMark`) — `src/components/w2-proof-capture.test.tsx`.
 - Unmarking an already-marked Square stays instant even in `proof_required` (no proof gate on unmark) — `src/components/w2-proof-capture.test.tsx`.
-- In `honor` mode a Square marks directly with no sheet — a Proof never gates credit — `src/components/w2-proof-capture.test.tsx`.
+- In `honor` mode a claim tap opens the sheet too (issue #181), but the 🎖️ Cross My Heart pledge marks WITHOUT any Proof — a Proof never gates credit — `src/components/w4-honor-pledge.test.tsx` (see `specs/w4-honor-pledge.md`; before #181 an honor tap marked directly with no sheet).
 - `admin_confirmed` starts the Proof `pending` (admin-only readable per the rules), holds the cell `pending` so it is excluded from stats, and files a claim for the admin queue referencing the proof + cell — `src/data/w2-proof-capture.test.ts`.
 - `ProofSheet` never frames a Proof as "required for credit" — `src/components/w2-proof-capture.test.tsx`.
 
