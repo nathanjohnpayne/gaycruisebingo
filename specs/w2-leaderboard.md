@@ -59,7 +59,7 @@ Runner: `npm test` (Vitest, jsdom). Test: `src/components/w2-leaderboard.test.ts
 - Switching back to "All" restores the full, still-unreordered roster.
 - The active filter button carries `aria-pressed="true"`, and exactly one filter is active at a time.
 - A filter with no matches renders a distinct "No one matches this filter yet." message while the filter row stays interactive — never the global empty-roster state.
-- The global "Loading…" state and the global "No players yet" (empty-roster) state both render with no filter row at all, unaffected by the filter feature.
+- The global animated "Tallying the leaderboard…" state and the global "No players yet" (empty-roster) state both render with no filter row at all, unaffected by the filter feature.
 
 ## Acceptance criteria
 

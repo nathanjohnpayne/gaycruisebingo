@@ -3,6 +3,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useItems } from '../hooks/useData';
 import { addItem, checkItemRateLimit, itemRateLimitRemainingMs, reportItem } from '../data/api';
 import { track } from '../analytics';
+import LoadingState from './LoadingState';
 
 // Pre-sail framing (ADR 0003): a Board freezes the moment a Player joins, so
 // a Prompt added afterward can never land on THAT Player's own card — it only
@@ -111,7 +112,7 @@ export default function ItemPool() {
         </p>
       )}
       {loading ? (
-        <div className="center muted">Loading…</div>
+        <LoadingState label="Fetching prompts…" />
       ) : (
         <div className="list">
           {items.map((it) => (
