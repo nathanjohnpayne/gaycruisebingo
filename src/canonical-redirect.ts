@@ -29,11 +29,30 @@ export function canonicalRedirectUrl(loc: {
   return `https://${CANONICAL_HOST}${loc.pathname}${loc.search}${loc.hash}`;
 }
 
+/**
+ * Whether a boot on this location should redirect, and where — `null` means stay
+ * put. Redirects only when online: an offline PWA boot on an alias origin must
+ * stay local, because the service-worker shell and the Firestore/Auth IndexedDB
+ * the ADR 0006 offline cold-boot relies on are origin-scoped. Navigating
+ * cross-origin while offline would strand the player on an uncached
+ * gaycruisebingo.com and abandon any offline-queued Marks (Codex P1 on #162).
+ */
+export function redirectTargetForBoot(
+  loc: { hostname: string; pathname: string; search: string; hash: string },
+  online: boolean,
+): string | null {
+  if (!online) return null;
+  return canonicalRedirectUrl(loc);
+}
+
 // Side effect on import: run the redirect at the earliest point in the boot path
 // (this module is imported first in main.tsx, before React/Firebase/PostHog
 // evaluate). Guarded on `window` so it is inert under SSR/tests; `replace` (not
 // assign) so the alias URL never lands in history and the back button can't loop.
 if (typeof window !== 'undefined') {
-  const target = canonicalRedirectUrl(window.location);
+  // Mirror AuthContext.isOnline: a definite navigator.onLine === false means "no
+  // network"; a missing navigator or `true` is treated as online.
+  const online = typeof navigator === 'undefined' || navigator.onLine !== false;
+  const target = redirectTargetForBoot(window.location, online);
   if (target) window.location.replace(target);
 }
