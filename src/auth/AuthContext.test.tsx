@@ -159,6 +159,38 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
     expect(mocks.attestAdult).not.toHaveBeenCalled();
   });
+
+  it('redirects to the canonical origin instead of opening the popup when signing in from a Firebase alias origin (#162/#165)', async () => {
+    const assign = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      assign,
+    });
+
+    let signIn!: () => Promise<void>;
+    function Capture() {
+      ({ signIn } = useAuth());
+      return null;
+    }
+    render(
+      <AuthProvider>
+        <Capture />
+      </AuthProvider>,
+    );
+
+    await signIn();
+
+    // Alias origin → send the player to the canonical origin to sign in there…
+    expect(assign).toHaveBeenCalledWith('https://gaycruisebingo.com/card');
+    // …and do NOT hit the cross-origin OAuth handler from the alias origin.
+    expect(mocks.signInWithPopup).not.toHaveBeenCalled();
+    expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
+
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('AuthContext stale-attempt + retry hardening', () => {

@@ -10,6 +10,7 @@ import {
   readAdultAttestationFromServer,
 } from '../data/api';
 import { track } from '../analytics';
+import { canonicalRedirectUrl } from '../canonical-redirect';
 import SignIn from '../components/SignIn';
 import ConfirmWinMoments from '../components/ConfirmWinMoments';
 import PoolRecoveryWatcher from '../components/PoolRecoveryWatcher';
@@ -635,6 +636,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = async () => {
+    // Sign in same-origin with Firebase Auth's OAuth handler (authDomain =
+    // gaycruisebingo.com, #161): if the app is running on a Firebase alias origin
+    // (.web.app/.firebaseapp.com), send the Player to the canonical origin to
+    // authenticate there rather than hitting the cross-origin handler that fails in
+    // storage-partitioned webviews (#162). Redirecting at sign-in time — not at
+    // boot — means a signed-in Player reading their cached board offline is never
+    // navigated away, and signing in always needs the network anyway, so the
+    // unreliable `navigator.onLine` boot signal is sidestepped (Codex P2 on #165).
+    const canonical = canonicalRedirectUrl(window.location);
+    if (canonical) {
+      window.location.assign(canonical);
+      return;
+    }
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (err) {

@@ -1,7 +1,3 @@
-// First import on purpose (#162): its side effect redirects Firebase alias
-// origins (.web.app/.firebaseapp.com) to the canonical gaycruisebingo.com before
-// React, Firebase, or PostHog evaluate, so the OAuth handler is same-origin (#161).
-import './canonical-redirect';
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, useLocation } from 'react-router-dom';

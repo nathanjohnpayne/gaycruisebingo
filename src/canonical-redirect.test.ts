@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canonicalRedirectUrl, redirectTargetForBoot } from './canonical-redirect';
+import { canonicalRedirectUrl } from './canonical-redirect';
 
 describe('canonicalRedirectUrl (#162)', () => {
   it('redirects gaycruisebingo.web.app to the canonical origin, preserving path/query/hash', () => {
@@ -33,31 +33,5 @@ describe('canonicalRedirectUrl (#162)', () => {
     ]) {
       expect(canonicalRedirectUrl({ hostname, pathname: '/', search: '', hash: '' })).toBeNull();
     }
-  });
-});
-
-describe('redirectTargetForBoot — offline guard (Codex P1)', () => {
-  it('redirects an alias origin when online', () => {
-    expect(
-      redirectTargetForBoot({ hostname: 'gaycruisebingo.web.app', pathname: '/card', search: '', hash: '' }, true),
-    ).toBe('https://gaycruisebingo.com/card');
-  });
-
-  it('stays put on an alias origin when OFFLINE (keeps the origin-scoped cached shell + queued Marks)', () => {
-    expect(
-      redirectTargetForBoot({ hostname: 'gaycruisebingo.web.app', pathname: '/card', search: '', hash: '' }, false),
-    ).toBeNull();
-    expect(
-      redirectTargetForBoot({ hostname: 'gaycruisebingo.firebaseapp.com', pathname: '/', search: '', hash: '' }, false),
-    ).toBeNull();
-  });
-
-  it('stays put on the canonical origin whether online or offline', () => {
-    expect(
-      redirectTargetForBoot({ hostname: 'gaycruisebingo.com', pathname: '/', search: '', hash: '' }, true),
-    ).toBeNull();
-    expect(
-      redirectTargetForBoot({ hostname: 'gaycruisebingo.com', pathname: '/', search: '', hash: '' }, false),
-    ).toBeNull();
   });
 });

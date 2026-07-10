@@ -1,23 +1,30 @@
-// Keep every visitor on the canonical origin so Firebase Auth's OAuth handler is
-// same-origin with the app (#161, #162). authDomain is gaycruisebingo.com, but
-// Firebase Hosting also serves the app at gaycruisebingo.web.app and
-// gaycruisebingo.firebaseapp.com. A visitor who lands on one of those has a
-// cross-origin auth handler, so Google sign-in fails with "missing initial state"
-// in storage-partitioned in-app webviews (iMessage/Instagram/WhatsApp) and Safari
-// ITP — the exact failure #161 fixed for .com only. authDomain can be one origin,
-// so we funnel the alias origins to it instead.
+// Google sign-in must run same-origin with Firebase Auth's OAuth handler
+// (authDomain is gaycruisebingo.com, #161). Firebase Hosting also serves the app
+// at the alias origins gaycruisebingo.web.app and gaycruisebingo.firebaseapp.com;
+// a visitor who signs in from one of those hits a cross-origin handler that fails
+// with "missing initial state" in storage-partitioned in-app webviews and Safari
+// ITP (#162). So when a Player signs in from an alias origin we send them to the
+// canonical origin to authenticate there.
+//
+// This is consulted at sign-in time (AuthContext.signIn), NOT at boot: a boot
+// redirect would navigate away from an alias origin whose service-worker shell and
+// Firestore/Auth IndexedDB hold a signed-in Player's cached board and offline-
+// queued Marks, and `navigator.onLine` is unreliable on ship/captive Wi-Fi, so it
+// could strand a player who only wanted to read their cached board offline (Codex
+// P2 on #165). Signing in always requires the network, so gating the redirect on
+// the sign-in action sidesteps the connectivity question entirely.
 
 const CANONICAL_HOST = 'gaycruisebingo.com';
 
 // The Firebase-default alias hosts that serve the same site. localhost, preview
-// (vite preview / e2e), and the canonical host itself are intentionally absent so
-// this never fires in dev, tests, or on .com.
+// channels (vite preview / e2e), and the canonical host itself are intentionally
+// absent so this never fires in dev, tests, or on .com.
 const ALIAS_HOSTS = ['gaycruisebingo.web.app', 'gaycruisebingo.firebaseapp.com'];
 
 /**
- * The canonical URL to send this location to, or `null` when it is already
- * canonical (or a non-alias host like localhost/preview). Pure so it is unit
- * testable; the path, query, and hash are preserved verbatim.
+ * The canonical URL to send this location to before signing in, or `null` when it
+ * is already canonical (or a non-alias host like localhost/preview). Pure so it is
+ * unit testable; the path, query, and hash are preserved verbatim.
  */
 export function canonicalRedirectUrl(loc: {
   hostname: string;
@@ -27,32 +34,4 @@ export function canonicalRedirectUrl(loc: {
 }): string | null {
   if (!ALIAS_HOSTS.includes(loc.hostname)) return null;
   return `https://${CANONICAL_HOST}${loc.pathname}${loc.search}${loc.hash}`;
-}
-
-/**
- * Whether a boot on this location should redirect, and where — `null` means stay
- * put. Redirects only when online: an offline PWA boot on an alias origin must
- * stay local, because the service-worker shell and the Firestore/Auth IndexedDB
- * the ADR 0006 offline cold-boot relies on are origin-scoped. Navigating
- * cross-origin while offline would strand the player on an uncached
- * gaycruisebingo.com and abandon any offline-queued Marks (Codex P1 on #162).
- */
-export function redirectTargetForBoot(
-  loc: { hostname: string; pathname: string; search: string; hash: string },
-  online: boolean,
-): string | null {
-  if (!online) return null;
-  return canonicalRedirectUrl(loc);
-}
-
-// Side effect on import: run the redirect at the earliest point in the boot path
-// (this module is imported first in main.tsx, before React/Firebase/PostHog
-// evaluate). Guarded on `window` so it is inert under SSR/tests; `replace` (not
-// assign) so the alias URL never lands in history and the back button can't loop.
-if (typeof window !== 'undefined') {
-  // Mirror AuthContext.isOnline: a definite navigator.onLine === false means "no
-  // network"; a missing navigator or `true` is treated as online.
-  const online = typeof navigator === 'undefined' || navigator.onLine !== false;
-  const target = redirectTargetForBoot(window.location, online);
-  if (target) window.location.replace(target);
 }
