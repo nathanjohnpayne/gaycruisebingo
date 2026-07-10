@@ -16,7 +16,7 @@
     "test:e2e": "scripts/test-e2e.sh",
     "emulator": "firebase emulators:start --only auth,firestore,storage",
     "seed": "node scripts/seed.mjs",
-    "verify:seed": "node scripts/seed.mjs --verify",
+    "verify:seed": "GOOGLE_CLOUD_PROJECT=gaycruisebingo node scripts/seed.mjs --verify",
     "deploy": "npm run build && scripts/firebase/op-firebase-deploy",
     "deploy:hosting": "npm run build && scripts/firebase/op-firebase-deploy --only hosting",
     "pretest:e2e": "playwright install chromium"
@@ -39,6 +39,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.7.0",
     "fake-indexeddb": "^6.2.5",
+    "firebase-admin": "^12.7.0",
     "firebase-tools": "^15.22.4",
     "jsdom": "^25.0.1",
     "typescript": "^5.6.2",

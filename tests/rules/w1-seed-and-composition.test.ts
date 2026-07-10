@@ -122,6 +122,9 @@ async function readPool(db: Firestore) {
     text: d.data().text,
     createdBy: d.data().createdBy,
     spicy: d.data().spicy,
+    isFreeSpace: d.data().isFreeSpace,
+    status: d.data().status,
+    reportCount: d.data().reportCount,
   }));
 }
 

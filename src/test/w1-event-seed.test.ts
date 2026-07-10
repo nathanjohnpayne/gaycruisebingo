@@ -5,10 +5,18 @@ import { resolve } from 'node:path';
 // declarations (tsconfig sets no allowJs); Vitest resolves and executes it natively,
 // and importing it is side-effect-free because seeding only runs when the script is
 // the entry module. Asserts specs/w1-event-seed.md.
-import { EVENT_SEED, ITEMS, adminRoster, eventWritePayload, seedItemDocId, verifySeedPool } from '../../scripts/seed.mjs';
+import { EVENT_SEED, ITEMS, adminRoster, eventWritePayload, formatDriftReport, seedItemDocId, verifySeedPool } from '../../scripts/seed.mjs';
 
 type SeedItem = { text: string; spicy: boolean };
-type LiveDoc = { id: string; text: string; createdBy: string; spicy: boolean };
+type LiveDoc = {
+  id: string;
+  text: string;
+  createdBy: string;
+  spicy: boolean;
+  isFreeSpace: boolean;
+  status: string;
+  reportCount: number;
+};
 
 // Build the live `events/{id}/items` shape a correct, in-sync seed run leaves
 // behind: every canonical prompt as a seed-owned doc with the content-hash id.
@@ -18,6 +26,9 @@ function liveFromCanonical(pool: SeedItem[] = ITEMS as SeedItem[]): LiveDoc[] {
     text,
     createdBy: 'seed',
     spicy,
+    isFreeSpace: false,
+    status: 'active',
+    reportCount: 0,
   }));
 }
 
@@ -145,7 +156,15 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
   it('ignores player-submitted prompts — they are not canonical and never count as drift', () => {
     const live: LiveDoc[] = [
       ...liveFromCanonical(),
-      { id: 'player-abc', text: 'A player prompt', createdBy: 'player-1', spicy: true },
+      {
+        id: 'player-abc',
+        text: 'A player prompt',
+        createdBy: 'player-1',
+        spicy: true,
+        isFreeSpace: false,
+        status: 'active',
+        reportCount: 0,
+      },
     ];
     const report = verifySeedPool(live);
     expect(report.ok).toBe(true);
@@ -164,7 +183,15 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
   it('flags a seed-owned prompt the canonical pool no longer contains as stale', () => {
     const live: LiveDoc[] = [
       ...liveFromCanonical(),
-      { id: seedItemDocId('A retired prompt'), text: 'A retired prompt', createdBy: 'seed', spicy: false },
+      {
+        id: seedItemDocId('A retired prompt'),
+        text: 'A retired prompt',
+        createdBy: 'seed',
+        spicy: false,
+        isFreeSpace: false,
+        status: 'active',
+        reportCount: 0,
+      },
     ];
     const report = verifySeedPool(live);
     expect(report.ok).toBe(false);
@@ -219,19 +246,54 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     ]);
   });
 
+  it.each([
+    ['isFreeSpace', { isFreeSpace: true }],
+    ['status', { status: 'hidden' }],
+    ['reportCount', { reportCount: 4 }],
+  ])('flags %s drift that removes a canonical prompt from the player-facing pool', (_field, change) => {
+    const live = liveFromCanonical().map((d) =>
+      d.text === 'Threesome' ? { ...d, ...change } : d,
+    );
+    const report = verifySeedPool(live);
+    expect(report.ok).toBe(false);
+    expect(report.mismatched).toHaveLength(1);
+    expect(report.mismatched[0]).toMatchObject({ text: 'Threesome' });
+  });
+
+  it('prints a roster-safe reconcile command for the same event and project', () => {
+    const previousProject = process.env.GOOGLE_CLOUD_PROJECT;
+    process.env.GOOGLE_CLOUD_PROJECT = 'staging-bingo';
+    try {
+      const report = verifySeedPool([]);
+      expect(formatDriftReport(report, 'future-cruise')).toContain(
+        'ADMIN_UID= VITE_EVENT_ID=future-cruise GOOGLE_CLOUD_PROJECT=staging-bingo node scripts/seed.mjs',
+      );
+    } finally {
+      if (previousProject === undefined) delete process.env.GOOGLE_CLOUD_PROJECT;
+      else process.env.GOOGLE_CLOUD_PROJECT = previousProject;
+    }
+  });
+
   // The exact production condition: the live pool is still the OLD (pre-#135)
   // seed set — a couple of prompts that survived into the new pool, plus retired
   // ones — and none of the ~86 new entries. verifySeedPool must catch it as both
   // missing (new entries absent) AND stale (retired entries lingering).
   it('reproduces the #129 incident: an un-reseeded OLD pool drifts on both axes', () => {
     const oldLive: LiveDoc[] = [
-      // Survived unchanged into the new pool.
-      { id: seedItemDocId('Threesome'), text: 'Threesome', createdBy: 'seed', spicy: true },
-      // Retired / renamed by #135 — should have been deleted on reseed.
-      { id: seedItemDocId('Make out with Patti LuPone'), text: 'Make out with Patti LuPone', createdBy: 'seed', spicy: true },
-      { id: seedItemDocId('Dance-floor blowjob'), text: 'Dance-floor blowjob', createdBy: 'seed', spicy: true },
-      { id: seedItemDocId('3 loads in one day'), text: '3 loads in one day', createdBy: 'seed', spicy: true },
-    ];
+      // Survived unchanged into the new pool, followed by prompts retired/renamed by #135.
+      'Threesome',
+      'Make out with Patti LuPone',
+      'Dance-floor blowjob',
+      '3 loads in one day',
+    ].map((text) => ({
+      id: seedItemDocId(text),
+      text,
+      createdBy: 'seed',
+      spicy: true,
+      isFreeSpace: false,
+      status: 'active',
+      reportCount: 0,
+    }));
     const report = verifySeedPool(oldLive);
     expect(report.ok).toBe(false);
     expect(report.missing.length).toBe(86); // every new-pool entry except 'Threesome'

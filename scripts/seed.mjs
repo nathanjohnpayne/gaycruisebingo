@@ -1,7 +1,7 @@
 // Seed the event + prompt pool using the Firebase Admin SDK (bypasses security rules).
 //
 // One-time setup (Application Default Credentials — no committed key file):
-//   1. npm i -D firebase-admin
+//   1. npm install
 //   2. gcloud auth application-default login
 //   3. Find each Admin's Google UID: sign into the app once, then Firebase console > Authentication > Users.
 //   4. ADMIN_UID=<uid>[,<uid>,...] GOOGLE_CLOUD_PROJECT=gaycruisebingo node scripts/seed.mjs
@@ -216,7 +216,12 @@ export function seedItemMutations(existingDocs, now = Date.now()) {
 // the mismatch going unnoticed. Player-submitted docs (createdBy !== 'seed') are
 // ignored — they are not part of the canonical pool and must never count as drift.
 export function verifySeedPool(existingDocs, pool = ITEMS) {
-  const expected = new Map(pool.map(({ text, spicy }) => [seedItemDocId(text), { text, spicy }]));
+  const expected = new Map(
+    pool.map(({ text, spicy }) => [
+      seedItemDocId(text),
+      { text, spicy, isFreeSpace: false, status: 'active', reportCount: 0 },
+    ]),
+  );
   const seedDocs = existingDocs.filter((doc) => doc.createdBy === 'seed');
   const seedById = new Map(seedDocs.map((doc) => [doc.id, doc]));
 
@@ -234,17 +239,33 @@ export function verifySeedPool(existingDocs, pool = ITEMS) {
   // field (all of which `Boolean(...)` would silently coerce to the "right"
   // answer) is itself drift the check must surface (Codex P2, PR #139).
   const mismatched = [];
-  for (const [id, { text, spicy }] of expected) {
+  for (const [id, expectedDoc] of expected) {
+    const { text } = expectedDoc;
     const live = seedById.get(id);
     if (!live) {
       missing.push({ id, text });
-    } else if (live.spicy !== spicy || live.text !== text) {
+    } else if (
+      live.text !== expectedDoc.text ||
+      live.spicy !== expectedDoc.spicy ||
+      live.isFreeSpace !== expectedDoc.isFreeSpace ||
+      live.status !== expectedDoc.status ||
+      live.reportCount !== expectedDoc.reportCount
+    ) {
       mismatched.push({
         id,
         text,
-        expectedSpicy: spicy,
+        expectedSpicy: expectedDoc.spicy,
         actualSpicy: live.spicy,
         ...(live.text !== text ? { actualText: live.text } : {}),
+        ...(live.isFreeSpace !== expectedDoc.isFreeSpace
+          ? { expectedIsFreeSpace: expectedDoc.isFreeSpace, actualIsFreeSpace: live.isFreeSpace }
+          : {}),
+        ...(live.status !== expectedDoc.status
+          ? { expectedStatus: expectedDoc.status, actualStatus: live.status }
+          : {}),
+        ...(live.reportCount !== expectedDoc.reportCount
+          ? { expectedReportCount: expectedDoc.reportCount, actualReportCount: live.reportCount }
+          : {}),
       });
     }
   }
@@ -271,9 +292,8 @@ export function verifySeedPool(existingDocs, pool = ITEMS) {
 // ---------------------------------------------------------------------------
 
 // Resolve the Admin SDK + a Firestore handle. Shared by `seed()` (writes) and
-// `verify()` (read-only). firebase-admin is a run-directly-only dependency
-// (`npm i -D firebase-admin` before seeding) that is absent from the app
-// install. The specifiers are computed + @vite-ignore so Vite (which transforms
+// `verify()` (read-only). firebase-admin is a dev dependency used only when this
+// script runs directly. The specifiers are computed + @vite-ignore so Vite (which transforms
 // this module when a test imports the pure payload/verify builders) never tries
 // to resolve them at transform time — Node resolves them normally at run time.
 async function initFirestore() {
@@ -285,10 +305,8 @@ async function initFirestore() {
     ({ initializeApp, cert, applicationDefault } = await import(/* @vite-ignore */ adminAppModule));
     ({ getFirestore, FieldValue } = await import(/* @vite-ignore */ adminFirestoreModule));
   } catch (err) {
-    // firebase-admin is a dev-only, run-directly-only dependency kept out of the
-    // app install (see the module header), so `npm run seed` / `verify:seed` on a
-    // clean checkout would otherwise fail with a raw ERR_MODULE_NOT_FOUND. Give
-    // the operator the one command that fixes it (Codex P2, PR #139).
+    // Keep a focused error if a partial or production-only install omitted the
+    // dev dependency, rather than surfacing a raw ERR_MODULE_NOT_FOUND.
     if (err?.code === 'ERR_MODULE_NOT_FOUND') {
       console.error(
         'firebase-admin is not installed — it is a dev-only dependency this script\n' +
@@ -375,6 +393,9 @@ async function seed() {
       text: doc.data().text,
       createdBy: doc.data().createdBy,
       spicy: doc.data().spicy,
+      isFreeSpace: doc.data().isFreeSpace,
+      status: doc.data().status,
+      reportCount: doc.data().reportCount,
     })),
   );
   if (!report.ok) {
@@ -425,7 +446,7 @@ export function formatDriftReport(report, eventId) {
     process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || 'gaycruisebingo';
   const eventEnv = eventId && eventId !== 'med-2026' ? `VITE_EVENT_ID=${eventId} ` : '';
   lines.push(
-    `  → reconcile (prompts only): ${eventEnv}GOOGLE_CLOUD_PROJECT=${project} node scripts/seed.mjs`,
+    `  → reconcile (prompts only): ADMIN_UID= ${eventEnv}GOOGLE_CLOUD_PROJECT=${project} node scripts/seed.mjs`,
   );
   return lines.join('\n');
 }
@@ -442,6 +463,9 @@ async function verify() {
       text: doc.data().text,
       createdBy: doc.data().createdBy,
       spicy: doc.data().spicy,
+      isFreeSpace: doc.data().isFreeSpace,
+      status: doc.data().status,
+      reportCount: doc.data().reportCount,
     })),
   );
   if (report.ok) {
