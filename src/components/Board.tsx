@@ -24,6 +24,7 @@ import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../ga
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
+import AcceptableUse from './AcceptableUse';
 import type { Cell, ClaimMode, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 import LoadingState from './LoadingState';
 
@@ -962,6 +963,10 @@ export default function Board() {
       <div className="count">
         Marked <b>{countMarked(cells)}</b> · Bingos <b>{player?.bingoCount ?? 0}</b>
       </div>
+      {/* 18+ · Guidelines, centered under the tally (#143) — moved out of the
+          floating app chrome so it no longer shares the bottom-right corner with
+          any other affordance. Self-gates on the signed-in User (ADR 0005). */}
+      <AcceptableUse />
       {/* `cells` fixes the empty-card share race (Codex P2, PR #111 finding
           1): Celebration used to open its own useBoard(uid) listener and
           could render/share before that listener's own first snapshot

@@ -75,13 +75,16 @@ function Editor({ user }: { user: User }) {
     };
   }, [open]);
 
-  // Wait for the live users/{uid} snapshot, not just auth, before rendering the
-  // trigger: openEditor() below seeds `name` from `currentName`, and while the
-  // profile subscription is still loading, `profile` is null so that fallback
-  // reads `user.displayName` (the Google name). Rendering earlier risked
-  // seeding — and, on an immediate Save, persisting — the Google name over a
-  // saved custom displayName that simply hadn't arrived yet.
-  if (profileLoading || !profileConfirmed) return null;
+  // The avatar itself is the edit trigger (it lives in the Nav header), so it
+  // renders immediately for layout — but it stays DISABLED until the live
+  // users/{uid} snapshot lands. openEditor() below seeds `name` from
+  // `currentName`, and while the profile subscription is still loading `profile`
+  // is null so that fallback reads `user.displayName` (the Google name). Gating
+  // the OPEN on `ready` (not hiding the trigger) keeps the same guarantee — the
+  // editor can never seed, and on Save persist, the Google name over a saved
+  // custom displayName that simply hadn't arrived yet — without leaving a hole
+  // in the header where the avatar belongs.
+  const ready = !profileLoading && profileConfirmed;
 
   const currentName = validDisplayName(profile?.displayName) ?? validDisplayName(user.displayName) ?? 'Anonymous';
   // customPhoto flags whether photoURL currently holds a custom upload (vs.
@@ -89,6 +92,7 @@ function Editor({ user }: { user: User }) {
   const customSrc = profile?.customPhoto === true && typeof profile.photoURL === 'string' ? profile.photoURL : null;
 
   const openEditor = () => {
+    if (!ready) return; // belt-and-braces; the trigger is also `disabled` until ready
     setName(currentName);
     setError(null);
     setOpen(true);
@@ -121,8 +125,17 @@ function Editor({ user }: { user: User }) {
 
   return (
     <>
-      <button ref={triggerRef} type="button" className="iconbtn profile-trigger" title="Edit profile" aria-label="Edit profile" aria-haspopup="dialog" onClick={openEditor}>
-        ✎
+      <button
+        ref={triggerRef}
+        type="button"
+        className="avatar-trigger"
+        title="Edit profile"
+        aria-label="Edit profile"
+        aria-haspopup="dialog"
+        disabled={!ready}
+        onClick={openEditor}
+      >
+        <Avatar name={currentName} src={user.photoURL ?? null} customPhoto={customSrc} />
       </button>
       {open && (
         <div className="sheet-backdrop" onClick={() => setOpen(false)}>

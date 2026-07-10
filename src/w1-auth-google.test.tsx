@@ -33,6 +33,9 @@ vi.mock('./hooks/useData', () => ({
   useMyPlayer: () => ({ data: null, loading: false, hasServerData: false }),
   useLeaderboard: () => ({ players: [], loading: false, hasServerData: false }),
   useMyClaims: () => ({ claims: [], loading: false, hasServerData: false }),
+  // ProfileEditor now renders as the Nav header avatar (#143), so the App shell
+  // pulls in useMyUser too; an inert stub keeps it out of this test's focus.
+  useMyUser: () => ({ data: null, loading: false, hasServerData: false }),
 }));
 
 import App from './App';

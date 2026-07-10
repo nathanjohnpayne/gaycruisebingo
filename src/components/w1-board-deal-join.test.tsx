@@ -250,10 +250,13 @@ describe('Board render', () => {
     const reDeal = /re-?deal|deal again|shuffle|swap|redraw|re-?roll|new card|regenerate/i;
     expect(screen.queryByRole('button', { name: reDeal })).toBeNull();
     expect(screen.queryByText(reDeal)).toBeNull();
-    // A freshly dealt card exposes only the permanent Free Space feedback control —
-    // no proof buttons, and certainly no re-deal button.
-    expect(screen.queryAllByRole('button')).toHaveLength(1);
+    // A freshly dealt card exposes only the permanent Free Space feedback control
+    // — no proof buttons, and certainly no re-deal button. The only other button
+    // is the 18+ · Guidelines pill in the Board footer (#143), app chrome rather
+    // than a card affordance.
+    expect(screen.queryAllByRole('button')).toHaveLength(2);
     expect(screen.getByRole('button', { name: FREE_TEXT })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /guidelines/i })).toBeInTheDocument();
   });
 });
 

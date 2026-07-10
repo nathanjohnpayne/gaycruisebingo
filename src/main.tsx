@@ -8,9 +8,8 @@ import { initPostHog, phIdentify, phReset, phPageview } from './posthog';
 import type { ThemeId } from './types';
 import App from './App';
 import ConsentNotice from './components/ConsentNotice';
-import ProfileEditor from './components/ProfileEditor';
-import AcceptableUse from './components/AcceptableUse';
 import InstallPrompt from './components/InstallPrompt';
+import AcceptableUse from './components/AcceptableUse';
 import './theme/themes.css';
 import './index.css';
 
@@ -46,13 +45,11 @@ function ThemedApp() {
   return (
     <ThemeProvider defaultTheme={defaultTheme}>
       <App />
-      {/* Global profile editor — App.tsx/Nav.tsx are frozen, so it mounts here. */}
-      <ProfileEditor />
-      {/* Acceptable-use / community-guidelines affordance in the app chrome. It
-          self-gates on the signed-in User (ADR 0005 — behind the auth wall, no
-          public page) and is mounted here rather than in the frozen tab route
-          table. */}
-      <AcceptableUse />
+      {/* The Card route renders Guidelines under its tally. Keep the same
+          policy affordance reachable on every other signed-in route without
+          duplicating it on Card (#143 review): it stays in normal flow rather
+          than returning to the overlapping fixed bottom-right chrome. */}
+      {location.pathname !== '/' && <AcceptableUse />}
     </ThemeProvider>
   );
 }

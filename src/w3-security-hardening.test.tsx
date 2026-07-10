@@ -49,10 +49,16 @@ describe('AcceptableUse page (behind auth — ADR 0005)', () => {
     expect(container).toBeEmptyDOMElement(); // null → no page/trigger reachable
   });
 
-  it('AcceptableUse is linked from the app chrome', () => {
-    // Mounted from the composition root, not the frozen tab route table.
+  it('keeps AcceptableUse reachable on Card and every other signed-in route', () => {
+    // Rendered inline under the Board tally line (#143), centered, rather than
+    // as a floating fixed element in the composition root.
+    const board = readRepoFile('./components/Board.tsx');
+    expect(board).toMatch(/<AcceptableUse\s*\/>/);
+
+    // The composition root supplies the same affordance on non-Card routes;
+    // the pathname guard prevents a duplicate trigger on Card.
     const main = readRepoFile('./main.tsx');
-    expect(main).toMatch(/<AcceptableUse\s*\/>/);
+    expect(main).toMatch(/location\.pathname\s*!==\s*['"]\/['"]\s*&&\s*<AcceptableUse\s*\/>/);
   });
 
   it('does not promise automatic report-threshold hiding', async () => {

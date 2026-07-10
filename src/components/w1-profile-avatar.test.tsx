@@ -237,22 +237,29 @@ describe('ProfileEditor', () => {
   // Codex P2 finding on ProfileEditor.tsx:32 (round 1) — the editor used to
   // gate only on auth loading, so it could open (and, on an immediate Save,
   // persist) the Google-name fallback while the live users/{uid} subscription
-  // was still in flight, clobbering a saved custom displayName. Simulates that
-  // delay: auth resolves first, the profile snapshot is deferred and resolves
-  // later with a name that differs from the Google name, and proves the saved
-  // name always wins.
-  it('waits for the live profile snapshot before rendering, so a delayed load never clobbers a saved name', async () => {
+  // was still in flight, clobbering a saved custom displayName. The avatar
+  // trigger now renders immediately (it IS the header photo) but stays DISABLED
+  // until that snapshot lands, so it still cannot open — and therefore cannot
+  // seed — the stale name. Simulates the delay: auth resolves first, the profile
+  // snapshot is deferred and resolves later with a name that differs from the
+  // Google name, and proves the saved name always wins.
+  it('keeps the avatar trigger disabled until the live profile snapshot lands, so a delayed load never clobbers a saved name', async () => {
     const user = userEvent.setup();
     profileSub.defer.add('u1'); // profile subscription still in flight
     profileSub.docs.set('u1', { displayName: 'Saved Custom Name', photoURL: null, customPhoto: false, createdAt: 0 });
     render(<ProfileEditor />);
-    expect(screen.queryByRole('button', { name: 'Edit profile' })).not.toBeInTheDocument();
+    // Present for layout (it's the header avatar) but not actionable yet, so the
+    // editor cannot be opened or seeded from the still-loading fallback name.
+    expect(screen.getByRole('button', { name: 'Edit profile' })).toBeDisabled();
+    expect(screen.queryByLabelText('Display name')).not.toBeInTheDocument();
 
     // The live users/{uid} snapshot arrives with a saved name that differs
     // from the Google name.
     act(() => profileSub.release('u1'));
 
-    await user.click(screen.getByRole('button', { name: 'Edit profile' }));
+    const trigger = screen.getByRole('button', { name: 'Edit profile' });
+    expect(trigger).toBeEnabled();
+    await user.click(trigger);
     expect(screen.getByLabelText('Display name')).toHaveValue('Saved Custom Name');
 
     await user.click(screen.getByRole('button', { name: 'Save name' }));
@@ -271,16 +278,19 @@ describe('ProfileEditor', () => {
     );
   });
 
-  it('waits for a server-confirmed profile snapshot before rendering', async () => {
+  it('keeps the avatar trigger disabled until a server-confirmed profile snapshot lands', async () => {
     const serverDoc = { displayName: 'Server Saved', photoURL: null, customPhoto: false, createdAt: 0 };
     profileSub.cacheOnly.add('u1');
     profileSub.docs.set('u1', { displayName: 'Cached Google Name', photoURL: null, customPhoto: false, createdAt: 0 });
 
     render(<ProfileEditor />);
-    expect(screen.queryByRole('button', { name: 'Edit profile' })).not.toBeInTheDocument();
+    // A cache-only snapshot (no server confirmation yet) leaves it disabled.
+    expect(screen.getByRole('button', { name: 'Edit profile' })).toBeDisabled();
+    expect(screen.queryByLabelText('Display name')).not.toBeInTheDocument();
 
     act(() => profileSub.push('u1', serverDoc, true));
 
+    expect(screen.getByRole('button', { name: 'Edit profile' })).toBeEnabled();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Edit profile' }));
     expect(screen.getByLabelText('Display name')).toHaveValue('Server Saved');
   });
@@ -359,8 +369,9 @@ describe('ProfileEditor', () => {
     const u2Renders = profileSub.renderLog.filter((entry) => entry.uid === 'u2');
     expect(u2Renders.length).toBeGreaterThan(0);
     expect(u2Renders[0].loading).toBe(true);
-    // And behaviorally: the editor waits…
-    expect(screen.queryByRole('button', { name: 'Edit profile' })).not.toBeInTheDocument();
+    // And behaviorally: the trigger is present but disabled until u2's snapshot…
+    expect(screen.getByRole('button', { name: 'Edit profile' })).toBeDisabled();
+    expect(screen.queryByLabelText('Display name')).not.toBeInTheDocument();
 
     act(() => profileSub.release('u2'));
 
@@ -428,9 +439,13 @@ describe('ProfileEditor', () => {
     expect(trigger).toHaveFocus();
   });
 
-  it('uses the profile-trigger class so CSS can lift the button above the install prompt', () => {
+  it('renders the trigger as the avatar button (tap your photo to edit)', () => {
     render(<ProfileEditor />);
 
-    expect(screen.getByRole('button', { name: 'Edit profile' })).toHaveClass('profile-trigger');
+    const trigger = screen.getByRole('button', { name: 'Edit profile' });
+    // The avatar-trigger class styles it as a bare, in-header photo button…
+    expect(trigger).toHaveClass('avatar-trigger');
+    // …and the button's content is the player's avatar, not a separate icon.
+    expect(within(trigger).getByRole('img')).toHaveAttribute('src', googlePhoto);
   });
 });
