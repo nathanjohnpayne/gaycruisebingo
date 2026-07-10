@@ -50,7 +50,12 @@ export default defineConfig(({ command, mode }) => {
     plugins: [
       react(),
       VitePWA({
-        registerType: 'autoUpdate',
+        // 'prompt': the new SW installs and WAITS instead of activating under the
+        // running page; UpdatePrompt (src/components/UpdatePrompt.tsx, #178) owns
+        // telling the player and activating it. 'autoUpdate' would swap the
+        // precache out from under a live session with no reload, leaving stale
+        // code running (and old hashed chunks 404-able) until a manual restart.
+        registerType: 'prompt',
         includeAssets: ['favicon.svg', 'og-default.png', 'apple-touch-icon.png'],
         manifest: {
           name: 'Gay Cruise Bingo',
