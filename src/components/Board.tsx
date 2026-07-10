@@ -850,18 +850,14 @@ export default function Board() {
     else setProofTarget(c); // proof_required / admin_confirmed capture proof first
   };
 
-  const modeLabel =
-    claimMode === 'honor'
-      ? 'Honor system'
-      : claimMode === 'proof_required'
-        ? 'Proof required'
-        : 'Admin-confirmed';
-
   return (
     <>
+      {/* Just the cruise name here — the claim-mode label used to share this row
+          and force the title to wrap on mobile (#150). The mode still governs
+          behavior via `claimMode` above (proof-required opens the proof sheet on
+          tap); it just no longer competes with the title for the line. */}
       <div className="card-meta">
         <span>{event?.name ?? 'This cruise'}</span>
-        <span>{modeLabel}</span>
       </div>
       <div className="bingo-head">
         {['B', 'I', 'N', 'G', 'O'].map((l) => (
