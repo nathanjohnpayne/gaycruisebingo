@@ -11,7 +11,7 @@ This ticket owns the client-authoritative Mark write path. A Player Marks a Squa
 
 - `src/data/api.ts` — `setMark` no longer opens a `runTransaction`. It splits into a pure `computeMark` (the fold of one toggle into the next `cells` + denormalized Player stats: `squaresMarked`, `bingoCount`, `firstBingoAt`, `blackout`) and a `writeBatch` that writes `boards/{uid}` + `players/{uid}` and is **not awaited** (see concurrency note). Before folding, `setMark` reads the Board via `getDocFromCache` — a cache-only read, still no server round trip — and uses it as the base `cells` whenever one is cached, falling back to the caller-supplied `cells` only when nothing is cached yet (see concurrency note for why). An optional `database` param is the test seam for the emulator layer; production callers pass nothing and get the app `db`.
 - `src/components/Board.tsx` — the false offline comment at the `doMark` catch is replaced with the truth: an offline Mark does not reject; it queues durably in the persistent cache (ADR 0006, #20) and syncs on reconnect. Honor mode still Marks instantly, and the BINGO/Blackout transition effect still fires `Celebration`.
-- `src/components/Celebration.tsx` and `src/game/logic.ts` are unchanged: the overlay already renders both kinds, and `hasBingo`/`isBlackout`/`winningCells`/`completedLines` are already pure and tested — the transition wiring lives in `Board.tsx`'s effect, which is correct.
+- `src/components/Celebration.tsx` keeps the overlay's content in a bounded `.celebrate-card`; its action row wraps when space is constrained. `src/index.css` gives the hero a fluid size and a hard wrap/width bound so both BLACKOUT and BINGO remain fully visible and centered without horizontal overflow at supported mobile widths. `src/game/logic.ts` remains unchanged: `hasBingo`/`isBlackout`/`winningCells`/`completedLines` are already pure and tested.
 
 ## Concurrency design decision (offline-queueable write)
 
@@ -99,6 +99,7 @@ Runner: `firebase emulators:exec --only auth,firestore "vitest run --config vite
 ## Acceptance criteria
 
 - Given a dealt Board, when a Player Marks a Square in Honor mode, then it Marks instantly and `hasBingo`/`isBlackout` fire the `Celebration` on a new line/blackout — `src/data/w1-board-mark-win.test.ts` (compute) + the `Board.tsx` transition effect.
+- Given a 420×1203 or 320×568 viewport, when either BLACKOUT or BINGO renders, then the overlay has no horizontal overflow and the hero stays within and centered on the viewport — `tests/e2e/celebration-responsive.spec.ts`.
 - Given a Player Marks offline, when they reload, then the Mark is still queued and syncs on reconnect (ADR 0006 offline metric) — `tests/offline/w1-board-mark-win.test.ts`.
 - Given a bare Mark (no Proof), when it is written, then nothing posts to the Feed (ADR 0002) — `setMark` write-shape (no `addDoc`) + the offline test's empty `moments`.
 - Given an ONLINE Mark the backend rejects (e.g. `permission-denied` after an auth change), when `commit()` rejects, then the failure is logged with context (not swallowed) and the optimistic UI self-corrects via the listener rollback, while `setMark`'s optimistic return is unchanged — `src/data/w1-board-mark-win.test.ts` (commit-failure).
