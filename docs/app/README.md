@@ -6,7 +6,7 @@ Live, multiplayer bingo PWA. React (Vite) + TypeScript + Firebase. Ships the pre
 
 Phase 1 (proof system, moderation console, App Check) can land as live updates during the sailing without reworking this — see [`phase-1-deploy.md`](phase-1-deploy.md).
 
-> **Live (2026-07-07):** Phase 0 is deployed at **https://gaycruisebingo.web.app** (Firestore rules/indexes + Storage rules + hosting). The event `events/med-2026` is seeded (honor mode, `neon-playground` theme, 32 prompts). The custom domain `gaycruisebingo.com` is registered with Hosting and its DNS is set (SSL auto-provisioning). The Phase-1 backend (`functions`) is intentionally not deployed yet — it is Blaze-gated and lands later per [`phase-1-deploy.md`](phase-1-deploy.md). Sections 1–6 below are the runbook to reproduce or re-run any of this.
+> **Live (2026-07-07):** Phase 0 is deployed at **https://gaycruisebingo.web.app** (Firestore rules/indexes + Storage rules + hosting). The event `events/med-2026` is seeded (honor mode, `neon-playground` theme, 87 prompts). The custom domain `gaycruisebingo.com` is registered with Hosting and its DNS is set (SSL auto-provisioning). The Phase-1 backend (`functions`) is intentionally not deployed yet — it is Blaze-gated and lands later per [`phase-1-deploy.md`](phase-1-deploy.md). Sections 1–6 below are the runbook to reproduce or re-run any of this.
 
 ## Stack
 

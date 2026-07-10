@@ -260,6 +260,16 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     expect(report.mismatched[0]).toMatchObject({ text: 'Threesome' });
   });
 
+  it('accepts reports below the visibility threshold and rejects counts at the boundary', () => {
+    const withReportCount = (reportCount: number) =>
+      liveFromCanonical().map((d) =>
+        d.text === 'Threesome' ? { ...d, reportCount } : d,
+      );
+    expect(verifySeedPool(withReportCount(1)).ok).toBe(true);
+    expect(verifySeedPool(withReportCount(3)).ok).toBe(true);
+    expect(verifySeedPool(withReportCount(4)).ok).toBe(false);
+  });
+
   it('prints a roster-safe reconcile command for the same event and project', () => {
     const previousProject = process.env.GOOGLE_CLOUD_PROJECT;
     process.env.GOOGLE_CLOUD_PROJECT = 'staging-bingo';

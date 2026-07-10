@@ -215,11 +215,15 @@ export function seedItemMutations(existingDocs, now = Date.now()) {
 // post-deploy check (or `node scripts/seed.mjs --verify`) fails loudly instead of
 // the mismatch going unnoticed. Player-submitted docs (createdBy !== 'seed') are
 // ignored — they are not part of the canonical pool and must never count as drift.
-export function verifySeedPool(existingDocs, pool = ITEMS) {
+export function verifySeedPool(
+  existingDocs,
+  pool = ITEMS,
+  reportHideThreshold = EVENT_SEED.settings.reportHideThreshold,
+) {
   const expected = new Map(
     pool.map(({ text, spicy }) => [
       seedItemDocId(text),
-      { text, spicy, isFreeSpace: false, status: 'active', reportCount: 0 },
+      { text, spicy, isFreeSpace: false, status: 'active' },
     ]),
   );
   const seedDocs = existingDocs.filter((doc) => doc.createdBy === 'seed');
@@ -249,7 +253,9 @@ export function verifySeedPool(existingDocs, pool = ITEMS) {
       live.spicy !== expectedDoc.spicy ||
       live.isFreeSpace !== expectedDoc.isFreeSpace ||
       live.status !== expectedDoc.status ||
-      live.reportCount !== expectedDoc.reportCount
+      (typeof reportHideThreshold === 'number' &&
+        reportHideThreshold > 0 &&
+        live.reportCount >= reportHideThreshold)
     ) {
       mismatched.push({
         id,
@@ -263,8 +269,10 @@ export function verifySeedPool(existingDocs, pool = ITEMS) {
         ...(live.status !== expectedDoc.status
           ? { expectedStatus: expectedDoc.status, actualStatus: live.status }
           : {}),
-        ...(live.reportCount !== expectedDoc.reportCount
-          ? { expectedReportCount: expectedDoc.reportCount, actualReportCount: live.reportCount }
+        ...(typeof reportHideThreshold === 'number' &&
+        reportHideThreshold > 0 &&
+        live.reportCount >= reportHideThreshold
+          ? { reportHideThreshold, actualReportCount: live.reportCount }
           : {}),
       });
     }
