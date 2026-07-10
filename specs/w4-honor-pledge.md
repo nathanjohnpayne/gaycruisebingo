@@ -17,6 +17,11 @@ Issue #181. Claiming a Square is the app's highest-frequency action, and the pro
 - **The pledge is a bare Mark, NOT a Proof.** It calls `setMark` — no Proof doc, no Feed entry, no Doubt satisfaction, no `firestore.rules` change. Proof stays flavour, never enforcement (ADR 0001), and the honor claim keeps its offline durability (ADR 0006: marks queue in the persistent cache; `attachProof` is online-only). A Player in honor mode can still choose a REAL proof type instead — `attachProof` already handles `claimMode: 'honor'` (cell `confirmed`, proof `active`).
 - **Tightened sheet (no dead space).** No proof type is pre-selected: the sheet opens compact — title, pledge (when offered), the Photo/Sound/Callout segment row, actions — and the capture body renders only once a type is chosen. `Mark it` stays disabled until a selected type has a valid capture. The sheet keeps its bottom-sheet placement: thumb-reachable on mobile and it never covers the tapped Square.
 
+## Hardened properties (Codex P2s, PR #184)
+
+1. **One in-flight claim per sheet.** The pledge button also disables while `busy` — a submit of a REAL proof is saving. Without this, a pledge tap during a slow `attachProof` upload/transaction would fire the bare `setMark` path in parallel and the two full-cell writes could race (e.g. the bare mark overwriting the cell projection without the new `proofId`).
+2. **Source-live pledge (the `tallySourceLive` class applied to the proof surface).** Board closes a DANGLING ProofSheet the moment its source dies — render-time `proofSourceLive` adjust — and the pledge callback re-checks the same predicate at write time before calling `doMark` (the same belt-and-braces split as toggle + doMark). Live means: the CURRENT account's attributable board still holds the SAME Prompt (`itemId`) at that cell in the SAME marked state the sheet opened against. This covers the account switch that lands the NEW uid's board under an open sheet (where `cellsAttributable` alone passes and the captured index would mark the wrong card), a claim Square another tab claimed meanwhile (nothing left to pledge), and a proof-add source whose Mark fell. The sheet's own successful attach races its board echo benignly: both paths null the same state, so the double-close is idempotent.
+
 ## Non-goals / preserved invariants
 
 - No new analytics event: a pledge claim is a `mark_square` (mode `honor`), a proofed claim an `attach_proof` — already distinguishable.
@@ -34,6 +39,7 @@ The checker matches this spec's basename to any `*w4-honor-pledge*.test.*`.
   - `proof_required` / `admin_confirmed`: the claim-open sheet renders the pledge DISABLED; pressing it does nothing (no `setMark`).
   - Proof-add open (＋ on a marked Square): the pledge row is absent in every mode.
   - Honor: a real proof type still works from a claim open — selecting Callout and submitting calls `attachProof` (a pledge is optional, not forced).
+  - Race hardening (properties 1–2 above): the pledge disables while a real-proof submit is in flight (no parallel bare mark); an account switch under an open claim sheet closes it (never marks the wrong card); a claim Square marked from another tab closes its dangling sheet.
 - **`tests/e2e/x-e2e-happy-path.spec.ts`** (local-only) — the happy-path line completes via square-tap → pledge-tap per Square; the offline Mark case pledges while offline and the Mark still queues durably and survives the reload (ADR 0006).
 
 Amended sibling specs: `specs/w3-claim-modes.md` (honor is no longer "a tap marks INSTANTLY" — the pledge is the instant path inside the sheet) and `specs/w2-proof-capture.md` (the "honor marks directly with NO sheet" pin moved here, inverted).

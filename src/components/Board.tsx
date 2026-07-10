@@ -435,6 +435,24 @@ export default function Board() {
   // tallyTarget null.
   if (tallyTarget && !tallySourceLive(tallyTarget)) setTallyTarget(null);
 
+  // ProofSheet's SOURCE Square is live only while the CURRENT account's board
+  // still holds the SAME Prompt at that cell in the SAME marked state the sheet
+  // opened against (Codex P2, PR #184 — the tallySourceLive class applied to the
+  // proof/pledge surface). An account switch can land the NEW uid's board under
+  // an OPEN sheet: `cellsAttributable` alone then passes, and a pledge would
+  // mark the captured index on the WRONG card. The marked-state check also
+  // closes a claim sheet whose Square another tab claimed meanwhile (its pledge
+  // has nothing left to claim) and a proof-add sheet whose Mark fell. Note the
+  // sheet's own attachProof success races its board echo here: the echo flips
+  // the cell to marked and this close can fire just before submit's onClose —
+  // both paths null the same state, so the double-close is idempotent.
+  const proofSourceLive = (target: Cell): boolean => {
+    if (!cellsAttributable) return false;
+    const cell = cells.find((c) => c.index === target.index);
+    return cell != null && !cell.free && cell.itemId === target.itemId && cell.marked === target.marked;
+  };
+  if (proofTarget && !proofSourceLive(proofTarget)) setProofTarget(null);
+
   // The latest identity + roster + gate signals + CURRENT attributable cells for
   // Moment broadcasts, stored in a ref so `drainMoments` (a stable callback)
   // always reads the CURRENT actor, gate state, and board, never a stale render's
@@ -1028,6 +1046,12 @@ export default function Board() {
               : () => {
                   const target = proofTarget;
                   setProofTarget(null);
+                  // Write-time twin of the render-time proofSourceLive close
+                  // above (Codex P2, PR #184) — the same belt-and-braces split
+                  // as toggle + doMark: a tap queued before the closing render
+                  // commits must not mark a captured target the current board
+                  // no longer backs. Dead source → close only, write nothing.
+                  if (!proofSourceLive(target)) return;
                   void doMark(target, true);
                 }
           }

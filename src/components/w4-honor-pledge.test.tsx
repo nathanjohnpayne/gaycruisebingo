@@ -77,11 +77,13 @@ vi.mock('../auth/AuthContext', () => ({
 import Board from './Board';
 
 // A dealt board: every non-free Square unmarked, the free centre (12) "on".
-function dealt(): Cell[] {
+// `pool` prefixes the Prompt ids/texts so two accounts' boards genuinely differ
+// (a real deal draws each card independently from the pool).
+function dealt(pool = 'i'): Cell[] {
   return Array.from({ length: 25 }, (_, index) => ({
     index,
-    itemId: index === 12 ? null : `i${index}`,
-    text: index === 12 ? 'FREE' : `Prompt ${index}`,
+    itemId: index === 12 ? null : `${pool}${index}`,
+    text: index === 12 ? 'FREE' : `Prompt ${pool}${index}`,
     free: index === 12,
     marked: index === 12,
     markedAt: null,
@@ -186,6 +188,65 @@ describe('honor mode — the claim opens the sheet; the pledge IS the claim', ()
       claimMode: 'honor',
       proof: { type: 'text', text: 'saw it myself' },
     });
+    expect(H.setMark).not.toHaveBeenCalled();
+  });
+});
+
+describe('pledge race hardening (Codex P2s, PR #184)', () => {
+  it('the pledge disables while a REAL proof submit is in flight — no parallel bare mark racing the attach transaction', async () => {
+    const user = userEvent.setup();
+    // attachProof hangs: the submit is saving for the rest of the test.
+    let resolveAttach!: (v: unknown) => void;
+    H.attachProof.mockImplementationOnce(() => new Promise((resolve) => (resolveAttach = resolve)));
+    render(<Board />);
+    clickCell(0);
+    await screen.findByText(/proof for/i);
+
+    await user.click(screen.getByRole('button', { name: /callout/i }));
+    await user.type(screen.getByRole('textbox'), 'uploading…');
+    await user.click(screen.getByRole('button', { name: /mark it/i }));
+
+    const pledge = screen.getByRole('button', { name: PLEDGE });
+    expect(pledge).toBeDisabled();
+    fireEvent.click(pledge); // swallowed — one in-flight claim per sheet
+    expect(H.setMark).not.toHaveBeenCalled();
+
+    resolveAttach(undefined);
+    await waitFor(() => expect(screen.queryByText(/proof for/i)).toBeNull());
+    expect(H.setMark).not.toHaveBeenCalled();
+  });
+
+  it('an account switch under an open claim sheet closes it — the pledge can never mark the captured index on the WRONG card', async () => {
+    const { rerender } = render(<Board />);
+    clickCell(0);
+    await screen.findByText(/proof for/i);
+
+    // The account switches AND the subscription catches up to the NEW uid's
+    // board — `cellsAttributable` alone passes now, which is exactly the gap:
+    // the captured proofTarget belongs to the previous account's card.
+    H.user = { uid: 'u2', displayName: 'Second Sailor', photoURL: null };
+    H.board = { uid: 'u2', seed: 2, createdAt: 0, cells: dealt('j') }; // a different dealt card
+    rerender(<Board />);
+
+    // The render-time proofSourceLive close unmounts the dangling sheet…
+    await waitFor(() => expect(screen.queryByText(/proof for/i)).toBeNull());
+    // …so no pledge remains to mark the wrong card, and nothing was written.
+    expect(screen.queryByRole('button', { name: PLEDGE })).toBeNull();
+    expect(H.setMark).not.toHaveBeenCalled();
+  });
+
+  it('a claim sheet whose Square was claimed from ANOTHER TAB closes — its pledge has nothing left to claim', async () => {
+    const { rerender } = render(<Board />);
+    clickCell(0);
+    await screen.findByText(/proof for/i);
+
+    // The same account's listener echoes cell 0 now marked (another tab).
+    const cells = dealt();
+    cells[0] = { ...cells[0], marked: true, markedAt: 1, status: 'confirmed' };
+    H.board = { uid: 'u1', seed: 1, createdAt: 0, cells };
+    rerender(<Board />);
+
+    await waitFor(() => expect(screen.queryByText(/proof for/i)).toBeNull());
     expect(H.setMark).not.toHaveBeenCalled();
   });
 });

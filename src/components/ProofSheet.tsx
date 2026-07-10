@@ -139,7 +139,12 @@ export default function ProofSheet(props: Props) {
           // proof, and the greyed row teaches that honor mode has a fast path.
           <button
             className="btn pledge-btn"
-            disabled={claimMode !== 'honor'}
+            // `busy` too (Codex P2, PR #184): in honor mode a player can pick a
+            // REAL proof and submit — while that attachProof transaction is in
+            // flight, a pledge tap would fire the bare setMark path in parallel
+            // and race the transaction's full-cell write. One in-flight claim
+            // per sheet: the pledge locks while a submit is saving.
+            disabled={claimMode !== 'honor' || busy}
             title={claimMode !== 'honor' ? 'Available when the event runs honor mode' : undefined}
             onClick={onPledge}
           >
