@@ -481,7 +481,10 @@ a {
   display: grid;
   place-items: center;
   text-align: center;
-  padding: 20px;
+  padding: max(20px, env(safe-area-inset-top, 0px))
+    max(20px, env(safe-area-inset-right, 0px))
+    max(20px, env(safe-area-inset-bottom, 0px))
+    max(20px, env(safe-area-inset-left, 0px));
   /* OPAQUE backdrop (issue #72 Codex P2, PR #123 comment 3553469597). The
      celebration renders position:fixed over the live Board, so the earlier
      translucent overlay — color-mix(..., transparent) stops plus a

@@ -7,6 +7,30 @@ const indexCss = readFileSync(
   'utf8',
 );
 
+test('the celebration reserves all four device safe-area insets', async ({ page }) => {
+  expect(indexCss).toMatch(/env\(safe-area-inset-top/);
+  expect(indexCss).toMatch(/env\(safe-area-inset-right/);
+  expect(indexCss).toMatch(/env\(safe-area-inset-bottom/);
+  expect(indexCss).toMatch(/env\(safe-area-inset-left/);
+
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.setContent(`
+    <style>${indexCss}</style>
+    <!-- Desktop Chromium resolves env(safe-area-inset-*) to zero. This override
+         simulates the resolved asymmetric device insets while exercising the
+         same grid/card width constraints in a real layout engine. -->
+    <style>.celebrate { padding: 32px 44px 36px 40px; }</style>
+    <div class="celebrate">
+      <div class="celebrate-card"><div class="big">BLACKOUT</div></div>
+    </div>
+  `);
+
+  const bounds = await page.locator('.celebrate-card').boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.x).toBeGreaterThanOrEqual(40);
+  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(320 - 44);
+});
+
 for (const viewport of [
   { width: 420, height: 1203 },
   { width: 320, height: 568 },
