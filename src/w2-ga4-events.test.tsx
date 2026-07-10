@@ -4,9 +4,10 @@ import userEvent from '@testing-library/user-event';
 import { track, GA4_EVENTS } from './analytics';
 import ConsentNotice from './components/ConsentNotice';
 
-// Covers specs/w2-ga4-events.md: the completed 12-event GA4 catalog +
-// `track()` entry point (src/analytics.ts) and the 18+ analytics consent
-// notice (src/components/ConsentNotice.tsx).
+// Covers specs/w2-ga4-events.md: the 12-event GA4 PRD catalog (plus the
+// operational `login_failed` event added in #163) + `track()` entry point
+// (src/analytics.ts) and the 18+ analytics consent notice
+// (src/components/ConsentNotice.tsx).
 
 // Hoisted so these mock factories (which Vitest hoists above the imports
 // above) can close over them. `mockAnalyticsInstance.current` doubles as the
@@ -25,9 +26,10 @@ vi.mock('./firebase', () => ({
 }));
 
 describe('GA4_EVENTS catalog', () => {
-  it('enumerates exactly the 12 PRD events, including demand_proof and install_pwa', () => {
+  it('enumerates the 12 PRD events plus the operational login_failed (#163)', () => {
     expect(GA4_EVENTS).toEqual([
       'login',
+      'login_failed',
       'join_event',
       'add_item',
       'report_item',
