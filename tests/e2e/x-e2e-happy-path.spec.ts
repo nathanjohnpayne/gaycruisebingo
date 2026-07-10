@@ -206,7 +206,7 @@ test.describe('x-e2e-happy-path', () => {
       await setDoc(doc(context.firestore(), `events/${EVENT_ID}`), { admins: [uid] }, { merge: true });
     });
     await page.reload();
-    await expect(page.getByRole('link', { name: 'Admin' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Admin' })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link')).toHaveCount(5);
 
     const reloadedTrigger = page.getByRole('button', { name: 'Report a bug' });

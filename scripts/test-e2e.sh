@@ -30,4 +30,25 @@ for arg in "$@"; do
   cmd+=" $(printf '%q' "$arg")"
 done
 
-exec npx firebase emulators:exec --only auth,firestore,storage --project "$PROJECT_ID" "$cmd"
+# Callable flows need the compiled Functions entrypoint as well as the emulator.
+npm --prefix functions run build
+created_env=false
+created_secret=false
+if [[ ! -e functions/.env.local ]]; then
+  printf '%s\n' \
+    'EMAIL_FROM=Gay Cruise Bingo <e2e@example.invalid>' \
+    'ADMIN_NOTIFY_EMAIL=' \
+    'APP_BASE_URL=http://127.0.0.1:4173' \
+    'BUG_REPORT_APP_CHECK=false' > functions/.env.local
+  created_env=true
+fi
+if [[ ! -e functions/.secret.local ]]; then
+  printf '%s\n' 'RESEND_API_KEY=e2e-not-used' > functions/.secret.local
+  created_secret=true
+fi
+cleanup() {
+  [[ "$created_env" == false ]] || rm -f functions/.env.local
+  [[ "$created_secret" == false ]] || rm -f functions/.secret.local
+}
+trap cleanup EXIT INT TERM
+npx firebase --non-interactive emulators:exec --only auth,firestore,storage,functions --project "$PROJECT_ID" "$cmd"
