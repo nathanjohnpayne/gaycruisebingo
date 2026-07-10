@@ -3,20 +3,24 @@ import { readFileSync } from 'node:fs';
 
 vi.mock('../firebase', () => ({ EVENT_ID: 'med-2026', functions: {} }));
 
-const { toBlobSpy } = vi.hoisted(() => ({
+const { html2canvasSpy, toBlobSpy } = vi.hoisted(() => ({
+  html2canvasSpy: vi.fn(),
   toBlobSpy: vi.fn(),
 }));
 
+vi.mock('html2canvas', () => ({ default: html2canvasSpy }));
 vi.mock('html-to-image', () => ({ toBlob: toBlobSpy }));
 
 import { buildBugReportInput, captureAppSurface } from './bugReports';
 
 beforeEach(() => {
+  html2canvasSpy.mockReset();
   toBlobSpy.mockReset();
   document.body.innerHTML = '';
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   window.history.replaceState({}, '', '/');
   document.body.innerHTML = '';
 });
@@ -84,5 +88,84 @@ describe('bug-report client diagnostics', () => {
     expect(compatFilter(root.querySelector('[data-kind="frame"]') as HTMLElement)).toBe(false);
     expect(compatFilter(root.querySelector('[data-kind="canvas"]') as HTMLElement)).toBe(false);
     expect(compatFilter(root.querySelector('[data-kind="report-ui"]') as HTMLElement)).toBe(false);
+  });
+
+  it('falls back to a viewport canvas capture when both html-to-image paths fail on desktop', async () => {
+    const root = document.createElement('main');
+    root.className = 'app';
+    Object.defineProperty(root, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ width: 960, height: 2400, top: 0, left: 0, right: 960, bottom: 2400 }),
+    });
+    root.innerHTML = `
+      <section>
+        <p data-kind="content">Feed content</p>
+        <video data-kind="video" src="/clip.mp4"></video>
+        <img data-kind="remote-image" src="https://firebasestorage.googleapis.com/proof.png" />
+        <button data-kind="report-ui" data-bug-report-ui>Report a bug</button>
+      </section>
+    `;
+    document.body.append(root);
+    vi.stubGlobal('innerWidth', 800);
+    vi.stubGlobal('innerHeight', 600);
+    const fallbackBlob = new Blob(['png'], { type: 'image/png' });
+    const fallbackCanvas = {
+      toBlob: (callback: BlobCallback) => callback(fallbackBlob),
+    } as HTMLCanvasElement;
+    toBlobSpy.mockRejectedValue(new Error('foreignObject failed'));
+    html2canvasSpy.mockResolvedValue(fallbackCanvas);
+
+    await expect(captureAppSurface()).resolves.toBe(fallbackBlob);
+
+    expect(toBlobSpy).toHaveBeenCalledTimes(2);
+    expect(html2canvasSpy).toHaveBeenCalledWith(root, expect.objectContaining({
+      allowTaint: false,
+      foreignObjectRendering: false,
+      height: 600,
+      scale: 1,
+      useCORS: true,
+      width: 800,
+      windowHeight: 600,
+      windowWidth: 800,
+      x: 0,
+      y: 0,
+    }));
+    const ignoreElements = html2canvasSpy.mock.calls[0][1].ignoreElements as (element: Element) => boolean;
+    expect(ignoreElements(root.querySelector('[data-kind="content"]') as HTMLElement)).toBe(false);
+    expect(ignoreElements(root.querySelector('[data-kind="remote-image"]') as HTMLElement)).toBe(true);
+    expect(ignoreElements(root.querySelector('[data-kind="video"]') as HTMLElement)).toBe(true);
+    expect(ignoreElements(root.querySelector('[data-kind="report-ui"]') as HTMLElement)).toBe(true);
+  });
+
+  it('crops the desktop canvas fallback to the visible scrolled viewport', async () => {
+    const root = document.createElement('main');
+    root.className = 'app';
+    Object.defineProperty(root, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ width: 960, height: 2400, top: -700, left: -40, right: 920, bottom: 1700 }),
+    });
+    root.textContent = 'Scrolled feed content';
+    document.body.append(root);
+    vi.stubGlobal('innerWidth', 800);
+    vi.stubGlobal('innerHeight', 600);
+    vi.stubGlobal('scrollX', 40);
+    vi.stubGlobal('scrollY', 700);
+    const fallbackBlob = new Blob(['png'], { type: 'image/png' });
+    const fallbackCanvas = {
+      toBlob: (callback: BlobCallback) => callback(fallbackBlob),
+    } as HTMLCanvasElement;
+    toBlobSpy.mockRejectedValue(new Error('foreignObject failed'));
+    html2canvasSpy.mockResolvedValue(fallbackCanvas);
+
+    await expect(captureAppSurface()).resolves.toBe(fallbackBlob);
+
+    expect(html2canvasSpy).toHaveBeenCalledWith(root, expect.objectContaining({
+      height: 600,
+      scrollX: 40,
+      scrollY: 700,
+      width: 800,
+      x: 40,
+      y: 700,
+    }));
   });
 });

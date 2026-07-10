@@ -31,7 +31,7 @@ export interface SubmitBugReportResult {
 const TRANSPARENT_IMAGE_PLACEHOLDER =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
-type CaptureMode = 'full' | 'compat';
+type CaptureMode = 'full' | 'compat' | 'canvas';
 
 function isSafeImageForCompatCapture(node: HTMLImageElement): boolean {
   const source = node.currentSrc || node.src;
@@ -65,6 +65,47 @@ async function captureWithMode(root: HTMLElement, mode: CaptureMode): Promise<Bl
   return blob;
 }
 
+async function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('Screenshot capture returned no image'));
+    }, 'image/png');
+  });
+}
+
+async function captureWithCanvas(root: HTMLElement): Promise<Blob> {
+  const rect = root.getBoundingClientRect();
+  const rootWidth = Math.max(1, Math.ceil(rect.width || window.innerWidth));
+  const rootHeight = Math.max(1, Math.ceil(rect.height || window.innerHeight));
+  const width = Math.max(1, Math.min(rootWidth, window.innerWidth));
+  const height = Math.max(1, Math.min(rootHeight, window.innerHeight));
+  const x = Math.max(0, Math.min(Math.round(-rect.left), Math.max(0, rootWidth - width)));
+  const y = Math.max(0, Math.min(Math.round(-rect.top), Math.max(0, rootHeight - height)));
+  const { default: html2canvas } = await import('html2canvas');
+  const canvas = await html2canvas(root, {
+    allowTaint: false,
+    backgroundColor: null,
+    foreignObjectRendering: false,
+    height,
+    imageTimeout: 1500,
+    ignoreElements: (element) => element instanceof HTMLElement && excludedFromCapture(element, 'canvas'),
+    logging: false,
+    scale: 1,
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+    useCORS: true,
+    width,
+    windowHeight: window.innerHeight,
+    windowWidth: window.innerWidth,
+    x,
+    y,
+  });
+  const blob = await canvasToPngBlob(canvas);
+  if (blob.size > BUG_REPORT_SCREENSHOT_MAX_BYTES) throw new Error('Screenshot is too large');
+  return blob;
+}
+
 /** Capture only the app surface—never browser chrome, other tabs, or apps. */
 export async function captureAppSurface(): Promise<Blob> {
   const root = document.querySelector<HTMLElement>('.app');
@@ -75,8 +116,12 @@ export async function captureAppSurface(): Promise<Blob> {
     try {
       return await captureWithMode(root, 'compat');
     } catch {
-      if (error instanceof Error) throw error;
-      throw new Error('Screenshot capture failed');
+      try {
+        return await captureWithCanvas(root);
+      } catch {
+        if (error instanceof Error) throw error;
+        throw new Error('Screenshot capture failed');
+      }
     }
   }
 }
