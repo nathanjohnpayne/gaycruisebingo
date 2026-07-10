@@ -21,6 +21,16 @@ function safeReport(report) {
   if (report.screenshotPath != null && !/^bug-reports\/[a-f0-9]{20}\/[A-Za-z0-9_-]+\/screenshot\.png$/.test(report.screenshotPath)) {
     throw new Error(`Unsafe screenshot path for ${report.id}`);
   }
+  if (typeof report.submittedAt !== 'string' || !Number.isFinite(Date.parse(report.submittedAt))) throw new Error(`Invalid submittedAt for ${report.id}`);
+  if (typeof report.route !== 'string' || !report.route.startsWith('/') || report.route.length > 200) throw new Error(`Invalid route for ${report.id}`);
+  if (typeof report.eventId !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(report.eventId)) throw new Error(`Invalid eventId for ${report.id}`);
+  if (typeof report.appVersion !== 'string' || !report.appVersion || report.appVersion.length > 100) throw new Error(`Invalid appVersion for ${report.id}`);
+  if (typeof report.browser !== 'string' || !report.browser || report.browser.length > 500) throw new Error(`Invalid browser for ${report.id}`);
+  if (!report.viewport || !Number.isInteger(report.viewport.width) || !Number.isInteger(report.viewport.height)) throw new Error(`Invalid viewport for ${report.id}`);
+  if (typeof report.online !== 'boolean') throw new Error(`Invalid online state for ${report.id}`);
+  if (typeof report.reporterHash !== 'string' || !/^[a-f0-9]{20}$/.test(report.reporterHash)) throw new Error(`Invalid reporter hash for ${report.id}`);
+  if (report.captureError != null && (typeof report.captureError !== 'string' || report.captureError.length > 200)) throw new Error(`Invalid capture error for ${report.id}`);
+  if (report.status !== 'new') throw new Error(`Invalid status for ${report.id}`);
   const { description, ...metadata } = report;
   return { description: description.trim(), metadata };
 }
@@ -91,4 +101,16 @@ export async function archiveReport({ reportId, issueUrl, root, now = new Date()
     throw error;
   }
   return receipt;
+}
+
+export async function recordDisposition({ reportId, status, reason, root, now = new Date() }) {
+  if (!REPORT_ID.test(reportId)) throw new Error('Invalid report id');
+  if (!['failed', 'ambiguous'].includes(status)) throw new Error('Disposition must be failed or ambiguous');
+  const trimmed = reason?.trim();
+  if (!trimmed || trimmed.length > 1000) throw new Error('Disposition reason must be 1-1000 characters');
+  const source = path.join(root, 'inbox', reportId);
+  if (!(await exists(source))) throw new Error(`Inbox report ${reportId} does not exist`);
+  const disposition = { reportId, status, reason: trimmed, retryable: true, recordedAt: now.toISOString() };
+  await writeFile(path.join(source, 'disposition.json'), `${JSON.stringify(disposition, null, 2)}\n`, { flag: 'wx' });
+  return disposition;
 }

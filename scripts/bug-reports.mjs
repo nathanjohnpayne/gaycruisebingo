@@ -5,7 +5,7 @@ import process from 'node:process';
 import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
-import { archiveReport, exportReports } from './bug-reports-lib.mjs';
+import { archiveReport, exportReports, recordDisposition } from './bug-reports-lib.mjs';
 
 const root = path.resolve('.github/bug-reports');
 
@@ -55,6 +55,9 @@ if (command === 'pull') {
 } else if (command === 'archive') {
   if (args.length !== 2) throw new Error('Usage: npm run bugs:archive -- <report-id> <github-issue-url>');
   process.stdout.write(`${JSON.stringify(await archiveReport({ reportId: args[0], issueUrl: args[1], root }), null, 2)}\n`);
+} else if (command === 'disposition') {
+  if (args.length < 3) throw new Error('Usage: npm run bugs:disposition -- <report-id> <failed|ambiguous> <reason>');
+  process.stdout.write(`${JSON.stringify(await recordDisposition({ reportId: args[0], status: args[1], reason: args.slice(2).join(' '), root }), null, 2)}\n`);
 } else {
-  throw new Error('Usage: bug-reports.mjs <pull|archive>');
+  throw new Error('Usage: bug-reports.mjs <pull|archive|disposition>');
 }

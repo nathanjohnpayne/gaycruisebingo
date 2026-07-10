@@ -1,6 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import BugReport from './BugReport';
+
+const INDEX_CSS = readFileSync('src/index.css', 'utf8');
 
 const { captureSpy, submitSpy, blobToDataUrlSpy, buildInputSpy } = vi.hoisted(() => ({
   captureSpy: vi.fn(),
@@ -30,6 +33,16 @@ beforeEach(() => {
 });
 
 describe('W4 bug-report inbox', () => {
+  it('pins responsive, safe-area, install-prompt, and modal-suppression CSS contracts', () => {
+    const css = INDEX_CSS;
+    expect(css).toMatch(/\.bug-report-trigger\s*\{[^}]*right:\s*max\(12px, env\(safe-area-inset-right\)\)/s);
+    expect(css).toMatch(/bottom:\s*calc\(76px \+ env\(safe-area-inset-bottom\)\)/);
+    expect(css).toMatch(/body\.install-prompt-visible \.bug-report-trigger/);
+    expect(css).toMatch(/body:has\(\.celebrate\) \.bug-report-trigger/);
+    expect(css).toMatch(/body:has\(\.sheet-backdrop\) \.bug-report-trigger/);
+    expect(css).toMatch(/@media \(max-width: 520px\)[\s\S]*\.bug-report-trigger span/);
+  });
+
   it('renders a persistent accessible utility control, not a navigation link', () => {
     render(<BugReport />);
     const trigger = screen.getByRole('button', { name: 'Report a bug' });

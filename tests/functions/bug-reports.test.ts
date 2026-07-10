@@ -34,12 +34,14 @@ describe('bug-report server validation', () => {
     expect(() => validateBugReportInput({ ...valid(), route: 'https://attacker.example' })).toThrow('Route must be app-relative');
   });
 
-  it('allows three reports per window, blocks the fourth, and resets at the boundary', () => {
+  it('allows only three reports in every rolling 15-minute window, including across the boundary', () => {
     const first = nextRateState(undefined, 1_000);
     const second = nextRateState(first, 2_000);
     const third = nextRateState(second, 3_000);
-    expect(third.count).toBe(3);
+    expect(third.submissionMs).toEqual([1_000, 2_000, 3_000]);
     expect(() => nextRateState(third, 4_000)).toThrow(BugReportInputError);
-    expect(nextRateState(third, 1_000 + 15 * 60 * 1000)).toEqual({ windowStartMs: 901_000, count: 1 });
+    const atBoundary = nextRateState(third, 1_000 + 15 * 60 * 1000);
+    expect(atBoundary.submissionMs).toEqual([2_000, 3_000, 901_000]);
+    expect(() => nextRateState(atBoundary, 901_001)).toThrow(BugReportInputError);
   });
 });

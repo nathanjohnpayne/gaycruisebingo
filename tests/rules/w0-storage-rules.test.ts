@@ -199,6 +199,19 @@ describe('storage.rules — /og/** removed (#39, ADR 0005)', () => {
   });
 });
 
+describe('storage.rules — private bug-report evidence', () => {
+  const bugPath = 'bug-reports/0123456789abcdefabcd/report_123/screenshot.png';
+
+  it('denies signed-in players direct reads and writes', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await put(ctx, bugPath, TINY, { contentType: 'image/png' });
+    });
+    const owner = testEnv.authenticatedContext(OWNER);
+    await assertFails(getMetadata(ref(owner.storage(), bugPath)));
+    await assertFails(put(owner, 'bug-reports/0123456789abcdefabcd/forged/screenshot.png', TINY, { contentType: 'image/png' }));
+  });
+});
+
 describe('Storage ↔ Firestore Proof pinning (lockstep)', () => {
   // A Proof object that satisfies storage.rules must also satisfy the Firestore
   // `proofs` create rule: identical proofs/{eventId}/{uid}/{proofId}.{ext} path.

@@ -15,4 +15,4 @@ An operator manually runs `npm run bugs:pull` to atomically materialize new immu
 - `src/components/w4-bug-report-inbox.test.tsx` covers accessible placement, capture preview/fallback, submission metadata, retry, and success/error states.
 - `tests/functions/bug-reports.test.ts` covers server validation, PNG verification, and rate-limit boundaries.
 - `src/data/w4-bug-report-export.test.ts` covers atomic export, idempotency, malformed screenshots, and archive receipts.
-- `tests/rules/w4-bug-report-inbox.test.ts` proves direct Firestore and Storage access is denied.
+- `tests/rules/w0-firestore-rules.test.ts` and `tests/rules/w0-storage-rules.test.ts` prove direct Firestore and Storage access is denied.

@@ -31,3 +31,19 @@ export function archiveReport(args: {
   root: string;
   now?: Date;
 }): Promise<ImportReceipt>;
+
+export interface ReportDisposition {
+  reportId: string;
+  status: 'failed' | 'ambiguous';
+  reason: string;
+  retryable: true;
+  recordedAt: string;
+}
+
+export function recordDisposition(args: {
+  reportId: string;
+  status: 'failed' | 'ambiguous';
+  reason: string;
+  root: string;
+  now?: Date;
+}): Promise<ReportDisposition>;

@@ -25,8 +25,7 @@ export interface ValidBugReport {
 }
 
 export interface RateState {
-  windowStartMs: number;
-  count: number;
+  submissionMs: number[];
 }
 
 function invalid(message: string): never {
@@ -87,7 +86,8 @@ export function validateBugReportInput(value: unknown): ValidBugReport {
 }
 
 export function nextRateState(previous: RateState | undefined, nowMs: number): RateState {
-  if (!previous || nowMs - previous.windowStartMs >= RATE_WINDOW_MS) return { windowStartMs: nowMs, count: 1 };
-  if (previous.count >= RATE_MAX) throw new BugReportInputError('resource-exhausted', 'Too many bug reports. Try again later.');
-  return { windowStartMs: previous.windowStartMs, count: previous.count + 1 };
+  const cutoff = nowMs - RATE_WINDOW_MS;
+  const recent = (previous?.submissionMs ?? []).filter((timestamp) => Number.isFinite(timestamp) && timestamp > cutoff);
+  if (recent.length >= RATE_MAX) throw new BugReportInputError('resource-exhausted', 'Too many bug reports. Try again later.');
+  return { submissionMs: [...recent, nowMs] };
 }
