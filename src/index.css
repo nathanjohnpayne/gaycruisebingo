@@ -1040,11 +1040,7 @@ body:has(.sheet-backdrop) .bug-report-trigger {
 .guidelines-trigger svg {
   width: 20px;
   height: 20px;
-  fill: none;
-  stroke: currentcolor;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  fill: currentcolor;
 }
 body.install-prompt-visible .guidelines-trigger {
   bottom: calc(140px + env(safe-area-inset-bottom));
