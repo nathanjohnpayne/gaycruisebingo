@@ -95,17 +95,17 @@ export default function AcceptableUse() {
 
             <p>
               <b>This is an 18+ space</b> for one sailing&rsquo;s friend group. By playing you confirm
-              you are 18 or over. It stays behind sign-in — there are no public pages.
+              you are 18 or over. It stays behind sign-in—there are no public pages.
             </p>
             <p className="muted">Keep it fun and keep it kind:</p>
             <ul>
-              <li>Mark honestly — the Feed is the group&rsquo;s shared memory, not a leaderboard to game.</li>
+              <li>Mark honestly—the Feed is the group&rsquo;s shared memory, not a leaderboard to game.</li>
               <li>Proofs and callouts are playful. No harassment, no outing anyone, nothing non-consensual.</li>
               <li>No illegal content and nothing you would not want the whole boat to see.</li>
             </ul>
             <p>
               <b>How to report a Prompt or Proof:</b> tap <b>Report</b> on any Prompt in the pool or any
-              Proof in the Feed to flag it for an Admin&rsquo;s review — reporting doesn&rsquo;t hide
+              Proof in the Feed to flag it for an Admin&rsquo;s review—reporting doesn&rsquo;t hide
               anything automatically, but Admins can hide or remove anything reported or otherwise out
               of line.
             </p>

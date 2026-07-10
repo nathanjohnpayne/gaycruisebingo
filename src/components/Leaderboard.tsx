@@ -189,7 +189,7 @@ export default function Leaderboard() {
       await shareCardBlob({
         blob,
         filename: 'gay-cruise-bingo-leaderboard.png',
-        title: `${SHARE_CARD_APP_NAME} — Leaderboard`,
+        title: `${SHARE_CARD_APP_NAME}—Leaderboard`,
         text: 'Check out the Gay Cruise Bingo leaderboard 🏆',
         url: window.location.origin,
       });

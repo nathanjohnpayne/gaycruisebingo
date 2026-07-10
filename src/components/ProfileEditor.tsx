@@ -114,13 +114,13 @@ function Editor({ user }: { user: User }) {
 
   const saveName = () => {
     const trimmed = name.trim();
-    if (trimmed) run(() => updateDisplayName(user.uid, trimmed), 'Could not save your name — try again.', () => setOpen(false));
+    if (trimmed) run(() => updateDisplayName(user.uid, trimmed), 'Could not save your name—try again.', () => setOpen(false));
   };
 
   const onAvatarFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (file) run(() => updateAvatar(user.uid, file), 'Upload failed — try again.');
+    if (file) run(() => updateAvatar(user.uid, file), 'Upload failed—try again.');
   };
 
   return (

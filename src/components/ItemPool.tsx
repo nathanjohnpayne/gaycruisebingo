@@ -11,12 +11,12 @@ import LoadingState from './LoadingState';
 // still take effect for late joiners / future Events); they are just mostly
 // inert on cards already dealt, which is expected, not a bug.
 const PRESAIL_NOTE =
-  "Get your prompts in before we sail — once your card is dealt it's frozen, so a prompt added after that joins the pool for a future card, not yours.";
+  "Get your prompts in before we sail—once your card is dealt it's frozen, so a prompt added after that joins the pool for a future card, not yours.";
 
 // Phase 0 client-side throttle copy — see `checkItemRateLimit` in
 // `../data/api` for why this is presentational only, not a security boundary.
-const ADD_THROTTLE_MESSAGE = 'Slow down — you can add another prompt in a few seconds.';
-const REPORT_THROTTLE_MESSAGE = 'Slow down — you can report again in a few seconds.';
+const ADD_THROTTLE_MESSAGE = 'Slow down—you can add another prompt in a few seconds.';
+const REPORT_THROTTLE_MESSAGE = 'Slow down—you can report again in a few seconds.';
 
 export default function ItemPool() {
   const { user } = useAuth();

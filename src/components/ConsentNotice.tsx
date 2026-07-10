@@ -38,7 +38,7 @@ export default function ConsentNotice() {
   return (
     <div className="consent-notice" role="note">
       <p>
-        This is an 18+ app. We use Google Analytics (GA4) to see what&rsquo;s working — nothing
+        This is an 18+ app. We use Google Analytics (GA4) to see what&rsquo;s working—nothing
         here is sold, and it&rsquo;s kept separate from your marks and proof.
       </p>
       <button className="btn" onClick={dismiss}>

@@ -41,7 +41,7 @@ function TallyBadge({ itemId, onOpen }: { itemId: string; onOpen: () => void }) 
     <button
       className="tally-badge"
       title="See who marked this"
-      aria-label={`${count} marked — see who`}
+      aria-label={`${count} marked—see who`}
       onClick={(e) => {
         e.stopPropagation();
         onOpen();
@@ -98,7 +98,7 @@ function DoubtBadge({
     <button
       className="doubt-badge"
       title="pics or it didn't happen"
-      aria-label={`${open.length} open doubt${open.length === 1 ? '' : 's'} — pics or it didn't happen`}
+      aria-label={`${open.length} open doubt${open.length === 1 ? '' : 's'}—pics or it didn't happen`}
       onClick={(e) => {
         e.stopPropagation();
         onOpen();
@@ -238,7 +238,7 @@ function TallySheet({
         <div className="sheet-title">Who marked “{itemText}”</div>
         {openCount > 0 && (
           <p className="doubt-summary">
-            {openCount} open doubt{openCount === 1 ? '' : 's'} — pics or it didn&apos;t happen
+            {openCount} open doubt{openCount === 1 ? '' : 's'}—pics or it didn&apos;t happen
           </p>
         )}
         {loading && markers.length === 0 ? (
@@ -263,7 +263,7 @@ function TallySheet({
                   <div className="grow">
                     <div className="name">{m.displayName}</div>
                     {status === 'open' && (
-                      <div className="sub doubt-open">Doubted — pics or it didn&apos;t happen</div>
+                      <div className="sub doubt-open">Doubted—pics or it didn&apos;t happen</div>
                     )}
                     {status === 'satisfied' && (
                       <div className="sub doubt-satisfied">Proof shown ✓</div>
@@ -888,7 +888,7 @@ export default function Board() {
             role={c.free ? 'button' : undefined}
             tabIndex={c.free ? 0 : undefined}
             aria-label={c.free ? c.text : undefined}
-            title={c.free ? 'Free space — already marked' : undefined}
+            title={c.free ? 'Free space—already marked' : undefined}
             onClick={() => toggle(c)}
             onKeyDown={(event) => {
               if (c.free && (event.key === 'Enter' || event.key === ' ')) {

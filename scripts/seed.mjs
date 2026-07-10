@@ -26,7 +26,7 @@ import { pathToFileURL } from 'node:url';
 // ---------------------------------------------------------------------------
 
 export const EVENT_SEED = {
-  name: 'Atlantis Med — Trieste to Barcelona',
+  name: 'Atlantis Med—Trieste to Barcelona',
   sailStart: '2026-07-15',
   sailEnd: '2026-07-24',
   status: 'active',

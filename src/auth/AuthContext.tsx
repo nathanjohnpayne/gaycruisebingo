@@ -108,7 +108,7 @@ function isPoolShortfall(err: unknown): boolean {
 // `dealBoard` throwing when the active non-free pool is below the 24 a Board needs.
 function dealErrorMessage(err: unknown): string {
   if (isPoolShortfall(err)) {
-    return "We couldn't deal your card yet — the prompt pool is below the 24 a card needs. Ask an admin to add a few prompts, then retry.";
+    return "We couldn't deal your card yet—the prompt pool is below the 24 a card needs. Ask an admin to add a few prompts, then retry.";
   }
   return "We couldn't deal your bingo card. Check your connection and retry.";
 }
