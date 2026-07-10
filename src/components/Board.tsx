@@ -959,9 +959,9 @@ export default function Board() {
       <div className="count">
         Marked <b>{countMarked(cells)}</b> · Bingos <b>{player?.bingoCount ?? 0}</b>
       </div>
-      {/* 18+ · Guidelines, centered under the tally (#143) — moved out of the
-          floating app chrome so it no longer shares the bottom-right corner with
-          any other affordance. Self-gates on the signed-in User (ADR 0005). */}
+      {/* The fixed Guidelines affordance is mounted here on Card and from main.tsx
+          elsewhere. It sits bottom-left, opposite the bottom-right bug reporter,
+          and self-gates on the signed-in User (ADR 0005). */}
       <AcceptableUse />
       {/* `cells` fixes the empty-card share race (Codex P2, PR #111 finding
           1): Celebration used to open its own useBoard(uid) listener and
