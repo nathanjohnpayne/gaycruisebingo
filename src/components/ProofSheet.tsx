@@ -58,7 +58,7 @@ export default function ProofSheet(props: Props) {
       rec.start();
       setRecording(true);
     } catch {
-      alert('Mic unavailable — try a photo or a callout instead.');
+      alert('Mic unavailable—try a photo or a callout instead.');
     }
   };
   const stopRec = () => {
@@ -98,7 +98,7 @@ export default function ProofSheet(props: Props) {
       onClose();
     } catch {
       setBusy(false);
-      alert('Upload failed — try again.');
+      alert('Upload failed—try again.');
     }
   };
 

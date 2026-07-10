@@ -42,7 +42,7 @@ import App from './App';
 import { DealError } from './components/SignIn';
 
 const POOL_MESSAGE =
-  "We couldn't deal your card yet — the prompt pool is below the 24 a card needs. Ask an admin to add a few prompts, then retry.";
+  "We couldn't deal your card yet—the prompt pool is below the 24 a card needs. Ask an admin to add a few prompts, then retry.";
 
 beforeEach(() => {
   vi.clearAllMocks();
