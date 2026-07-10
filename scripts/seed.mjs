@@ -1,7 +1,7 @@
 // Seed the event + prompt pool using the Firebase Admin SDK (bypasses security rules).
 //
 // One-time setup (Application Default Credentials — no committed key file):
-//   1. npm i -D firebase-admin
+//   1. npm install
 //   2. gcloud auth application-default login
 //   3. Find each Admin's Google UID: sign into the app once, then Firebase console > Authentication > Users.
 //   4. ADMIN_UID=<uid>[,<uid>,...] GOOGLE_CLOUD_PROJECT=gaycruisebingo node scripts/seed.mjs
@@ -205,33 +205,159 @@ export function seedItemMutations(existingDocs, now = Date.now()) {
   };
 }
 
+// Drift check (#129 reopened): the app renders the pool from Firestore, not from
+// the JS bundle, so a change to ITEMS only reaches players once this seed is
+// re-run against the live project. Merging + deploying the frontend does NOT
+// reseed — so a pool change can pass CI, ship the bundle, and still leave players
+// on the OLD pool (exactly what happened after #135: 87-prompt pool merged, but
+// events/{id}/items still held the pre-#135 32). `verifySeedPool` compares the
+// live SEED-OWNED docs against the canonical `pool` and reports the drift so a
+// post-deploy check (or `node scripts/seed.mjs --verify`) fails loudly instead of
+// the mismatch going unnoticed. Player-submitted docs (createdBy !== 'seed') are
+// ignored — they are not part of the canonical pool and must never count as drift.
+export function verifySeedPool(
+  existingDocs,
+  pool = ITEMS,
+  reportHideThreshold = EVENT_SEED.settings.reportHideThreshold,
+) {
+  const expected = new Map(
+    pool.map(({ text, spicy }) => [
+      seedItemDocId(text),
+      { text, spicy, isFreeSpace: false, status: 'active' },
+    ]),
+  );
+  const seedDocs = existingDocs.filter((doc) => doc.createdBy === 'seed');
+  const seedById = new Map(seedDocs.map((doc) => [doc.id, doc]));
+
+  // Canonical prompts absent from the live seed pool (a new/renamed prompt that
+  // was never seeded — the #135 symptom for every new-text entry).
+  const missing = [];
+  // Present at the canonical id but a stored field drifted from the canonical
+  // record. The doc id is a content hash of `text`, so a matching id normally
+  // implies matching text — but a malformed or hand-edited doc can carry the
+  // canonical id with a different stored `text`, and the whole point of this
+  // check is to catch a live pool that has silently diverged, so compare the
+  // stored fields exactly (Codex P2, PR #139) rather than trusting the id.
+  // `spicy` is compared strictly, not by truthiness: firestore.rules require
+  // `spicy is bool`, so a live value of `"true"`, `1`, `undefined`, or a missing
+  // field (all of which `Boolean(...)` would silently coerce to the "right"
+  // answer) is itself drift the check must surface (Codex P2, PR #139).
+  const mismatched = [];
+  for (const [id, expectedDoc] of expected) {
+    const { text } = expectedDoc;
+    const live = seedById.get(id);
+    if (!live) {
+      missing.push({ id, text });
+    } else if (
+      live.text !== expectedDoc.text ||
+      live.spicy !== expectedDoc.spicy ||
+      live.isFreeSpace !== expectedDoc.isFreeSpace ||
+      live.status !== expectedDoc.status ||
+      (typeof reportHideThreshold === 'number' &&
+        reportHideThreshold > 0 &&
+        live.reportCount >= reportHideThreshold)
+    ) {
+      mismatched.push({
+        id,
+        text,
+        expectedSpicy: expectedDoc.spicy,
+        actualSpicy: live.spicy,
+        ...(live.text !== text ? { actualText: live.text } : {}),
+        ...(live.isFreeSpace !== expectedDoc.isFreeSpace
+          ? { expectedIsFreeSpace: expectedDoc.isFreeSpace, actualIsFreeSpace: live.isFreeSpace }
+          : {}),
+        ...(live.status !== expectedDoc.status
+          ? { expectedStatus: expectedDoc.status, actualStatus: live.status }
+          : {}),
+        ...(typeof reportHideThreshold === 'number' &&
+        reportHideThreshold > 0 &&
+        live.reportCount >= reportHideThreshold
+          ? { reportHideThreshold, actualReportCount: live.reportCount }
+          : {}),
+      });
+    }
+  }
+  // Seed-owned docs the canonical pool no longer contains (an old prompt that a
+  // reseed should have deleted — the #135 symptom for every retired entry).
+  const stale = seedDocs
+    .filter((doc) => !expected.has(doc.id))
+    .map((doc) => ({ id: doc.id, text: doc.text }));
+
+  return {
+    ok: missing.length === 0 && mismatched.length === 0 && stale.length === 0,
+    expected: expected.size,
+    seedOwned: seedDocs.length,
+    playerOwned: existingDocs.length - seedDocs.length,
+    missing,
+    mismatched,
+    stale,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Seeding — runs only when executed directly (`node scripts/seed.mjs`), so
 // importing the payload above never requires the dev-only firebase-admin install.
 // ---------------------------------------------------------------------------
 
-async function seed() {
+// Resolve the Admin SDK + a Firestore handle. Shared by `seed()` (writes) and
+// `verify()` (read-only). firebase-admin is a dev dependency used only when this
+// script runs directly. The specifiers are computed + @vite-ignore so Vite (which transforms
+// this module when a test imports the pure payload/verify builders) never tries
+// to resolve them at transform time — Node resolves them normally at run time.
+async function initFirestore() {
   const { readFileSync, existsSync } = await import('node:fs');
-  // firebase-admin is a run-directly-only dependency (`npm i -D firebase-admin`
-  // before seeding) that is absent from the app install. The specifiers are
-  // computed + @vite-ignore so Vite (which transforms this module when the
-  // test imports the payload builders) never tries to resolve them at
-  // transform time — Node resolves them normally when the seed actually runs.
   const adminAppModule = 'firebase-admin/app';
   const adminFirestoreModule = 'firebase-admin/firestore';
-  const { initializeApp, cert, applicationDefault } = await import(/* @vite-ignore */ adminAppModule);
-  const { getFirestore, FieldValue } = await import(/* @vite-ignore */ adminFirestoreModule);
+  let initializeApp, cert, applicationDefault, getFirestore, FieldValue;
+  try {
+    ({ initializeApp, cert, applicationDefault } = await import(/* @vite-ignore */ adminAppModule));
+    ({ getFirestore, FieldValue } = await import(/* @vite-ignore */ adminFirestoreModule));
+  } catch (err) {
+    // Keep a focused error if a partial or production-only install omitted the
+    // dev dependency, rather than surfacing a raw ERR_MODULE_NOT_FOUND.
+    if (err?.code === 'ERR_MODULE_NOT_FOUND') {
+      console.error(
+        'firebase-admin is not installed — it is a dev-only dependency this script\n' +
+          'loads at runtime. Install it first, then re-run:\n' +
+          '  npm i -D firebase-admin',
+      );
+      process.exit(1);
+    }
+    throw err;
+  }
 
   const EVENT_ID = process.env.VITE_EVENT_ID || 'med-2026';
-  const admins = adminRoster(process.env.ADMIN_UID);
+
+  // Pin the target Firebase project so a bare `node scripts/seed.mjs [--verify]`
+  // (npm run seed / verify:seed) can never silently read or write the wrong
+  // project (Codex P2, PR #139): prefer the standard env vars, else fall back to
+  // the .firebaserc default, and pass it to initializeApp explicitly rather than
+  // relying on ADC's ambient project.
+  let projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+  if (!projectId) {
+    const rcUrl = new URL('../.firebaserc', import.meta.url);
+    if (existsSync(rcUrl)) {
+      try {
+        projectId = JSON.parse(readFileSync(rcUrl, 'utf8'))?.projects?.default || '';
+      } catch {
+        projectId = '';
+      }
+    }
+  }
 
   const keyUrl = new URL('../serviceAccountKey.json', import.meta.url);
-  initializeApp(
-    existsSync(keyUrl)
+  initializeApp({
+    ...(existsSync(keyUrl)
       ? { credential: cert(JSON.parse(readFileSync(keyUrl))) }
-      : { credential: applicationDefault() },
-  );
-  const db = getFirestore();
+      : { credential: applicationDefault() }),
+    ...(projectId ? { projectId } : {}),
+  });
+  return { db: getFirestore(), EVENT_ID, FieldValue };
+}
+
+async function seed() {
+  const { db, EVENT_ID, FieldValue } = await initFirestore();
+  const admins = adminRoster(process.env.ADMIN_UID);
 
   const eventRef = db.doc(`events/${EVENT_ID}`);
   await eventRef.set(eventWritePayload(admins, FieldValue.delete()), {
@@ -265,6 +391,26 @@ async function seed() {
   for (const { id, data } of writes) batch.set(col.doc(id), data, { merge: true });
   await batch.commit();
 
+  // Self-check: read the collection back and confirm the live seed pool now
+  // matches the canonical ITEMS. A green seed run that leaves drift (partial
+  // batch, wrong project, stale doc a scoped delete missed) should fail loudly
+  // right here, not weeks later when a player notices the old prompts.
+  const report = verifySeedPool(
+    (await col.get()).docs.map((doc) => ({
+      id: doc.id,
+      text: doc.data().text,
+      createdBy: doc.data().createdBy,
+      spicy: doc.data().spicy,
+      isFreeSpace: doc.data().isFreeSpace,
+      status: doc.data().status,
+      reportCount: doc.data().reportCount,
+    })),
+  );
+  if (!report.ok) {
+    console.error(formatDriftReport(report, EVENT_ID));
+    process.exit(1);
+  }
+
   console.log(`Seeded ${ITEMS.length} prompts into events/${EVENT_ID}.`);
   // Redacted on purpose (CodeQL js/clear-text-logging, alert #2): report that the
   // roster was set — and how many uids parsed — without echoing the env-sourced uids.
@@ -276,6 +422,72 @@ async function seed() {
   process.exit(0);
 }
 
+// Render a `verifySeedPool` drift report as a human-readable, actionable block.
+// Only the first few entries per bucket are listed so a wholesale reseed (dozens
+// of missing/stale) stays readable; the counts tell the full story.
+export function formatDriftReport(report, eventId) {
+  const preview = (rows) =>
+    rows
+      .slice(0, 5)
+      .map((r) => JSON.stringify(r.text))
+      .join(', ') + (rows.length > 5 ? ', …' : '');
+  const lines = [
+    `✗ events/${eventId}/items DRIFTS from the canonical ${report.expected}-prompt pool`,
+    `  live seed-owned: ${report.seedOwned}   player-owned (ignored): ${report.playerOwned}`,
+  ];
+  if (report.missing.length)
+    lines.push(`  missing from live (${report.missing.length}): ${preview(report.missing)}`);
+  if (report.stale.length)
+    lines.push(`  stale in live (${report.stale.length}): ${preview(report.stale)}`);
+  if (report.mismatched.length)
+    lines.push(`  field drift (${report.mismatched.length}): ${preview(report.mismatched)}`);
+  // Reconcile with a bare reseed — NO ADMIN_UID. The seed's event write merges,
+  // and omitting ADMIN_UID leaves `events/{id}.admins` untouched (a reseed to
+  // refresh prompts must never overwrite the live admin roster, Codex P2 PR
+  // #139). ADMIN_UID is only for the separate act of *granting* admin.
+  //
+  // Echo the SAME target the drift was found against, not a hardcoded default
+  // (Codex P2, PR #139): carry the resolved project and — when it is not the
+  // `med-2026` default — the `VITE_EVENT_ID`, so a copy-pasted reconcile command
+  // reseeds the event that actually drifted rather than a different one.
+  const project =
+    process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || 'gaycruisebingo';
+  const eventEnv = eventId && eventId !== 'med-2026' ? `VITE_EVENT_ID=${eventId} ` : '';
+  lines.push(
+    `  → reconcile (prompts only): ADMIN_UID= ${eventEnv}GOOGLE_CLOUD_PROJECT=${project} node scripts/seed.mjs`,
+  );
+  return lines.join('\n');
+}
+
+// Read-only drift check (`node scripts/seed.mjs --verify`). Never writes — safe
+// to run as a post-deploy smoke test. Exits 0 when the live seed pool matches
+// the canonical ITEMS, 1 (with an actionable report) when it drifts.
+async function verify() {
+  const { db, EVENT_ID } = await initFirestore();
+  const snap = await db.collection(`events/${EVENT_ID}/items`).get();
+  const report = verifySeedPool(
+    snap.docs.map((doc) => ({
+      id: doc.id,
+      text: doc.data().text,
+      createdBy: doc.data().createdBy,
+      spicy: doc.data().spicy,
+      isFreeSpace: doc.data().isFreeSpace,
+      status: doc.data().status,
+      reportCount: doc.data().reportCount,
+    })),
+  );
+  if (report.ok) {
+    console.log(
+      `✓ events/${EVENT_ID}/items matches the canonical ${report.expected}-prompt pool ` +
+        `(${report.seedOwned} seed-owned, ${report.playerOwned} player-owned).`,
+    );
+    process.exit(0);
+  }
+  console.error(formatDriftReport(report, EVENT_ID));
+  process.exit(1);
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await seed();
+  if (process.argv.includes('--verify')) await verify();
+  else await seed();
 }
