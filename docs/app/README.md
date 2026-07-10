@@ -37,7 +37,9 @@ GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcb-sa.json \
   firebase apps:sdkconfig WEB --project gaycruisebingo --non-interactive
 ```
 
-Map the JSON fields into `.env.local`: `apiKey`→`VITE_FIREBASE_API_KEY`, `authDomain`→`VITE_FIREBASE_AUTH_DOMAIN`, `projectId`→`VITE_FIREBASE_PROJECT_ID`, `storageBucket`→`VITE_FIREBASE_STORAGE_BUCKET`, `messagingSenderId`→`VITE_FIREBASE_MESSAGING_SENDER_ID`, `appId`→`VITE_FIREBASE_APP_ID`, `measurementId`→`VITE_FIREBASE_MEASUREMENT_ID`. `VITE_EVENT_ID` defaults to `med-2026`; `VITE_RECAPTCHA_SITE_KEY` is Phase-1 (App Check) — leave it blank for Phase 0.
+Map the JSON fields into `.env.local`: `apiKey`→`VITE_FIREBASE_API_KEY`, `authDomain`→`VITE_FIREBASE_AUTH_DOMAIN` (**do not copy verbatim — override, see below**), `projectId`→`VITE_FIREBASE_PROJECT_ID`, `storageBucket`→`VITE_FIREBASE_STORAGE_BUCKET`, `messagingSenderId`→`VITE_FIREBASE_MESSAGING_SENDER_ID`, `appId`→`VITE_FIREBASE_APP_ID`, `measurementId`→`VITE_FIREBASE_MEASUREMENT_ID`. `VITE_EVENT_ID` defaults to `med-2026`; `VITE_RECAPTCHA_SITE_KEY` is Phase-1 (App Check) — leave it blank for Phase 0.
+
+**`VITE_FIREBASE_AUTH_DOMAIN` must be the origin the app is served from — `gaycruisebingo.com` — NOT the `gaycruisebingo.firebaseapp.com` value the console reports.** Firebase serves the Google OAuth handler at `<authDomain>/__/auth/handler`. When that origin differs from where the app runs, storage-partitioned browsers — iOS/Android in-app webviews (links opened inside iMessage, Instagram, WhatsApp, etc.) and Safari with ITP — can't read the sign-in state written before the redirect, so Google sign-in dies with "Unable to process request due to missing initial state." Real mobile Chrome/Safari tolerate the cross-origin handler, which is why the bug hides in direct testing and only surfaces for users who open a shared link in an in-app browser. `gaycruisebingo.com` already serves the handler (`/__/auth/handler` → 200) and is in the authorized-domains list, so pointing `authDomain` at it is same-origin and drop-in.
 
 ## 3. Install & run
 
