@@ -235,8 +235,10 @@ describe('Board render', () => {
     const free = screen.getByRole('button', { name: FREE_TEXT });
     fireEvent.click(free);
     expect(free).toHaveClass('free-pulse-a', 'marked');
+    fireEvent.animationEnd(free);
+    expect(free).not.toHaveClass('free-pulse-a', 'free-pulse-b');
     fireEvent.click(free);
-    expect(free).toHaveClass('free-pulse-b', 'marked');
+    expect(free).toHaveClass('free-pulse-a', 'marked');
   });
 
   it('exposes no re-deal / Square-swap affordance (ADR 0003)', () => {

@@ -299,8 +299,8 @@ a {
 }
 @media (prefers-reduced-motion: reduce) {
   .loading-spinner i,
-  .cell.free-pulse-a,
-  .cell.free-pulse-b {
+  .cell.free.free-pulse-a,
+  .cell.free.free-pulse-b {
     animation: none;
   }
 }

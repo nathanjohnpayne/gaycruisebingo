@@ -24,7 +24,7 @@ Feature: a Player's Board is dealt once, at join, from the active non-free Promp
 
 `src/components/w1-board-deal-join.test.tsx` (Vitest, RTL-jsdom + firestore-mocked unit):
 
-- Board render — a real `dealBoard` result (from the seed pool) rendered through `Board`: exactly 25 Squares, one marked Free Space at the centre with a distinct `FREE` label plus the seeded `FREE_TEXT` prompt ("Complain about Circuit Music"), click feedback that alternates pulse classes without unmarking it, and no re-deal / shuffle / swap / "new card" control present.
+- Board render — a real `dealBoard` result (from the seed pool) rendered through `Board`: exactly 25 Squares, one marked Free Space at the centre with a distinct `FREE` label plus the seeded `FREE_TEXT` prompt ("Complain about Circuit Music"), click feedback that removes its one-shot pulse class at animation end without unmarking it, and no re-deal / shuffle / swap / "new card" control present.
 - Board deal guard — with no Board yet and the active non-free pool `< MIN_POOL`, `Board` shows the guard alert; with the pool `≥ MIN_POOL` (or still loading) it shows the neutral "Dealing…" state, proving the guard fires only on a genuinely thin pool, not on an in-flight deal.
 - Board cold-cache suppression — with both subscriptions resolved but cache-only (`hasServerData: false`), an empty pool and missing board keep the neutral state (no alert); the alert appears only after the server confirms a thin pool, and a server-delivered Board renders the card with no alert flash.
 - Board pool-listener gate — `useItems` is called with `enabled: true` while there is no Board, and `enabled: false` once a Board exists.

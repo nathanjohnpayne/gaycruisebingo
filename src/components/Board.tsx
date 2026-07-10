@@ -899,6 +899,9 @@ export default function Board() {
                 toggle(c);
               }
             }}
+            onAnimationEnd={() => {
+              if (c.free) setFreePulse(0);
+            }}
           >
             {c.free ? (
               <>
