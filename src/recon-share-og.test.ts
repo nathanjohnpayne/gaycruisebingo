@@ -36,7 +36,9 @@ describe('recon: share Function + escapeHtml + OG_RENDERER_URL removed from func
     expect(functionsIndex).not.toMatch(/export const share\b/);
     expect(functionsIndex).not.toMatch(/escapeHtml/);
     expect(functionsIndex).not.toMatch(/OG_RENDERER_URL/);
-    expect(functionsIndex).not.toMatch(/from 'firebase-functions\/v2\/https'/);
+    // HTTPS callables are legitimate server APIs (for example bug intake); the
+    // removed OG pipeline specifically used an onRequest HTTP renderer.
+    expect(functionsIndex).not.toMatch(/import\s*\{[^}]*\bonRequest\b[^}]*\}\s*from 'firebase-functions\/v2\/https'/s);
   });
 
   it('keeps moderateProof intact', () => {

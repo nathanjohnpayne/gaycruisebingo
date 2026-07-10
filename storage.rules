@@ -35,5 +35,11 @@ service firebase.storage {
       allow create, update: if isOwner(uid) && (okImage() || okAudio());
       allow delete: if isOwner(uid) || isEventAdmin(eventId);
     }
+
+    // Private server-written bug-report evidence. The submitBugReport callable
+    // uses the Admin SDK; no browser identity may read, enumerate, or mutate it.
+    match /bug-reports/{uidHash}/{reportId}/{file} {
+      allow read, write: if false;
+    }
   }
 }

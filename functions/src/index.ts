@@ -1,21 +1,29 @@
 import { setGlobalOptions } from 'firebase-functions/v2';
 import { onObjectFinalized, type StorageEvent } from 'firebase-functions/v2/storage';
 import { onDocumentWritten } from 'firebase-functions/v2/firestore';
+import { onCall } from 'firebase-functions/v2/https';
 import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
 import vision from '@google-cloud/vision';
 import sharp from 'sharp';
-import { RESEND_API_KEY } from './params';
+import { BUG_REPORT_APP_CHECK, RESEND_API_KEY } from './params';
 import { shouldNotify, notifyAdminsOfModeration, type ModeratedDoc } from './notify';
 import { visionModerationEnabled } from './visionGate';
 import { applyThresholdHide, applyThresholdBackfill, type ReportableDoc } from './autohide';
+import { handleSubmitBugReport } from './bugReports';
 
 initializeApp();
 setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
 
 const db = getFirestore();
 const visionClient = new vision.ImageAnnotatorClient();
+
+/** Private, authenticated bug intake; App Check enforcement follows #44's toggle. */
+export const submitBugReport = onCall(
+  { maxInstances: 10, timeoutSeconds: 30 },
+  (request) => handleSubmitBugReport(request, BUG_REPORT_APP_CHECK.value()),
+);
 
 // Cloud Vision (moderateProof) stays deferred by default (#126): the gate keeps
 // the export OFF until Vision is deliberately enabled (Cloud Vision API on +

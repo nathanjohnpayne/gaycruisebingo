@@ -161,6 +161,34 @@ test.describe('x-e2e-happy-path', () => {
       expect(await boardHasMarkedText(testEnv, uid, targetText)).toBe(true);
     }).toPass({ timeout: 20_000 });
   });
+
+  test('the persistent bug-report control clears the tab bar and previews the app surface', async ({
+    page,
+  }) => {
+    await joinViaSharedLink(page);
+    const trigger = page.getByRole('button', { name: 'Report a bug' });
+    const tabs = page.getByRole('navigation', { name: 'Primary' });
+    await expect(trigger).toBeVisible();
+    await expect(trigger).toHaveCSS('position', 'fixed');
+    const geometry = await page.evaluate(() => {
+      const triggerRect = document.querySelector('.bug-report-trigger')?.getBoundingClientRect();
+      const tabsRect = document.querySelector('.tabs')?.getBoundingClientRect();
+      return triggerRect && tabsRect
+        ? { triggerBottom: triggerRect.bottom, tabTop: tabsRect.top, width: triggerRect.width, height: triggerRect.height }
+        : null;
+    });
+    expect(geometry).not.toBeNull();
+    expect(geometry?.triggerBottom).toBeLessThanOrEqual(geometry?.tabTop ?? 0);
+    expect(geometry?.width).toBeGreaterThanOrEqual(44);
+    expect(geometry?.height).toBeGreaterThanOrEqual(44);
+
+    await trigger.click();
+    const dialog = page.getByRole('dialog', { name: 'Report a bug' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByAltText('Screenshot that will be submitted with this bug report')).toBeVisible({ timeout: 15_000 });
+    await expect(trigger).toBeHidden();
+    await expect(tabs).toBeVisible();
+  });
 });
 
 function markedCellLocator(page: Page, text: string) {

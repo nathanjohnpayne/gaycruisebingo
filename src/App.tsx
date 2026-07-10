@@ -10,6 +10,7 @@ import ProofFeed from './components/ProofFeed';
 import Admin from './components/Admin';
 import { TABS, FALLBACK_PATH, type TabId } from './components/tabs';
 import LoadingState from './components/LoadingState';
+import BugReport from './components/BugReport';
 
 export default function App() {
   const { user, loading, dealError, dealing, retryDeal } = useAuth();
@@ -53,6 +54,7 @@ export default function App() {
         ))}
         <Route path="*" element={<Navigate to={FALLBACK_PATH} replace />} />
       </Routes>
+      <BugReport />
     </div>
   );
 }

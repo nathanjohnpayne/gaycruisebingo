@@ -7,6 +7,7 @@ import {
   connectFirestoreEmulator,
 } from 'firebase/firestore';
 import { getStorage, connectStorageEmulator } from 'firebase/storage';
+import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import { getAnalytics, isSupported, type Analytics } from 'firebase/analytics';
 
@@ -32,6 +33,7 @@ export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
 });
 export const storage = getStorage(app);
+export const functions = getFunctions(app, 'us-central1');
 
 // Local Emulator Suite wiring for the Playwright e2e layer
 // (specs/x-e2e-happy-path.md). The suite serves a `vite build --mode e2e` +
@@ -52,6 +54,7 @@ if (import.meta.env.MODE === 'e2e' && import.meta.env.VITE_FIREBASE_PROJECT_ID?.
   connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
   connectFirestoreEmulator(db, '127.0.0.1', 8080);
   connectStorageEmulator(storage, '127.0.0.1', 9199);
+  connectFunctionsEmulator(functions, '127.0.0.1', 5001);
 }
 
 // App Check (abuse protection). No-op unless a reCAPTCHA Enterprise site key is set.
