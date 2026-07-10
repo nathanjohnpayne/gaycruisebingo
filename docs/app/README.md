@@ -84,7 +84,7 @@ This creates `events/med-2026` (honor claim-mode, `neon-playground` default them
 > npm run verify:seed    # = node scripts/seed.mjs --verify (read-only; exit 1 on drift)
 > ```
 >
-> Run `verify:seed` as the last step of any deploy that touched the pool (and any time you suspect players are on a stale pool). It reads the live `events/{id}/items`, compares the seed-owned docs to the canonical `ITEMS`, and fails loudly — listing what is missing / stale — instead of the drift going unnoticed.
+> Run `verify:seed` as the last step of any deploy that touched the pool (and any time you suspect players are on a stale pool). It reads the live `events/{id}/items`, compares the seed-owned docs to the canonical `ITEMS`, and fails loudly — listing what is missing / stale — instead of the drift going unnoticed. It shares the seed's prerequisites: `npm i -D firebase-admin`, a credential (ADC or the SA key), and the project (`GOOGLE_CLOUD_PROJECT=gaycruisebingo`, or the `.firebaserc` default).
 
 ## 5. Deploy
 

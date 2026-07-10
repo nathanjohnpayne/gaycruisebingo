@@ -223,15 +223,25 @@ export function verifySeedPool(existingDocs, pool = ITEMS) {
   // Canonical prompts absent from the live seed pool (a new/renamed prompt that
   // was never seeded — the #135 symptom for every new-text entry).
   const missing = [];
-  // Present by id (same text) but the spicy flag drifted (a flag flipped in a
-  // new pool revision without a reseed).
+  // Present at the canonical id but a stored field drifted from the canonical
+  // record. The doc id is a content hash of `text`, so a matching id normally
+  // implies matching text — but a malformed or hand-edited doc can carry the
+  // canonical id with a different stored `text`, and the whole point of this
+  // check is to catch a live pool that has silently diverged, so compare the
+  // stored fields exactly (Codex P2, PR #139) rather than trusting the id.
   const mismatched = [];
   for (const [id, { text, spicy }] of expected) {
     const live = seedById.get(id);
     if (!live) {
       missing.push({ id, text });
-    } else if (Boolean(live.spicy) !== spicy) {
-      mismatched.push({ id, text, expectedSpicy: spicy, actualSpicy: Boolean(live.spicy) });
+    } else if (Boolean(live.spicy) !== spicy || live.text !== text) {
+      mismatched.push({
+        id,
+        text,
+        expectedSpicy: spicy,
+        actualSpicy: Boolean(live.spicy),
+        ...(live.text !== text ? { actualText: live.text } : {}),
+      });
     }
   }
   // Seed-owned docs the canonical pool no longer contains (an old prompt that a
@@ -266,16 +276,52 @@ async function initFirestore() {
   const { readFileSync, existsSync } = await import('node:fs');
   const adminAppModule = 'firebase-admin/app';
   const adminFirestoreModule = 'firebase-admin/firestore';
-  const { initializeApp, cert, applicationDefault } = await import(/* @vite-ignore */ adminAppModule);
-  const { getFirestore, FieldValue } = await import(/* @vite-ignore */ adminFirestoreModule);
+  let initializeApp, cert, applicationDefault, getFirestore, FieldValue;
+  try {
+    ({ initializeApp, cert, applicationDefault } = await import(/* @vite-ignore */ adminAppModule));
+    ({ getFirestore, FieldValue } = await import(/* @vite-ignore */ adminFirestoreModule));
+  } catch (err) {
+    // firebase-admin is a dev-only, run-directly-only dependency kept out of the
+    // app install (see the module header), so `npm run seed` / `verify:seed` on a
+    // clean checkout would otherwise fail with a raw ERR_MODULE_NOT_FOUND. Give
+    // the operator the one command that fixes it (Codex P2, PR #139).
+    if (err?.code === 'ERR_MODULE_NOT_FOUND') {
+      console.error(
+        'firebase-admin is not installed — it is a dev-only dependency this script\n' +
+          'loads at runtime. Install it first, then re-run:\n' +
+          '  npm i -D firebase-admin',
+      );
+      process.exit(1);
+    }
+    throw err;
+  }
 
   const EVENT_ID = process.env.VITE_EVENT_ID || 'med-2026';
+
+  // Pin the target Firebase project so a bare `node scripts/seed.mjs [--verify]`
+  // (npm run seed / verify:seed) can never silently read or write the wrong
+  // project (Codex P2, PR #139): prefer the standard env vars, else fall back to
+  // the .firebaserc default, and pass it to initializeApp explicitly rather than
+  // relying on ADC's ambient project.
+  let projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+  if (!projectId) {
+    const rcUrl = new URL('../.firebaserc', import.meta.url);
+    if (existsSync(rcUrl)) {
+      try {
+        projectId = JSON.parse(readFileSync(rcUrl, 'utf8'))?.projects?.default || '';
+      } catch {
+        projectId = '';
+      }
+    }
+  }
+
   const keyUrl = new URL('../serviceAccountKey.json', import.meta.url);
-  initializeApp(
-    existsSync(keyUrl)
+  initializeApp({
+    ...(existsSync(keyUrl)
       ? { credential: cert(JSON.parse(readFileSync(keyUrl))) }
-      : { credential: applicationDefault() },
-  );
+      : { credential: applicationDefault() }),
+    ...(projectId ? { projectId } : {}),
+  });
   return { db: getFirestore(), EVENT_ID, FieldValue };
 }
 
@@ -361,9 +407,13 @@ export function formatDriftReport(report, eventId) {
   if (report.stale.length)
     lines.push(`  stale in live (${report.stale.length}): ${preview(report.stale)}`);
   if (report.mismatched.length)
-    lines.push(`  spicy-flag drift (${report.mismatched.length}): ${preview(report.mismatched)}`);
+    lines.push(`  field drift (${report.mismatched.length}): ${preview(report.mismatched)}`);
+  // Reconcile with a bare reseed — NO ADMIN_UID. The seed's event write merges,
+  // and omitting ADMIN_UID leaves `events/{id}.admins` untouched (a reseed to
+  // refresh prompts must never overwrite the live admin roster, Codex P2 PR
+  // #139). ADMIN_UID is only for the separate act of *granting* admin.
   lines.push(
-    `  → reconcile: ADMIN_UID=<uid> GOOGLE_CLOUD_PROJECT=${process.env.GOOGLE_CLOUD_PROJECT || 'gaycruisebingo'} node scripts/seed.mjs`,
+    `  → reconcile (prompts only): GOOGLE_CLOUD_PROJECT=${process.env.GOOGLE_CLOUD_PROJECT || 'gaycruisebingo'} node scripts/seed.mjs`,
   );
   return lines.join('\n');
 }

@@ -186,6 +186,18 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     });
   });
 
+  it('flags a stored-text drift (canonical id but a tampered text field) as mismatched (Codex P2, PR #139)', () => {
+    // A malformed doc carrying the canonical content-hash id but a different
+    // stored `text` must not slip through just because the id matches.
+    const live = liveFromCanonical().map((d) =>
+      d.text === 'Threesome' ? { ...d, text: 'Tampered text' } : d,
+    );
+    const report = verifySeedPool(live);
+    expect(report.ok).toBe(false);
+    expect(report.mismatched).toHaveLength(1);
+    expect(report.mismatched[0]).toMatchObject({ text: 'Threesome', actualText: 'Tampered text' });
+  });
+
   // The exact production condition: the live pool is still the OLD (pre-#135)
   // seed set — a couple of prompts that survived into the new pool, plus retired
   // ones — and none of the ~86 new entries. verifySeedPool must catch it as both
