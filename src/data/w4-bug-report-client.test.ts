@@ -26,14 +26,19 @@ afterEach(() => {
 });
 
 describe('bug-report client diagnostics', () => {
-  it('keeps the unhashed service-worker registration script out of immutable hosting cache', () => {
+  it('keeps the unhashed service worker out of immutable hosting cache', () => {
+    // sw.js is the unhashed artifact update detection rides on: UpdatePrompt's
+    // periodic registration.update() (specs/app-update-reload-prompt.md) only
+    // sees a new deploy if hosting never lets sw.js go immutable. Registration
+    // itself moved in-bundle in #178 (UpdatePrompt's virtual:pwa-register/react
+    // import), so there is no separate registerSW.js to guard anymore.
     const firebaseConfig = JSON.parse(readFileSync('firebase.json', 'utf8')) as {
       hosting: { headers: Array<{ source: string; headers: Array<{ key: string; value: string }> }> };
     };
     const noCacheSources = firebaseConfig.hosting.headers
       .filter((entry) => entry.headers.some((header) => header.key === 'Cache-Control' && header.value === 'no-cache'))
       .map((entry) => entry.source);
-    expect(noCacheSources.some((source) => source.includes('registerSW.js'))).toBe(true);
+    expect(noCacheSources.some((source) => source.includes('sw.js'))).toBe(true);
   });
 
   it('records the screen path without potentially sensitive query parameters', () => {

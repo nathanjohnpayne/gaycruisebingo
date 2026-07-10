@@ -9,6 +9,7 @@ import type { ThemeId } from './types';
 import App from './App';
 import ConsentNotice from './components/ConsentNotice';
 import InstallPrompt from './components/InstallPrompt';
+import UpdatePrompt from './components/UpdatePrompt';
 import AcceptableUse from './components/AcceptableUse';
 import './theme/themes.css';
 import './index.css';
@@ -64,6 +65,9 @@ createRoot(rootEl).render(
         signed-out SignIn screen, since a Player may install before ever
         signing in. */}
     <InstallPrompt />
+    {/* Same stable mount point again: a new deploy must be able to prompt a
+        reload on every screen, signed-out SignIn included (#178). */}
+    <UpdatePrompt />
     <AuthProvider>
       <BrowserRouter>
         <ThemedApp />

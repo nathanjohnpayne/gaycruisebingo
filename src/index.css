@@ -871,9 +871,13 @@ a {
   font-size: 11px;
 }
 
-/* ---------- install prompt ---------- */
-/* Fixed to the bottom like .tabs; env(safe-area-inset-bottom) clears the iOS home indicator. */
-.install-prompt {
+/* ---------- install + update prompts ---------- */
+/* Shared bottom-banner shell: .install-prompt (specs/w1-pwa.md) and .update-prompt
+   (specs/app-update-reload-prompt.md) read the same theme tokens so both follow the
+   active theme. Fixed to the bottom like .tabs; env(safe-area-inset-bottom) clears
+   the iOS home indicator. */
+.install-prompt,
+.update-prompt {
   position: fixed;
   bottom: 0;
   left: 0;
@@ -887,33 +891,48 @@ a {
   backdrop-filter: blur(6px);
   border-top: 1px solid var(--border);
 }
-.install-prompt p {
+/* If both banners are ever up at once, the pending update takes precedence:
+   the install banner is fully suppressed (display: none removes it from the
+   tab order and accessibility tree, not just from view — a z-index overlay
+   would leave keyboard/screen-reader users hitting invisible Install controls
+   underneath) rather than stacking a third fixed bar. A reload re-fires
+   beforeinstallprompt, so the install offer isn't lost. */
+body.update-prompt-visible .install-prompt {
+  display: none;
+}
+.install-prompt p,
+.update-prompt p {
   flex: 1;
   margin: 0;
   color: var(--dim);
   font-size: 12px;
   line-height: 1.4;
 }
-.install-prompt .btn {
+.install-prompt .btn,
+.update-prompt .btn {
   flex: none;
   padding: 8px 14px;
   font-size: 11px;
 }
 /* Stack above .tabs (61px = its own height) instead of hiding it — see specs/w1-pwa.md. */
-body:has(.tabs) .install-prompt {
+body:has(.tabs) .install-prompt,
+body:has(.tabs) .update-prompt {
   bottom: calc(61px + env(safe-area-inset-bottom));
 }
 /* Reserve extra .app bottom clearance only while the banner is actually up (either
    variant — Chromium or the iOS hint), so the last scrollable row doesn't sit
    underneath it; growing .app's base 112px unconditionally would waste that space
    the rest of the time. `install-prompt-visible` is toggled on <body> by
-   InstallPrompt (src/components/InstallPrompt.tsx) — see specs/w1-pwa.md. ~64px is
+   InstallPrompt (src/components/InstallPrompt.tsx) — see specs/w1-pwa.md — and
+   `update-prompt-visible` by UpdatePrompt (src/components/UpdatePrompt.tsx) — see
+   specs/app-update-reload-prompt.md. ~64px is
    reasoned from the banner's own padding/border plus up to two wrapped lines of its
    copy on narrow phones, not confirmed against a live rendered measurement — treat
    it as a generous, unverified estimate (see specs/w1-pwa.md) pending a real-device
    check; jsdom has no layout engine so it can't be verified by an automated test
    either. */
-body.install-prompt-visible .app {
+body.install-prompt-visible .app,
+body.update-prompt-visible .app {
   padding-bottom: 200px; /* 136px .app base + ~64px banner */
 }
 
@@ -956,7 +975,8 @@ body.install-prompt-visible .app {
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-body.install-prompt-visible .bug-report-trigger {
+body.install-prompt-visible .bug-report-trigger,
+body.update-prompt-visible .bug-report-trigger {
   bottom: calc(140px + env(safe-area-inset-bottom));
 }
 body:has(.celebrate) .bug-report-trigger,
@@ -1058,7 +1078,8 @@ body:has(.sheet-backdrop) .bug-report-trigger {
   height: 18px;
   fill: currentcolor;
 }
-body.install-prompt-visible .guidelines-trigger {
+body.install-prompt-visible .guidelines-trigger,
+body.update-prompt-visible .guidelines-trigger {
   bottom: calc(140px + env(safe-area-inset-bottom));
 }
 body:has(.celebrate) .guidelines-trigger,
