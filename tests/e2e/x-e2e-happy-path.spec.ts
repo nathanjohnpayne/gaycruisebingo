@@ -4,6 +4,7 @@
 // mapping.
 import { test, expect, type Page } from '@playwright/test';
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
+import { doc, setDoc } from 'firebase/firestore';
 import { MIN_POOL } from '../../src/game/logic';
 import {
   boardHasMarkedText,
@@ -19,6 +20,7 @@ import {
   tapCellByText,
   waitForBoardServerConfirmed,
 } from './support/board';
+import { EVENT_ID } from './support/env';
 
 test.describe('x-e2e-happy-path', () => {
   let testEnv: RulesTestEnvironment;
@@ -160,6 +162,60 @@ test.describe('x-e2e-happy-path', () => {
     await expect(async () => {
       expect(await boardHasMarkedText(testEnv, uid, targetText)).toBe(true);
     }).toPass({ timeout: 20_000 });
+  });
+
+  test('the persistent bug-report control clears the tab bar and previews the app surface', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await joinViaSharedLink(page);
+    const trigger = page.getByRole('button', { name: 'Report a bug' });
+    const tabs = page.getByRole('navigation', { name: 'Primary' });
+    await expect(trigger).toBeVisible();
+    await expect(trigger).toHaveCSS('position', 'fixed');
+    const geometry = await page.evaluate(() => {
+      const triggerRect = document.querySelector('.bug-report-trigger')?.getBoundingClientRect();
+      const tabsRect = document.querySelector('.tabs')?.getBoundingClientRect();
+      return triggerRect && tabsRect
+        ? { triggerBottom: triggerRect.bottom, tabTop: tabsRect.top, width: triggerRect.width, height: triggerRect.height }
+        : null;
+    });
+    expect(geometry).not.toBeNull();
+    expect(geometry?.triggerBottom).toBeLessThanOrEqual(geometry?.tabTop ?? 0);
+    expect(geometry?.width).toBeGreaterThanOrEqual(44);
+    expect(geometry?.height).toBeGreaterThanOrEqual(44);
+    await expect(trigger.locator('span')).toHaveCSS('position', 'absolute');
+
+    const normalBottom = await trigger.evaluate((element) => Number.parseFloat(getComputedStyle(element).bottom));
+    await page.evaluate(() => document.body.classList.add('install-prompt-visible'));
+    const installBottom = await trigger.evaluate((element) => Number.parseFloat(getComputedStyle(element).bottom));
+    expect(installBottom - normalBottom).toBeGreaterThanOrEqual(60);
+    await page.evaluate(() => document.body.classList.remove('install-prompt-visible'));
+
+    await page.evaluate(() => {
+      const sheet = document.createElement('div');
+      sheet.className = 'sheet-backdrop test-only-sheet';
+      document.body.append(sheet);
+    });
+    await expect(trigger).toBeHidden();
+    await page.evaluate(() => document.querySelector('.test-only-sheet')?.remove());
+    await expect(trigger).toBeVisible();
+
+    const uid = await signedInUid(page);
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), `events/${EVENT_ID}`), { admins: [uid] }, { merge: true });
+    });
+    await page.reload();
+    await expect(page.getByRole('link', { name: 'Admin' })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('navigation', { name: 'Primary' }).getByRole('link')).toHaveCount(5);
+
+    const reloadedTrigger = page.getByRole('button', { name: 'Report a bug' });
+    await reloadedTrigger.click();
+    const dialog = page.getByRole('dialog', { name: 'Report a bug' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByAltText('Screenshot that will be submitted with this bug report')).toBeVisible({ timeout: 15_000 });
+    await expect(reloadedTrigger).toBeHidden();
+    await expect(tabs).toBeVisible();
   });
 });
 

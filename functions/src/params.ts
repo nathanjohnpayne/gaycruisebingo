@@ -5,7 +5,7 @@
  * secret. RESEND_API_KEY is a Secret Manager secret (set out of band with
  * `firebase functions:secrets:set RESEND_API_KEY`), NEVER a plain env var.
  */
-import { defineSecret, defineString } from 'firebase-functions/params';
+import { defineBoolean, defineSecret, defineString } from 'firebase-functions/params';
 
 export const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
 export const EMAIL_FROM = defineString('EMAIL_FROM', {
@@ -15,3 +15,5 @@ export const EMAIL_FROM = defineString('EMAIL_FROM', {
 export const ADMIN_NOTIFY_EMAIL = defineString('ADMIN_NOTIFY_EMAIL', { default: '' });
 /** Base URL for the Admin-console deep link in notification bodies. */
 export const APP_BASE_URL = defineString('APP_BASE_URL', { default: 'https://gaycruisebingo.com' });
+/** Enforce a valid App Check token on bug intake after #44 enables clients. */
+export const BUG_REPORT_APP_CHECK = defineBoolean('BUG_REPORT_APP_CHECK', { default: false });

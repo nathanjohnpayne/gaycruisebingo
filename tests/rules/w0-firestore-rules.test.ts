@@ -247,4 +247,14 @@ describe('firestore.rules — honor-system invariants', () => {
     await assertFails(setDoc(doc(db(ALICE), at(`moments/${BOB}-bingo`)), moment({ uid: BOB }))); // forged uid
     await assertSucceeds(getDoc(doc(db(ALICE), at('moments/seed')))); // public read
   });
+
+  it('keeps bug reports and rate-limit state server-only', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'bugReports/report_123'), { description: 'private' });
+    });
+    await assertFails(getDoc(doc(db(ALICE), 'bugReports/report_123')));
+    await assertFails(setDoc(doc(db(ALICE), 'bugReports/forged'), { description: 'forged' }));
+    await assertFails(getDoc(doc(db(ALICE), `bugReportRateLimits/${ALICE}`)));
+    await assertFails(setDoc(doc(db(ALICE), `bugReportRateLimits/${ALICE}`), { submissionMs: [NOW()] }));
+  });
 });

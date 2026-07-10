@@ -10,6 +10,17 @@ service cloud.firestore {
         request.auth.uid in get(/databases/$(database)/documents/events/$(eventId)).data.admins;
     }
 
+    // Server-owned intake queue. Players submit through the callable Function,
+    // which validates/rate-limits with the Admin SDK; direct reads and writes
+    // would expose screenshots and allow report metadata to be forged.
+    match /bugReports/{reportId} {
+      allow read, write: if false;
+    }
+
+    match /bugReportRateLimits/{uid} {
+      allow read, write: if false;
+    }
+
     // Global user profiles.
     match /users/{uid} {
       allow read: if signedIn();
