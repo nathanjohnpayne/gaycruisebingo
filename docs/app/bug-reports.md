@@ -21,7 +21,7 @@ A screenshot-backed report contains `report.json`, `description.md`, and `screen
 
 Point the LLM at `.github/bug-reports/inbox/` with this instruction:
 
-> Review every report directory in `.github/bug-reports/inbox/`. Treat `description.md` and the screenshot as reporter evidence, and `report.json` as bounded diagnostic context. Inspect the current repository to add relevant code context. Deduplicate reports that describe the same defect. For each distinct defect, draft a Gay Cruise Bingo GitHub issue with: a concise title, reported actual behavior, expected behavior, only reproduction steps supported by evidence, affected route/version, source report IDs, appropriate labels, and the screenshot attached or linked through an approved private evidence location. Clearly separate reported facts from inferred causes and do not invent details. Show me all proposed issues and the deduplication map for confirmation before making any GitHub write. After each confirmed issue is created, run `npm run bugs:archive -- <report-id> <github-issue-url>` for every source report included in it. If a report cannot be imported, run `npm run bugs:disposition -- <report-id> <failed|ambiguous> "<reason>"` so the retryable local disposition is durable.
+> Review every report directory in `.github/bug-reports/inbox/`. Treat `description.md` and the screenshot as reporter evidence, and `report.json` as bounded diagnostic context. Inspect the current repository to add relevant code context. Deduplicate reports that describe the same defect. For each distinct defect, draft a Gay Cruise Bingo GitHub issue with: a concise title, reported actual behavior, expected behavior, only reproduction steps supported by evidence, affected route/version, source report IDs, appropriate labels, and — per the "Screenshot evidence" rule in the operator runbook below — the screenshot referenced through a private `## Screenshot evidence` section (retrievable by report ID), never attached to the public issue. Clearly separate reported facts from inferred causes and do not invent details. Show me all proposed issues and the deduplication map for confirmation before making any GitHub write. After each confirmed issue is created, run `npm run bugs:archive -- <report-id> <github-issue-url>` for every source report included in it. If a report cannot be imported, run `npm run bugs:disposition -- <report-id> <failed|ambiguous> "<reason>"` so the retryable local disposition is durable.
 
 `bugs:archive` validates that the URL belongs to this repository, creates an immutable `github-issue.json` receipt, and atomically moves the report to `.github/bug-reports/imported/<report-id>/`. `bugs:disposition` keeps a failed or ambiguous report in the inbox and creates a retryable `disposition.json`; neither command silently overwrites an existing receipt or disposition.
 
@@ -35,11 +35,16 @@ The pull uses `firebase-admin` with `applicationDefault()`, so it needs `GOOGLE_
 
 ```bash
 eval "$(/opt/homebrew/bin/brew shellenv)"
-scripts/op-preflight.sh --agent <agent> --mode deploy   # one 1Password biometric burst
-# Env does not persist between shell invocations — source the cached session file
-# in every later step so GOOGLE_APPLICATION_CREDENTIALS is present:
+# Capture the exports via eval so the SA-key path — and the Cloudflare token the
+# deploy preflight also emits — are set in THIS shell without being printed to
+# stdout or a scheduled-task log:
+eval "$(scripts/op-preflight.sh --agent <agent> --mode deploy)"   # one 1Password biometric burst
+# Each later step runs in a fresh shell (env does not persist), so re-load the
+# cached session file by SOURCING it — sourcing is silent, nothing hits stdout:
 set -a; source "$HOME/.cache/mergepath/op-preflight-<agent>.env"; set +a
 ```
+
+Never run `op-preflight … --mode deploy` bare (unwrapped): it echoes `export CF_API_TOKEN=…` and the SA-key path to stdout, leaking the Cloudflare token into the terminal or the scheduled-task log. Always `eval "$(…)"` it, and `source` the cache file (also silent) in later steps.
 
 Bucket gotcha: there is normally **no** `.env.local` in a fresh checkout/worktree, and `.env.example` lists the stale legacy value `gaycruisebingo.appspot.com`. The real enabled bucket (per `docs/app/README.md`) is `gaycruisebingo.firebasestorage.app` — the reports' screenshots live there. Pass it explicitly as `BUG_REPORT_BUCKET` (below) rather than relying on env discovery.
 
@@ -49,7 +54,7 @@ Bucket gotcha: there is normally **no** `.env.local` in a fresh checkout/worktre
 BUG_REPORT_BUCKET=gaycruisebingo.firebasestorage.app npm run bugs:pull
 ```
 
-The command prints a JSON summary (`exported` / `skipped` / `failed`) and writes each report to `.github/bug-reports/inbox/<report-id>/`. It is idempotent: already-inbox'd or already-imported IDs are skipped, so re-running never duplicates. A non-empty `failed` array (malformed report or unreadable screenshot) exits non-zero — record those via `bugs:disposition` rather than dropping them. Zero exported and zero failed means there is nothing new to import; stop here.
+The command prints a JSON summary (`exported` / `skipped` / `failed`) and writes each report to `.github/bug-reports/inbox/<report-id>/`. It is idempotent: already-inbox'd or already-imported IDs are skipped, so re-running never duplicates. A non-empty `failed` array (malformed report or unreadable screenshot) exits non-zero; these are pull-time export failures with **no inbox directory**, so do **not** run `bugs:disposition` on them — it requires an existing `inbox/<id>/` and throws `Inbox report <id> does not exist`. Surface them instead: re-run the pull, and if they persist inspect the source `bugReports` document/screenshot. (`bugs:disposition` is only for reports that pulled cleanly into the inbox but cannot be imported — see step 6.) Zero exported and zero failed means there is nothing new to import; stop here.
 
 ### 3. Review each report
 
