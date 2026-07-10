@@ -171,13 +171,6 @@ a {
 .cell:active {
   transform: scale(0.95);
 }
-.cell.free {
-  border-color: var(--accent);
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--cell));
-  font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
-  letter-spacing: 0.04em;
-}
 .cell.marked {
   /* --on-gradient (issue #72, specs/theme-on-color-contrast.md) replaces the
      literal #fff that used to fail WCAG AA against this gradient in 7 of 8
@@ -192,6 +185,33 @@ a {
   border-color: var(--ink);
   background: linear-gradient(145deg, var(--primary), var(--secondary));
   box-shadow: 0 0 14px var(--shadow);
+}
+.cell.free.marked {
+  flex-direction: column;
+  gap: 3px;
+  border: 2px solid var(--accent);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 18%, var(--cell));
+  box-shadow:
+    inset 0 0 0 2px var(--cell),
+    0 0 16px var(--shadow);
+}
+.cell.free.marked::after {
+  content: none;
+}
+.free-label {
+  color: var(--accent);
+  font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+  font-size: clamp(15px, 4.5vw, 22px);
+  line-height: 0.9;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 10px var(--shadow);
+}
+.free-prompt {
+  max-width: 100%;
+  font-size: clamp(7px, 1.9vw, 10px);
+  font-weight: 700;
+  line-height: 1.05;
 }
 .cell.marked::after {
   content: '✓';

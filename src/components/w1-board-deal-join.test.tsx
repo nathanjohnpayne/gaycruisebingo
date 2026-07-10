@@ -218,12 +218,11 @@ describe('Board render', () => {
     const free = container.querySelectorAll('.cell.free');
     expect(free).toHaveLength(1); // exactly one Free Space
     expect(container.querySelectorAll('.grid .cell')[CENTER]).toHaveClass('free');
-    // The spec's acceptance criteria require the Free Space centre to read
-    // the seeded "Complain about Circuit Music" copy, not the literal string
-    // "FREE" — Board renders each cell's `c.text`, which dealBoard already
-    // sets to FREE_TEXT for the centre (Codex P2 on PR #66).
-    expect(free[0]).toHaveTextContent(FREE_TEXT);
-    expect(free[0]).not.toHaveTextContent('FREE');
+    // The prompt remains the cell's accessible name, while a separate visual
+    // eyebrow makes the special center square immediately identifiable.
+    expect(free[0]).toHaveAccessibleName(FREE_TEXT);
+    expect(free[0].querySelector('.free-label')).toHaveTextContent('FREE');
+    expect(free[0].querySelector('.free-prompt')).toHaveTextContent(FREE_TEXT);
     expect(free[0]).toHaveClass('marked'); // the centre is always marked
   });
 
