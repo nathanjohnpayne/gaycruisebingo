@@ -21,9 +21,116 @@ A screenshot-backed report contains `report.json`, `description.md`, and `screen
 
 Point the LLM at `.github/bug-reports/inbox/` with this instruction:
 
-> Review every report directory in `.github/bug-reports/inbox/`. Treat `description.md` and the screenshot as reporter evidence, and `report.json` as bounded diagnostic context. Inspect the current repository to add relevant code context. Deduplicate reports that describe the same defect. For each distinct defect, draft a Gay Cruise Bingo GitHub issue with: a concise title, reported actual behavior, expected behavior, only reproduction steps supported by evidence, affected route/version, source report IDs, appropriate labels, and the screenshot attached or linked through an approved private evidence location. Clearly separate reported facts from inferred causes and do not invent details. Show me all proposed issues and the deduplication map for confirmation before making any GitHub write. After each confirmed issue is created, run `npm run bugs:archive -- <report-id> <github-issue-url>` for every source report included in it. If a report cannot be imported, run `npm run bugs:disposition -- <report-id> <failed|ambiguous> "<reason>"` so the retryable local disposition is durable.
+> Review every report directory in `.github/bug-reports/inbox/`. Treat `description.md` and the screenshot as reporter evidence, and `report.json` as bounded diagnostic context. Inspect the current repository to add relevant code context. Deduplicate reports that describe the same defect. For each distinct defect, draft a Gay Cruise Bingo GitHub issue with: a concise title, reported actual behavior, expected behavior, only reproduction steps supported by evidence, affected route/version, source report IDs, appropriate labels, and — per the "Screenshot evidence" rule in the operator runbook below — the screenshot referenced through a private `## Screenshot evidence` section (retrievable by report ID), never attached to the public issue. Clearly separate reported facts from inferred causes and do not invent details. Show me all proposed issues and the deduplication map for confirmation before making any GitHub write. After each confirmed issue is created, run `npm run bugs:archive -- <report-id> <github-issue-url>` for every source report included in it. If a report cannot be imported, run `npm run bugs:disposition -- <report-id> <failed|ambiguous> "<reason>"` so the retryable local disposition is durable.
 
 `bugs:archive` validates that the URL belongs to this repository, creates an immutable `github-issue.json` receipt, and atomically moves the report to `.github/bug-reports/imported/<report-id>/`. `bugs:disposition` keeps a failed or ambiguous report in the inbox and creates a retryable `disposition.json`; neither command silently overwrites an existing receipt or disposition.
+
+## Operator runbook (agent-ready)
+
+A self-contained, repeatable procedure any agent can follow end to end. It is the reference the daily `import-bug-reports` scheduled task (see [Daily scheduled import](#daily-scheduled-import)) executes. Substitute your own reviewer identity (`claude`, `codex`, `cursor`) for `<agent>` throughout.
+
+### 1. Load credentials
+
+The pull uses `firebase-admin` with `applicationDefault()`, so it needs `GOOGLE_APPLICATION_CREDENTIALS` pointed at the Firebase deployer service-account key, plus the Storage bucket name. `op-preflight --mode deploy` fetches the SA key from 1Password and writes a cached session env file.
+
+```bash
+eval "$(/opt/homebrew/bin/brew shellenv)"
+# Capture the exports via eval so the SA-key path — and the Cloudflare token the
+# deploy preflight also emits — are set in THIS shell without being printed to
+# stdout or a scheduled-task log:
+eval "$(scripts/op-preflight.sh --agent <agent> --mode deploy)"   # one 1Password biometric burst
+# Each later step runs in a fresh shell (env does not persist), so re-load the
+# cached session file by SOURCING it — sourcing is silent, nothing hits stdout:
+set -a; source "$HOME/.cache/mergepath/op-preflight-<agent>.env"; set +a
+```
+
+Never run `op-preflight … --mode deploy` bare (unwrapped): it echoes `export CF_API_TOKEN=…` and the SA-key path to stdout, leaking the Cloudflare token into the terminal or the scheduled-task log. Always `eval "$(…)"` it, and `source` the cache file (also silent) in later steps.
+
+Bucket gotcha: there is normally **no** `.env.local` in a fresh checkout/worktree, and `.env.example` lists the stale legacy value `gaycruisebingo.appspot.com`. The real enabled bucket (per `docs/app/README.md`) is `gaycruisebingo.firebasestorage.app` — the reports' screenshots live there. Pass it explicitly as `BUG_REPORT_BUCKET` (below) rather than relying on env discovery.
+
+### 2. Pull
+
+```bash
+BUG_REPORT_BUCKET=gaycruisebingo.firebasestorage.app npm run bugs:pull
+```
+
+The command prints a JSON summary (`exported` / `skipped` / `failed`) and writes each report to `.github/bug-reports/inbox/<report-id>/`. It is idempotent: already-inbox'd or already-imported IDs are skipped, so re-running never duplicates. A non-empty `failed` array (malformed report or unreadable screenshot) exits non-zero; these are pull-time export failures with **no inbox directory**, so do **not** run `bugs:disposition` on them — it requires an existing `inbox/<id>/` and throws `Inbox report <id> does not exist`. Surface them instead: re-run the pull, and if they persist inspect the source `bugReports` document/screenshot. (`bugs:disposition` is only for reports that pulled cleanly into the inbox but cannot be imported — see step 6.) Do not treat `exported: [] / failed: []` as "nothing to do" on its own: an earlier approval-gated run (or an interrupted import) may have left already-pulled reports in `.github/bug-reports/inbox/`, and the pull reports those as `skipped` (not `exported`) because the directory already exists. Before stopping, list `inbox/*` and process any report that has neither an `imported/<id>/` receipt nor a `disposition.json`. Stop only when the pull added nothing new **and** no un-actioned report remains in the inbox.
+
+### 3. Review each report
+
+Each directory has `report.json` (bounded diagnostics: `route`, `appVersion`, `viewport`, `browser`, `online`, `submittedAt`) and `description.md` (the reporter's words). Screenshot-backed reports also have `screenshot.png`; text-only reports omit it and record a `captureError`.
+
+- Open `screenshot.png` with the **Read tool** — it renders the PNG visually so you can see what the reporter saw.
+- Cross-check `appVersion` against history to avoid filing something already fixed. Compare against an up-to-date `origin/main`, not whatever `HEAD` the checkout/worktree happens to be on (in a PR worktree `HEAD` is not `main`): `git fetch origin main` then `git merge-base --is-ancestor <appVersion-sha> origin/main` (ancestor = the report predates current `main`; then check whether a later commit already addressed it, and note that overlap in the issue).
+- Read the affected component/CSS to ground the issue in `file:line` evidence.
+
+### 4. Deduplicate and draft
+
+Group reports that describe the same defect into one issue (keep every source report ID). For each distinct defect draft: a concise title, the reporter's **actual** behavior (quote `description.md`), expected behavior, affected surface as `file:line`, only reproduction steps the evidence supports, and — clearly labelled and separated — any **inferred cause** from reading the code. Never invent reproduction steps, and never present an inferred cause as a reported fact.
+
+Privacy: **do not attach report screenshots to public GitHub issues.** This repo is public, and captures may contain other players' names and photos plus app NSFW content; a GitHub attachment would publish that world-readably and is hard to retract. GitHub image attachments also have no REST API, so `gh issue create` cannot upload them anyway. Instead, give every issue a **`## Screenshot evidence`** section that makes the private evidence retrievable by report ID, so whoever picks up the ticket knows exactly how to see it:
+
+````markdown
+## Screenshot evidence
+
+Not attached (public repo; capture may contain other players' names/photos and app NSFW content). Retained privately in Firebase (normally up to 90 days; an active linked issue may extend that) and retrievable by report ID:
+
+1. From a `gaycruisebingo` checkout, load Firebase deploy credentials and run the exporter (§ steps 1–2 above):
+
+   ```bash
+   BUG_REPORT_BUCKET=gaycruisebingo.firebasestorage.app npm run bugs:pull
+   ```
+
+2. Open `.github/bug-reports/inbox/<report-id>/screenshot.png` (gitignored). If already imported on that machine, it is at `.github/bug-reports/imported/<report-id>/screenshot.png` instead.
+
+Source report ID(s): `<report-id>`
+````
+
+The pull is idempotent and Firebase keeps the reports immutable, so a fresh checkout (with no local ledger) re-materializes every still-retained report — the report ID stays a durable pointer to the evidence for the retention window.
+
+For a **text-only report** (no `screenshot.png`; `report.json` carries a `captureError`), do not point readers at a screenshot that was never captured. Replace the retrieval steps with a single line noting the capture failed — e.g. "Text-only report — screenshot capture failed (`captureError` in `report.json`); no image available." — so the ticket never links a dead evidence path.
+
+### 5. Create the issues
+
+**Confirm before writing.** Creating GitHub issues is a public, outward-facing write. Present the deduplication map and the drafted issues to the human and get explicit approval **before** running any `gh issue create` — do not publish straight from an LLM draft, where a bad inference or a missed duplicate would become a public issue. (The scheduled task enforces this by stopping after drafting; a human running this runbook directly must pause here too.)
+
+The GitHub MCP server token is **read-only** in this environment — `issue create` returns `403 Resource not accessible by integration`. Create issues with the `gh` CLI under the author identity instead. `gh issue create` is **not** intercepted by the `gh-pr-guard.sh` hook (only `gh pr create|merge|review|comment|edit` and `gh issue comment` are), so no author-wrapper is required.
+
+```bash
+# Resolve the author token in a checked step so a keyring miss FAILS CLOSED,
+# rather than running gh issue create with an empty GH_TOKEN (which can fall
+# back to another configured gh account and misattribute the issue):
+author_token="$(gh auth token --user nathanjohnpayne)" \
+  || { echo "no gh author token for nathanjohnpayne — aborting" >&2; exit 1; }
+GH_TOKEN="$author_token" \
+  gh issue create --repo nathanjohnpayne/gaycruisebingo \
+  --title "<title>" --body-file <path-to-drafted-body.md> \
+  --label bug --label "track:<area>" --label agent-action --label size:S \
+  --assignee nathanjohnpayne
+```
+
+Use `--body-file` (not inline `--body`) for multi-line bodies to avoid shell-escaping issues. Pick labels from `gh label list`; the reports so far mapped to `bug` + a `track:*` area label + `polish` / `agent-action` / `size:*`.
+
+### 6. Archive (and disposition failures)
+
+For **every** source report included in a created issue, write its immutable receipt and move it to `imported/`:
+
+```bash
+node scripts/bug-reports.mjs archive <report-id> \
+  https://github.com/nathanjohnpayne/gaycruisebingo/issues/<n>
+```
+
+Call it once per report. Note that the login shell here is **zsh**, which does not word-split unquoted variables — a `for entry in "${MAP[@]}"; do set -- $entry; …` loop collapses `"<id> <n>"` into a single argument and the id fails validation (`Invalid report id`). Invoke `archive` explicitly per report, or split fields deliberately (`read -r id n <<< "$entry"`). For a report you cannot import, keep it retryable in the inbox: `npm run bugs:disposition -- <report-id> <failed|ambiguous> "<reason>"`.
+
+### 7. Verify and clean up
+
+Confirm every report is accounted for: each imported report has an `imported/<id>/github-issue.json` receipt, and any report you could not import stays in the inbox with a `disposition.json` (step 6) — a valid partial run leaves failed/ambiguous reports behind on purpose, so "empty inbox" is not the check; "no un-actioned report left over" is. Confirm `git status --porcelain .github/` is clean (the inbox/imported trees are gitignored — `git check-ignore` should confirm). Then purge the fetched deploy credentials: `scripts/op-preflight.sh --agent <agent> --purge`.
+
+## Daily scheduled import
+
+A local scheduled task (`import-bug-reports`, managed via this app's scheduled tasks) runs once per day. It is **approval-gated**: each run performs only the read-only half of the runbook — load credentials, pull, review, deduplicate, and draft — then presents the drafts and stops. It makes **no** GitHub writes and runs no `bugs:archive` / `bugs:disposition`; creating the issues and archiving is a human-approved follow-up (steps 5–6). This satisfies the #146 requirement of human confirmation before any GitHub write.
+
+Scheduled runs execute in the local app environment, so they use the same credential path as an interactive session; each run starts with a fresh context, so its prompt is self-contained and points back at this runbook. If the app is closed when the task is due, it runs on next launch. Note that the pull needs a 1Password biometric unlock (step 1): an unattended run while 1Password is locked cannot pull, so the task is written to detect that, report it, and stop rather than proceed without credentials. No non-interactive credential path is configured today — if daily unattended pulls become a requirement, provision a 1Password service-account token (or an injected Firebase service-account key) and adapt step 1 accordingly.
 
 ## Privacy and retention
 
