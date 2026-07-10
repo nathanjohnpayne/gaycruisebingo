@@ -882,9 +882,20 @@ export default function Board() {
               (c.status === 'pending' ? ' pending' : '') +
               (wins.has(c.index) ? ' win' : '')
             }
+            role={c.free ? 'group' : undefined}
+            aria-label={c.free ? c.text : undefined}
             onClick={() => toggle(c)}
           >
-            {c.text}
+            {c.free ? (
+              <>
+                <span className="free-label" aria-hidden="true">
+                  FREE
+                </span>
+                <span className="free-prompt">{c.text}</span>
+              </>
+            ) : (
+              c.text
+            )}
             {c.marked && !c.free && (
               <button
                 className="proofbtn"
