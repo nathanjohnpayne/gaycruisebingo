@@ -56,7 +56,7 @@ function Harness() {
       {dealError ? <p role="alert">{dealError}</p> : null}
       <span data-testid="dealing">{dealing ? 'dealing' : 'idle'}</span>
       <button onClick={() => retryDeal()}>retry</button>
-      <button onClick={() => void signIn().catch(() => {})}>signin</button>
+      <button onClick={() => void signIn()}>signin</button>
     </div>
   );
 }
@@ -127,20 +127,35 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
   });
 
-  it("fires track('login_failed', …) with the Firebase error code and rethrows when the popup rejects (#163)", async () => {
+  it("fires track('login_failed', …) with method/code/message and rethrows when the popup rejects (#163)", async () => {
     const err = Object.assign(new Error('Unable to process request due to missing initial state.'), {
       code: 'auth/missing-initial-state',
     });
     mocks.signInWithPopup.mockRejectedValueOnce(err);
-    mount();
-    await userEvent.click(screen.getByText('signin'));
-    await waitFor(() =>
-      expect(mocks.track).toHaveBeenCalledWith(
-        'login_failed',
-        expect.objectContaining({ method: 'google', code: 'auth/missing-initial-state' }),
-      ),
+
+    // Capture signIn directly so we can assert its rejection contract, rather
+    // than routing through the Harness button (which discards the promise).
+    let signIn!: () => Promise<void>;
+    function Capture() {
+      ({ signIn } = useAuth());
+      return null;
+    }
+    render(
+      <AuthProvider>
+        <Capture />
+      </AuthProvider>,
     );
-    // The success event must NOT fire on the failure path (no login, no attest).
+
+    // Rethrow contract: signIn surfaces the original error to its caller.
+    await expect(signIn()).rejects.toBe(err);
+
+    // The failure event carries method, the Firebase code, AND the message.
+    expect(mocks.track).toHaveBeenCalledWith('login_failed', {
+      method: 'google',
+      code: 'auth/missing-initial-state',
+      message: 'Unable to process request due to missing initial state.',
+    });
+    // The success path did not run: no login event, no attestation.
     expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
     expect(mocks.attestAdult).not.toHaveBeenCalled();
   });
