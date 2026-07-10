@@ -5,7 +5,7 @@ import process from 'node:process';
 import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
-import { archiveReport, exportReports, recordDisposition } from './bug-reports-lib.mjs';
+import { archiveReport, exportReports, normalizeSubmittedAt, recordDisposition } from './bug-reports-lib.mjs';
 
 const root = path.resolve('.github/bug-reports');
 
@@ -34,9 +34,9 @@ async function pull() {
   const reports = snapshot.docs.map((doc) => {
     const data = doc.data();
     return {
-      id: doc.id,
       ...data,
-      submittedAt: data.submittedAt?.toDate?.().toISOString?.() ?? null,
+      id: doc.id,
+      submittedAt: normalizeSubmittedAt(data.submittedAt),
     };
   });
   const bucket = getStorage(app).bucket(config.storageBucket);

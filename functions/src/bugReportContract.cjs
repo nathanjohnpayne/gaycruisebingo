@@ -55,6 +55,7 @@ function validatePngBytes(value) {
   }
   let offset = 8;
   let chunks = 0;
+  let sawIdat = false;
   let ended = false;
   while (offset + 12 <= value.length) {
     const length = value.readUInt32BE(offset);
@@ -64,10 +65,17 @@ function validatePngBytes(value) {
     const crcInput = value.subarray(offset + 4, offset + 8 + length);
     if (crc32(crcInput) !== value.readUInt32BE(offset + 8 + length)) throw new Error('Screenshot PNG checksum is invalid.');
     if (chunks === 0) {
-      if (type !== 'IHDR' || length !== 13 || value.readUInt32BE(offset + 8) === 0 || value.readUInt32BE(offset + 12) === 0) {
+      const width = value.readUInt32BE(offset + 8);
+      const height = value.readUInt32BE(offset + 12);
+      const bitDepth = value[offset + 16];
+      const colorType = value[offset + 17];
+      const legalDepths = { 0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16] };
+      if (type !== 'IHDR' || length !== 13 || width === 0 || height === 0 || width > 8192 || height > 8192 || width * height > 40_000_000 ||
+          !legalDepths[colorType]?.includes(bitDepth) || value[offset + 18] !== 0 || value[offset + 19] !== 0 || ![0, 1].includes(value[offset + 20])) {
         throw new Error('Screenshot PNG header is invalid.');
       }
     }
+    if (type === 'IDAT') sawIdat = true;
     chunks += 1;
     offset = dataEnd;
     if (type === 'IEND') {
@@ -76,7 +84,7 @@ function validatePngBytes(value) {
       break;
     }
   }
-  if (!ended) throw new Error('Screenshot PNG is incomplete.');
+  if (!ended || !sawIdat) throw new Error('Screenshot PNG is incomplete.');
   return value;
 }
 

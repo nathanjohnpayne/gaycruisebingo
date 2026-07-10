@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BugReportInputError, nextRateState, validateBugReportInput } from '../../functions/src/bugReportCore';
+import contract from '../../functions/src/bugReportContract.cjs';
 
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
@@ -32,6 +33,16 @@ describe('bug-report server validation', () => {
   it('rejects spoofed image content and non-app routes', () => {
     expect(() => validateBugReportInput({ ...valid(), screenshotDataUrl: 'data:image/png;base64,YWJj' })).toThrow(BugReportInputError);
     expect(() => validateBugReportInput({ ...valid(), route: 'https://attacker.example' })).toThrow('Route must be app-relative');
+  });
+
+  it('rejects a structurally valid PNG container with no image data', () => {
+    const complete = Buffer.from(png.split(',')[1], 'base64');
+    const ihdrLength = 25;
+    const noImageData = Buffer.concat([
+      complete.subarray(0, 8 + ihdrLength),
+      complete.subarray(complete.length - 12),
+    ]);
+    expect(() => contract.validatePngBytes(noImageData)).toThrow('incomplete');
   });
 
   it('allows only three reports in every rolling 15-minute window, including across the boundary', () => {

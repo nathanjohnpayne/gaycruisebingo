@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { archiveReport, exportReports, recordDisposition } from '../../scripts/bug-reports-lib.mjs';
+import { archiveReport, exportReports, normalizeSubmittedAt, recordDisposition } from '../../scripts/bug-reports-lib.mjs';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
 let root: string;
@@ -62,6 +62,24 @@ describe('local bug-report export', () => {
     await expect(stat(path.join(root, 'inbox/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('requires the screenshot path to match the report identity exactly', async () => {
+    const mismatched = { ...report(), screenshotPath: 'bug-reports/0123456789abcdefabcd/other_report/screenshot.png' };
+    const summary = await exportReports({ reports: [mismatched], downloadScreenshot: async () => PNG, root });
+    expect(summary.failed[0].error).toContain('Unsafe screenshot path');
+  });
+
+  it('exports only the explicit metadata allowlist', async () => {
+    const summary = await exportReports({
+      reports: [{ ...report(), rawUid: 'secret-user-id', futurePrivateField: 'do-not-export' }],
+      downloadScreenshot: async () => PNG,
+      root,
+    });
+    expect(summary.exported).toEqual(['report_123']);
+    const metadata = JSON.parse(await readFile(path.join(root, 'inbox/report_123/report.json'), 'utf8'));
+    expect(metadata).not.toHaveProperty('rawUid');
+    expect(metadata).not.toHaveProperty('futurePrivateField');
+  });
+
   it('archives with an immutable GitHub receipt and prevents duplicate import', async () => {
     await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
     const receipt = await archiveReport({
@@ -72,17 +90,22 @@ describe('local bug-report export', () => {
     });
     expect(receipt.issue).toBe(200);
     expect(JSON.parse(await readFile(path.join(root, 'imported/report_123/github-issue.json'), 'utf8'))).toEqual(receipt);
-    await expect(archiveReport({ reportId: 'report_123', issueUrl: receipt.url, root })).rejects.toThrow('does not exist');
+    await expect(archiveReport({ reportId: 'report_123', issueUrl: receipt.url, root })).resolves.toEqual(receipt);
+    await expect(archiveReport({
+      reportId: 'report_123',
+      issueUrl: 'https://github.com/nathanjohnpayne/gaycruisebingo/issues/201',
+      root,
+    })).rejects.toThrow('conflicting receipt');
   });
 
-  it('does not overwrite a pre-existing receipt', async () => {
+  it('does not overwrite a malformed pre-existing receipt', async () => {
     await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
     await writeFile(path.join(root, 'inbox/report_123/github-issue.json'), 'existing');
     await expect(archiveReport({
       reportId: 'report_123',
       issueUrl: 'https://github.com/nathanjohnpayne/gaycruisebingo/issues/200',
       root,
-    })).rejects.toMatchObject({ code: 'EEXIST' });
+    })).rejects.toThrow();
   });
 
   it('records a retryable failed or ambiguous disposition without moving the report', async () => {
@@ -96,5 +119,17 @@ describe('local bug-report export', () => {
     });
     expect(disposition.retryable).toBe(true);
     expect(JSON.parse(await readFile(path.join(root, 'inbox/report_123/disposition.json'), 'utf8'))).toEqual(disposition);
+    await expect(recordDisposition({
+      reportId: 'report_123', status: 'ambiguous', reason: disposition.reason, root,
+    })).resolves.toEqual(disposition);
+    await expect(recordDisposition({
+      reportId: 'report_123', status: 'failed', reason: 'Different outcome.', root,
+    })).rejects.toThrow('conflicting disposition');
+  });
+
+  it('normalizes Firestore timestamps without letting malformed values abort a batch', () => {
+    expect(normalizeSubmittedAt({ toDate: () => new Date('2026-07-09T00:00:00Z') })).toBe('2026-07-09T00:00:00.000Z');
+    expect(normalizeSubmittedAt({ toDate: () => { throw new Error('bad timestamp'); } })).toBeNull();
+    expect(normalizeSubmittedAt('2026-07-09')).toBeNull();
   });
 });

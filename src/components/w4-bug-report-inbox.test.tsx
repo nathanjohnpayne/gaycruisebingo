@@ -101,4 +101,32 @@ describe('W4 bug-report inbox', () => {
     expect(screen.queryByRole('dialog', { name: 'Report a bug' })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
+
+  it('ignores a stale capture that finishes after the sheet is closed', async () => {
+    let resolveCapture!: (image: Blob) => void;
+    captureSpy.mockReturnValue(new Promise<Blob>((resolve) => { resolveCapture = resolve; }));
+    render(<BugReport />);
+    fireEvent.click(screen.getByRole('button', { name: 'Report a bug' }));
+    await screen.findByRole('dialog', { name: 'Report a bug' });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    resolveCapture(new Blob(['late'], { type: 'image/png' }));
+    await Promise.resolve();
+    expect(screen.queryByAltText('Screenshot that will be submitted with this bug report')).not.toBeInTheDocument();
+  });
+
+  it('traps keyboard focus within the modal sheet', async () => {
+    captureSpy.mockRejectedValue(new Error('Capture unavailable'));
+    render(<BugReport />);
+    fireEvent.click(screen.getByRole('button', { name: 'Report a bug' }));
+    await screen.findByText(/Screenshot unavailable/);
+    const textarea = screen.getByLabelText('What happened?');
+    const send = screen.getByRole('button', { name: 'Send report' });
+    send.removeAttribute('disabled');
+    send.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(textarea).toHaveFocus();
+    textarea.focus();
+    fireEvent.keyDown(document, { key: 'Tab', shiftKey: true });
+    expect(send).toHaveFocus();
+  });
 });

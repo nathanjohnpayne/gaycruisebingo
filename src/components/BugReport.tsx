@@ -24,6 +24,8 @@ function errorMessage(error: unknown): string {
 
 export default function BugReport() {
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const captureAttemptRef = useRef(0);
   const wasOpenRef = useRef(false);
   const [open, setOpen] = useState(false);
   const [description, setDescription] = useState('');
@@ -45,21 +47,46 @@ export default function BugReport() {
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !busy) setOpen(false);
+      if (event.key === 'Escape' && !busy) {
+        captureAttemptRef.current += 1;
+        setOpen(false);
+        setScreenshot(null);
+        setCaptureState('idle');
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      );
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !dialogRef.current?.contains(document.activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [busy, open]);
 
   const capture = async () => {
+    const attempt = ++captureAttemptRef.current;
     setCaptureState('capturing');
     setCaptureError(null);
     setScreenshot(null);
     try {
       const image = await captureAppSurface();
+      if (captureAttemptRef.current !== attempt) return;
       setScreenshot(image);
       setCaptureState('ready');
     } catch (captureFailure) {
+      if (captureAttemptRef.current !== attempt) return;
       const message = captureFailure instanceof Error ? captureFailure.message.slice(0, 200) : 'Capture unavailable';
       setCaptureError(message);
       setCaptureState('failed');
@@ -76,6 +103,7 @@ export default function BugReport() {
 
   const close = () => {
     if (busy) return;
+    captureAttemptRef.current += 1;
     setOpen(false);
     setScreenshot(null);
     setCaptureState('idle');
@@ -107,6 +135,7 @@ export default function BugReport() {
       {open && (
         <div className="sheet-backdrop bug-report-backdrop" role="presentation" onClick={close}>
           <section
+            ref={dialogRef}
             className="sheet bug-report-sheet"
             role="dialog"
             aria-modal="true"

@@ -66,7 +66,9 @@ export function buildBugReportInput(args: {
     description: args.description.trim(),
     screenshotDataUrl: args.screenshotDataUrl,
     captureError: args.captureError,
-    route: `${window.location.pathname}${window.location.search}`.slice(0, 200),
+    // Query strings can carry invite codes or other secrets. The path is
+    // sufficient to identify the affected screen without exporting them.
+    route: window.location.pathname.slice(0, 200),
     eventId: EVENT_ID,
     appVersion: __APP_VERSION__,
     browser: navigator.userAgent.slice(0, 500),

@@ -12,6 +12,8 @@ export interface ExportSummary {
   failed: Array<{ id: string; error: string }>;
 }
 
+export function normalizeSubmittedAt(value: unknown): string | null;
+
 export function exportReports(args: {
   reports: ExportReport[];
   downloadScreenshot: (path: string) => Promise<Buffer>;

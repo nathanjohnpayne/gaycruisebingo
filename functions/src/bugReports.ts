@@ -11,16 +11,10 @@ export async function handleSubmitBugReport(
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', 'Sign in before reporting a bug.');
   if (requireAppCheck && !request.app) throw new HttpsError('failed-precondition', 'App Check is required.');
-  let report: ReturnType<typeof validateBugReportInput>;
-  try {
-    report = validateBugReportInput(request.data);
-  } catch (error) {
-    if (error instanceof BugReportInputError) throw new HttpsError(error.code, error.message);
-    throw error;
-  }
   const nowMs = Date.now();
   const db = getFirestore();
-  const rateRef = db.doc(`bugReportRateLimits/${uid}`);
+  const uidHash = createHash('sha256').update(uid).digest('hex').slice(0, 20);
+  const rateRef = db.doc(`bugReportRateLimits/${uidHash}`);
   await db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(rateRef);
     const current = snapshot.exists ? (snapshot.data() as RateState) : undefined;
@@ -32,7 +26,14 @@ export async function handleSubmitBugReport(
     }
   });
 
-  const uidHash = createHash('sha256').update(uid).digest('hex').slice(0, 20);
+  let report: ReturnType<typeof validateBugReportInput>;
+  try {
+    report = validateBugReportInput(request.data);
+  } catch (error) {
+    if (error instanceof BugReportInputError) throw new HttpsError(error.code, error.message);
+    throw error;
+  }
+
   const reportRef = db.collection('bugReports').doc();
   const storagePath = report.screenshot
     ? `bug-reports/${uidHash}/${reportRef.id}/screenshot.png`
