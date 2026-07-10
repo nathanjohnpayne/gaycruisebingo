@@ -7,11 +7,18 @@ status: accepted
 
 `src/analytics.ts` owns the GA4 event catalog and the single `track(name, params?)` entry point every call site uses instead of importing `firebase/analytics` directly. This spec pins the completed 12-event PRD set (10 events already fired at their call sites pre-ticket; this ticket adds `demand_proof` and `install_pwa` to the catalog and type) and the lightweight 18+ analytics disclosure that ships alongside it. It is exercised by `src/w2-ga4-events.test.tsx` (unit + RTL-jsdom, covering both `src/analytics.ts` and `src/components/ConsentNotice.tsx`).
 
-## The catalog is the complete, de-duplicated 12-event PRD set
+## The catalog is the complete, de-duplicated 12-event PRD set (plus one later operational event)
 
-`GA4_EVENTS` enumerates all 12 catalogued event names in one place, and `track()`'s `name` parameter is typed to that union so a call site can only pass a catalogued name.
+`GA4_EVENTS` enumerates every catalogued event name in one place, and `track()`'s `name` parameter is typed to that union so a call site can only pass a catalogued name.
 
-- **Given** the exported `GA4_EVENTS` catalog **when** read **then** it contains exactly the 12 PRD events in order — `login`, `join_event`, `add_item`, `report_item`, `mark_square`, `attach_proof`, `demand_proof`, `bingo`, `blackout`, `theme_change`, `share_click`, `install_pwa` — completing the 10 that already fired pre-ticket with the two new ones, with no duplicate names. (Test: "enumerates exactly the 12 PRD events, including demand_proof and install_pwa".)
+- **Given** the exported `GA4_EVENTS` catalog **when** read **then** it contains the 12 PRD events plus the operational `login_failed` (added later by #163, defined below), in order — `login`, `login_failed`, `join_event`, `add_item`, `report_item`, `mark_square`, `attach_proof`, `demand_proof`, `bingo`, `blackout`, `theme_change`, `share_click`, `install_pwa` — with no duplicate names. (Test: "enumerates the 12 PRD events plus the operational login_failed (#163)".)
+
+## `login_failed` — operational sign-in-failure event (#163, post-w2)
+
+`login_failed` is an operational observability event, not one of the 12 PRD events; it was added after this ticket by #163. `track('login')` fires only on a *successful* Google sign-in, and the Firebase storage-partition handler error (#161) renders on the OAuth handler's own origin where PostHog is not loaded — so a failed sign-in was previously invisible in analytics. `signIn()` in `auth/AuthContext.tsx` now wraps `signInWithPopup` in a `try`/`catch` and, on rejection, fires `track('login_failed', { method: 'google', code, message })` — carrying the Firebase error `code` — then rethrows to preserve the caller contract. Its params are PII-free, matching the catalog's privacy posture.
+
+- **Given** a Google sign-in **when** `signInWithPopup` rejects **then** `track('login_failed', …)` fires with the Firebase error `code` and the success `login` event does not fire. (Test: "fires track('login_failed', …) with the Firebase error code and rethrows when the popup rejects (#163)", in `src/auth/AuthContext.test.tsx`.)
+- **Known gap:** the in-app-webview redirect fallback unloads the app before the `catch` runs, so `login_failed` does not capture that path; the sign-in-screen pageview → `login` funnel remains the signal there. The `.web.app`/`.firebaseapp.com` → canonical-origin redirect (#162) reduces how often that fallback triggers.
 
 ## `demand_proof` and `install_pwa` fire through the existing `track()`, not a second path
 

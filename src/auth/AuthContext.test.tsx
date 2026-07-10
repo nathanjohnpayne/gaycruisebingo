@@ -126,6 +126,72 @@ describe('AuthContext deal-error hardening', () => {
     await waitFor(() => expect(mocks.track).toHaveBeenCalledWith('login', { method: 'google' }));
     expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
   });
+
+  it("fires track('login_failed', …) with method/code/message and rethrows when the popup rejects (#163)", async () => {
+    const err = Object.assign(new Error('Unable to process request due to missing initial state.'), {
+      code: 'auth/missing-initial-state',
+    });
+    mocks.signInWithPopup.mockRejectedValueOnce(err);
+
+    // Capture signIn directly so we can assert its rejection contract, rather
+    // than routing through the Harness button (which discards the promise).
+    let signIn!: () => Promise<void>;
+    function Capture() {
+      ({ signIn } = useAuth());
+      return null;
+    }
+    render(
+      <AuthProvider>
+        <Capture />
+      </AuthProvider>,
+    );
+
+    // Rethrow contract: signIn surfaces the original error to its caller.
+    await expect(signIn()).rejects.toBe(err);
+
+    // The failure event carries method, the Firebase code, AND the message.
+    expect(mocks.track).toHaveBeenCalledWith('login_failed', {
+      method: 'google',
+      code: 'auth/missing-initial-state',
+      message: 'Unable to process request due to missing initial state.',
+    });
+    // The success path did not run: no login event, no attestation.
+    expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
+    expect(mocks.attestAdult).not.toHaveBeenCalled();
+  });
+
+  it('redirects to the canonical origin instead of opening the popup when signing in from a Firebase alias origin (#162/#165)', async () => {
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    let signIn!: () => Promise<void>;
+    function Capture() {
+      ({ signIn } = useAuth());
+      return null;
+    }
+    render(
+      <AuthProvider>
+        <Capture />
+      </AuthProvider>,
+    );
+
+    await signIn();
+
+    // Alias origin → send the player to the canonical origin to sign in there,
+    // via replace() so the alias page is not left as the Back target…
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.com/card');
+    // …and do NOT hit the cross-origin OAuth handler from the alias origin.
+    expect(mocks.signInWithPopup).not.toHaveBeenCalled();
+    expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
+
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('AuthContext stale-attempt + retry hardening', () => {

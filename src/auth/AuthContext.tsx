@@ -10,6 +10,7 @@ import {
   readAdultAttestationFromServer,
 } from '../data/api';
 import { track } from '../analytics';
+import { canonicalRedirectUrl } from '../canonical-redirect';
 import SignIn from '../components/SignIn';
 import ConfirmWinMoments from '../components/ConfirmWinMoments';
 import PoolRecoveryWatcher from '../components/PoolRecoveryWatcher';
@@ -635,7 +636,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = async () => {
-    await signInWithPopup(auth, googleProvider);
+    // Sign in same-origin with Firebase Auth's OAuth handler (authDomain =
+    // gaycruisebingo.com, #161): if the app is running on a Firebase alias origin
+    // (.web.app/.firebaseapp.com), send the Player to the canonical origin to
+    // authenticate there rather than hitting the cross-origin handler that fails in
+    // storage-partitioned webviews (#162). Redirecting at sign-in time — not at
+    // boot — means a signed-in Player reading their cached board offline is never
+    // navigated away, and signing in always needs the network anyway, so the
+    // unreliable `navigator.onLine` boot signal is sidestepped (Codex P2 on #165).
+    const canonical = canonicalRedirectUrl(window.location);
+    if (canonical) {
+      // replace(), not assign(): the alias page is a signed-out throwaway, so it
+      // must not stay the Back target — after the Player authenticates on the
+      // canonical origin, Back would otherwise return to the alias origin, where
+      // Firebase Auth persistence is origin-scoped (they would look signed out and
+      // could bounce back through this redirect). (Codex P2 on #165.)
+      window.location.replace(canonical);
+      return;
+    }
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err) {
+      // Sign-in failures were invisible in analytics (#163): track('login') only
+      // fires on success, and the storage-partition handler error (#161) renders
+      // on the OAuth handler's own origin, which PostHog never loads. Emit an
+      // explicit failure event carrying the Firebase error code so popup-path
+      // breakage (blocked popup, account-exists, network) is at least observable.
+      // Rethrow to preserve the prior contract — the caller (SignIn.tsx) surfaces
+      // the error. NOTE: the in-app-webview redirect fallback unloads the app
+      // before this catch can run, so it won't capture that path — the funnel
+      // (sign-in pageviews vs `login`) remains the signal there (#162/#163).
+      track('login_failed', {
+        method: 'google',
+        code: (err as { code?: string })?.code,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
     track('login', { method: 'google' });
     // The 18+ checkbox gated this sign-in (SignIn.tsx), so signing in IS the
     // attestation — persist it now that we have a uid, so a first-time User is not

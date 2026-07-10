@@ -7,7 +7,7 @@ import { phCapture } from './posthog';
  * this app fires (the PRD's "GA4 events" list plus the Doubt-flow
  * `demand_proof` event). `track()` below is the only call into Firebase's
  * `logEvent`; nothing else should import `firebase/analytics` directly.
- * Call sites: `login` (auth/AuthContext.tsx), `join_event` (App.tsx),
+ * Call sites: `login` + `login_failed` (auth/AuthContext.tsx), `join_event` (App.tsx),
  * `add_item` + `report_item` (components/ItemPool.tsx, ProofFeed.tsx),
  * `mark_square` + `bingo` + `blackout` (components/Board.tsx),
  * `attach_proof` (components/ProofSheet.tsx), `theme_change`
@@ -19,6 +19,7 @@ import { phCapture } from './posthog';
  */
 export const GA4_EVENTS = [
   'login',
+  'login_failed',
   'join_event',
   'add_item',
   'report_item',
