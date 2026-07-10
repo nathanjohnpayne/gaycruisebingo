@@ -54,14 +54,14 @@ Bucket gotcha: there is normally **no** `.env.local` in a fresh checkout/worktre
 BUG_REPORT_BUCKET=gaycruisebingo.firebasestorage.app npm run bugs:pull
 ```
 
-The command prints a JSON summary (`exported` / `skipped` / `failed`) and writes each report to `.github/bug-reports/inbox/<report-id>/`. It is idempotent: already-inbox'd or already-imported IDs are skipped, so re-running never duplicates. A non-empty `failed` array (malformed report or unreadable screenshot) exits non-zero; these are pull-time export failures with **no inbox directory**, so do **not** run `bugs:disposition` on them — it requires an existing `inbox/<id>/` and throws `Inbox report <id> does not exist`. Surface them instead: re-run the pull, and if they persist inspect the source `bugReports` document/screenshot. (`bugs:disposition` is only for reports that pulled cleanly into the inbox but cannot be imported — see step 6.) Zero exported and zero failed means there is nothing new to import; stop here.
+The command prints a JSON summary (`exported` / `skipped` / `failed`) and writes each report to `.github/bug-reports/inbox/<report-id>/`. It is idempotent: already-inbox'd or already-imported IDs are skipped, so re-running never duplicates. A non-empty `failed` array (malformed report or unreadable screenshot) exits non-zero; these are pull-time export failures with **no inbox directory**, so do **not** run `bugs:disposition` on them — it requires an existing `inbox/<id>/` and throws `Inbox report <id> does not exist`. Surface them instead: re-run the pull, and if they persist inspect the source `bugReports` document/screenshot. (`bugs:disposition` is only for reports that pulled cleanly into the inbox but cannot be imported — see step 6.) Do not treat `exported: [] / failed: []` as "nothing to do" on its own: an earlier approval-gated run (or an interrupted import) may have left already-pulled reports in `.github/bug-reports/inbox/`, and the pull reports those as `skipped` (not `exported`) because the directory already exists. Before stopping, list `inbox/*` and process any report that has neither an `imported/<id>/` receipt nor a `disposition.json`. Stop only when the pull added nothing new **and** no un-actioned report remains in the inbox.
 
 ### 3. Review each report
 
 Each directory has `report.json` (bounded diagnostics: `route`, `appVersion`, `viewport`, `browser`, `online`, `submittedAt`) and `description.md` (the reporter's words). Screenshot-backed reports also have `screenshot.png`; text-only reports omit it and record a `captureError`.
 
 - Open `screenshot.png` with the **Read tool** — it renders the PNG visually so you can see what the reporter saw.
-- Cross-check `appVersion` against history to avoid filing something already fixed: `git merge-base --is-ancestor <appVersion-sha> HEAD` (ancestor = the report predates current `main`; then check whether a later commit already addressed it, and note that overlap in the issue).
+- Cross-check `appVersion` against history to avoid filing something already fixed. Compare against an up-to-date `origin/main`, not whatever `HEAD` the checkout/worktree happens to be on (in a PR worktree `HEAD` is not `main`): `git fetch origin main` then `git merge-base --is-ancestor <appVersion-sha> origin/main` (ancestor = the report predates current `main`; then check whether a later commit already addressed it, and note that overlap in the issue).
 - Read the affected component/CSS to ground the issue in `file:line` evidence.
 
 ### 4. Deduplicate and draft
@@ -88,12 +88,21 @@ Source report ID(s): `<report-id>`
 
 The pull is idempotent and Firebase keeps the reports immutable, so a fresh checkout (with no local ledger) re-materializes every still-retained report — the report ID stays a durable pointer to the evidence for the retention window.
 
+For a **text-only report** (no `screenshot.png`; `report.json` carries a `captureError`), do not point readers at a screenshot that was never captured. Replace the retrieval steps with a single line noting the capture failed — e.g. "Text-only report — screenshot capture failed (`captureError` in `report.json`); no image available." — so the ticket never links a dead evidence path.
+
 ### 5. Create the issues
+
+**Confirm before writing.** Creating GitHub issues is a public, outward-facing write. Present the deduplication map and the drafted issues to the human and get explicit approval **before** running any `gh issue create` — do not publish straight from an LLM draft, where a bad inference or a missed duplicate would become a public issue. (The scheduled task enforces this by stopping after drafting; a human running this runbook directly must pause here too.)
 
 The GitHub MCP server token is **read-only** in this environment — `issue create` returns `403 Resource not accessible by integration`. Create issues with the `gh` CLI under the author identity instead. `gh issue create` is **not** intercepted by the `gh-pr-guard.sh` hook (only `gh pr create|merge|review|comment|edit` and `gh issue comment` are), so no author-wrapper is required.
 
 ```bash
-GH_TOKEN="$(gh auth token --user nathanjohnpayne)" \
+# Resolve the author token in a checked step so a keyring miss FAILS CLOSED,
+# rather than running gh issue create with an empty GH_TOKEN (which can fall
+# back to another configured gh account and misattribute the issue):
+author_token="$(gh auth token --user nathanjohnpayne)" \
+  || { echo "no gh author token for nathanjohnpayne — aborting" >&2; exit 1; }
+GH_TOKEN="$author_token" \
   gh issue create --repo nathanjohnpayne/gaycruisebingo \
   --title "<title>" --body-file <path-to-drafted-body.md> \
   --label bug --label "track:<area>" --label agent-action --label size:S \
