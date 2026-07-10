@@ -25,6 +25,7 @@ import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode, PlayerDoc, ProofDoc, TallyEntry } from '../types';
+import LoadingState from './LoadingState';
 
 /**
  * The per-Prompt Tally count badge on a marked Square (ADR 0002). Subscribes to
@@ -371,6 +372,7 @@ export default function Board() {
   const claimMode: ClaimMode = event?.claimMode ?? 'honor';
 
   const [celebrate, setCelebrate] = useState<null | 'bingo' | 'blackout'>(null);
+  const [freePulse, setFreePulse] = useState(0);
   const [proofTarget, setProofTarget] = useState<Cell | null>(null);
   const [tallyTarget, setTallyTarget] = useState<Cell | null>(null);
   // Edge refs for the COSMETIC Celebration UI only (issue #104). The public Moment
@@ -691,7 +693,7 @@ export default function Board() {
         </div>
       );
     }
-    return <div className="center muted">Dealing your card…</div>;
+    return <LoadingState label="Dealing your card…" />;
   }
 
   const wins = winningCells(cells);
@@ -836,7 +838,10 @@ export default function Board() {
     // an honor mark would fold the wrong cells (doMark also guards, belt-and-
     // braces), and a proof sheet would open against the wrong card.
     if (!cellsAttributable) return;
-    if (c.free) return;
+    if (c.free) {
+      setFreePulse((pulse) => pulse + 1);
+      return;
+    }
     if (c.marked) {
       doMark(c, false); // unmark is always instant
       return;
@@ -880,11 +885,20 @@ export default function Board() {
               (c.free ? ' free' : '') +
               (c.marked ? ' marked' : '') +
               (c.status === 'pending' ? ' pending' : '') +
-              (wins.has(c.index) ? ' win' : '')
+              (wins.has(c.index) ? ' win' : '') +
+              (c.free && freePulse > 0 ? (freePulse % 2 ? ' free-pulse-a' : ' free-pulse-b') : '')
             }
-            role={c.free ? 'group' : undefined}
+            role={c.free ? 'button' : undefined}
+            tabIndex={c.free ? 0 : undefined}
             aria-label={c.free ? c.text : undefined}
+            title={c.free ? 'Free space — already marked' : undefined}
             onClick={() => toggle(c)}
+            onKeyDown={(event) => {
+              if (c.free && (event.key === 'Enter' || event.key === ' ')) {
+                event.preventDefault();
+                toggle(c);
+              }
+            }}
           >
             {c.free ? (
               <>

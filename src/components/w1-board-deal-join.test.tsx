@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import type { User } from 'firebase/auth';
 import type { BoardDoc, EventDoc, ItemDoc, PlayerDoc } from '../types';
 
@@ -226,6 +226,19 @@ describe('Board render', () => {
     expect(free[0]).toHaveClass('marked'); // the centre is always marked
   });
 
+  it('acknowledges a Free Space click without unmarking the permanent centre', () => {
+    const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
+    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+
+    render(<Board />);
+
+    const free = screen.getByRole('button', { name: FREE_TEXT });
+    fireEvent.click(free);
+    expect(free).toHaveClass('free-pulse-a', 'marked');
+    fireEvent.click(free);
+    expect(free).toHaveClass('free-pulse-b', 'marked');
+  });
+
   it('exposes no re-deal / Square-swap affordance (ADR 0003)', () => {
     const cells = dealBoard(dealPool, FREE_TEXT, 11);
     H.data.board = { uid: SIGNED_IN.uid, seed: 11, createdAt: 0, cells };
@@ -235,9 +248,10 @@ describe('Board render', () => {
     const reDeal = /re-?deal|deal again|shuffle|swap|redraw|re-?roll|new card|regenerate/i;
     expect(screen.queryByRole('button', { name: reDeal })).toBeNull();
     expect(screen.queryByText(reDeal)).toBeNull();
-    // A freshly dealt card (only the free centre marked) surfaces no controls at
-    // all — no proof buttons, and certainly no re-deal button.
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    // A freshly dealt card exposes only the permanent Free Space feedback control —
+    // no proof buttons, and certainly no re-deal button.
+    expect(screen.queryAllByRole('button')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: FREE_TEXT })).toBeInTheDocument();
   });
 });
 

@@ -188,7 +188,7 @@ describe('Leaderboard — global loading/empty-roster states are unaffected by t
   it('renders the loading state with no filter row', () => {
     H.loading = true;
     render(<Leaderboard />);
-    expect(screen.getByText('Loading…')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Tallying the leaderboard…');
     expect(screen.queryByRole('button', { name: 'All' })).toBeNull();
   });
 

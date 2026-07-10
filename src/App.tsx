@@ -9,11 +9,12 @@ import ItemPool from './components/ItemPool';
 import ProofFeed from './components/ProofFeed';
 import Admin from './components/Admin';
 import { TABS, FALLBACK_PATH, type TabId } from './components/tabs';
+import LoadingState from './components/LoadingState';
 
 export default function App() {
   const { user, loading, dealError, dealing, retryDeal } = useAuth();
 
-  if (loading) return <div className="center muted">Loading…</div>;
+  if (loading) return <LoadingState label="Checking your cruise pass…" />;
   if (!user) return <SignIn />;
 
   // Frozen route -> page-component mapping, one entry per stable mount

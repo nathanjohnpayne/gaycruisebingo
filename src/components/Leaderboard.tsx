@@ -4,6 +4,7 @@ import { track } from '../analytics';
 import { renderLeaderboardShareCard, shareCardBlob, SHARE_CARD_APP_NAME, type LeaderboardShareRow } from './ShareCard';
 import Avatar from './Avatar';
 import type { PlayerDoc } from '../types';
+import LoadingState from './LoadingState';
 
 function when(ts: number | null): string {
   if (!ts) return '—';
@@ -93,7 +94,7 @@ export default function Leaderboard() {
     promise: Promise<Blob | null>;
   } | null>(null);
 
-  if (loading) return <div className="center muted">Loading…</div>;
+  if (loading) return <LoadingState label="Tallying the leaderboard…" />;
   if (!players.length) return <div className="center muted">No players yet. Be the first.</div>;
 
   // First to BINGO is the earliest firstBingoAt across ALL Players — a

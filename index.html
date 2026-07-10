@@ -25,9 +25,36 @@
     <meta property="og:image:height" content="1260" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="robots" content="noindex" />
+    <!-- Inline on purpose: this paints before newly deployed hashed assets load. -->
+    <style>
+      .boot-loader {
+        min-height: 100vh; display: grid; place-content: center; gap: 14px;
+        color: #cfc7e8; background: #07060d; text-align: center;
+        font: 600 15px/1.2 system-ui, sans-serif; letter-spacing: 0.04em;
+      }
+      .boot-loader-dots { display: flex; justify-content: center; gap: 7px; }
+      .boot-loader-dots i {
+        width: 9px; height: 9px; border-radius: 50%; background: #ff2d9b;
+        animation: boot-pulse 1s ease-in-out infinite;
+      }
+      .boot-loader-dots i:nth-child(2) { animation-delay: 0.15s; }
+      .boot-loader-dots i:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes boot-pulse {
+        0%, 100% { opacity: 0.35; transform: scale(0.75); }
+        50% { opacity: 1; transform: scale(1.15); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .boot-loader-dots i { animation: none; opacity: 0.8; }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="boot-loader" role="status" aria-live="polite">
+        <span class="boot-loader-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span>Opening your bingo card…</span>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
