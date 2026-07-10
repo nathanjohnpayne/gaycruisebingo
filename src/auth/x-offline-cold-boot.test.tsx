@@ -1,6 +1,6 @@
 import { render, screen, act, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { AuthProvider, useAuth } from './AuthContext';
+import { AUTH_BOOTSTRAP_TIMEOUT_MS, AuthProvider, useAuth } from './AuthContext';
 
 // Covers specs/x-offline-cold-boot.md — the connectivity/attestation state
 // machine (#115). The cache lifts the 18+ gate PROVISIONALLY offline so the app
@@ -175,9 +175,33 @@ beforeEach(() => {
   mocks.signOut.mockResolvedValue(undefined);
 });
 
-afterEach(() => setOnline(true));
+afterEach(() => {
+  vi.useRealTimers();
+  setOnline(true);
+});
 
 describe('offline cold boot (#115)', () => {
+  it('releases an ONLINE bootstrap that never settles to a retryable error instead of loading forever', async () => {
+    vi.useFakeTimers();
+    setOnline(true);
+    mocks.ensureUserProfile.mockReturnValue(NEVER);
+
+    mount();
+    await coldBoot(RETURNING_USER);
+
+    expect(boardHeld()).toBe(true);
+    expect(dealErrorShown()).toBe(false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AUTH_BOOTSTRAP_TIMEOUT_MS);
+    });
+
+    expect(boardRendered()).toBe(true);
+    expect(dealErrorShown()).toBe(true);
+    expect(screen.getByRole('alert')).toHaveTextContent(/check your connection and retry/i);
+    expect(mocks.joinAndDeal).not.toHaveBeenCalled();
+  });
+
   it('publishes the User and settles loading:false without awaiting the network transaction', async () => {
     // Offline: ensureUserProfile (a transaction) would never resolve; the cached
     // stamp settles the returning User attested.

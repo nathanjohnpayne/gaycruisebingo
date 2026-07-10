@@ -24,6 +24,23 @@ function isOnline(): boolean {
   return typeof navigator === 'undefined' || navigator.onLine !== false;
 }
 
+// Safari (and captive/ship Wi-Fi generally) can report navigator.onLine=true
+// while a Firestore transaction or server-only read never settles. The online
+// bootstrap is render-gating for the 18+ check, so an unbounded wait strands the
+// whole app on its loading screen. Bound that gate and hand failures to the
+// existing retry surface; never fall back to cached authority or render the Board.
+export const AUTH_BOOTSTRAP_TIMEOUT_MS = 10_000;
+
+function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('Auth bootstrap timed out')), timeoutMs);
+  });
+  return Promise.race([work, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
+
 interface AuthContextValue {
   user: User | null;
   loading: boolean;
@@ -274,13 +291,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let attestedRead: boolean | undefined;
     let bootstrapFailure: { err: unknown } | null = null;
     try {
-      await ensureUserProfile(u);
-      // SERVER-ONLY authority read (Codex #117 round 6): getDocFromServer, NOT the
-      // cache-capable getDoc — a stamp served from cache must never authorize a
-      // deal. It REJECTS when the server is actually unreachable (a flaky reconnect
-      // where navigator.onLine is true but there is no route), which falls into the
-      // catch below → authority NOT established, no deal, deferred to reconnect.
-      attestedRead = (await readAdultAttestationFromServer(u.uid)) !== null;
+      attestedRead = await withTimeout(
+        (async () => {
+          await ensureUserProfile(u);
+          // SERVER-ONLY authority read (Codex #117 round 6): getDocFromServer, NOT the
+          // cache-capable getDoc — a stamp served from cache must never authorize a
+          // deal. It REJECTS when the server is actually unreachable (a flaky reconnect
+          // where navigator.onLine is true but there is no route), which falls into the
+          // catch below → authority NOT established, no deal, deferred to reconnect.
+          return (await readAdultAttestationFromServer(u.uid)) !== null;
+        })(),
+        AUTH_BOOTSTRAP_TIMEOUT_MS,
+      );
     } catch (err) {
       bootstrapFailure = { err };
     }
@@ -504,10 +526,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const attempt = (profileAttemptRef.current += 1);
     setDealing(true);
     try {
-      await ensureUserProfile(u);
-      // SERVER-ONLY authority read (round 6), same as bootstrapUser — a retry must
-      // not authorize a deal from a cache-served getDoc either.
-      const read = (await readAdultAttestationFromServer(u.uid)) !== null;
+      const read = await withTimeout(
+        (async () => {
+          await ensureUserProfile(u);
+          // SERVER-ONLY authority read (round 6), same as bootstrapUser — a retry must
+          // not authorize a deal from a cache-served getDoc either.
+          return (await readAdultAttestationFromServer(u.uid)) !== null;
+        })(),
+        AUTH_BOOTSTRAP_TIMEOUT_MS,
+      );
       if (profileAttemptRef.current !== attempt) return;
       const optimisticSticky = attestedUidsRef.current.has(u.uid);
       const committedSticky = attestCommittedUidsRef.current.has(u.uid);
