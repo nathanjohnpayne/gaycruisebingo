@@ -1,5 +1,7 @@
 # Propagation wave ordering and change-handling
 
+> **Consumer-repo note.** Gay Cruise Bingo is a mergepath *consumer*. This is a **hub-only** doc: the propagation machinery it describes (`scripts/sync-to-downstream.sh`, `.mergepath-sync.yml`) runs in mergepath, not here, and those files are absent in this repo. Mirrored for reference. The "in-repo source of truth" status below refers to mergepath.
+
 Status: **canonical, in-repo source of truth.** The order below is reviewed monthly; the dated review log lives on the repo wiki page [Propagation-Wave-Order-Review-Log](https://github.com/nathanjohnpayne/mergepath/wiki/Propagation-Wave-Order-Review-Log). See [§ Maintenance](#maintenance) for how the doc and that log stay in sync.
 
 This is a **hub-only** doc — it governs how a canonical change is fanned out *from* mergepath *to* the 8 consumers via `scripts/sync-to-downstream.sh`. It is intentionally **not** in `.mergepath-sync.yml` (consumers don't run propagation waves). It complements [templated-propagation.md](templated-propagation.md) (the rendering engine) and the canary-first note in `.mergepath-sync.yml`.

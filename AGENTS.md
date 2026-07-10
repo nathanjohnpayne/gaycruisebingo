@@ -14,9 +14,9 @@ Agent instructions are organized into focused sub-files under `docs/agents/`. Re
 
 ## Repository Layout
 
-Most top-level directories are described by the `docs/agents/` files above or are self-evident. One carries its justification out-of-line, per the [Code Modification Rules](docs/agents/code-modification-rules.md) requirement that new top-level directories document their justification here or in a `plans/` entry:
+Most top-level directories are described by the `docs/agents/` files above or are self-evident. The app-specific ones carry their justification out-of-line, per the [Code Modification Rules](docs/agents/code-modification-rules.md) requirement that new top-level directories document their justification here or in a `plans/` entry:
 
-- **`packaging/`** --- placeholder package scaffolds that reserve the `mergepath` name on the npm and PyPI registries (name-squatting prevention). Rationale and publish steps live in [`packaging/README.md`](packaging/README.md); see issues [#92](https://github.com/nathanjohnpayne/mergepath/issues/92) (npm) and [#93](https://github.com/nathanjohnpayne/mergepath/issues/93) (PyPI). The directory is whitelisted in `.repo-template.yml`.
+- **`public/`** --- the Vite app's static-assets directory (icons, PWA manifest, service worker, `og-default.png`), served verbatim by Firebase Hosting. Whitelisted in `.repo-template.yml` (`extra_top_level_dirs`); the app-scaffold directory rationale lives in [`plans/app-scaffold-dirs.md`](plans/app-scaffold-dirs.md).
 
 ## Code Review Policy
 

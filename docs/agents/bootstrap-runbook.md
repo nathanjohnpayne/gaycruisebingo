@@ -1,5 +1,7 @@
 # Bootstrap Wizard Runbook
 
+> **Consumer-repo note.** Gay Cruise Bingo is a downstream *consumer* of the [mergepath](https://github.com/nathanjohnpayne/mergepath) template, not the template hub. This runbook describes bootstrapping **new** repos from mergepath; it is mirrored here for reference and is not part of working on this app. For the app, see [`README.md`](../../README.md).
+
 Operator-facing reference for `scripts/bootstrap-new-repo.sh`. Goal: **an operator can run a fresh bootstrap without reading the source.**
 
 The wizard is the canonical path for spinning up a brand-new repo from the Mergepath template. It replaces a 30-step manual checklist with a single invocation, and is the implementation of issue #156 (sub-issues A through E).
