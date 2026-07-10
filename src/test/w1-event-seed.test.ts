@@ -198,6 +198,27 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     expect(report.mismatched[0]).toMatchObject({ text: 'Threesome', actualText: 'Tampered text' });
   });
 
+  it('compares spicy strictly — a non-boolean or missing flag is drift, not silently coerced (Codex P2, PR #139)', () => {
+    // firestore.rules require `spicy is bool`; a value that only *coerces* to the
+    // canonical answer (a truthy string on a spicy prompt, or a missing/undefined
+    // flag on a tame prompt) is itself drift the check must surface.
+    const truthyString = liveFromCanonical().map((d) =>
+      d.text === 'Threesome' ? { ...d, spicy: 'true' as unknown as boolean } : d,
+    );
+    expect(verifySeedPool(truthyString).ok).toBe(false);
+    expect(verifySeedPool(truthyString).mismatched.map((m: { text: string }) => m.text)).toEqual([
+      'Threesome',
+    ]);
+
+    const missingFlag = liveFromCanonical().map((d) =>
+      d.text === 'Scabies' ? { ...d, spicy: undefined as unknown as boolean } : d,
+    );
+    expect(verifySeedPool(missingFlag).ok).toBe(false);
+    expect(verifySeedPool(missingFlag).mismatched.map((m: { text: string }) => m.text)).toEqual([
+      'Scabies',
+    ]);
+  });
+
   // The exact production condition: the live pool is still the OLD (pre-#135)
   // seed set — a couple of prompts that survived into the new pool, plus retired
   // ones — and none of the ~86 new entries. verifySeedPool must catch it as both

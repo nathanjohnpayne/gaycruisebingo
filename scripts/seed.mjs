@@ -229,17 +229,21 @@ export function verifySeedPool(existingDocs, pool = ITEMS) {
   // canonical id with a different stored `text`, and the whole point of this
   // check is to catch a live pool that has silently diverged, so compare the
   // stored fields exactly (Codex P2, PR #139) rather than trusting the id.
+  // `spicy` is compared strictly, not by truthiness: firestore.rules require
+  // `spicy is bool`, so a live value of `"true"`, `1`, `undefined`, or a missing
+  // field (all of which `Boolean(...)` would silently coerce to the "right"
+  // answer) is itself drift the check must surface (Codex P2, PR #139).
   const mismatched = [];
   for (const [id, { text, spicy }] of expected) {
     const live = seedById.get(id);
     if (!live) {
       missing.push({ id, text });
-    } else if (Boolean(live.spicy) !== spicy || live.text !== text) {
+    } else if (live.spicy !== spicy || live.text !== text) {
       mismatched.push({
         id,
         text,
         expectedSpicy: spicy,
-        actualSpicy: Boolean(live.spicy),
+        actualSpicy: live.spicy,
         ...(live.text !== text ? { actualText: live.text } : {}),
       });
     }
@@ -412,8 +416,16 @@ export function formatDriftReport(report, eventId) {
   // and omitting ADMIN_UID leaves `events/{id}.admins` untouched (a reseed to
   // refresh prompts must never overwrite the live admin roster, Codex P2 PR
   // #139). ADMIN_UID is only for the separate act of *granting* admin.
+  //
+  // Echo the SAME target the drift was found against, not a hardcoded default
+  // (Codex P2, PR #139): carry the resolved project and — when it is not the
+  // `med-2026` default — the `VITE_EVENT_ID`, so a copy-pasted reconcile command
+  // reseeds the event that actually drifted rather than a different one.
+  const project =
+    process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || 'gaycruisebingo';
+  const eventEnv = eventId && eventId !== 'med-2026' ? `VITE_EVENT_ID=${eventId} ` : '';
   lines.push(
-    `  → reconcile (prompts only): GOOGLE_CLOUD_PROJECT=${process.env.GOOGLE_CLOUD_PROJECT || 'gaycruisebingo'} node scripts/seed.mjs`,
+    `  → reconcile (prompts only): ${eventEnv}GOOGLE_CLOUD_PROJECT=${project} node scripts/seed.mjs`,
   );
   return lines.join('\n');
 }
