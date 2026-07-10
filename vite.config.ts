@@ -14,12 +14,17 @@ export default defineConfig(({ command, mode }) => {
   //
   // Scope: only the real deploy build. The emulator e2e build runs `--mode e2e`
   // (mode !== 'production') and legitimately has no key; app-ci's build step runs
-  // in CI without one on purpose (it verifies compilation, never deploys), so we
-  // exempt CI via the standard `CI` env var. What remains is the local/agent
-  // production build that `npm run deploy` and `deploy:hosting` invoke.
-  if (command === 'build' && mode === 'production' && !process.env.CI) {
+  // without one on purpose (it verifies compilation, never deploys). We key the
+  // CI exemption off GITHUB_ACTIONS, not the generic `CI` var: `CI` is set by
+  // many tools and a stray `CI=<anything>` (even `CI=false`, a truthy string) in
+  // a deploy shell would silently disable the guard, whereas GITHUB_ACTIONS is
+  // set only by the runner and never by `npm run deploy` / `deploy:hosting`. What
+  // remains is the local/agent production build — exactly the outage vector.
+  if (command === 'build' && mode === 'production' && !process.env.GITHUB_ACTIONS) {
     const env = loadEnv(mode, process.cwd(), 'VITE_');
-    if (!env.VITE_FIREBASE_API_KEY) {
+    // `.trim()` so a whitespace-only or leftover-placeholder key is rejected too
+    // — it is just as broken as an empty one (still `auth/invalid-api-key`).
+    if (!env.VITE_FIREBASE_API_KEY?.trim()) {
       throw new Error(
         'Refusing to build: VITE_FIREBASE_API_KEY is empty, which would ship a ' +
           'blank Firebase config and crash the app on load with ' +
