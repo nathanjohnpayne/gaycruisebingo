@@ -635,7 +635,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = async () => {
-    await signInWithPopup(auth, googleProvider);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err) {
+      // Sign-in failures were invisible in analytics (#163): track('login') only
+      // fires on success, and the storage-partition handler error (#161) renders
+      // on the OAuth handler's own origin, which PostHog never loads. Emit an
+      // explicit failure event carrying the Firebase error code so popup-path
+      // breakage (blocked popup, account-exists, network) is at least observable.
+      // Rethrow to preserve the prior contract — the caller (SignIn.tsx) surfaces
+      // the error. NOTE: the in-app-webview redirect fallback unloads the app
+      // before this catch can run, so it won't capture that path — the funnel
+      // (sign-in pageviews vs `login`) remains the signal there (#162/#163).
+      track('login_failed', {
+        method: 'google',
+        code: (err as { code?: string })?.code,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
     track('login', { method: 'google' });
     // The 18+ checkbox gated this sign-in (SignIn.tsx), so signing in IS the
     // attestation — persist it now that we have a uid, so a first-time User is not

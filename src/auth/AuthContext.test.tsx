@@ -56,7 +56,7 @@ function Harness() {
       {dealError ? <p role="alert">{dealError}</p> : null}
       <span data-testid="dealing">{dealing ? 'dealing' : 'idle'}</span>
       <button onClick={() => retryDeal()}>retry</button>
-      <button onClick={() => void signIn()}>signin</button>
+      <button onClick={() => void signIn().catch(() => {})}>signin</button>
     </div>
   );
 }
@@ -125,6 +125,24 @@ describe('AuthContext deal-error hardening', () => {
     await userEvent.click(screen.getByText('signin'));
     await waitFor(() => expect(mocks.track).toHaveBeenCalledWith('login', { method: 'google' }));
     expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires track('login_failed', …) with the Firebase error code and rethrows when the popup rejects (#163)", async () => {
+    const err = Object.assign(new Error('Unable to process request due to missing initial state.'), {
+      code: 'auth/missing-initial-state',
+    });
+    mocks.signInWithPopup.mockRejectedValueOnce(err);
+    mount();
+    await userEvent.click(screen.getByText('signin'));
+    await waitFor(() =>
+      expect(mocks.track).toHaveBeenCalledWith(
+        'login_failed',
+        expect.objectContaining({ method: 'google', code: 'auth/missing-initial-state' }),
+      ),
+    );
+    // The success event must NOT fire on the failure path (no login, no attest).
+    expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
+    expect(mocks.attestAdult).not.toHaveBeenCalled();
   });
 });
 
