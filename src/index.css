@@ -886,48 +886,41 @@ body.install-prompt-visible .app {
 }
 
 /* ---------- acceptable-use trigger ---------- */
-/* The "18+ · Guidelines" pill (src/components/AcceptableUse.tsx), fixed above
-   the tab bar. Positioning lives in this class (not inline) so the
-   install-banner override below can win over it. */
+/* The "18+ · Guidelines" pill (src/components/AcceptableUse.tsx), rendered in
+   the Card flow directly under the tally line and centered (#143) — no longer a
+   floating fixed element, so it can't collide with the header avatar or the
+   install banner. `width: fit-content` + `auto` side margins center the pill;
+   the bottom margin keeps it clear of the fixed tab bar as the card scrolls. */
 .guidelines-trigger {
-  position: fixed;
-  right: 12px;
-  bottom: calc(64px + env(safe-area-inset-bottom));
-  z-index: 30;
+  display: block;
+  width: fit-content;
+  margin: 14px auto calc(4px + env(safe-area-inset-bottom));
   font-size: 12px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   opacity: 0.85;
 }
-/* The install banner (.install-prompt above, z-index 55) sits in the same
-   bottom-right region once it's up and would otherwise cover the trigger —
-   the app's only entry point to the guidelines dialog. Lift the trigger
-   clear of the banner's ~64px footprint (see the .app padding-bottom
-   comment above) and raise it above the banner's stacking context as a
-   second line of defense in case that estimate runs short (#69 P3). */
-body.install-prompt-visible .guidelines-trigger {
-  bottom: calc(64px + 64px + env(safe-area-inset-bottom));
-  z-index: 56;
-}
 
-/* Floating profile editor trigger (src/components/ProfileEditor.tsx), fixed
-   above the tab bar. Positioning lives in CSS so the install-prompt override
-   can lift it above the banner just like .guidelines-trigger. */
-.profile-trigger {
-  position: fixed;
-  right: 14px;
-  bottom: calc(78px + env(safe-area-inset-bottom));
-  z-index: 25;
-  background: var(--panel);
-  border: 1px solid var(--border);
+/* ---------- profile edit trigger (the header avatar) ---------- */
+/* The player's avatar IS the edit affordance (#143): ProfileEditor renders it
+   inline in the Nav identity bar as a bare button (tap your photo to edit), so
+   there is no floating pencil. The button is just the 38px Avatar — no chrome
+   of its own — with a visible focus ring for keyboard users; `disabled` (while
+   the profile snapshot is still loading) simply drops the pointer affordance. */
+.avatar-trigger {
+  padding: 0;
+  border: none;
+  background: none;
   border-radius: 50%;
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
+  line-height: 0;
+  cursor: pointer;
+  display: inline-flex;
 }
-body.install-prompt-visible .profile-trigger {
-  bottom: calc(78px + 64px + env(safe-area-inset-bottom));
-  z-index: 56;
+.avatar-trigger:disabled {
+  cursor: default;
+}
+.avatar-trigger:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 /* ---------- leaderboard share affordance ---------- */

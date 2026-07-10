@@ -49,10 +49,11 @@ describe('AcceptableUse page (behind auth — ADR 0005)', () => {
     expect(container).toBeEmptyDOMElement(); // null → no page/trigger reachable
   });
 
-  it('AcceptableUse is linked from the app chrome', () => {
-    // Mounted from the composition root, not the frozen tab route table.
-    const main = readRepoFile('./main.tsx');
-    expect(main).toMatch(/<AcceptableUse\s*\/>/);
+  it('AcceptableUse is linked from the Card view under the tally', () => {
+    // Rendered inline under the Board tally line (#143), centered, rather than
+    // as a floating fixed element in the composition root.
+    const board = readRepoFile('./components/Board.tsx');
+    expect(board).toMatch(/<AcceptableUse\s*\/>/);
   });
 
   it('does not promise automatic report-threshold hiding', async () => {
