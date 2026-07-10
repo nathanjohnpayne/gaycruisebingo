@@ -28,7 +28,8 @@ export const POSTHOG_INIT_OPTIONS: Partial<PostHogConfig> = {
  * Default ingestion host. Our first-party reverse proxy (#149) forwards both the
  * ingestion API and PostHog's static assets to the US region, so shipping through
  * it keeps analytics on our own domain (fewer ad-blocker drops, no third-party
- * host). `VITE_POSTHOG_HOST` still overrides it for non-prod / other regions.
+ * host). `VITE_POSTHOG_HOST` still supports a direct-US non-production bypass;
+ * this US deployment deliberately keeps `ui_host` region-fixed above.
  */
 export const POSTHOG_PROXY_HOST = 'https://d.gaycruisebingo.com';
 

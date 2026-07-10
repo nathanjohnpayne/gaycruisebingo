@@ -55,14 +55,14 @@ describe('PostHog init with a key', () => {
   it('initializes with the privacy-safe options + host when a key is present', async () => {
     vi.resetModules();
     vi.stubEnv('VITE_POSTHOG_KEY', 'phc_test');
-    vi.stubEnv('VITE_POSTHOG_HOST', 'https://eu.i.posthog.com');
+    vi.stubEnv('VITE_POSTHOG_HOST', 'https://us.i.posthog.com');
     const ph = (await import('posthog-js')).default;
     const mod = await import('./posthog');
     mod.initPostHog();
     expect(ph.init).toHaveBeenCalledWith(
       'phc_test',
       expect.objectContaining({
-        api_host: 'https://eu.i.posthog.com', // VITE_POSTHOG_HOST still overrides
+        api_host: 'https://us.i.posthog.com', // US direct-host bypass still overrides
         ui_host: 'https://us.posthog.com',
         autocapture: false,
         disable_session_recording: true,
