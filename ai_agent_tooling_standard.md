@@ -1,5 +1,7 @@
 # AI Agent Tooling Standard
 
+> **Consumer-repo note.** This repository, **Gay Cruise Bingo**, is a downstream *consumer* of the [mergepath](https://github.com/nathanjohnpayne/mergepath) template — the reference implementation named below — not the standard's owner. This document is mirrored here for reference; the canonical copy lives in mergepath. The bingo app itself is described in [`README.md`](README.md).
+
 ## Purpose
 
 This document defines a **deterministic repository standard** for AI coding agents and human developers. It governs structure, documentation placement, and agent behavior to prevent configuration drift and cross-tool inconsistency.

@@ -5,7 +5,12 @@
 - Do not introduce new top-level directories without documented justification in `AGENTS.md` or a `plans/` entry.
 - Place canonical instructions only in root files or the appropriate supporting directory---never in `.cursor/`, `.claude/`, or `.vscode/`.
 
-Replace this section with project-specific language, pattern, and boundary constraints.
+Project-specific constraints:
+
+- **TypeScript strict** everywhere; no `any` to force a compile. `src/types.ts` is the single shared domain contract — extend it there rather than redeclaring shapes locally.
+- **Don't duplicate the domain model.** The ubiquitous language lives in [`CONTEXT.md`](../../CONTEXT.md); the pure game rules live in `src/game/logic.ts`. Reuse them instead of re-deriving bingo/blackout/leaderboard logic inside components.
+- **Stats stay client-authoritative** ([ADR 0001](../adr/0001-honor-system-trust-model.md)) — never add a server-side stat recompute. Access boundaries are enforced by `firestore.rules` / `storage.rules`, not by hiding the (non-secret) client config.
+- **The prompt pool is Firestore data, not the bundle** ([ADR 0003](../adr/0003-pool-is-pre-cruise.md)): changing `ITEMS` requires a reseed, not just a deploy — see [`docs/app/README.md`](../app/README.md) §4 and run `npm run verify:seed`.
 
 ## ESLint flat-config policy
 
@@ -15,7 +20,7 @@ Replace this section with project-specific language, pattern, and boundary const
 
 Any repo with a root `package.json` ships an `eslint.config.js` flat config at the repo root. The config must, at minimum, load `@eslint/js`'s `recommended` ruleset. Additional framework plugins are required when the matching framework is in the repo's dependencies (the contributor decides which apply; the CI check does not introspect package contents).
 
-Repos with no root `package.json` are exempt — Mergepath itself falls in this category (shell-only), so the check early-outs with a not-applicable log line in this repo's own CI run.
+Repos with no root `package.json` are exempt (mergepath itself is shell-only and early-outs with a not-applicable log line). This repo is **not** exempt — it has a root `package.json` (the Vite app) and ships an `eslint.config.js` flat config at the repo root, so the policy applies here.
 
 ### Why the flat config
 
