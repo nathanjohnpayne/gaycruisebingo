@@ -5,7 +5,7 @@ Adds PostHog product analytics to the React app **alongside GA4** (both fire; Po
 ## Behaviour
 
 - **Single dispatch path.** `track(name, params)` in `src/analytics.ts` is the only analytics call site in the app; it now fires each event to **both** GA4 (`logEvent`) and PostHog (`phCapture`). Each sink is independently guarded and never throws, so one failing or being unconfigured never blocks the other. The event catalog is unchanged (`GA4_EVENTS`, 12 events).
-- **Init.** `initPostHog()` (in `src/posthog.ts`) runs once from `main.tsx`. It is a **no-op without `VITE_POSTHOG_KEY`**, mirroring the GA4 guard — dev/test/CI without env vars stay silent. Host defaults to `https://us.i.posthog.com` (`VITE_POSTHOG_HOST` overrides). The `phc_` project key is client-safe/public.
+- **Init.** `initPostHog()` (in `src/posthog.ts`) runs once from `main.tsx`. It is a **no-op without `VITE_POSTHOG_KEY`**, mirroring the GA4 guard — dev/test/CI without env vars stay silent. Ingestion defaults to the first-party reverse proxy at `https://d.gaycruisebingo.com`; `VITE_POSTHOG_HOST=https://us.i.posthog.com` can bypass it for non-production diagnostics. This app is US-region-bound: `ui_host` remains `https://us.posthog.com`, so toolbar and “view in PostHog” links target the US app rather than the proxy. The proxy forwards ingestion plus PostHog's `/static/*` and `/array/*` asset/config routes. The `phc_` project key is client-safe/public.
 - **Identify.** On sign-in the User is identified by **uid only** (no PII person properties); identity is reset on sign-out. Wired from `main.tsx`/`ThemedApp` (not `AuthContext`) to keep analytics out of the protected `src/auth/**` path.
 - **Pageviews.** Captured manually on route change with the **path only** (no query/hash), so no PII leaks through the URL.
 
@@ -22,5 +22,5 @@ These options are exported as `POSTHOG_INIT_OPTIONS` so the policy is unit-teste
 
 ## Tested by
 
-- `src/posthog-analytics.test.ts` — the privacy-safe config options, the no-op-without-key guard, and that init passes those options.
+- `src/posthog-analytics.test.ts` — the privacy-safe config options, the no-op-without-key guard, the first-party proxy default, the environment override, and the fixed US UI host.
 - `src/analytics.dual-dispatch.test.ts` — `track()` fires the same event/params to both GA4 and PostHog, and still reaches PostHog if GA4 throws.

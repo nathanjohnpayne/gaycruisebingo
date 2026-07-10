@@ -17,7 +17,21 @@ export const POSTHOG_INIT_OPTIONS: Partial<PostHogConfig> = {
   capture_pageleave: false,
   disable_session_recording: true,
   person_profiles: 'identified_only',
+  // Events POST first-party through our reverse proxy (see `api_host` below,
+  // #149); `ui_host` keeps the PostHog toolbar and "view in PostHog" links
+  // pointed at the real US app rather than the proxy domain. Region-fixed, so
+  // it lives here in the static (testable) options rather than being env-driven.
+  ui_host: 'https://us.posthog.com',
 };
+
+/**
+ * Default ingestion host. Our first-party reverse proxy (#149) forwards both the
+ * ingestion API and PostHog's static assets to the US region, so shipping through
+ * it keeps analytics on our own domain (fewer ad-blocker drops, no third-party
+ * host). `VITE_POSTHOG_HOST` still supports a direct-US non-production bypass;
+ * this US deployment deliberately keeps `ui_host` region-fixed above.
+ */
+export const POSTHOG_PROXY_HOST = 'https://d.gaycruisebingo.com';
 
 let ready = false;
 
@@ -31,7 +45,7 @@ export function initPostHog(): void {
   const key = import.meta.env.VITE_POSTHOG_KEY as string | undefined;
   if (!key) return;
   const api_host =
-    (import.meta.env.VITE_POSTHOG_HOST as string | undefined) || 'https://us.i.posthog.com';
+    (import.meta.env.VITE_POSTHOG_HOST as string | undefined) || POSTHOG_PROXY_HOST;
   try {
     posthog.init(key, { api_host, ...POSTHOG_INIT_OPTIONS });
     ready = true;
