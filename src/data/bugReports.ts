@@ -28,22 +28,57 @@ export interface SubmitBugReportResult {
   reportId: string;
 }
 
-function excludedFromCapture(node: HTMLElement): boolean {
-  return !!node.closest('[data-bug-report-ui]');
+const TRANSPARENT_IMAGE_PLACEHOLDER =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+
+type CaptureMode = 'full' | 'compat';
+
+function isSafeImageForCompatCapture(node: HTMLImageElement): boolean {
+  const source = node.currentSrc || node.src;
+  if (!source) return true;
+  try {
+    const url = new URL(source, window.location.href);
+    return url.protocol === 'data:' || url.protocol === 'blob:' || url.origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
+function excludedFromCapture(node: HTMLElement, mode: CaptureMode): boolean {
+  if (node.closest('[data-bug-report-ui]')) return true;
+  if (mode === 'full') return false;
+  if (node.closest('video, audio, iframe, canvas, object, embed')) return true;
+  if (node instanceof HTMLImageElement && !isSafeImageForCompatCapture(node)) return true;
+  return false;
+}
+
+async function captureWithMode(root: HTMLElement, mode: CaptureMode): Promise<Blob> {
+  const blob = await toBlob(root, {
+    cacheBust: true,
+    imagePlaceholder: TRANSPARENT_IMAGE_PLACEHOLDER,
+    pixelRatio: mode === 'full' ? Math.min(window.devicePixelRatio || 1, 2) : 1,
+    skipFonts: mode === 'compat',
+    filter: (node) => !(node instanceof HTMLElement) || !excludedFromCapture(node, mode),
+  });
+  if (!blob) throw new Error('Screenshot capture returned no image');
+  if (blob.size > BUG_REPORT_SCREENSHOT_MAX_BYTES) throw new Error('Screenshot is too large');
+  return blob;
 }
 
 /** Capture only the app surface—never browser chrome, other tabs, or apps. */
 export async function captureAppSurface(): Promise<Blob> {
   const root = document.querySelector<HTMLElement>('.app');
   if (!root) throw new Error('App surface unavailable');
-  const blob = await toBlob(root, {
-    cacheBust: true,
-    pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
-    filter: (node) => !(node instanceof HTMLElement) || !excludedFromCapture(node),
-  });
-  if (!blob) throw new Error('Screenshot capture returned no image');
-  if (blob.size > BUG_REPORT_SCREENSHOT_MAX_BYTES) throw new Error('Screenshot is too large');
-  return blob;
+  try {
+    return await captureWithMode(root, 'full');
+  } catch (error) {
+    try {
+      return await captureWithMode(root, 'compat');
+    } catch {
+      if (error instanceof Error) throw error;
+      throw new Error('Screenshot capture failed');
+    }
+  }
 }
 
 export async function blobToDataUrl(blob: Blob): Promise<string> {
