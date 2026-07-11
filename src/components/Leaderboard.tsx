@@ -217,7 +217,10 @@ export default function Leaderboard() {
         ))}
       </div>
       {visible.length === 0 ? (
-        <div className="center muted">No one matches this filter yet.</div>
+        // Compact (NOT the 70vh `.center`) so the below-list "Share leaderboard"
+        // action stays reachable in an empty-filter view (Codex, #174): the share
+        // card uses the full roster, so the CTA is still valid here.
+        <div className="lb-empty muted">No one matches this filter yet.</div>
       ) : (
         <div className="list">
           {visible.map((p, i) => {

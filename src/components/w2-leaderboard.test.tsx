@@ -214,4 +214,21 @@ describe('Leaderboard — the Share action sits below the ranked list (#174)', (
     expect(filters!.compareDocumentPosition(share) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(list!.compareDocumentPosition(share) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  it('keeps the Share action reachable in an empty-filter view (Codex): compact empty state, not the 70vh .center', async () => {
+    H.players = [earlyBird]; // no Blackout Player, so the Blackout filter is empty
+    const user = userEvent.setup();
+    const { container } = render(<Leaderboard />);
+
+    await user.click(screen.getByRole('button', { name: 'Blackout' }));
+
+    // The share card uses the FULL roster, so the CTA stays valid + present.
+    expect(screen.getByRole('button', { name: /share leaderboard/i })).toBeInTheDocument();
+    // The empty-filter message must NOT use the full-height `.center` (min-height
+    // 70vh), which would shove the below-list CTA off-screen (#174).
+    const empty = screen.getByText(/no one matches this filter/i);
+    expect(empty).toHaveClass('lb-empty');
+    expect(empty).not.toHaveClass('center');
+    expect(container.querySelector('.list')).toBeNull();
+  });
 });
