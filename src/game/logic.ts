@@ -165,6 +165,23 @@ export function hasBingo(cells: Cell[]): boolean {
   return completedLines(cells).length > 0;
 }
 
+/**
+ * Cosmetic-celebration edge (#176). The animation must fire whenever the player
+ * completes a NEW winning line, not only the first. Tracking a boolean "has any
+ * bingo" flips false→true exactly once, so a 2nd/3rd line never re-triggered it.
+ * Comparing the completed-line COUNT against the previous count fixes that:
+ * `gained` is true iff a line was just added (a rising edge in the count), and
+ * a line falling away (count decreasing) never fires. Returns `lines` so the
+ * caller can store it as the next baseline.
+ */
+export function bingoLineEdge(
+  cells: Cell[],
+  prevLineCount: number,
+): { lines: number; gained: boolean } {
+  const lines = completedLines(cells).length;
+  return { lines, gained: lines > prevLineCount };
+}
+
 /** Set of cell indices that are part of any completed line (for highlighting). */
 export function winningCells(cells: Cell[]): Set<number> {
   const s = new Set<number>();

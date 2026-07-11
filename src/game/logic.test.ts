@@ -6,6 +6,7 @@ import {
   isBlackout,
   countMarked,
   winningCells,
+  bingoLineEdge,
   sortPlayers,
   comparePlayers,
   CENTER,
@@ -113,5 +114,39 @@ describe('leaderboard ordering', () => {
         { bingoCount: 0, squaresMarked: 2, firstBingoAt: 500 },
       ),
     ).toBeGreaterThan(0);
+  });
+});
+
+describe('bingoLineEdge (#176: the celebration re-fires on each NEW line)', () => {
+  // A dealt board's center (index 12) is free+marked; marking every non-center
+  // cell of a row completes exactly that line (rows share no other line here).
+  function boardWithRows(rows: number[]) {
+    const cells = dealBoard(pool, 'FREE', 42);
+    for (const r of rows) for (const k of [0, 1, 2, 3, 4]) cells[r * 5 + k].marked = true;
+    return cells;
+  }
+
+  it('no completed lines, previous count 0 → not gained', () => {
+    expect(bingoLineEdge(boardWithRows([]), 0)).toEqual({ lines: 0, gained: false });
+  });
+
+  it('the first line completing is a rising edge → gained', () => {
+    expect(bingoLineEdge(boardWithRows([0]), 0)).toEqual({ lines: 1, gained: true });
+  });
+
+  it('the SAME single line on a later snapshot does not re-fire', () => {
+    expect(bingoLineEdge(boardWithRows([0]), 1)).toEqual({ lines: 1, gained: false });
+  });
+
+  it('a SECOND line re-fires the celebration — the #176 regression', () => {
+    expect(bingoLineEdge(boardWithRows([0, 1]), 1)).toEqual({ lines: 2, gained: true });
+  });
+
+  it('a THIRD line keeps re-firing', () => {
+    expect(bingoLineEdge(boardWithRows([0, 1, 2]), 2)).toEqual({ lines: 3, gained: true });
+  });
+
+  it('a line falling away (count decreasing) never fires', () => {
+    expect(bingoLineEdge(boardWithRows([0]), 2)).toEqual({ lines: 1, gained: false });
   });
 });
