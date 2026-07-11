@@ -887,7 +887,7 @@ export default function Board() {
           tap); it just no longer competes with the title for the line. */}
       <div className="card-meta">
         <span>
-          {event ? eventTitle(event.name, event.sailStart, event.sailEnd) : 'This cruise'}
+          {event?.name ? eventTitle(event.name, event.sailStart, event.sailEnd) : 'This cruise'}
         </span>
       </div>
       <div className="bingo-head">

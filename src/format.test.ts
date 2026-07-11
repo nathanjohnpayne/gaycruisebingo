@@ -39,6 +39,19 @@ describe('formatSailRange', () => {
     expect(formatSailRange('2026-07-32', '2026-07-24')).toBe(''); // day 32
     expect(formatSailRange('2026-07-15', '2026-00-24')).toBe(''); // month 0
   });
+
+  it('rejects an impossible calendar day (day exceeds the month, leap-year aware)', () => {
+    expect(formatSailRange('2026-02-31', '2026-07-24')).toBe(''); // Feb 31
+    expect(formatSailRange('2026-04-31', '2026-07-24')).toBe(''); // Apr 31
+    expect(formatSailRange('2026-02-29', '2026-07-24')).toBe(''); // 2026 is not a leap year
+    // A real leap day is accepted.
+    expect(formatSailRange('2028-02-29', '2028-02-29')).toBe('February 29, 2028');
+  });
+
+  it('drops a reversed window where the end precedes the start', () => {
+    expect(formatSailRange('2026-07-24', '2026-07-15')).toBe(''); // swapped same-month
+    expect(formatSailRange('2026-08-01', '2026-07-31')).toBe(''); // swapped across months
+  });
 });
 
 describe('eventTitle', () => {

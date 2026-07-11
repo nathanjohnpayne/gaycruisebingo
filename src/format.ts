@@ -35,20 +35,19 @@ export function formatSailRange(sailStart: string, sailEnd: string): string {
   };
   const a = parse(sailStart);
   const b = parse(sailEnd);
-  // Degrade to no range (rather than throw / render a broken title) when a date
-  // is missing or malformed — a partial or hand-edited Event doc must never crash
-  // the board, and the write rules don't validate sailStart/sailEnd. A numeric but
-  // out-of-range value (e.g. 2026-13-01, 2026-07-32) must fail this check too, not
-  // just a non-numeric one.
-  const valid = (p: { y: number; m: number; d: number }) =>
-    Number.isInteger(p.y) &&
-    Number.isInteger(p.m) &&
-    p.m >= 1 &&
-    p.m <= 12 &&
-    Number.isInteger(p.d) &&
-    p.d >= 1 &&
-    p.d <= 31;
-  if (!valid(a) || !valid(b)) return '';
+  // Degrade to no range (rather than throw / render a broken title) for a missing,
+  // malformed, or impossible date, or a reversed window — a partial or hand-edited
+  // Event doc must never crash the board, and the write rules don't validate
+  // sailStart/sailEnd. `Date.UTC` is used ONLY to reject impossible calendar dates
+  // (e.g. 2026-02-31, 2026-13-01) via a round-trip check; the range itself is still
+  // formatted from the parsed integer parts so no timezone can shift a displayed day.
+  const validCalendar = (p: { y: number; m: number; d: number }) => {
+    if (![p.y, p.m, p.d].every(Number.isInteger)) return false;
+    const dt = new Date(Date.UTC(p.y, p.m - 1, p.d));
+    return dt.getUTCFullYear() === p.y && dt.getUTCMonth() === p.m - 1 && dt.getUTCDate() === p.d;
+  };
+  const key = (p: { y: number; m: number; d: number }) => p.y * 10000 + p.m * 100 + p.d;
+  if (!validCalendar(a) || !validCalendar(b) || key(b) < key(a)) return '';
   const mA = MONTHS[a.m - 1];
   const mB = MONTHS[b.m - 1];
 
