@@ -4,6 +4,31 @@ Signed-in players can submit a description and previewed screenshot from the per
 
 Set `BUG_REPORT_APP_CHECK=true` only when App Check client registration and enforcement from #44 are live. With the parameter enabled, submissions without a valid App Check token fail closed.
 
+## Repeat-deploy hardening
+
+The first production deploy of `submitBugReport` (issue #146 / PR #157) surfaced deploy-time gaps that this section closes so a repeat deploy is reproducible and verifiable (#158).
+
+**`BUG_REPORT_APP_CHECK` is declared in `functions/.env.example`.** A non-interactive `firebase deploy` resolves every `firebase-functions/params` value up front and stops if one is unset and has no bound value, so the param is committed to the template (default `false`) rather than left to the code default alone. Copy it into `functions/.env` / `functions/.env.<projectId>` like the other params.
+
+**The callable is reachable via a disabled Cloud Run invoker IAM check, not an `allUsers` binding.** The project's org policy (Domain Restricted Sharing) rejects the `allUsers` Cloud Run invoker binding that `firebase deploy` normally adds to make a callable public. The org-policy-compatible configuration instead disables the invoker IAM check on the backing Cloud Run service (`submitbugreport`): the service accepts unauthenticated requests at the network layer, and the callable enforces Firebase Auth in application code (an unauthenticated call returns `UNAUTHENTICATED`, never a document write). A `firebase deploy --only functions` can reset this — it may re-try the rejected `allUsers` binding and report a partial failure — so re-run the reproducible post-deploy step after every Functions deploy:
+
+```bash
+scripts/set-bug-report-invoker.sh            # idempotent; no-ops if already disabled
+scripts/set-bug-report-invoker.sh --dry-run  # preview only
+```
+
+The script targets `submitbugreport` / `us-central1` / `gaycruisebingo` by default (override with `BUG_REPORT_SERVICE` / `BUG_REPORT_REGION` / `BUG_REPORT_PROJECT`) and runs through the 1Password-backed `gcloud` — load deploy credentials first (`eval "$(scripts/op-preflight.sh --agent <agent> --mode deploy)"`).
+
+**Verify reachability with the production smoke check.** After a deploy (and after `set-bug-report-invoker.sh`), assert that an unauthenticated request reaches application code and returns `UNAUTHENTICATED`:
+
+```bash
+scripts/smoke-bug-report-callable.sh
+```
+
+It sends a single load-and-assert request (no auth ⇒ no side effect) and fails loudly if the callable returns HTTP 403 — the signal that the request was blocked at the Cloud Run invoker layer and the invoker configuration has regressed. This is the check that would have flagged the original outage class.
+
+**Functions runtime.** The Functions package targets the Node.js 22 runtime (`functions/package.json` `engines.node`). Node.js 20 is deprecated on Cloud Functions with a 2026-10-30 decommission date; the runtime bump takes effect on the next `op-firebase-deploy --only functions`.
+
 ## Pull reports locally
 
 Run credential preflight in deploy mode, then export new reports:
