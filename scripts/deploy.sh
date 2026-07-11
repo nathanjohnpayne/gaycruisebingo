@@ -242,9 +242,10 @@ else
   $SYNTHETIC_URL (blank page, a Firebase init error such as auth/invalid-api-key,
   or an uncaught exception). The deploy is live but likely broken.
 
-  Roll back now (see DEPLOYMENT.md § Rollback Procedure):
-    firebase hosting:releases:list
-    firebase hosting:channel:deploy live --release-id <PREVIOUS_VERSION_ID>
+  Roll back now — Firebase Console → Hosting → Release history → Roll back is
+  the one-click path; or via the CLI (see DEPLOYMENT.md § Rollback Procedure):
+    firebase hosting:releases:list                          # find the prior version id
+    firebase hosting:clone <site-id>:@<VERSION_ID> <site-id>:live
 
   (If this is a "browser not found" error, run: npx playwright install chromium,
    then re-run: npm run test:synthetic)

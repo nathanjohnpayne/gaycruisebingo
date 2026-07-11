@@ -580,17 +580,15 @@ That makes `gcloud` default to the project-specific impersonated configuration f
 
 ## Rollback Procedure
 
-Firebase Hosting supports instant rollback:
+Firebase Hosting supports instant rollback. The **Firebase Console → Hosting → Release history → Roll back** button is the one-click path. Via the CLI, clone a previous version onto the `live` channel (note: `hosting:channel:deploy` deploys the *current local* build to a channel — it does not roll back):
 
 ```bash
-# List recent releases
+# List recent releases to find the version id to restore
 firebase hosting:releases:list
 
-# Roll back via CLI
-firebase hosting:channel:deploy live --release-id <VERSION_ID>
+# Clone that version onto live (site-id is the Hosting site, e.g. gaycruisebingo)
+firebase hosting:clone <site-id>:@<VERSION_ID> <site-id>:live
 ```
-
-Or use Firebase Console → Hosting → Release History → Roll back.
 
 ## Post-Deployment Verification
 

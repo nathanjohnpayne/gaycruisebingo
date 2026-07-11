@@ -30,5 +30,17 @@ export default defineConfig({
     actionTimeout: 15_000,
     trace: 'on-first-retry',
   },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  projects: [
+    {
+      name: 'chromium',
+      use: {
+        ...devices['Desktop Chrome'],
+        // Append a synthetic marker to the real Chrome UA so the app skips
+        // analytics for this load (src/synthetic-probe.ts, #142) without
+        // otherwise altering feature detection. Kept in sync with
+        // SYNTHETIC_UA_MARKER in that module.
+        userAgent: `${devices['Desktop Chrome'].userAgent} GCB-Synthetic`,
+      },
+    },
+  ],
 });
