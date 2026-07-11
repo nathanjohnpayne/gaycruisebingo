@@ -16,6 +16,10 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/synthetic',
   testMatch: '**/*.spec.ts',
+  // Per-test budget above navigation (30s) + the mount wait (20s), so a slow but
+  // genuinely-rendering cold load never trips Playwright's 30s default test
+  // timeout before the mount assertion gets its full window (false outage alert).
+  timeout: 90_000,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   // Tolerate a transient network blip against the real site (up to two retries)
