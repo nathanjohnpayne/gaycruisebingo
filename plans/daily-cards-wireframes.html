@@ -1,0 +1,863 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Daily Cards—Wireframes (themed, one per day)</title>
+<style>
+  /* lucide sizing—official lucide-static SVGs inlined below (self-contained, no CDN);
+     each svg's data-lucide attribute names the icon for lucide-react in the real build */
+  svg.lucide{width:15px;height:15px;vertical-align:-2px;stroke-width:2}
+  .tab svg.lucide{width:17px;height:17px;display:block;margin:0 auto 1px}
+  .mi svg.lucide{width:14px;height:14px}
+  .chev svg.lucide{width:13px;height:13px}
+  .statusbar svg.lucide{width:13px;height:13px;vertical-align:-1px}
+  .safaribar svg.lucide{width:17px;height:17px;vertical-align:-3px}
+  .segbtn svg.lucide,.btn svg.lucide{width:12px;height:12px;vertical-align:-1.5px}
+  .play svg.lucide{width:11px;height:11px;vertical-align:0}
+  .lockicon svg.lucide{width:24px;height:24px}
+  i[data-lucide]{display:inline-block;min-width:2px}
+</style>
+<style>
+  /* ---------- page chrome ---------- */
+  body{margin:0;padding:32px 24px 64px;background:#ececf0;color:#2a2a2e;
+    font:14px/1.45 "Helvetica Neue",Arial,sans-serif}
+  h1{font-size:22px;margin:0 0 4px}
+  h2{font-size:16px;margin:36px 0 12px;border-top:1px solid #c9c9d0;padding-top:20px}
+  .sub{color:#77777f;margin:0 0 24px;max-width:760px}
+  .frames{display:flex;flex-wrap:wrap;gap:32px;align-items:flex-start}
+  .unit{width:393px}
+  .cap{margin:10px 4px 0;font-size:12.5px;color:#77777f}
+  .cap b{color:#2a2a2e;display:block;font-size:13.5px;margin-bottom:2px}
+  .sw{display:inline-block;width:11px;height:11px;border-radius:50%;border:1px solid #0003;
+    vertical-align:-1px;margin-right:2px}
+
+  /* ---------- real theme tokens (copied from src/theme/themes.css) ---------- */
+  [data-theme='neon-playground']{--bg:#07060d;--panel:#0e0a1a;--ink:#f6ecff;--dim:#b9a9d6;
+    --primary:#ff2d95;--secondary:#00e6ff;--accent:#ffd23f;--cell:#120c22;
+    --border:rgba(0,230,255,.35);--on-gradient:#000}
+  [data-theme='get-sporty']{--bg:#0a0f0b;--panel:#0f1712;--ink:#f2fff4;--dim:#a9c8b3;
+    --primary:#39ff88;--secondary:#eaffef;--accent:#ffe600;--cell:#0f1712;
+    --border:rgba(57,255,136,.35);--on-gradient:#000}
+  [data-theme='duty-free']{--bg:#0a0e1a;--panel:#101827;--ink:#eef3ff;--dim:#a9b6d6;
+    --primary:#ff4d5e;--secondary:#3aa0ff;--accent:#ffd23f;--cell:#101827;
+    --border:rgba(58,160,255,.35);--on-gradient:#000}
+  [data-theme='glamiators']{--bg:#0c0a08;--panel:#16120c;--ink:#fff7e8;--dim:#cbb489;
+    --primary:#e8c86a;--secondary:#c9a24a;--accent:#fffefb;--cell:#16120c;
+    --border:rgba(232,200,106,.35);--on-gradient:#000}
+  [data-theme='summer-white']{--bg:#f6f1e7;--panel:#fffdf8;--ink:#20170f;--dim:#7a6a58;
+    --primary:#8f600d;--secondary:#8a5c12;--accent:#20170f;--cell:#fffdf8;
+    --border:rgba(32,23,15,.18);--on-gradient:#fff}
+  [data-theme='dog-tag']{--bg:#0c0e0a;--panel:#14170f;--ink:#eef2e6;--dim:#aeb69a;
+    --primary:#b5c15a;--secondary:#8f9b8a;--accent:#ffd23f;--cell:#14170f;
+    --border:rgba(181,193,90,.35);--on-gradient:#000}
+  [data-theme='revival-disco']{--bg:#120a14;--panel:#1b1020;--ink:#ffeede;--dim:#c9a7c0;
+    --primary:#ff7a1a;--secondary:#c04bff;--accent:#ffd23f;--cell:#1b1020;
+    --border:rgba(192,75,255,.35);--on-gradient:#000}
+  [data-theme='seriously-pink']{--bg:#1a0713;--panel:#260a1c;--ink:#ffe9f5;--dim:#e59bc4;
+    --primary:#ff4fb0;--secondary:#ff9ed8;--accent:#fff06a;--cell:#260a1c;
+    --border:rgba(255,79,176,.45);--on-gradient:#000}
+  /* proposed new tutorial themes (spec § Theme reference) */
+  [data-theme='welcome-aboard']{--bg:#051019;--panel:#0a1a28;--ink:#eaf6ff;--dim:#9fbcd0;
+    --primary:#33c6ff;--secondary:#ffbe5c;--accent:#ffd23f;--cell:#0a1a28;
+    --border:rgba(51,198,255,.35);--on-gradient:#000}
+  [data-theme='so-long-farewell']{--bg:#140b12;--panel:#1e1019;--ink:#fff0ea;--dim:#d0a8ab;
+    --primary:#ff8b6a;--secondary:#feb47b;--accent:#ffd23f;--cell:#1e1019;
+    --border:rgba(255,139,106,.35);--on-gradient:#000}
+
+  /* ---------- phone frame: iPhone 15 Pro canvas (393×852pt, 19.5:9), themed via tokens ---------- */
+  .mini{width:393px;min-height:852px;background:var(--bg);color:var(--ink);border:2px solid #2a2a2e;
+    border-radius:47px;overflow:hidden;display:flex;flex-direction:column;position:relative}
+  .mini .board{flex:1}
+  .statusbar{display:flex;justify-content:space-between;align-items:center;
+    padding:16px 28px 8px;background:var(--panel);font-size:13px;font-weight:700;
+    color:var(--ink);position:relative}
+  .dynisland{position:absolute;left:50%;transform:translateX(-50%);top:11px;
+    width:112px;height:30px;border-radius:16px;background:#000;border:1px solid rgba(255,255,255,.08)}
+  .homebar{padding:8px 0 9px;background:var(--panel);display:flex;justify-content:center}
+  .homebar i{display:block;width:130px;height:5px;border-radius:3px;background:var(--dim);opacity:.55}
+  /* Safari chrome (pre-install frames only; installed PWA runs standalone) */
+  .safaribar{background:#f7f7f8;border-top:1px solid #d5d5da;padding:9px 14px;
+    display:flex;align-items:center;gap:12px;color:#5a5a62;font-size:16px}
+  .urlpill{flex:1;background:#e9e9ee;border-radius:11px;padding:7px 12px;font-size:12px;
+    text-align:center;color:#1c1c22;font-weight:600}
+  .sfico.hot{color:#0a84ff;font-weight:800;text-shadow:0 0 8px rgba(10,132,255,.7)}
+  .safarihome{background:#f7f7f8}
+  .safarihome i{background:#8a8a92}
+  /* system toasts: install nudge + update banner */
+  .systoast{display:flex;align-items:center;gap:9px;background:var(--panel);
+    border:1px solid var(--primary);border-radius:13px;padding:9px 12px;font-size:11.5px;
+    color:var(--ink);box-shadow:0 6px 18px rgba(0,0,0,.45);margin:0 10px 8px}
+  .systoast .btn{white-space:nowrap}
+  .hdr{display:flex;justify-content:space-between;align-items:center;
+    padding:14px 14px 10px;border-bottom:1px solid var(--border);background:var(--panel)}
+  .title{font-weight:800;font-size:14px;letter-spacing:.06em;line-height:1.15;color:var(--ink)}
+  .title i{font-style:normal;color:var(--primary)}
+  .today{text-align:right;font-size:12.5px;line-height:1.35}
+  .today .port{font-weight:700;color:var(--ink)}
+  .today .theme{color:var(--dim)}
+  .strip{display:flex;gap:6px;padding:9px 12px;border-bottom:1px solid var(--border);
+    overflow:hidden;background:var(--bg)}
+  .chip{flex:0 0 auto;border:1px solid var(--border);border-radius:14px;padding:3px 9px;
+    font-size:10.5px;color:var(--dim);white-space:nowrap;background:var(--panel)}
+  .chip.now{background:var(--primary);color:var(--on-gradient);border-color:var(--primary);font-weight:700}
+  .chip.lock{border-style:dashed}
+  .fade{flex:0 0 12px;align-self:center;color:var(--dim)}
+  .board{padding:11px 13px 13px;display:flex;flex-direction:column;gap:8px}
+  .daybar{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .dayname{font-weight:800;font-size:13.5px;color:var(--ink)}
+  .daymeta{font-size:11px;color:var(--dim);white-space:nowrap}
+  .tag{display:inline-block;border:1px solid var(--accent);color:var(--accent);
+    border-radius:10px;font-size:9.5px;padding:1px 7px;margin-left:6px;vertical-align:1px}
+  .desc{font-size:11px;color:var(--dim);line-height:1.35;margin-top:-3px}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px}
+  .cell{aspect-ratio:1;border:1px solid var(--border);border-radius:6px;padding:3px;
+    font-size:7.4px;line-height:1.12;overflow:hidden;position:relative;background:var(--cell);
+    display:flex;align-items:center;justify-content:center;text-align:center;color:var(--ink)}
+  .cell.m{background:linear-gradient(var(--primary),var(--secondary));
+    color:var(--on-gradient);border-color:var(--ink);font-weight:600}
+  .cell.free{background:var(--panel);border:1.5px solid var(--accent);color:var(--ink);font-weight:700}
+  .cell.blank{background:var(--panel);border-style:dashed}
+  .tally{position:absolute;right:2px;bottom:2px;background:#000;color:#fff;border-radius:8px;
+    font-size:7px;padding:0 4px}
+  .banner{border:1px dashed var(--primary);border-radius:10px;padding:8px 11px;font-size:11px;
+    background:var(--panel);color:var(--ink)}
+  .banner b{display:block;margin-bottom:3px}
+  .banner ol{margin:0;padding-left:16px}
+  .banner li{margin:1px 0}
+  .note{font-size:10.5px;color:var(--dim);text-align:center}
+
+  /* lock overlay */
+  .lockwrap{position:relative}
+  .lockbadge{position:absolute;inset:0;display:flex;flex-direction:column;gap:6px;
+    align-items:center;justify-content:center}
+  .lockicon{width:52px;height:52px;border:2px solid var(--ink);border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-size:22px;background:var(--panel)}
+  .locktext{font-weight:700;font-size:12.5px;background:var(--panel);border:1px solid var(--border);
+    border-radius:10px;padding:4px 12px;color:var(--ink)}
+
+  /* tabs (states section) */
+  .tabs{display:flex;border-top:1px solid var(--border);background:var(--panel)}
+  .tab{flex:1;text-align:center;padding:9px 0 12px;font-size:10.5px;color:var(--dim)}
+  .tab.on{color:var(--primary);font-weight:700}
+  .tab span{display:block;font-size:15px}
+
+  /* admin + ranks widgets */
+  .row{display:flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:10px;
+    padding:7px 10px;font-size:11.5px;background:var(--panel)}
+  .row .grow{flex:1}
+  .row .who{color:var(--dim);font-size:10px;display:block}
+  .btn{border:1px solid var(--ink);border-radius:8px;padding:3px 9px;font-size:10.5px;
+    background:var(--panel);color:var(--ink)}
+  .btn.ok{background:var(--primary);color:var(--on-gradient);border-color:var(--primary)}
+  .pill{border:1px solid var(--border);border-radius:10px;font-size:9.5px;padding:1px 7px;color:var(--dim)}
+  .secthead{font-weight:800;font-size:11px;letter-spacing:.05em;color:var(--dim);
+    text-transform:uppercase;margin:4px 0 1px}
+  .rank{display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);
+    padding:7px 2px;font-size:12px}
+  .rank .n{width:16px;font-weight:800;color:var(--primary)}
+  .avatar{width:24px;height:24px;border-radius:50%;background:var(--dim);flex:0 0 auto;opacity:.5}
+  .rank .stats{margin-left:auto;color:var(--dim);font-size:10.5px;text-align:right}
+  .honors{display:flex;gap:6px;overflow:hidden;padding:2px 0 4px}
+  .honor{flex:0 0 auto;border:1px solid var(--border);border-radius:10px;padding:4px 8px;
+    font-size:9.5px;line-height:1.3;text-align:center;background:var(--panel)}
+  .honor b{display:block;font-size:10px}
+  .schedrow{display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);
+    padding:6px 2px;font-size:11.5px}
+  .dd{border:1px solid var(--border);border-radius:8px;padding:3px 8px;font-size:10.5px;
+    color:var(--ink);margin-left:auto;background:var(--panel)}
+  .dd.dis{color:var(--dim);border-style:dashed}
+
+  /* more menu */
+  .grow{flex:1}
+  .who{color:var(--dim);font-size:10px;display:block;font-weight:400}
+  .menucard{display:flex;align-items:center;gap:10px;border:1px solid var(--border);
+    border-radius:12px;padding:10px;background:var(--panel);font-size:13px;font-weight:700}
+  .avatar.lg{width:38px;height:38px}
+  .menurow{display:flex;align-items:center;gap:9px;border:1px solid var(--border);
+    border-radius:10px;padding:7px 10px;font-size:12px;background:var(--panel);font-weight:600}
+  .menurow.signout{border-style:dashed;color:var(--dim);font-weight:400}
+  .mi{font-size:14px;width:19px;text-align:center;flex:0 0 auto}
+  .chev{color:var(--dim);font-size:14px}
+  .badge{background:var(--primary);color:var(--on-gradient);border-radius:9px;
+    font-size:9.5px;padding:1px 6px;font-weight:700}
+  .tabavatar{width:15px;height:15px;border-radius:50%;background:var(--dim);
+    display:inline-block;border:1.5px solid var(--primary)}
+
+  /* claim sheet */
+  .sheet{background:var(--panel);border-top:2px solid var(--primary);
+    border-radius:16px 16px 0 0;padding:10px 14px 14px;display:flex;flex-direction:column;
+    gap:8px;box-shadow:0 -8px 24px rgba(0,0,0,.5);margin-top:-4px}
+  .sheetgrab{width:36px;height:4px;border-radius:2px;background:var(--dim);margin:0 auto;opacity:.5}
+  .sheet-title{font-weight:800;font-size:13px;color:var(--ink)}
+  .sheetsub{font-size:10.5px;color:var(--dim);margin-top:-4px}
+  .pledge{border:1.5px solid var(--accent);color:var(--accent);border-radius:10px;
+    padding:8px;text-align:center;font-weight:700;font-size:12px}
+  .seg{display:flex;gap:5px}
+  .segbtn{flex:1;text-align:center;border:1px solid var(--border);border-radius:9px;
+    padding:5px 0;font-size:11px;color:var(--dim);background:var(--bg)}
+  .segbtn.on{background:var(--primary);color:var(--on-gradient);border-color:var(--primary);font-weight:700}
+  .btnrow{display:flex;gap:6px}
+  .btnrow .btn{flex:1;text-align:center;padding:7px 0}
+
+  /* coach overlay */
+  .coach{position:absolute;inset:10px;display:flex;align-items:center}
+  .coachcard{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    padding:13px;display:flex;flex-direction:column;gap:9px;box-shadow:0 8px 30px rgba(0,0,0,.6);width:100%}
+  .coachcard h3{margin:0;font-size:13px;color:var(--ink)}
+  .lgd{display:flex;align-items:flex-start;gap:8px;font-size:10.5px;line-height:1.35;color:var(--ink)}
+  .lgd .who{font-size:10px}
+  .lgdchip{flex:0 0 auto;background:#000;color:#fff;border-radius:8px;font-size:8.5px;
+    padding:1px 6px;margin-top:1px;font-weight:700}
+  .lgdchip.plus{background:var(--primary);color:var(--on-gradient)}
+  .lgdchip.freec{background:var(--panel);border:1px solid var(--accent);color:var(--accent)}
+
+  /* admin proof panel widgets */
+  .tgl{width:28px;height:16px;border-radius:9px;background:var(--primary);position:relative;flex:0 0 auto}
+  .tgl::after{content:'';position:absolute;right:2px;top:2px;width:12px;height:12px;
+    border-radius:50%;background:var(--panel)}
+  .tgl.off{background:var(--border)}
+  .tgl.off::after{left:2px;right:auto}
+  .rdo{width:13px;height:13px;border-radius:50%;border:1.5px solid var(--dim);flex:0 0 auto}
+  .rdo.on{border-color:var(--primary);box-shadow:inset 0 0 0 3.5px var(--primary)}
+
+  /* feed proof cards */
+  .pcard{border:1px solid var(--border);border-radius:12px;background:var(--panel);
+    padding:9px 10px;display:flex;flex-direction:column;gap:7px}
+  .phead{display:flex;align-items:center;gap:8px;font-size:11.5px;font-weight:700;color:var(--ink)}
+  .phead .who{font-weight:400}
+  .pquote{align-self:flex-start;border:1px solid var(--border);border-radius:9px;
+    padding:2px 8px;font-size:10.5px;color:var(--dim);font-style:italic}
+  .pphoto{height:150px;border-radius:9px;position:relative;display:flex;align-items:center;
+    justify-content:center;font-size:34px;
+    background:repeating-linear-gradient(45deg,var(--bg),var(--bg) 10px,var(--cell) 10px,var(--cell) 20px);
+    border:1px dashed var(--border)}
+  .srcbadge{position:absolute;right:6px;top:6px;background:rgba(0,0,0,.75);color:#fff;
+    font-size:9px;padding:1px 6px;border-radius:8px}
+  .paudio{display:flex;align-items:center;gap:9px;background:var(--bg);border-radius:9px;
+    padding:8px 10px;border:1px dashed var(--border)}
+  .play{width:26px;height:26px;border-radius:50%;background:var(--primary);color:var(--on-gradient);
+    display:flex;align-items:center;justify-content:center;font-size:11px;flex:0 0 auto;font-weight:800}
+  .wave{flex:1;height:22px;opacity:.75;
+    background:repeating-linear-gradient(90deg,var(--primary) 0 2px,transparent 2px 5px)}
+  .ptext{background:var(--bg);border-radius:9px;padding:8px 10px;font-size:11.5px;
+    border:1px dashed var(--border);color:var(--ink)}
+  .pfoot{display:flex;gap:6px;align-items:center;font-size:10px;color:var(--dim)}
+  .pfoot .pill{font-size:9.5px}
+  .moment{border-radius:12px;padding:10px 12px;font-size:12px;font-weight:800;
+    background:linear-gradient(90deg,var(--primary),var(--secondary));color:var(--on-gradient)}
+  .moment .who{color:inherit;opacity:.75}
+  /* who-list / doubt rows + leaderboard media chips */
+  .thumb{width:18px;height:18px;border-radius:5px;border:1px solid var(--border);
+    background:repeating-linear-gradient(45deg,var(--bg),var(--bg) 4px,var(--cell) 4px,var(--cell) 8px);
+    display:inline-flex;align-items:center;justify-content:center;font-size:9px;flex:0 0 auto}
+  .doubtbtn{border:1px solid var(--secondary);color:var(--secondary);border-radius:9px;
+    padding:3px 8px;font-size:9.5px;font-weight:700;white-space:nowrap}
+  .state{font-size:9.5px;color:var(--dim);white-space:nowrap;text-align:right}
+  /* tally cards: bare marks reaching the feed */
+  .tcard{display:flex;align-items:center;gap:9px;border:1px solid var(--border);
+    border-left:3px solid var(--primary);border-radius:12px;background:var(--panel);
+    padding:8px 10px;font-size:11.5px;color:var(--ink)}
+  .tcard .btn{white-space:nowrap;font-size:10px;padding:4px 8px}
+  .avstack{display:flex;flex:0 0 auto}
+  .avstack .avatar{width:22px;height:22px;border:1.5px solid var(--panel);margin-left:-8px}
+  .avstack .avatar:first-child{margin-left:0}
+</style>
+</head>
+<body>
+<h1>Daily Cards—wireframes</h1>
+<p class="sub">Canvas: <b>iPhone 15 Pro—393×852 pt (19.5:9), Safari baseline</b>, with Dynamic Island and home indicator. Installed-PWA frames run standalone (no browser chrome); the install-nudge frame shows Safari's bottom bar, since that's the only moment players see it. Every frame is painted with the <b>actual theme tokens from <code>src/theme/themes.css</code></b> (the two tutorial themes use the palettes proposed in the spec). Marked squares use the app's real <code>linear-gradient(--primary, --secondary)</code> fill with <code>--on-gradient</code> text. The header always shows <i>today's</i> port and theme on two lines; the board area retints to the <i>viewed</i> Day.</p>
+
+<h2>Day-by-day gallery—one card per day, Trieste → Barcelona</h2>
+<p class="sub">Each frame shows that Day as it looks on its own morning. Days 1 and 10 are the curated tutorial cards; Days 2–9 deal from the shared main pool.</p>
+<div class="frames" id="gallery"></div>
+
+<h2>States &amp; consoles</h2>
+<div class="frames">
+
+  <!-- Locked future day, viewed from Day 2 -->
+  <div class="unit">
+    <div class="mini" data-theme="dog-tag">
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
+      </div>
+      <div class="strip">
+        <div class="chip">✓ Wed 🛳️</div>
+        <div class="chip">Thu 🇭🇷 🏋️</div>
+        <div class="chip lock">🔒 Fri ✈️</div>
+        <div class="chip lock now">🔒 Tue 🪖</div>
+        <div class="fade">›</div>
+      </div>
+      <div class="board">
+        <div class="daybar">
+          <div class="dayname">Day 7 · Dog Tag T-Dance</div>
+          <div class="daymeta">🇫🇷 Nice</div>
+        </div>
+        <div class="desc">The longest-running signature party, inspired by men in small uniforms. Souvenir dog tags provided.</div>
+        <div class="lockwrap">
+          <div class="grid" id="lockgrid"></div>
+          <div class="lockbadge">
+            <div class="lockicon"><svg data-lucide="lock" class="lucide lucide-lock" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="11" x="3" y="11" rx="2" ry="2" /> <path d="M7 11V7a5 5 0 0 1 10 0v4" /> </svg></div>
+            <div class="locktext">Unlocks 8:00 a.m. · Tue Jul 21</div>
+          </div>
+        </div>
+        <div class="note">24 fresh squares land at 8. Come back after coffee.</div>
+      </div>
+      <div class="tabs">
+        <div class="tab on"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab"><span>⋯</span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>Locked Day preview</b>Viewed from Day 2: full Dog Tag chrome and dress-code tease, hatched blank squares, live free space, lock badge with the unlock time. The header still shows today (Split · Get Sporty).</p>
+  </div>
+
+  <!-- Claim sheet (tile tap) -->
+  <div class="unit">
+    <div class="mini" data-theme="get-sporty">
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
+      </div>
+      <div class="board" style="padding-bottom:0">
+        <div class="daybar">
+          <div class="dayname">Day 2 · Get Sporty</div>
+          <div class="daymeta">🇭🇷 Split</div>
+        </div>
+        <div class="grid" id="dimgrid" style="opacity:.3"></div>
+      </div>
+      <div class="tabs" style="opacity:.35">
+        <div class="tab on"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+      <div class="sheet">
+        <div class="sheetgrab"></div>
+        <div class="sheet-title">Proof for “Lost passport”</div>
+        <div class="sheetsub">🔥 Marked by 4 others so far</div>
+        <div class="pledge">🎖️ Cross My Heart</div>
+        <div class="seg"><span class="segbtn on"><svg data-lucide="camera" class="lucide lucide-camera" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z" /> <circle cx="12" cy="13" r="3" /> </svg> Photo</span><span class="segbtn"><svg data-lucide="mic" class="lucide lucide-mic" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 19v3" /> <path d="M19 10v2a7 7 0 0 1-14 0v-2" /> <rect x="9" y="2" width="6" height="13" rx="3" /> </svg> Sound</span><span class="segbtn"><svg data-lucide="pen-line" class="lucide lucide-pen-line" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M13 21h8" /> <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /> </svg> Callout</span></div>
+        <div class="btnrow"><span class="btn ok"><svg data-lucide="camera" class="lucide lucide-camera" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M13.997 4a2 2 0 0 1 1.76 1.05l.486.9A2 2 0 0 0 18.003 7H20a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1.997a2 2 0 0 0 1.759-1.048l.489-.904A2 2 0 0 1 10.004 4z" /> <circle cx="12" cy="13" r="3" /> </svg> Take photo</span><span class="btn"><svg data-lucide="images" class="lucide lucide-images" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m22 11-1.296-1.296a2.4 2.4 0 0 0-3.408 0L11 16" /> <path d="M4 8a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2" /> <circle cx="13" cy="7" r="1" fill="currentColor" /> <rect x="8" y="2" width="14" height="14" rx="2" /> </svg> Library</span></div>
+        <div class="note">Library picks wear a 🖼️ badge on the Feed (issue #190)</div>
+        <div class="btnrow"><span class="btn">Cancel</span><span class="btn ok">Mark it</span></div>
+      </div>
+    </div>
+    <p class="cap"><b>Tile tap—the Claim sheet</b>Your current #181 flow, kept: the sheet opens on every claim, Cross My Heart is the one-tap honor path, and ＋ on an already-marked square opens the same sheet minus the pledge. Additions: the photo body splits into Take photo (live camera, one tap as today) and Library (native picker, resolving #190); a Feed badge marks library picks; and a small tally line adds social heat under the title. In admin-confirmed mode the primary reads "Submit claim" as today.</p>
+  </div>
+
+  <!-- Tally who-list / raising a Doubt -->
+  <div class="unit">
+    <div class="mini" data-theme="get-sporty">
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
+      </div>
+      <div class="board" style="padding-bottom:0">
+        <div class="daybar">
+          <div class="dayname">Day 2 · Get Sporty</div>
+          <div class="daymeta">🇭🇷 Split</div>
+        </div>
+        <div class="grid" id="tallygrid" style="opacity:.3"></div>
+      </div>
+      <div class="tabs" style="opacity:.35">
+        <div class="tab on"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+      <div class="sheet">
+        <div class="sheetgrab"></div>
+        <div class="sheet-title">Who got “Lost passport”</div>
+        <div class="sheetsub">5 players · 3 open doubts 👀 on this square</div>
+        <div class="menurow"><div class="avatar"></div><div class="grow">Marco<span class="who">Day 2 · 11:40a</span></div><span class="doubtbtn">🤨 Pics or it didn't happen</span></div>
+        <div class="menurow"><div class="avatar"></div><div class="grow">Javi<span class="who">Day 2 · 12:05p</span></div><span class="state">👀 Doubted · waiting…</span></div>
+        <div class="menurow"><div class="avatar"></div><div class="grow">Theo<span class="who">Day 2 · 1:22p</span></div><span class="thumb">📷</span><span class="state">✓ Answered</span></div>
+        <div class="menurow"><div class="avatar"></div><div class="grow">Big Denver Chris<span class="who">Day 2 · 2:48p</span></div><span class="thumb">🎙</span><span class="state">✓ Answered</span></div>
+        <div class="menurow"><div class="avatar"></div><div class="grow">Nathan<span class="who">Day 2 · 3:15p</span></div><span class="pill">you</span></div>
+        <div class="note">A doubt never blocks or unmarks—it's social pressure with a scoreboard.</div>
+      </div>
+    </div>
+    <p class="cap"><b>Asking for proof—the Tally who-list</b>Tap any marked square's tally count to open this sheet: every player who marked the prompt, newest state on the right. "Pics or it didn't happen" raises a Doubt against that player's mark (one slot per pair per prompt, so no pile-ons from the same person); their square grows the 👀 badge, and attaching a proof flips their row to ✓ Answered with the proof thumbnail inline. Your own row gets no button—no self-doubt.</p>
+  </div>
+
+  <!-- Coach overlay (first open) -->
+  <div class="unit">
+    <div class="mini" data-theme="welcome-aboard">
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">Sails Jul 15</div><div class="theme">🛳️ Welcome Aboard</div></div>
+      </div>
+      <div class="board">
+        <div class="daybar">
+          <div class="dayname">Welcome Aboard<span class="tag">Warm-up</span></div>
+          <div class="daymeta">🇮🇹 Trieste</div>
+        </div>
+        <div class="lockwrap">
+          <div class="grid" id="introgrid" style="opacity:.25"></div>
+          <div class="coach">
+            <div class="coachcard">
+              <h3>Reading your card 👀</h3>
+              <div class="lgd"><span class="lgdchip">4</span><div>The tally: how many players marked this square. Tap it on a marked square to see exactly who.</div></div>
+              <div class="lgd"><span class="lgdchip">👀 2</span><div>Doubts: friends saying "pics or it didn't happen." Attach a proof to clear them—doubts never unmark you.</div></div>
+              <div class="lgd"><span class="lgdchip plus">＋</span><div>Add proof to a square you already marked: photo, sound, or written callout. It posts to the Feed.</div></div>
+              <div class="lgd"><span class="lgdchip freec">FREE</span><div>The center is yours from the start and counts toward every line.</div></div>
+              <div class="btnrow"><span class="btn ok">Got it—deal me in</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="tabs">
+        <div class="tab on"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>First-open coach overlay</b>Shows once per event, over the player's first dealt card (naturally the embark card for day-one joiners). A badge legend, not a tutorial—the Welcome Aboard banner carries the narrative; this decodes the numbers. Replayable from More → How to play.</p>
+  </div>
+
+  <!-- Feed: proofs + moments -->
+  <div class="unit">
+    <div class="mini" data-theme="duty-free">
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">🇲🇹 Valletta</div><div class="theme">✈️ Duty Free</div></div>
+      </div>
+      <div class="board" style="gap:8px">
+        <div class="tcard">
+          <div class="avstack"><div class="avatar"></div><div class="avatar"></div><div class="avatar"></div></div>
+          <div class="grow"><b>Nathan Payne, Sterling Tadlock +12</b> got “Balcony or porthole photo”<span class="who">Day 1 card · bumped just now · tap for who</span></div>
+          <span class="btn ok">＋ Proof</span>
+        </div>
+        <div class="moment">🎉 BINGO—Javi's 2nd<span class="who"> · Day 3 · 4:02p</span></div>
+        <div class="pcard">
+          <div class="phead"><div class="avatar"></div>Theo<span class="who">· Day 3 · ✈️ Duty Free · 3:47p</span></div>
+          <div class="pquote">“Feathers, mesh, or sequins before noon”</div>
+          <div class="pphoto">🏞️<span class="srcbadge">📷 live</span></div>
+          <div class="pfoot"><span class="pill">👀 cleared 2 doubts</span><span class="pill">tally 7</span></div>
+        </div>
+        <div class="pcard">
+          <div class="phead"><div class="avatar"></div>Big Denver Chris<span class="who">· Day 3 · 2:15p</span></div>
+          <div class="pquote">“Unexpected Broadway sing-along”</div>
+          <div class="paudio"><span class="play"><svg data-lucide="play" class="lucide lucide-play" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z" /> </svg></span><div class="wave"></div><span class="state">0:19</span></div>
+          <div class="pfoot"><span class="pill">tally 4</span></div>
+        </div>
+        <div class="pcard">
+          <div class="phead"><div class="avatar"></div>Marco<span class="who">· Day 3 · 1:58p</span></div>
+          <div class="pquote">“Pool-chair territory dispute”</div>
+          <div class="pphoto" style="height:120px">🏞️<span class="srcbadge">🖼️ library</span></div>
+          <div class="pfoot"><span class="pill">tally 11</span></div>
+        </div>
+        <div class="tcard">
+          <div class="avstack"><div class="avatar"></div></div>
+          <div class="grow"><b>Javi</b> got “Matching Speedos”<span class="who">Day 3 · 1:12p</span></div>
+          <span class="btn">🙋 Got it too</span>
+        </div>
+        <div class="pcard">
+          <div class="phead"><div class="avatar"></div>Jess<span class="who">· Day 3 · 12:31p</span></div>
+          <div class="pquote">“Cause an international incident”</div>
+          <div class="ptext">✍️ “Customs in Valletta would like a word with the man in the mesh caftan. Names withheld. It was Dan.”</div>
+          <div class="pfoot"><span class="pill">👀 cleared 1 doubt</span><span class="pill">tally 2</span></div>
+        </div>
+      </div>
+      <div class="tabs">
+        <div class="tab"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab on"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>Feed—Tally cards, proofs, and Moments</b>New: <b>Tally cards</b> put bare marks in the stream—one live card per prompt per day (never duplicates), first two names then +N, avatar stack, bumped to the top when someone new gets it (debounced to one bump per ~10 min so hot squares don't bury photo proofs). Tap opens the who-list sheet; the button is ＋ Proof if you've marked it, 🙋 Got it too if the square sits unmarked on one of your cards. Proof cards: avatar + name, day chip, the square quoted, then media—photo with live/library source badge (#190), audio with play + waveform + duration, or a callout. Moments stay gradient banners.</p>
+  </div>
+
+  <!-- Install nudge (in Safari, pre-install) -->
+  <div class="unit">
+    <div class="mini" data-theme="welcome-aboard" data-chrome="manual">
+      <div class="statusbar"><span>9:41</span><div class="dynisland"></div><span><svg data-lucide="signal" class="lucide lucide-signal" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M2 20h.01" /> <path d="M7 20v-4" /> <path d="M12 20v-8" /> <path d="M17 20V8" /> <path d="M22 4v16" /> </svg> <svg data-lucide="battery-full" class="lucide lucide-battery-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 10v4" /> <path d="M14 10v4" /> <path d="M22 14v-4" /> <path d="M6 10v4" /> <rect x="2" y="6" width="16" height="12" rx="2" /> </svg></span></div>
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">Sails Jul 15</div><div class="theme">🛳️ Welcome Aboard</div></div>
+      </div>
+      <div class="board" style="padding-bottom:0">
+        <div class="daybar">
+          <div class="dayname">Welcome Aboard<span class="tag">Warm-up</span></div>
+          <div class="daymeta">🇮🇹 Trieste</div>
+        </div>
+        <div class="grid" id="nudgegrid"></div>
+      </div>
+      <div class="systoast">
+        <span style="font-size:16px">📲</span>
+        <div class="grow">Add me to your Home Screen<span class="who">Full screen, works offline at sea. Tap ▲ below, then "Add to Home Screen."</span></div>
+        <span class="btn ok">Show me</span>
+        <span class="chev"><svg data-lucide="x" class="lucide lucide-x" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg></span>
+      </div>
+      <div class="tabs">
+        <div class="tab on"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+      <div class="safaribar"><span><svg data-lucide="chevron-left" class="lucide lucide-chevron-left" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m15 18-6-6 6-6" /> </svg></span><span><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span><div class="urlpill">gaycruisebingo.com</div><span class="sfico hot"><svg data-lucide="share" class="lucide lucide-share" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 2v13" /> <path d="m16 6-4-4-4 4" /> <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /> </svg></span><span><svg data-lucide="copy" class="lucide lucide-copy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="14" height="14" x="8" y="8" rx="2" ry="2" /> <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" /> </svg></span></div>
+      <div class="homebar safarihome"><i></i></div>
+    </div>
+    <p class="cap"><b>Install nudge (Safari, pre-install)</b>The existing InstallPrompt (w1-pwa), restyled as a quiet toast: shows once after the player's first mark (not on load), ✕ dismisses forever, and the option lives on in More → Install the app. iOS variant shown—"Show me" opens the Share → Add to Home Screen walkthrough since Safari never fires beforeinstallprompt; on Android the button reads Install and triggers the captured prompt. Never shown when already standalone.</p>
+  </div>
+
+  <!-- Update / reload banner -->
+  <div class="unit">
+    <div class="mini" data-theme="glamiators">
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">🇮🇹 Palermo</div><div class="theme">🏛️ Glamiators</div></div>
+      </div>
+      <div class="strip">
+        <div class="chip">✓ Fri ✈️</div>
+        <div class="chip now">Sat 🇮🇹 🏛️</div>
+        <div class="chip lock">🔒 Sun 🌈</div>
+        <div class="chip lock">🔒 Mon 🤍</div>
+        <div class="fade">›</div>
+      </div>
+      <div class="board">
+        <div class="daybar">
+          <div class="dayname">Day 4 · Glamiators</div>
+          <div class="daymeta">First to BINGO: Theo, 11:02</div>
+        </div>
+        <div class="grid" id="updgrid"></div>
+      </div>
+      <div class="systoast">
+        <span style="font-size:16px">🚢</span>
+        <div class="grow">A fresh build just docked<span class="who">Your marks are safe—reload takes two seconds</span></div>
+        <span class="btn ok">Reload</span>
+        <span class="btn">Not now</span>
+      </div>
+      <div class="systoast" style="opacity:.85">
+        <span style="font-size:16px">📲</span>
+        <div class="grow">Add me to your Home Screen<span class="who">Full screen, works offline at sea</span></div>
+        <span class="btn ok">Show me</span>
+        <span class="chev"><svg data-lucide="x" class="lucide lucide-x" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg></span>
+      </div>
+      <div class="tabs">
+        <div class="tab on"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>Update banner + toast stacking</b>The existing UpdatePrompt (#178) mechanics, unchanged: the waiting service worker flips needRefresh, Reload activates it, Not now dismisses for the session (next full launch updates anyway; the 60s poll keeps long-lived sea-day tabs current). Shown here with the install nudge beneath it—the rare both-at-once case. Stack rule: newest on top, urgent (update) outranks invitational (install), never more than two—a third-comer waits its turn. Both reserve bottom clearance via the existing body-class mechanism, so the tab bar and board never jump.</p>
+  </div>
+
+  <!-- More menu -->
+  <div class="unit">
+    <div class="mini" data-theme="seriously-pink">
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">🌊 Sea Day</div><div class="theme">💖 Seriously Pink T-Dance</div></div>
+      </div>
+      <div class="board" style="gap:7px">
+        <div class="menucard">
+          <div class="avatar lg"></div>
+          <div class="grow">Nathan<span class="who">@nathan · Edit profile &amp; photo</span></div>
+          <span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span>
+        </div>
+        <div class="menurow"><span class="mi"><svg data-lucide="palette" class="lucide lucide-palette" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z" /> <circle cx="13.5" cy="6.5" r=".5" fill="currentColor" /> <circle cx="17.5" cy="10.5" r=".5" fill="currentColor" /> <circle cx="6.5" cy="12.5" r=".5" fill="currentColor" /> <circle cx="8.5" cy="7.5" r=".5" fill="currentColor" /> </svg></span><div class="grow">Theme<span class="who">Auto: match the day (💖 today) · or pick your own</span></div><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="menurow"><span class="mi"><svg data-lucide="a-large-small" class="lucide lucide-a-large-small" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m15 16 2.536-7.328a1.02 1.02 1 0 1 1.928 0L22 16" /> <path d="M15.697 14h5.606" /> <path d="m2 16 4.039-9.69a.5.5 0 0 1 .923 0L11 16" /> <path d="M3.304 13h6.392" /> </svg></span><div class="grow">Text size<span class="who">Squares grow up to what still fits—long prompts never overflow</span></div><div class="seg" style="flex:0 0 auto;width:118px"><span class="segbtn">S</span><span class="segbtn on">M</span><span class="segbtn">L</span></div></div>
+        <div class="secthead">Play</div>
+        <div class="menurow"><span class="mi"><svg data-lucide="calendar-days" class="lucide lucide-calendar-days" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M8 2v4" /> <path d="M16 2v4" /> <rect width="18" height="18" x="3" y="4" rx="2" /> <path d="M3 10h18" /> <path d="M8 14h.01" /> <path d="M12 14h.01" /> <path d="M16 14h.01" /> <path d="M8 18h.01" /> <path d="M12 18h.01" /> <path d="M16 18h.01" /> </svg></span><div class="grow">Cruise schedule<span class="who">10 days · ports, parties &amp; unlock times</span></div><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="menurow"><span class="mi"><svg data-lucide="lightbulb" class="lucide lucide-lightbulb" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" /> <path d="M9 18h6" /> <path d="M10 22h4" /> </svg></span><div class="grow">Suggest a square<span class="who">Goes to admin review before it can be dealt</span></div><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="menurow"><span class="mi"><svg data-lucide="graduation-cap" class="lucide lucide-graduation-cap" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z" /> <path d="M22 10v6" /> <path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5" /> </svg></span><div class="grow">How to play<span class="who">Replay the Welcome Aboard walkthrough</span></div><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="menurow"><span class="mi"><svg data-lucide="download" class="lucide lucide-download" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 15V3" /> <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /> <path d="m7 10 5 5 5-5" /> </svg></span><div class="grow">Install the app<span class="who">Add to home screen—shown only when installable</span></div><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="secthead">Support</div>
+        <div class="menurow"><span class="mi"><svg data-lucide="bug" class="lucide lucide-bug" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 20v-9" /> <path d="M14 7a4 4 0 0 1 4 4v3a6 6 0 0 1-12 0v-3a4 4 0 0 1 4-4z" /> <path d="M14.12 3.88 16 2" /> <path d="M21 21a4 4 0 0 0-3.81-4" /> <path d="M21 5a4 4 0 0 1-3.55 3.97" /> <path d="M22 13h-4" /> <path d="M3 21a4 4 0 0 1 3.81-4" /> <path d="M3 5a4 4 0 0 0 3.55 3.97" /> <path d="M6 13H2" /> <path d="m8 2 1.88 1.88" /> <path d="M9 7.13V6a3 3 0 1 1 6 0v1.13" /> </svg></span><div class="grow">Report a bug<span class="who">Tell us what broke; we're also on vacation</span></div><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="menurow"><span class="mi"><svg data-lucide="shield-alert" class="lucide lucide-shield-alert" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> <path d="M12 8v4" /> <path d="M12 16h.01" /> </svg></span><div class="grow">18+ advisory &amp; acceptable use<span class="who">Attested Jul 2 · honor system, be kind</span></div><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="secthead">Admin</div>
+        <div class="menurow"><span class="mi"><svg data-lucide="wrench" class="lucide lucide-wrench" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z" /> </svg></span><div class="grow">Admin console<span class="who">Approvals · Schedule · Pool · Bans · Reports</span></div><span class="badge">3</span><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="menurow signout"><span class="mi"><svg data-lucide="log-out" class="lucide lucide-log-out" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m16 17 5-5-5-5" /> <path d="M21 12H9" /> <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /> </svg></span><div class="grow">Sign out</div></div>
+        <div class="note">v2.0 · Trieste → Barcelona · Jul 15–24 · 🍑</div>
+      </div>
+      <div class="tabs">
+        <div class="tab"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab on"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>⋯ More menu</b>Profile relocates here from the top bar and the More tab wears your avatar (identity stays glanceable; the header keeps only brand + today's port/theme). Order: profile, theme (with a new "auto: match the day" default), text size (S/M/L—squares auto-fit, so Large never overflows), Play (schedule, suggest-a-square, tutorial replay, install), Support (bug report, 18+ advisory/acceptable use), Admin (admins only, with pending-approvals badge), sign out last. Prompts and Admin leave the tab bar and mount here—bottom bar becomes Card · Feed · Ranks · More.</p>
+  </div>
+
+  <!-- Admin -->
+  <div class="unit">
+    <div class="mini" data-theme="neon-playground">
+      <div class="hdr">
+        <div class="title">ADMIN</div>
+        <div class="today"><div class="port">Approvals · Schedule</div><div class="theme">Pool · Bans · Reports</div></div>
+      </div>
+      <div class="board" style="gap:7px">
+        <div class="secthead">Pending items · 3</div>
+        <div class="row"><div class="grow">"Fall asleep in full harness"<span class="who">@marco · 2h ago · 🔞 spicy</span></div><span class="btn ok">Approve</span><span class="btn">Reject</span></div>
+        <div class="row"><div class="grow">"Miss the ship in Palermo"<span class="who">@dan_atl · 5h ago · tame</span></div><span class="btn ok">Approve</span><span class="btn">Reject</span></div>
+        <div class="row"><div class="grow">"Meet your Grindr wallpaper IRL"<span class="who">@jj · 6h ago · 🔞 spicy</span></div><span class="btn ok">Approve</span><span class="btn">Reject</span></div>
+        <div class="note">Approved items join every not-yet-unlocked Day at its 8:00 snapshot.</div>
+        <div class="secthead">Schedule · theme per night</div>
+        <div class="schedrow">Wed 15 · Trieste <span class="pill">tutorial</span><span class="dd dis">🛳️ Welcome Aboard</span></div>
+        <div class="schedrow">Thu 16 · Split<span class="dd dis">🏋️ Get Sporty ✓</span></div>
+        <div class="schedrow">Fri 17 · Valletta<span class="dd">✈️ Duty Free ▾</span></div>
+        <div class="schedrow">Sat 18 · Palermo<span class="dd">🏛️ Glamiators ▾</span></div>
+        <div class="schedrow">Sun 19 · Sorrento<span class="dd">🌈 Neon Playground ▾</span></div>
+        <div class="schedrow">Mon 20 · Rome<span class="dd">🤍 Summer White ▾</span></div>
+        <div class="note">Past / unlocked days frozen; future themes editable. Reusable per event for future cruises.</div>
+      </div>
+      <div class="tabs">
+        <div class="tab"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab on"><span>⋯</span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>Admin—Approvals &amp; Schedule</b>Player submissions land as <i>pending</i> (invisible, never dealt) until approved. The Day schedule below carries the real 2026 mapping, editable for future days and future cruises.</p>
+  </div>
+
+  <!-- Admin: Proof & claims -->
+  <div class="unit">
+    <div class="mini" data-theme="neon-playground">
+      <div class="hdr">
+        <div class="title">ADMIN</div>
+        <div class="today"><div class="port">Proof &amp; Claims</div><div class="theme">Approvals · Schedule · Pool</div></div>
+      </div>
+      <div class="board" style="gap:7px">
+        <div class="secthead">Claim mode</div>
+        <div class="seg"><span class="segbtn on">Honor</span><span class="segbtn">Proof-to-mark</span><span class="segbtn">Admin-confirmed</span></div>
+        <div class="note">A friction knob, not a trust level—marks are self-recorded either way.</div>
+        <div class="secthead">Photo proof source · #190</div>
+        <div class="menurow"><span class="rdo on"></span><div class="grow">Camera or library<span class="who">Native picker: take a photo or choose an existing one. Library picks wear a 🖼️ badge on the Feed.</span></div></div>
+        <div class="menurow"><span class="rdo"></span><div class="grow">Camera only<span class="who">Live proof, in the moment—the current behavior. For events that want ceremony.</span></div></div>
+        <div class="secthead">Photo handling</div>
+        <div class="menurow"><div class="grow">Strip location data (EXIF/GPS)<span class="who">Re-encode on upload so geotags never leave the phone</span></div><span class="tgl"></span></div>
+        <div class="menurow"><div class="grow">AI screen for illegal/extreme images<span class="who">The existing vision gate; flagged proofs hide pending review</span></div><span class="tgl"></span></div>
+        <div class="secthead">Reports &amp; claims</div>
+        <div class="menurow"><div class="grow">Auto-hide after reports<span class="who">Proofs and prompts hide at this report count</span></div><span class="dd">3 ▾</span></div>
+        <div class="menurow"><div class="grow">Pending claims<span class="who">Admin-confirmed mode only—confirm or reject marks</span></div><span class="badge">2</span><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+      </div>
+      <div class="tabs">
+        <div class="tab"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab on"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>Admin—Proof &amp; Claims panel</b>The #190 photo-source policy as an event setting (recommended default: camera or library, badged for transparency), plus the knobs that already exist in the backend but have no UI: the vision gate, the report auto-hide threshold, claim mode, and the pending-claims queue. New: EXIF stripping.</p>
+  </div>
+
+  <!-- Ranks -->
+  <div class="unit">
+    <div class="mini" data-theme="neon-playground">
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">🇮🇹 Sorrento</div><div class="theme">🌈 Neon Playground</div></div>
+      </div>
+      <div class="board" style="gap:7px">
+        <div class="secthead">Daily first to bingo</div>
+        <div class="honors">
+          <div class="honor"><b>🛳️ D1</b>Marco</div>
+          <div class="honor"><b>🏋️ D2</b>Jess</div>
+          <div class="honor"><b>✈️ D3</b>Dan</div>
+          <div class="honor"><b>🏛️ D4</b>Theo</div>
+          <div class="honor"><b>🌈 D5</b>—</div>
+          <div class="fade">›</div>
+        </div>
+        <div class="secthead">Cruise leaderboard · all cards</div>
+        <div class="rank"><div class="n">1</div><div class="avatar"></div>Jess ⭐ <span class="pill">First BINGO</span><span class="thumb">📷</span><span class="thumb">✍️</span><div class="stats">7 bingos<br>84 squares</div></div>
+        <div class="rank"><div class="n">2</div><div class="avatar"></div>Marco<span class="thumb">📷</span><span class="thumb">🖼️</span><span class="thumb">🎙</span><div class="stats">6 bingos<br>91 squares</div></div>
+        <div class="rank"><div class="n">3</div><div class="avatar"></div>Dan<div class="stats">6 bingos<br>77 squares</div></div>
+        <div class="rank"><div class="n">4</div><div class="avatar"></div>Theo<span class="thumb">📷</span><div class="stats">5 bingos<br>80 squares</div></div>
+        <div class="rank"><div class="n">5</div><div class="avatar"></div>Big Denver Chris<span class="thumb">🎙</span><div class="stats">4 bingos<br>62 squares</div></div>
+        <div class="note">Totals sum every Day Card. ⭐ cruise-wide First to BINGO counts main-game days only. Proof chips = that player's latest proofs; tap one to jump to it in the Feed.</div>
+      </div>
+      <div class="tabs">
+        <div class="tab"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
+        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
+        <div class="tab on"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab"><span>⋯</span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>Ranks—overall + daily honors</b>One cruise-long leaderboard summing all cards; per-day First to BINGO strip above it, one chip per theme night. Feed Moments carry the same day chip.</p>
+  </div>
+
+</div>
+
+<script>
+// ---------- pools (samples of the real seed + the curated tutorial lists) ----------
+const MAIN = ["Lost passport","Matching Speedos","Poppers spill","Eat carbs","Cruise boyfriend",
+"Three-way kiss","Late-night pizza","Dance-floor k-hole","Sunset selfie","30-year age gap",
+"Karaoke “Fergalicious”","Suite orgy","Lost bracelet","“I need electrolytes”","Use a condom",
+"Mirror-hall selfie","Get read by Bianca Del Rio","Threesome","Breakfast in sunglasses",
+"Ship-photographer ambush","Drink three dirty martinis","Become ship-famous","Emergency fan deployment",
+"Overpacked toiletries","Pool-chair territory dispute","Selfie with HAYLA","Cafeteria k-hole",
+"Feathers, mesh, or sequins before noon","“I'm just having one drink”","Accidental matching outfits",
+"Elevator outfit compliment","New best friend from another city","Nap through the main event",
+"Poolside caftan moment","Too many group chats","Themed-party costume escalation","Get lost on the ship",
+"Unexpected Broadway sing-along","Matching tank tops","Suspiciously perfect tan","Cruise-boyfriend breakup",
+"Dramatic outfit change before dinner","Wear a sissy skirt","Make out with a woman"];
+
+const EMBARK = ["Get your favorite dessert","Find your muster station","Get lost finding your cabin",
+"Ride an elevator the wrong way","Locate the late-night pizza","First soft-serve of the cruise",
+"Toast at the sailaway party","Wave goodbye to land","Hear the ship's horn","Meet someone from another country",
+"Learn a crew member's name","Befriend a bartender","Compliment a stranger's outfit",
+"“Where are you from?” ×3","Exchange Instagrams","Spot matching Speedos","Unpack an unhinged outfit",
+"Plan tomorrow's party look","Test the bed (nap counts)","Stateroom mirror selfie","Balcony or porthole photo",
+"Frozen drink, zero shame","Sunscreen a stranger's back","Scope the gym you'll never use","Find the theater",
+"Locate the Dick Deck (recon only)","Sign up for something you'll skip","Overhear someone already complaining"];
+
+const FAREWELL = ["Last sunrise or sunset photo","Goodbye, cruise boyfriend","Swap numbers with your bestie",
+"Promise a city visit","“See you next year”—mean it","Book next year's cruise","Final soft-serve",
+"Thank your steward by name","Thank the bartender who carried you","One last ship lap","Last dance, one more song",
+"Group photo, chosen family","Cry (or valiantly almost)","Glitter somewhere impossible","Suitcase no longer closes",
+"Softest airport look","Breakfast in sunglasses, one last time","Swap favorite memories",
+"“Never drinking again” (sincere)","Post the photo dump","Screenshot the group chat's new name",
+"Set a reunion date","Give away your sunscreen","Realize you never used the gym","Hum the song of the week",
+"Legal souvenir acquired","Five-star crew shoutout","Feel things at the stern"];
+
+// ---------- the real 2026 schedule ----------
+const DAYS = [
+{n:1, date:"Wed Jul 15", port:"Trieste", flag:"🇮🇹", theme:"welcome-aboard", emoji:"🛳️", label:"Welcome Aboard",
+ desc:"You made it. Learn the game, find the soft-serve, wave goodbye to land.",
+ pool:EMBARK, free:"You made it aboard", tag:"Warm-up", headPort:"Sails Jul 15",
+ banner:"<b>How this works</b><ol><li><b>Mark what happens</b>—tap a square when you see it, do it, or survive it.</li><li><b>Five in a row is BINGO.</b> Center's free.</li><li><b>The feed is the proof</b>—pics, doubts, Moments.</li></ol>",
+ note:"This one's a warm-up. The real chaos starts tomorrow at 8."},
+{n:2, date:"Thu Jul 16", port:"Split", flag:"🇭🇷", theme:"get-sporty", emoji:"🏋️", label:"Get Sporty",
+ desc:"Locker-room fantasy, varsity realness, cheer-captain glam—looks that leave very little to the imagination.",
+ pool:MAIN, free:"Complain about circuit music"},
+{n:3, date:"Fri Jul 17", port:"Valletta", flag:"🇲🇹", theme:"duty-free", emoji:"✈️", label:"Duty Free",
+ desc:"No borders, no limits, no VAT. National colors, flags, or whatever you find in Duty Free.",
+ pool:MAIN, free:"Complain about circuit music"},
+{n:4, date:"Sat Jul 18", port:"Palermo", flag:"🇮🇹", theme:"glamiators", emoji:"🏛️", label:"Glamiators",
+ desc:"Roman toga-chic meets runway excess. Ancient fantasy, body armor, spectator looks welcome.",
+ pool:MAIN, free:"Complain about circuit music"},
+{n:5, date:"Sun Jul 19", port:"Sorrento", flag:"🇮🇹", theme:"neon-playground", emoji:"🌈", label:"Neon Playground",
+ desc:"Fast, flashy, bright, and silly. Neon, sparkles, and lights for a laser-lit night in the Red Room.",
+ pool:MAIN, free:"Complain about circuit music"},
+{n:6, date:"Mon Jul 20", port:"Rome", flag:"🇮🇹", theme:"summer-white", emoji:"🤍", label:"Summer White",
+ desc:"Atlantis's pinnacle party. Dress up or down in white for a sexy, creative, irreverent night under the stars.",
+ pool:MAIN, free:"Complain about circuit music"},
+{n:7, date:"Tue Jul 21", port:"Nice", flag:"🇫🇷", theme:"dog-tag", emoji:"🪖", label:"Dog Tag T-Dance",
+ desc:"The longest-running signature party, inspired by men in small uniforms. Souvenir dog tags provided.",
+ pool:MAIN, free:"Complain about circuit music"},
+{n:8, date:"Wed Jul 22", port:"Marseille", flag:"🇫🇷", theme:"revival-disco", emoji:"🪩", label:"Revival: Classic Disco",
+ desc:"A '70s disco afternoon—artificial fabrics, facial hair, oversized shoes, obnoxious accessories.",
+ pool:MAIN, free:"Complain about circuit music"},
+{n:9, date:"Thu Jul 23", port:"Sea Day", flag:"🌊", theme:"seriously-pink", emoji:"💖", label:"Seriously Pink T-Dance",
+ desc:"A hot afternoon of pink silliness, Barbie energy, and frivolous dolled-up fun.",
+ pool:MAIN, free:"Complain about circuit music"},
+{n:10, date:"Fri Jul 24", port:"Barcelona", flag:"🇪🇸", theme:"so-long-farewell", emoji:"👋", label:"So Long, Farewell",
+ desc:"Last one. Mark your goodbyes—then go book next year.",
+ pool:FAREWELL, free:"We had the best damn time", tag:"Goodbye",
+ banner:"<b>🏆 Final standings—Champion: Jess · First to BINGO: Marco · 10 daily honors inside</b>Last one. 🥲 Mark your goodbyes—then go book next year. Standings froze at unlock; this card is pure ceremony.",
+ note:"Unlocks 8:00 a.m. disembark morning—the standard rule, same as every day."}
+];
+
+// deterministic PRNG so the sample deals are stable
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);
+  t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function shuffle(arr,rnd){const a=arr.slice();for(let i=a.length-1;i>0;i--){
+  const j=Math.floor(rnd()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+
+function esc(s){return s.replace(/&/g,"&amp;").replace(/</g,"&lt;")}
+
+function gridHTML(day){
+  const rnd=mulberry32(day.n*1000+7);
+  const picks=shuffle(day.pool,rnd).slice(0,24);
+  const markedIdx=new Set(shuffle([...Array(25).keys()].filter(i=>i!==12),rnd).slice(0, 3+Math.floor(rnd()*4)));
+  let html="", p=0;
+  for(let i=0;i<25;i++){
+    if(i===12){html+='<div class="cell free">FREE<br>'+esc(day.free)+'</div>';continue}
+    const t=esc(picks[p++]);
+    if(markedIdx.has(i)){
+      const tally=1+Math.floor(rnd()*14);
+      html+='<div class="cell m">'+t+'<span class="tally">'+tally+'</span></div>';
+    } else html+='<div class="cell">'+t+'</div>';
+  }
+  return html;
+}
+
+function stripHTML(d){
+  const chips=[];
+  const prev=DAYS[d.n-2], next=DAYS[d.n], next2=DAYS[d.n+1];
+  if(prev) chips.push('<div class="chip">✓ '+prev.date.slice(0,3)+' '+prev.emoji+'</div>');
+  chips.push('<div class="chip now">'+d.date.slice(0,3)+' '+d.flag+' '+d.emoji+'</div>');
+  if(next) chips.push('<div class="chip lock">🔒 '+next.date.slice(0,3)+' '+next.emoji+'</div>');
+  if(next2) chips.push('<div class="chip lock">🔒 '+next2.date.slice(0,3)+' '+next2.emoji+'</div>');
+  return chips.join('')+(next2?'<div class="fade">›</div>':'');
+}
+
+const gallery=document.getElementById('gallery');
+DAYS.forEach(d=>{
+  const poolName = d.pool===MAIN ? "main pool (shared, theme is visual only)"
+    : d.pool===EMBARK ? "curated embark pool" : "curated farewell pool";
+  const unit=document.createElement('div');
+  unit.className='unit';
+  unit.innerHTML=
+  '<div class="mini" data-theme="'+d.theme+'">'+
+    '<div class="hdr"><div class="title">GAY CRUISE<br>BINGO</div>'+
+      '<div class="today"><div class="port">'+(d.headPort? d.headPort : d.flag+' '+d.port)+'</div>'+
+      '<div class="theme">'+d.emoji+' '+d.label+'</div></div></div>'+
+    '<div class="strip">'+stripHTML(d)+'</div>'+
+    '<div class="board">'+
+      '<div class="daybar"><div class="dayname">Day '+d.n+' · '+d.label+
+        (d.tag?'<span class="tag">'+d.tag+'</span>':'')+'</div>'+
+        '<div class="daymeta">'+d.flag+' '+d.port+'</div></div>'+
+      '<div class="desc">'+d.desc+'</div>'+
+      (d.banner?'<div class="banner">'+d.banner+'</div>':'')+
+      '<div class="grid">'+gridHTML(d)+'</div>'+
+      (d.note?'<div class="note">'+d.note+'</div>':'')+
+    '</div>'+
+    '<div class="tabs"><div class="tab on"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>'+
+      '<div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div><div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>'+
+      '<div class="tab"><span><i class="tabavatar"></i></span>More</div></div>'+
+  '</div>'+
+  '<p class="cap"><b>Day '+d.n+'—'+d.emoji+' '+d.label+'</b>'+d.date+' · '+d.port+' · '+poolName+
+   ' · <span class="sw" style="background:var(--sw1)"></span><span class="sw" style="background:var(--sw2)"></span><span class="sw" style="background:var(--sw3)"></span></p>';
+  gallery.appendChild(unit);
+  // palette swatches in the caption, read from the frame's own computed tokens
+  const cs=getComputedStyle(unit.querySelector('.mini'));
+  const cap=unit.querySelector('.cap');
+  cap.style.setProperty('--sw1',cs.getPropertyValue('--primary'));
+  cap.style.setProperty('--sw2',cs.getPropertyValue('--secondary'));
+  cap.style.setProperty('--sw3',cs.getPropertyValue('--bg'));
+});
+
+// locked-day blank grid
+const lg=document.getElementById('lockgrid');
+let lh='';
+for(let i=0;i<25;i++){
+  lh += i===12 ? '<div class="cell free">FREE<br>Complain about circuit music</div>'
+               : '<div class="cell blank"></div>';
+}
+lg.innerHTML=lh;
+
+// dimmed boards behind the claim sheet and coach overlay
+const dg=document.getElementById('dimgrid');
+if(dg) dg.innerHTML=gridHTML({n:2,pool:MAIN,free:"Complain about circuit music"});
+// same day-2 seed as the claim sheet, so the two sheets share one board
+const tg=document.getElementById('tallygrid');
+if(tg) tg.innerHTML=gridHTML({n:2,pool:MAIN,free:"Complain about circuit music"});
+const ig=document.getElementById('introgrid');
+if(ig) ig.innerHTML=gridHTML({n:1,pool:EMBARK,free:"You made it aboard"});
+const ng=document.getElementById('nudgegrid');
+if(ng) ng.innerHTML=gridHTML({n:11,pool:EMBARK,free:"You made it aboard"});
+const ug=document.getElementById('updgrid');
+if(ug) ug.innerHTML=gridHTML({n:4,pool:MAIN,free:"Complain about circuit music"});
+
+// iPhone 15 Pro chrome: status bar + home indicator on every frame
+// (frames marked data-chrome="manual" draw their own, e.g. the Safari one)
+document.querySelectorAll('.mini').forEach(m=>{
+  if(m.dataset.chrome==='manual') return;
+  m.insertAdjacentHTML('afterbegin',
+    '<div class="statusbar"><span>9:41</span><div class="dynisland"></div><span><svg data-lucide="signal" class="lucide lucide-signal" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M2 20h.01" /> <path d="M7 20v-4" /> <path d="M12 20v-8" /> <path d="M17 20V8" /> <path d="M22 4v16" /> </svg> <svg data-lucide="battery-full" class="lucide lucide-battery-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 10v4" /> <path d="M14 10v4" /> <path d="M22 14v-4" /> <path d="M6 10v4" /> <rect x="2" y="6" width="16" height="12" rx="2" /> </svg></span></div>');
+  m.insertAdjacentHTML('beforeend','<div class="homebar"><i></i></div>');
+});
+
+</script>
+</body>
+</html>
