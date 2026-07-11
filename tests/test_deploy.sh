@@ -80,6 +80,22 @@ exit "${NPM_STUB_EXIT:-0}"
 STUB
 chmod +x "$STUB_DIR/npm"
 
+# Stub `npx` so the pre-deploy Chromium-ensure step (issue #142) is exercised
+# without a real Playwright install. Logs to NPX_LOG when set and exits with
+# NPX_STUB_EXIT (default 0) so a test can simulate the browser install failing.
+cat >"$STUB_DIR/npx" <<'STUB'
+#!/usr/bin/env bash
+if [ -n "${NPX_LOG:-}" ]; then
+  {
+    printf 'npx'
+    for a in "$@"; do printf '\t%s' "$a"; done
+    printf '\n'
+  } >> "$NPX_LOG"
+fi
+exit "${NPX_STUB_EXIT:-0}"
+STUB
+chmod +x "$STUB_DIR/npx"
+
 # Helper: build a throwaway git repo on a non-main branch with one
 # committed file. Caller sets the working dir's dirty/clean state.
 init_fixture_repo() {
@@ -346,6 +362,38 @@ elif ! grep -q 'Rollback' "$ERR7"; then
   cat "$ERR7" >&2
 else
   pass "synthetic-fail: a failing synthetic fails the deploy and points at the rollback."
+fi
+
+# ---------------------------------------------------------------------------
+# Case 8 (#142): a failing pre-deploy Chromium install aborts BEFORE publishing
+# — op-firebase-deploy is never reached, so a broken local probe browser cannot
+# report a healthy site as a failed deploy after it is already live.
+# ---------------------------------------------------------------------------
+REPO8="$WORKDIR/case8-chromium-fail"
+init_fixture_repo "$REPO8"
+OUT8="$WORKDIR/case8.out"
+ERR8="$WORKDIR/case8.err"
+: >"$WORKDIR/ofd-calls-8.log"
+
+set +e
+PATH="$STUB_DIR:$PATH" \
+OFD_LOG="$WORKDIR/ofd-calls-8.log" \
+NPM_LOG="$WORKDIR/npm-calls-8.log" \
+NPX_STUB_EXIT=1 \
+  bash -c "cd '$REPO8' && bash '$SCRIPT' --force --skip-build --skip-cf-purge" \
+  >"$OUT8" 2>"$ERR8"
+RC8=$?
+set -e
+
+if [[ $RC8 -eq 0 ]]; then
+  fail "chromium-fail: deploy.sh returned 0 though the Chromium install failed."
+elif grep -q 'op-firebase-deploy' "$WORKDIR/ofd-calls-8.log"; then
+  fail "chromium-fail: deploy.sh published (reached op-firebase-deploy) despite the browser install failing before publishing."
+elif ! grep -q 'before publishing' "$ERR8"; then
+  fail "chromium-fail: deploy.sh did not print the before-publishing abort diagnostic. stderr was:"
+  cat "$ERR8" >&2
+else
+  pass "chromium-fail: a failing pre-deploy Chromium install aborts before publishing (op-firebase-deploy never reached)."
 fi
 
 # ---------------------------------------------------------------------------

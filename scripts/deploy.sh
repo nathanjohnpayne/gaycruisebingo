@@ -182,6 +182,21 @@ else
   bash -euo pipefail -c -- "$BUILD_CMD"
 fi
 
+# Step 1.5: Ensure the post-deploy synthetic browser is present BEFORE we
+# publish (#142 Codex P2). The synthetic (Step 4) needs Playwright Chromium; if
+# it is missing, install it here — before op-firebase-deploy — so a missing probe
+# browser fails the deploy up front rather than after the release is already
+# live, which would report a healthy site as a failed deploy.
+if [[ "$SYNTHETIC_SKIP" != "true" ]]; then
+  echo ">> Ensuring Playwright Chromium (post-deploy synthetic prerequisite)"
+  if ! npx playwright install chromium; then
+    echo "   Could not install Playwright Chromium — aborting before publishing." >&2
+    echo "   Fix the tooling, or re-run with --skip-synthetic to deploy without" >&2
+    echo "   the post-deploy app-mount check." >&2
+    exit 1
+  fi
+fi
+
 # Step 2: Deploy
 echo ">> Deploying via op-firebase-deploy"
 # Bash 3.2 + `set -u`: expanding an empty `${DEPLOY_ARGS[@]}` aborts
