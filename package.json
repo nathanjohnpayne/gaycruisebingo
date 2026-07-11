@@ -24,7 +24,7 @@
     "deploy": "scripts/deploy.sh",
     "deploy:hosting": "scripts/deploy.sh --only hosting",
     "pretest:e2e": "playwright install chromium",
-    "pretest:synthetic": "playwright install chromium"
+    "pretest:synthetic": "playwright install --with-deps chromium"
   },
   "dependencies": {
     "firebase": "^12.15.0",

@@ -189,7 +189,11 @@ fi
 # live, which would report a healthy site as a failed deploy.
 if [[ "$SYNTHETIC_SKIP" != "true" ]]; then
   echo ">> Ensuring Playwright Chromium (post-deploy synthetic prerequisite)"
-  if ! npx playwright install chromium; then
+  # --with-deps so the browser can actually LAUNCH: on a clean Linux runner the
+  # binary alone is not enough (missing native libs), and a browser that installs
+  # but cannot launch would let the deploy publish and only then fail the probe.
+  # On macOS (the usual deploy host) --with-deps just installs the browser.
+  if ! npx playwright install --with-deps chromium; then
     echo "   Could not install Playwright Chromium — aborting before publishing." >&2
     echo "   Fix the tooling, or re-run with --skip-synthetic to deploy without" >&2
     echo "   the post-deploy app-mount check." >&2
