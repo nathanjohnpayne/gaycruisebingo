@@ -14,7 +14,22 @@ import {
   phCapture,
   phIdentify,
   phReset,
+  isLocalDevHost,
 } from './posthog';
+
+describe('isLocalDevHost (#194 — no capture from local dev)', () => {
+  it('is true for localhost, loopback, and .local hosts', () => {
+    for (const h of ['localhost', '127.0.0.1', '::1', '[::1]', 'gcb.local', 'my-mac.local']) {
+      expect(isLocalDevHost(h)).toBe(true);
+    }
+  });
+
+  it('is false for production hosts', () => {
+    for (const h of ['gaycruisebingo.com', 'www.gaycruisebingo.com', 'gaycruisebingo.web.app']) {
+      expect(isLocalDevHost(h)).toBe(false);
+    }
+  });
+});
 
 describe('PostHog client config (privacy-safe for a noindex, 18+ app)', () => {
   it('hard-disables every implicit capture vector — only explicit events ship', () => {

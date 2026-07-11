@@ -36,6 +36,24 @@ export const POSTHOG_PROXY_HOST = 'https://d.gaycruisebingo.com';
 let ready = false;
 
 /**
+ * True for local-development / loopback hosts. PostHog init is skipped on these
+ * (see the gate in main.tsx) so dev sessions and Vite HMR errors — e.g. the #194
+ * `ReferenceError: ProfileEditor is not defined` fast-refresh artifact captured
+ * from `localhost:5173` — never reach production analytics or session replays.
+ * Pure (host in, bool out) so the policy is unit-testable without stubbing
+ * `window.location`.
+ */
+export function isLocalDevHost(hostname: string): boolean {
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::1' ||
+    hostname === '[::1]' ||
+    hostname.endsWith('.local')
+  );
+}
+
+/**
  * Initialize once from the app entry (main.tsx). No-op without a key — mirrors
  * the GA4 guard in firebase.ts, so dev/test/CI without env vars stay silent. The
  * `phc_` project key is client-safe (public) by design.
