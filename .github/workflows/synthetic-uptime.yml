@@ -36,8 +36,18 @@ env:
 jobs:
   synthetic:
     runs-on: ubuntu-latest
+    # Bound the run so a hung npm ci / browser install can't hold the serialized
+    # slot up to GitHub's 360-min default and starve the 15-min monitor cadence
+    # (a real outage in that window would go unreported). A healthy run is ~2 min.
+    timeout-minutes: 10
     steps:
+      # persist-credentials: false so the issue:write repo token is NOT written
+      # into the local git config where a compromised dependency lifecycle script
+      # (npm ci below) could read it. The issue-update steps use an explicit
+      # GH_TOKEN instead, so nothing here needs the persisted git credential.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
