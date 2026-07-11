@@ -453,6 +453,11 @@ a {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  /* #173: a >=44x44px tap target (WCAG 2.5.5, and the 44px minimum issue #146
+     sets for persistent controls). The icon stays 20px; the transparent button
+     just carries a larger, thumb-friendly hit area (border-box keeps it 44px). */
+  min-width: 44px;
+  min-height: 44px;
 }
 .sign-out-trigger svg {
   width: 20px;
@@ -1142,17 +1147,25 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 }
 
 /* ---------- leaderboard share affordance ---------- */
-/* The "Share leaderboard" button (src/components/Leaderboard.tsx, issue #36),
-   right-aligned above the existing .lb-filters row so it reads as a distinct
-   action rather than a fourth filter option. */
+/* The "Share leaderboard" button (src/components/Leaderboard.tsx, issues #36
+   and #174): a full-width secondary action BELOW the ranked list, so it no
+   longer sits wedged in the narrow band between the global theme carousel and
+   the filter row. */
 .lb-actions {
   display: flex;
-  justify-content: flex-end;
-  margin-bottom: 8px;
+  margin-top: 14px;
 }
 .lb-actions .btn {
-  padding: 8px 14px;
-  font-size: 12px;
+  flex: 1;
+  padding: 10px 14px;
+  font-size: 13px;
+}
+/* Empty-FILTER state (players exist, none match the active filter). Kept compact
+   — deliberately NOT the 70vh `.center` used for the whole-page empty state — so
+   the below-list "Share leaderboard" action isn't pushed off-screen (#174). */
+.lb-empty {
+  text-align: center;
+  padding: 28px 0;
 }
 
 /* ---------- share cards (ADR 0005, issue #36) ---------- */

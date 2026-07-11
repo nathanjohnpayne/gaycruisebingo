@@ -9,7 +9,7 @@ export interface ThemeMeta {
 // The eight Atlantis party themes, surfaced in the theme switcher.
 export const THEMES: ThemeMeta[] = [
   { id: 'neon-playground', label: 'Neon Playground', emoji: '🌈' },
-  { id: 'get-sporty', label: 'Get Sporty', emoji: '🎉' },
+  { id: 'get-sporty', label: 'Get Sporty', emoji: '🏋️' },
   { id: 'duty-free', label: 'Duty Free', emoji: '✈️' },
   { id: 'glamiators', label: 'Glamiators', emoji: '🏛️' },
   { id: 'summer-white', label: 'Summer White', emoji: '🤍' },
