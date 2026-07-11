@@ -157,12 +157,18 @@ a {
 /* ---------- card ---------- */
 .card-meta {
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   gap: 8px;
   color: var(--dim);
-  font-size: 12px;
-  letter-spacing: 0.08em;
+  /* Title + sail dates on ONE centered line at phone widths: shrink the type
+     to fit the ~296–406px content column (the .app column minus its 12px
+     padding on a 320–430px phone) and never wrap. Capped at 12px so it holds
+     the original size on wider screens. */
+  font-size: clamp(9px, 2.7vw, 12px);
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  text-align: center;
+  white-space: nowrap;
   margin: 4px 2px 8px;
 }
 .bingo-head {
