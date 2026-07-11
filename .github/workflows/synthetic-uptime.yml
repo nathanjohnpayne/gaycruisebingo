@@ -45,13 +45,16 @@ jobs:
       # into the local git config where a compromised dependency lifecycle script
       # (npm ci below) could read it. The issue-update steps use an explicit
       # GH_TOKEN instead, so nothing here needs the persisted git credential.
-      - uses: actions/checkout@v4
+      # Actions pinned to full-length commit SHAs (mutable tags could run with
+      # this job's issues:write token if a tag/release were compromised).
+      # checkout SHA matches the repo-standard pin; setup-node is the v4 ref.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       - name: Install dependencies
