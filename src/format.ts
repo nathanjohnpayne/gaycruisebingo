@@ -35,13 +35,27 @@ export function formatSailRange(sailStart: string, sailEnd: string): string {
   };
   const a = parse(sailStart);
   const b = parse(sailEnd);
-  // Degrade to no range (rather than throw) when a date is missing or malformed
-  // — a partial Event doc must never crash the board.
-  if (![a.y, a.m, a.d, b.y, b.m, b.d].every(Number.isFinite)) return '';
-  const mA = MONTHS[a.m - 1] ?? '';
-  const mB = MONTHS[b.m - 1] ?? '';
+  // Degrade to no range (rather than throw / render a broken title) when a date
+  // is missing or malformed — a partial or hand-edited Event doc must never crash
+  // the board, and the write rules don't validate sailStart/sailEnd. A numeric but
+  // out-of-range value (e.g. 2026-13-01, 2026-07-32) must fail this check too, not
+  // just a non-numeric one.
+  const valid = (p: { y: number; m: number; d: number }) =>
+    Number.isInteger(p.y) &&
+    Number.isInteger(p.m) &&
+    p.m >= 1 &&
+    p.m <= 12 &&
+    Number.isInteger(p.d) &&
+    p.d >= 1 &&
+    p.d <= 31;
+  if (!valid(a) || !valid(b)) return '';
+  const mA = MONTHS[a.m - 1];
+  const mB = MONTHS[b.m - 1];
 
-  if (a.y === b.y && a.m === b.m) return `${mA} ${a.d}–${b.d}, ${a.y}`;
+  if (a.y === b.y && a.m === b.m) {
+    // A single-day sailing reads as a plain date, not a "15–15" range.
+    return a.d === b.d ? `${mA} ${a.d}, ${a.y}` : `${mA} ${a.d}–${b.d}, ${a.y}`;
+  }
   if (a.y === b.y) return `${mA} ${a.d} – ${mB} ${b.d}, ${a.y}`;
   return `${mA} ${a.d}, ${a.y} – ${mB} ${b.d}, ${b.y}`;
 }

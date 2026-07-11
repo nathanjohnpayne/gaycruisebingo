@@ -7,8 +7,8 @@ describe('formatSailRange', () => {
     expect(formatSailRange('2026-07-15', '2026-07-24')).toBe('July 15–24, 2026');
   });
 
-  it('handles a single-day window', () => {
-    expect(formatSailRange('2026-07-15', '2026-07-15')).toBe('July 15–15, 2026');
+  it('renders a single-day window as a plain date, not a duplicate range', () => {
+    expect(formatSailRange('2026-07-15', '2026-07-15')).toBe('July 15, 2026');
   });
 
   it('spans two months in the same year', () => {
@@ -32,6 +32,12 @@ describe('formatSailRange', () => {
     expect(formatSailRange('', '2026-07-24')).toBe('');
     expect(formatSailRange(undefined as unknown as string, undefined as unknown as string)).toBe('');
     expect(formatSailRange('not-a-date', '2026-07-24')).toBe('');
+  });
+
+  it('rejects a numeric but out-of-range date rather than rendering a broken title', () => {
+    expect(formatSailRange('2026-13-01', '2026-07-24')).toBe(''); // month 13
+    expect(formatSailRange('2026-07-32', '2026-07-24')).toBe(''); // day 32
+    expect(formatSailRange('2026-07-15', '2026-00-24')).toBe(''); // month 0
   });
 });
 
