@@ -23,8 +23,7 @@
     "bugs:disposition": "node scripts/bug-reports.mjs disposition",
     "deploy": "scripts/deploy.sh",
     "deploy:hosting": "scripts/deploy.sh --only hosting",
-    "pretest:e2e": "playwright install chromium",
-    "pretest:synthetic": "playwright install --with-deps chromium"
+    "pretest:e2e": "playwright install chromium"
   },
   "dependencies": {
     "firebase": "^12.15.0",
