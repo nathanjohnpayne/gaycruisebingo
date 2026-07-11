@@ -30,12 +30,15 @@ set -euo pipefail
 #   scripts/deploy.sh --force               # bypass branch + freshness guards
 #   scripts/deploy.sh --skip-build          # assume dist/ is already built
 #   scripts/deploy.sh --skip-cf-purge       # skip the Cloudflare purge step
+#   scripts/deploy.sh --skip-synthetic      # skip the post-deploy app-mount check
 #
 # Environment:
 #   BUILD_CMD            Build command (default: "npm run build").
 #   CF_API_TOKEN         Cloudflare API token with Purge Cache permission.
 #                        Typical source: 1Password (op read ...).
 #   CF_ZONE_ID           Cloudflare zone ID for the project domain.
+#   SYNTHETIC_URL        Origin the post-deploy synthetic loads
+#                        (default: https://gaycruisebingo.com/). See #142.
 #   DEPLOY_ALLOW_DIRTY   Set to "1" to bypass the clean-working-tree guard.
 #                        Break-glass only — never set during routine deploys.
 #                        See DEPLOYMENT.md § Deploy guards.
@@ -45,6 +48,7 @@ set -euo pipefail
 FORCE=false
 BUILD_SKIP=false
 CF_PURGE_SKIP=false
+SYNTHETIC_SKIP=false
 DEPLOY_ARGS=()
 
 usage() {
@@ -56,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --force)         FORCE=true; shift ;;
     --skip-build)    BUILD_SKIP=true; shift ;;
     --skip-cf-purge) CF_PURGE_SKIP=true; shift ;;
+    --skip-synthetic) SYNTHETIC_SKIP=true; shift ;;
     -h|--help)       usage; exit 0 ;;
     --)              shift; DEPLOY_ARGS+=("$@"); break ;;
     *)               DEPLOY_ARGS+=("$1"); shift ;;
@@ -213,6 +218,40 @@ else
     exit 1
   fi
   echo "   Cache purged."
+fi
+
+# Step 4: Post-deploy synthetic gate (issue #142)
+#
+# Assert the DEPLOYED app actually mounts and renders its root — the signal a
+# Hosting-200 check misses. The 2026-07-09 outage (#141) returned 200 for the
+# shell while the client JS crashed on init (`auth/invalid-api-key`), leaving a
+# blank page; a rules regression that blocks first paint fails the same way.
+# Runs against the live origin (SYNTHETIC_URL, default the production domain)
+# AFTER the cache purge above, so it sees what users will get. This is the
+# deploy-to-live-then-verify posture: on failure it exits non-zero and points at
+# the rollback so a broken deploy is caught immediately rather than by a user.
+if [[ "$SYNTHETIC_SKIP" == "true" ]]; then
+  echo ">> Post-deploy synthetic skipped (--skip-synthetic)"
+else
+  SYNTHETIC_URL="${SYNTHETIC_URL:-https://gaycruisebingo.com/}"
+  echo ">> Post-deploy synthetic: asserting the app mounts at $SYNTHETIC_URL"
+  if ! SYNTHETIC_URL="$SYNTHETIC_URL" npm run --silent test:synthetic; then
+    cat >&2 <<EOF
+
+✗ Post-deploy synthetic FAILED: the deployed app did not mount cleanly at
+  $SYNTHETIC_URL (blank page, a Firebase init error such as auth/invalid-api-key,
+  or an uncaught exception). The deploy is live but likely broken.
+
+  Roll back now (see DEPLOYMENT.md § Rollback Procedure):
+    firebase hosting:releases:list
+    firebase hosting:channel:deploy live --release-id <PREVIOUS_VERSION_ID>
+
+  (If this is a "browser not found" error, run: npx playwright install chromium,
+   then re-run: npm run test:synthetic)
+EOF
+    exit 1
+  fi
+  echo "   App mounts. Synthetic passed."
 fi
 
 echo ">> Deploy complete."

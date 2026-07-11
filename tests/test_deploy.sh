@@ -64,6 +64,22 @@ exit 0
 STUB
 chmod +x "$STUB_DIR/op-firebase-deploy"
 
+# Stub `npm` so the post-deploy synthetic step (issue #142) is exercised without
+# a real app / Playwright. Records each invocation to NPM_LOG and exits with
+# NPM_STUB_EXIT (default 0) so a test can simulate the synthetic passing or
+# failing.
+cat >"$STUB_DIR/npm" <<'STUB'
+#!/usr/bin/env bash
+: "${NPM_LOG:?NPM_LOG must be set by the test}"
+{
+  printf 'npm'
+  for a in "$@"; do printf '\t%s' "$a"; done
+  printf '\n'
+} >> "$NPM_LOG"
+exit "${NPM_STUB_EXIT:-0}"
+STUB
+chmod +x "$STUB_DIR/npm"
+
 # Helper: build a throwaway git repo on a non-main branch with one
 # committed file. Caller sets the working dir's dirty/clean state.
 init_fixture_repo() {
@@ -107,7 +123,7 @@ set +e
 PATH="$STUB_DIR:$PATH" \
 OFD_LOG="$WORKDIR/ofd-calls.log" \
 BUILD_CMD='false; echo should-not-run' \
-  bash -c "cd '$REPO1' && bash '$SCRIPT' --force --skip-cf-purge" \
+  bash -c "cd '$REPO1' && bash '$SCRIPT' --force --skip-cf-purge --skip-synthetic" \
   >"$OUT1" 2>"$ERR1"
 RC1=$?
 set -e
@@ -142,7 +158,7 @@ ERR2="$WORKDIR/case2.err"
 set +e
 PATH="$STUB_DIR:$PATH" \
 OFD_LOG="$WORKDIR/ofd-calls.log" \
-  bash -c "cd '$REPO2' && bash '$SCRIPT' --force --skip-cf-purge --skip-build" \
+  bash -c "cd '$REPO2' && bash '$SCRIPT' --force --skip-cf-purge --skip-synthetic --skip-build" \
   >"$OUT2" 2>"$ERR2"
 RC2=$?
 set -e
@@ -182,7 +198,7 @@ set +e
 PATH="$STUB_DIR:$PATH" \
 OFD_LOG="$WORKDIR/ofd-calls.log" \
 DEPLOY_ALLOW_DIRTY=1 \
-  bash -c "cd '$REPO3' && bash '$SCRIPT' --force --skip-build --skip-cf-purge -- --only hosting" \
+  bash -c "cd '$REPO3' && bash '$SCRIPT' --force --skip-build --skip-cf-purge --skip-synthetic -- --only hosting" \
   >"$OUT3" 2>"$ERR3"
 RC3=$?
 set -e
@@ -220,7 +236,7 @@ ERR4="$WORKDIR/case4.err"
 set +e
 PATH="$STUB_DIR:$PATH" \
 OFD_LOG="$WORKDIR/ofd-calls-4.log" \
-  bash -c "cd '$REPO4' && bash '$SCRIPT' --force --skip-build --skip-cf-purge" \
+  bash -c "cd '$REPO4' && bash '$SCRIPT' --force --skip-build --skip-cf-purge --skip-synthetic" \
   >"$OUT4" 2>"$ERR4"
 RC4=$?
 set -e
@@ -236,6 +252,100 @@ elif ! grep -q 'op-firebase-deploy' "$WORKDIR/ofd-calls-4.log"; then
   cat "$ERR4" >&2
 else
   pass "empty-args: deploy.sh with no trailing DEPLOY_ARGS reaches op-firebase-deploy without unbound-variable abort"
+fi
+
+# ---------------------------------------------------------------------------
+# Case 5 (#142): the post-deploy synthetic runs by default and the deploy
+# completes when it passes. The `npm` stub records `run … test:synthetic`.
+# ---------------------------------------------------------------------------
+REPO5="$WORKDIR/case5-synthetic-runs"
+init_fixture_repo "$REPO5"
+OUT5="$WORKDIR/case5.out"
+ERR5="$WORKDIR/case5.err"
+: >"$WORKDIR/ofd-calls-5.log"
+: >"$WORKDIR/npm-calls-5.log"
+
+set +e
+PATH="$STUB_DIR:$PATH" \
+OFD_LOG="$WORKDIR/ofd-calls-5.log" \
+NPM_LOG="$WORKDIR/npm-calls-5.log" \
+  bash -c "cd '$REPO5' && bash '$SCRIPT' --force --skip-build --skip-cf-purge" \
+  >"$OUT5" 2>"$ERR5"
+RC5=$?
+set -e
+
+if [[ $RC5 -ne 0 ]]; then
+  fail "synthetic-runs: deploy.sh returned $RC5 though the stubbed synthetic passed. stderr was:"
+  cat "$ERR5" >&2
+elif ! grep -q 'test:synthetic' "$WORKDIR/npm-calls-5.log"; then
+  fail "synthetic-runs: deploy.sh did not invoke the post-deploy synthetic (npm run test:synthetic)."
+else
+  pass "synthetic-runs: deploy.sh runs the post-deploy synthetic and completes when it passes."
+fi
+
+# ---------------------------------------------------------------------------
+# Case 6 (#142): --skip-synthetic skips the step — logs the skip line and
+# never invokes `npm run test:synthetic`.
+# ---------------------------------------------------------------------------
+REPO6="$WORKDIR/case6-synthetic-skip"
+init_fixture_repo "$REPO6"
+OUT6="$WORKDIR/case6.out"
+ERR6="$WORKDIR/case6.err"
+: >"$WORKDIR/ofd-calls-6.log"
+: >"$WORKDIR/npm-calls-6.log"
+
+set +e
+PATH="$STUB_DIR:$PATH" \
+OFD_LOG="$WORKDIR/ofd-calls-6.log" \
+NPM_LOG="$WORKDIR/npm-calls-6.log" \
+  bash -c "cd '$REPO6' && bash '$SCRIPT' --force --skip-build --skip-cf-purge --skip-synthetic" \
+  >"$OUT6" 2>"$ERR6"
+RC6=$?
+set -e
+
+if [[ $RC6 -ne 0 ]]; then
+  fail "synthetic-skip: deploy.sh returned $RC6 with --skip-synthetic. stderr was:"
+  cat "$ERR6" >&2
+elif grep -q 'test:synthetic' "$WORKDIR/npm-calls-6.log"; then
+  fail "synthetic-skip: deploy.sh ran the synthetic despite --skip-synthetic."
+elif ! grep -q 'synthetic skipped' "$OUT6"; then
+  fail "synthetic-skip: deploy.sh did not log the skip line. stdout was:"
+  cat "$OUT6" >&2
+else
+  pass "synthetic-skip: --skip-synthetic skips the synthetic and logs the skip line."
+fi
+
+# ---------------------------------------------------------------------------
+# Case 7 (#142): a failing synthetic fails the deploy (non-zero) and prints
+# the rollback guidance. NPM_STUB_EXIT=1 makes the stubbed synthetic fail.
+# ---------------------------------------------------------------------------
+REPO7="$WORKDIR/case7-synthetic-fail"
+init_fixture_repo "$REPO7"
+OUT7="$WORKDIR/case7.out"
+ERR7="$WORKDIR/case7.err"
+: >"$WORKDIR/ofd-calls-7.log"
+: >"$WORKDIR/npm-calls-7.log"
+
+set +e
+PATH="$STUB_DIR:$PATH" \
+OFD_LOG="$WORKDIR/ofd-calls-7.log" \
+NPM_LOG="$WORKDIR/npm-calls-7.log" \
+NPM_STUB_EXIT=1 \
+  bash -c "cd '$REPO7' && bash '$SCRIPT' --force --skip-build --skip-cf-purge" \
+  >"$OUT7" 2>"$ERR7"
+RC7=$?
+set -e
+
+if [[ $RC7 -eq 0 ]]; then
+  fail "synthetic-fail: deploy.sh returned 0 though the synthetic failed."
+elif ! grep -q 'synthetic FAILED' "$ERR7"; then
+  fail "synthetic-fail: deploy.sh did not print the synthetic-failure diagnostic. stderr was:"
+  cat "$ERR7" >&2
+elif ! grep -q 'Rollback' "$ERR7"; then
+  fail "synthetic-fail: deploy.sh failure diagnostic did not point at the rollback. stderr was:"
+  cat "$ERR7" >&2
+else
+  pass "synthetic-fail: a failing synthetic fails the deploy and points at the rollback."
 fi
 
 # ---------------------------------------------------------------------------
