@@ -4,7 +4,7 @@ import { BrowserRouter, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ThemeProvider } from './theme/ThemeContext';
 import { useEventDoc, useMyPlayer } from './hooks/useData';
-import { initPostHog, phIdentify, phReset, phPageview } from './posthog';
+import { initPostHog, phIdentify, phReset, phPageview, isLocalDevHost } from './posthog';
 import { isSyntheticProbe } from './synthetic-probe';
 import type { ThemeId } from './types';
 import App from './App';
@@ -15,11 +15,12 @@ import AcceptableUse from './components/AcceptableUse';
 import './theme/themes.css';
 import './index.css';
 
-// Initialize client-side PostHog once (alongside GA4). No-op without a key (#96)
-// and skipped for the uptime synthetic (#142) so its load-only probe never fires
-// analytics — all ph* calls guard on init, so skipping this suppresses PostHog
-// entirely for that load.
-if (!isSyntheticProbe()) initPostHog();
+// Initialize client-side PostHog once (alongside GA4). No-op without a key (#96),
+// skipped for the uptime synthetic (#142), and skipped on local-dev hosts (#194)
+// so dev sessions and Vite HMR errors never pollute production analytics or
+// session replays. All ph* calls guard on init, so skipping this suppresses
+// PostHog entirely for those loads.
+if (!isSyntheticProbe() && !isLocalDevHost(window.location.hostname)) initPostHog();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('root element missing');
