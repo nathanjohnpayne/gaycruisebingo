@@ -20,7 +20,7 @@ import {
 // the proofed-mark completion verdict ProofSheet reports back (PR #110 round 2
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
-import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL } from '../game/logic';
+import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge } from '../game/logic';
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
@@ -385,7 +385,9 @@ export default function Board() {
   // re-celebrating a win that ALREADY stood on first paint (a returning Player).
   // `initialized` holds that "baseline the first snapshot, detect edges after" rule;
   // the account-switch reset below re-establishes it per uid.
-  const wasBingo = useRef(false);
+  // #176: the bingo edge tracks the COUNT of completed lines (not a boolean), so
+  // a 2nd/3rd bingo line re-fires the animation. wasBlackout stays boolean.
+  const wasBingoLines = useRef(0);
   const wasBlackout = useRef(false);
   const initialized = useRef(false);
 
@@ -404,7 +406,7 @@ export default function Board() {
   if (edgeStateUid.current !== uid) {
     edgeStateUid.current = uid;
     initialized.current = false;
-    wasBingo.current = false;
+    wasBingoLines.current = 0;
     wasBlackout.current = false;
   }
 
@@ -630,13 +632,16 @@ export default function Board() {
     // ignore a board that is not the current account's so it neither seeds the
     // celebration baseline, drops/drains queue flags, nor animates.
     if (!cellsAttributable || !cells.length) return;
-    const bingo = hasBingo(cells);
+    // #176: track the COUNT of completed lines, not a boolean, so completing a
+    // 2nd/3rd bingo line re-fires the animation (a boolean flips false→true only
+    // once). `bingoEdge` is the rising edge vs the previous snapshot's count.
+    const { lines: bingoLines, gained: bingoEdge } = bingoLineEdge(cells, wasBingoLines.current);
     const black = isBlackout(cells);
     // Passive falling edges (duty 1) — compared against the PREVIOUS snapshot's
     // state before the refs re-seed below. On a mount's first snapshot the refs
-    // are false, so nothing can spuriously read as a fall.
+    // are 0/false, so nothing can spuriously read as a fall.
     if (uid) {
-      if (wasBingo.current && !bingo) dropPendingWins(uid, { bingo: true });
+      if (wasBingoLines.current > 0 && bingoLines === 0) dropPendingWins(uid, { bingo: true });
       if (wasBlackout.current && !black) dropPendingWins(uid, { blackout: true });
     }
     // Baseline vs detection (round 2 finding C, kept for the animation): under the
@@ -644,29 +649,30 @@ export default function Board() {
     // stale cache lacking a bingo the server already has would make the server
     // confirmation read as a live transition — animating a celebration for a win
     // that already stood. So while the board is NOT server-confirmed every snapshot
-    // re-seeds wasBingo/wasBlackout without animating (initialized stays false); the
+    // re-seeds wasBingoLines/wasBlackout without animating (initialized stays false); the
     // first server-confirmed snapshot is baseline too; edge DETECTION runs after it.
     // This is now purely cosmetic (no writes), so the round-3/round-4 local-action
     // machinery the offline MOMENT once needed is gone: a win completed while the
     // board is still cache-only animates when the board confirms — a small cosmetic
     // delay the durable Moment (action path, fires at mark time) does not share.
     if (!boardConfirmed || !initialized.current) {
-      wasBingo.current = bingo;
+      wasBingoLines.current = bingoLines;
       wasBlackout.current = black;
       initialized.current = boardConfirmed;
       drainMoments(); // duty 2: even a baseline snapshot delivers a board to revalidate against
       return;
     }
-    const bingoEdge = bingo && !wasBingo.current;
+    // #176: fire on a RISING edge in the completed-line COUNT (bingoEdge, computed
+    // above), so a 2nd/3rd bingo line re-animates — not just the first. Blackout
+    // still takes visual priority; only one animation shows.
     const blackoutEdge = black && !wasBlackout.current;
-    // A Blackout takes visual priority over a plain BINGO; only one animation shows.
     if (blackoutEdge) {
       setCelebrate('blackout');
       track('blackout');
     } else if (bingoEdge) {
       setCelebrate('bingo');
     }
-    wasBingo.current = bingo;
+    wasBingoLines.current = bingoLines;
     wasBlackout.current = black;
     drainMoments(); // duty 2
   }, [cells, cellsAttributable, boardConfirmed, uid, drainMoments]);
