@@ -1,6 +1,10 @@
 import { useState } from 'react';
 
-const KEY = 'gcb.consent.analytics.dismissedAt';
+// Versioned so a change to the disclosure copy re-shows the notice once to
+// everyone: the v1 key was dismissed under the old GA4-only wording, which never
+// mentioned PostHog session replay. Bumping to v2 re-surfaces the accurate
+// replay disclosure to prior visitors. (Codex P1 on #195.)
+const KEY = 'gcb.consent.analytics.v2.dismissedAt';
 
 /** Whether the 18+ analytics disclosure was already dismissed on this device. */
 function isDismissed(): boolean {
@@ -12,7 +16,8 @@ function isDismissed(): boolean {
 }
 
 /**
- * A lightweight, dismissible disclosure that this 18+ app uses GA4 analytics.
+ * A lightweight, dismissible disclosure that this 18+ app uses analytics (GA4 and
+ * PostHog, including session replay).
  * This is deliberately NOT a consent-management platform and NOT a gate:
  * `firebase.ts` already loads GA4 unconditionally (when supported + a
  * measurement id is configured), so dismissing this notice does not opt
@@ -38,8 +43,8 @@ export default function ConsentNotice() {
   return (
     <div className="consent-notice" role="note">
       <p>
-        This is an 18+ app. We use Google Analytics (GA4) to see what&rsquo;s working—nothing
-        here is sold, and it&rsquo;s kept separate from your marks and proof.
+        This is an 18+ app. We use analytics&mdash;Google Analytics and PostHog, including
+        session replay&mdash;to see what&rsquo;s working and improve the app. Nothing here is sold.
       </p>
       <button className="btn" onClick={dismiss}>
         Got it

@@ -1,21 +1,38 @@
 // Client-side PostHog (product analytics) — runs ALONGSIDE GA4 (#96).
 //
-// Privacy stance for a noindex, 18+ app whose Players upload adult photos/audio
-// and type "name names" text Proofs: PostHog sends ONLY the explicit named events
-// that already flow through analytics.ts's `track()` (parity with GA4) and
-// identifies by uid (no PII person properties). Every implicit capture vector is
-// hard-disabled — no autocapture, no session recording, no pageview autocapture —
-// so PostHog can never ingest user-generated media, inputs, or names, and sees
-// nothing GA4 doesn't. The 18+ analytics disclosure is ConsentNotice.tsx (a
-// notice, not a gate — GA4 and PostHog both fire without an opt-in).
-import posthog, { type PostHogConfig } from 'posthog-js';
+// Full capture is ENABLED (this reverses the prior privacy lockdown, at the
+// owner's request). PostHog now autocaptures clicks, SPA pageviews + pageleaves,
+// heatmaps, and records sessions — on top of the explicit named events that flow
+// through analytics.ts's `track()`. Identity is still by uid only (no PII person
+// properties).
+//
+// This is a noindex, 18+ app whose play surface is public to any logged-in
+// Player. Session replay + autocapture record everything (including Proof media,
+// typed inputs, and display names) UNMASKED, by owner decision: the owner is the
+// sole PostHog viewer and uses replays to find UX issues, so content masking is
+// deliberately not applied. The one exception is URL hygiene — captured URLs are
+// reduced to path-only (see `sanitizeUrls`) so query-string credentials (e.g.
+// Firebase auth-handler OAuth params) never land in analytics, matching the app's
+// long-standing path-only pageview stance. This reverses the #96 privacy lockdown
+// at the owner's request; ConsentNotice.tsx discloses that session replay is used.
+import posthog, { type PostHogConfig, type CaptureResult } from 'posthog-js';
 
-/** Privacy-safe init options — exported so the policy is unit-testable. */
+/** Init options — exported so the capture policy is unit-testable. */
 export const POSTHOG_INIT_OPTIONS: Partial<PostHogConfig> = {
-  autocapture: false,
-  capture_pageview: false,
-  capture_pageleave: false,
-  disable_session_recording: true,
+  autocapture: true,
+  // 'history_change' captures the initial load AND SPA route changes (react-router
+  // drives navigation through the History API), so no manual pageview call is needed.
+  capture_pageview: 'history_change',
+  capture_pageleave: true,
+  disable_session_recording: false,
+  // PostHog masks all inputs in replays by default; the owner wants fully
+  // unmasked replays (see the header note), so opt out explicitly — otherwise
+  // typed text like the callout-Proof <textarea> stays hidden, defeating the
+  // UX-debugging purpose. (Codex P3 on #195.)
+  session_recording: { maskAllInputs: false },
+  // Content is unmasked, but URLs are not: strip query/hash from URL properties
+  // so query-string secrets (auth tokens, emails) are never stored. (Codex P1 on #195.)
+  before_send: sanitizeUrls,
   person_profiles: 'identified_only',
   // Events POST first-party through our reverse proxy (see `api_host` below,
   // #149); `ui_host` keeps the PostHog toolbar and "view in PostHog" links
@@ -32,6 +49,53 @@ export const POSTHOG_INIT_OPTIONS: Partial<PostHogConfig> = {
  * this US deployment deliberately keeps `ui_host` region-fixed above.
  */
 export const POSTHOG_PROXY_HOST = 'https://d.gaycruisebingo.com';
+
+/**
+ * Strip the query string and hash from a URL string, keeping origin + path.
+ * Non-string / non-URL values pass through unchanged.
+ */
+export function stripUrlSecrets(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  try {
+    const u = new URL(value);
+    return u.origin + u.pathname;
+  } catch {
+    // Relative or malformed URL — drop everything from the first ? or #.
+    return value.split(/[?#]/)[0];
+  }
+}
+
+const URL_PROP_KEYS = [
+  '$current_url',
+  '$pathname',
+  '$referrer',
+  '$initial_current_url',
+  '$initial_referrer',
+];
+
+/** Reduce any URL-bearing keys in a property bag to path-only, in place. */
+function scrubUrlBag(bag: Record<string, unknown> | undefined): void {
+  if (!bag) return;
+  for (const key of URL_PROP_KEYS) {
+    if (bag[key] != null) bag[key] = stripUrlSecrets(bag[key]);
+  }
+}
+
+/**
+ * `before_send` hook: reduce URL-bearing fields to path-only so query-string /
+ * hash credentials (e.g. Firebase auth-handler OAuth params) are never stored,
+ * even though replay content is otherwise unmasked. Covers the event `properties`
+ * AND the person-property bags `$set` / `$set_once` — the latter carry
+ * `$initial_current_url` / `$initial_referrer` on the first pageview and would
+ * otherwise persist the full entry URL. (Codex P1 on #195.)
+ */
+export function sanitizeUrls(event: CaptureResult | null): CaptureResult | null {
+  if (!event) return event;
+  scrubUrlBag(event.properties);
+  scrubUrlBag(event.$set);
+  scrubUrlBag(event.$set_once);
+  return event;
+}
 
 let ready = false;
 
@@ -99,16 +163,6 @@ export function phReset(): void {
   if (!ready) return;
   try {
     posthog.reset();
-  } catch {
-    /* no-op */
-  }
-}
-
-/** Manual SPA pageview — path only (no query/hash), so no PII leaks via the URL. */
-export function phPageview(pathname: string): void {
-  if (!ready) return;
-  try {
-    posthog.capture('$pageview', { $current_url: pathname });
   } catch {
     /* no-op */
   }

@@ -39,8 +39,8 @@ export type GA4EventName = (typeof GA4_EVENTS)[number];
  * Fire an analytics event to BOTH sinks — GA4 and PostHog (#96) — from one call
  * site. Each sink is independently guarded and never throws, so one being
  * unavailable (or failing) never blocks the other. Same event name + params go
- * to both; PostHog is configured to send only these explicit events (see
- * posthog.ts). Never throws.
+ * to both. These explicit events are additive: PostHog also autocaptures
+ * pageviews, clicks, heatmaps, and session replays (see posthog.ts). Never throws.
  */
 export function track(name: GA4EventName, params?: Record<string, unknown>): void {
   try {

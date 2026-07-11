@@ -4,7 +4,7 @@ import { BrowserRouter, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ThemeProvider } from './theme/ThemeContext';
 import { useEventDoc, useMyPlayer } from './hooks/useData';
-import { initPostHog, phIdentify, phReset, phPageview, isLocalDevHost } from './posthog';
+import { initPostHog, phIdentify, phReset, isLocalDevHost } from './posthog';
 import { isSyntheticProbe } from './synthetic-probe';
 import type { ThemeId } from './types';
 import App from './App';
@@ -32,22 +32,24 @@ if (!rootEl) throw new Error('root element missing');
  * locally-saved theme and an explicit in-session pick still win (see ThemeProvider).
  */
 function ThemedApp() {
-  const { user } = useAuth();
+  const { user, loading } = useAuth();
   const { data: event } = useEventDoc(!!user);
   const { data: player } = useMyPlayer(user?.uid);
   const defaultTheme: ThemeId = player?.theme ?? event?.defaultTheme ?? 'neon-playground';
   const location = useLocation();
   // Tie PostHog events to the signed-in User by uid; clear on sign-out. (#96)
   // Kept here (not in AuthContext) so the analytics wiring stays out of the
-  // protected src/auth/** path.
+  // protected src/auth/** path. Wait for auth to resolve (`!loading`) before
+  // resetting: with autocaptured pageviews the initial `$pageview` fires at
+  // init under an anonymous id, and an eager reset during Firebase's loading
+  // state would orphan it under a discarded id instead of stitching it to the
+  // signed-in user via identify. (Codex P2 on #195.)
   useEffect(() => {
     if (user?.uid) phIdentify(user.uid);
-    else phReset();
-  }, [user?.uid]);
-  // Manual SPA pageview on route change — path only, no PII. (#96)
-  useEffect(() => {
-    phPageview(location.pathname);
-  }, [location.pathname]);
+    else if (!loading) phReset();
+  }, [user?.uid, loading]);
+  // SPA pageviews are autocaptured by posthog-js (`capture_pageview:
+  // 'history_change'`, see posthog.ts), so no manual pageview call is needed here.
   return (
     <ThemeProvider defaultTheme={defaultTheme}>
       <App />
