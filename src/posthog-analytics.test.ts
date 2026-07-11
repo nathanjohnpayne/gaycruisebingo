@@ -15,7 +15,60 @@ import {
   phIdentify,
   phReset,
   isLocalDevHost,
+  stripUrlSecrets,
+  sanitizeUrls,
 } from './posthog';
+
+describe('URL hygiene — sanitizeUrls / stripUrlSecrets (#195)', () => {
+  it('strips query and hash from absolute URLs, keeping origin + path', () => {
+    expect(stripUrlSecrets('https://gaycruisebingo.com/__/auth/handler?code=SECRET&state=x')).toBe(
+      'https://gaycruisebingo.com/__/auth/handler',
+    );
+    expect(stripUrlSecrets('https://gaycruisebingo.com/feed#token=abc')).toBe(
+      'https://gaycruisebingo.com/feed',
+    );
+  });
+
+  it('strips query/hash from relative paths and passes non-strings through', () => {
+    expect(stripUrlSecrets('/items?t=secret#frag')).toBe('/items');
+    expect(stripUrlSecrets(undefined)).toBeUndefined();
+    expect(stripUrlSecrets(42)).toBe(42);
+  });
+
+  it('before_send scrubs URL properties but leaves other props intact', () => {
+    const out = sanitizeUrls({
+      uuid: 'u',
+      event: '$pageview',
+      properties: {
+        $current_url: 'https://gcb.com/x?token=secret',
+        $pathname: '/x?token=secret',
+        $browser: 'Chrome',
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    expect(out?.properties.$current_url).toBe('https://gcb.com/x');
+    expect(out?.properties.$pathname).toBe('/x');
+    expect(out?.properties.$browser).toBe('Chrome');
+  });
+
+  it('also scrubs URL person-property bags ($set / $set_once)', () => {
+    const out = sanitizeUrls({
+      uuid: 'u',
+      event: '$pageview',
+      properties: { $current_url: 'https://gcb.com/a?x=1' },
+      $set: { $initial_current_url: 'https://gcb.com/enter?code=SECRET' },
+      $set_once: { $initial_referrer: 'https://ref.com/p?t=secret' },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    expect(out?.properties.$current_url).toBe('https://gcb.com/a');
+    expect(out?.$set?.$initial_current_url).toBe('https://gcb.com/enter');
+    expect(out?.$set_once?.$initial_referrer).toBe('https://ref.com/p');
+  });
+
+  it('is wired as the before_send hook in the init options', () => {
+    expect(POSTHOG_INIT_OPTIONS.before_send).toBe(sanitizeUrls);
+  });
+});
 
 describe('isLocalDevHost (#194 — no capture from local dev)', () => {
   it('is true for localhost, loopback, and .local hosts', () => {
@@ -31,13 +84,17 @@ describe('isLocalDevHost (#194 — no capture from local dev)', () => {
   });
 });
 
-describe('PostHog client config (privacy-safe for a noindex, 18+ app)', () => {
-  it('hard-disables every implicit capture vector — only explicit events ship', () => {
-    expect(POSTHOG_INIT_OPTIONS.autocapture).toBe(false);
-    expect(POSTHOG_INIT_OPTIONS.disable_session_recording).toBe(true);
-    expect(POSTHOG_INIT_OPTIONS.capture_pageview).toBe(false);
-    expect(POSTHOG_INIT_OPTIONS.capture_pageleave).toBe(false);
+describe('PostHog client config (full capture, unlocked)', () => {
+  it('enables full capture — autocapture, SPA pageviews + pageleave, and session recording', () => {
+    expect(POSTHOG_INIT_OPTIONS.autocapture).toBe(true);
+    expect(POSTHOG_INIT_OPTIONS.disable_session_recording).toBe(false);
+    expect(POSTHOG_INIT_OPTIONS.capture_pageview).toBe('history_change');
+    expect(POSTHOG_INIT_OPTIONS.capture_pageleave).toBe(true);
     expect(POSTHOG_INIT_OPTIONS.person_profiles).toBe('identified_only');
+  });
+
+  it('records replays fully unmasked (maskAllInputs: false) by owner decision', () => {
+    expect(POSTHOG_INIT_OPTIONS.session_recording).toEqual({ maskAllInputs: false });
   });
 
   it('routes the UI to the PostHog US app while events go through the proxy (#149)', () => {
@@ -67,7 +124,7 @@ describe('PostHog init with a key', () => {
     vi.clearAllMocks();
   });
 
-  it('initializes with the privacy-safe options + host when a key is present', async () => {
+  it('initializes with the full-capture options + host when a key is present', async () => {
     vi.resetModules();
     vi.stubEnv('VITE_POSTHOG_KEY', 'phc_test');
     vi.stubEnv('VITE_POSTHOG_HOST', 'https://us.i.posthog.com');
@@ -79,9 +136,9 @@ describe('PostHog init with a key', () => {
       expect.objectContaining({
         api_host: 'https://us.i.posthog.com', // US direct-host bypass still overrides
         ui_host: 'https://us.posthog.com',
-        autocapture: false,
-        disable_session_recording: true,
-        capture_pageview: false,
+        autocapture: true,
+        disable_session_recording: false,
+        capture_pageview: 'history_change',
         person_profiles: 'identified_only',
       }),
     );

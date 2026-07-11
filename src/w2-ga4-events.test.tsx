@@ -91,7 +91,9 @@ function createStorageStub(): Storage {
 }
 
 describe('ConsentNotice', () => {
-  const CONSENT_KEY = 'gcb.consent.analytics.dismissedAt';
+  // Versioned key (#195): bumped to v2 so the updated session-replay disclosure
+  // re-shows to visitors who dismissed the old GA4-only notice.
+  const CONSENT_KEY = 'gcb.consent.analytics.v2.dismissedAt';
   let storage: Storage;
 
   beforeEach(() => {
