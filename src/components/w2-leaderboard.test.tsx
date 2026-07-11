@@ -199,3 +199,19 @@ describe('Leaderboard — global loading/empty-roster states are unaffected by t
     expect(screen.queryByRole('button', { name: 'All' })).toBeNull();
   });
 });
+
+describe('Leaderboard — the Share action sits below the ranked list (#174)', () => {
+  it('renders "Share leaderboard" AFTER both the filter row and the list, not wedged above them', () => {
+    const { container } = render(<Leaderboard />);
+    const share = screen.getByRole('button', { name: /share leaderboard/i });
+    const filters = container.querySelector('.lb-filters');
+    const list = container.querySelector('.list');
+    expect(filters).not.toBeNull();
+    expect(list).not.toBeNull();
+    // #174: the button used to sit in the narrow band ABOVE the filter row
+    // (wedged under the global theme carousel). It now follows both the filter
+    // row and the list in DOM order.
+    expect(filters!.compareDocumentPosition(share) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(list!.compareDocumentPosition(share) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});

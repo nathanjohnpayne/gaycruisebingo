@@ -203,18 +203,6 @@ export default function Leaderboard() {
 
   return (
     <>
-      <div className="lb-actions">
-        <button
-          type="button"
-          className="btn"
-          onClick={shareLeaderboard}
-          onPointerEnter={() => void warmShareCard()}
-          onFocus={() => void warmShareCard()}
-          onPointerDown={() => void warmShareCard()}
-        >
-          Share leaderboard
-        </button>
-      </div>
       <div className="lb-filters" role="group" aria-label="Filter leaderboard">
         {FILTERS.map((f) => (
           <button
@@ -251,6 +239,18 @@ export default function Leaderboard() {
           })}
         </div>
       )}
+      <div className="lb-actions">
+        <button
+          type="button"
+          className="btn"
+          onClick={shareLeaderboard}
+          onPointerEnter={() => void warmShareCard()}
+          onFocus={() => void warmShareCard()}
+          onPointerDown={() => void warmShareCard()}
+        >
+          Share leaderboard
+        </button>
+      </div>
     </>
   );
 }
