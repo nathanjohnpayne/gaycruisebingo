@@ -82,18 +82,59 @@ function scrubUrlBag(bag: Record<string, unknown> | undefined): void {
 }
 
 /**
+ * Session-replay snapshots ($snapshot events) carry the page URL separately from
+ * $current_url and drive the URL shown in the replay timeline, so scrubbing only
+ * $current_url leaves the replay URL bar with the full query/hash. Walk the rrweb
+ * events and reduce those hrefs to path-only too. Two carriers:
+ *   - Meta events (type 4): `data.href` (initial page metadata).
+ *   - Custom events (type 5): `data.payload.href` — PostHog's pageview / URL-change
+ *     markers, emitted on initial load and SPA navigations under
+ *     `capture_pageview: 'history_change'`.
+ * No-op when the payload is compressed/opaque (not a plain array), the safe
+ * fallback. (#197)
+ */
+function scrubSnapshotUrls(snapshotData: unknown): void {
+  // posthog-js sends `$snapshot_data` as a plain array of rrweb events, or (in
+  // some shapes) an object wrapping that array under `.data`.
+  const events = Array.isArray(snapshotData)
+    ? snapshotData
+    : Array.isArray((snapshotData as { data?: unknown } | null)?.data)
+      ? (snapshotData as { data: unknown[] }).data
+      : null;
+  if (!events) return;
+  for (const ev of events) {
+    if (!ev || typeof ev !== 'object') continue;
+    const { type, data } = ev as { type?: unknown; data?: Record<string, unknown> };
+    if (!data || typeof data !== 'object') continue;
+    // Meta event (type 4): data.href
+    if (type === 4 && typeof data.href === 'string') {
+      data.href = stripUrlSecrets(data.href) as string;
+    }
+    // Custom event (type 5): data.payload.href
+    if (type === 5) {
+      const payload = (data as { payload?: Record<string, unknown> }).payload;
+      if (payload && typeof payload.href === 'string') {
+        payload.href = stripUrlSecrets(payload.href) as string;
+      }
+    }
+  }
+}
+
+/**
  * `before_send` hook: reduce URL-bearing fields to path-only so query-string /
  * hash credentials (e.g. Firebase auth-handler OAuth params) are never stored,
  * even though replay content is otherwise unmasked. Covers the event `properties`
  * AND the person-property bags `$set` / `$set_once` — the latter carry
  * `$initial_current_url` / `$initial_referrer` on the first pageview and would
- * otherwise persist the full entry URL. (Codex P1 on #195.)
+ * otherwise persist the full entry URL (Codex P1 on #195) — AND the rrweb Meta
+ * (type 4) / Custom-event (type 5) hrefs inside `$snapshot` replay data (#197).
  */
 export function sanitizeUrls(event: CaptureResult | null): CaptureResult | null {
   if (!event) return event;
   scrubUrlBag(event.properties);
   scrubUrlBag(event.$set);
   scrubUrlBag(event.$set_once);
+  if (event.event === '$snapshot') scrubSnapshotUrls(event.properties?.$snapshot_data);
   return event;
 }
 

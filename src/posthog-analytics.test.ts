@@ -65,6 +65,98 @@ describe('URL hygiene — sanitizeUrls / stripUrlSecrets (#195)', () => {
     expect(out?.$set_once?.$initial_referrer).toBe('https://ref.com/p');
   });
 
+  it('scrubs rrweb Meta href inside $snapshot replay data (#197)', () => {
+    const out = sanitizeUrls({
+      uuid: 's',
+      event: '$snapshot',
+      properties: {
+        $snapshot_data: [
+          { type: 4, data: { href: 'https://gcb.com/leaderboard?invite=SECRET', width: 390 }, timestamp: 1 },
+          { type: 3, data: { source: 2 }, timestamp: 2 },
+        ],
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const events = out?.properties.$snapshot_data as any[];
+    expect(events[0].data.href).toBe('https://gcb.com/leaderboard');
+    expect(events[1].data.source).toBe(2); // non-Meta events untouched
+  });
+
+  it('scrubs rrweb Custom-event payload href in $snapshot data (#197)', () => {
+    const out = sanitizeUrls({
+      uuid: 's',
+      event: '$snapshot',
+      properties: {
+        $snapshot_data: [
+          { type: 5, data: { tag: '$pageview', payload: { href: 'https://gcb.com/leaderboard?invite=SECRET' } } },
+          { type: 5, data: { tag: 'other', payload: { note: 'keep' } } },
+        ],
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const events = out?.properties.$snapshot_data as any[];
+    expect(events[0].data.payload.href).toBe('https://gcb.com/leaderboard');
+    expect(events[1].data.payload.note).toBe('keep'); // non-href payload untouched
+  });
+
+  it('scrubs rrweb Meta href when $snapshot_data is wrapped under .data (#197)', () => {
+    const out = sanitizeUrls({
+      uuid: 's',
+      event: '$snapshot',
+      properties: { $snapshot_data: { data: [{ type: 4, data: { href: 'https://gcb.com/x?t=1#h' } }] } },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((out?.properties.$snapshot_data as any).data[0].data.href).toBe('https://gcb.com/x');
+  });
+
+  it('leaves non-$snapshot events untouched by the snapshot scrub', () => {
+    const out = sanitizeUrls({
+      uuid: 'p',
+      event: '$pageview',
+      properties: { $snapshot_data: [{ type: 4, data: { href: 'https://gcb.com/y?t=1' } }] },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    // not a $snapshot event → snapshot data is left as-is
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((out?.properties.$snapshot_data as any[])[0].data.href).toBe('https://gcb.com/y?t=1');
+  });
+
+  it('does not throw on compressed / malformed $snapshot_data and leaves it unchanged', () => {
+    for (const snap of ['gzipped-opaque-string', 123, null, { foo: 'bar' }, { data: 'not-an-array' }]) {
+      const ev = {
+        uuid: 's',
+        event: '$snapshot',
+        properties: { $snapshot_data: snap },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any;
+      expect(() => sanitizeUrls(ev)).not.toThrow();
+      expect(ev.properties.$snapshot_data).toEqual(snap);
+    }
+  });
+
+  it('leaves Meta events with missing or non-string href untouched', () => {
+    const out = sanitizeUrls({
+      uuid: 's',
+      event: '$snapshot',
+      properties: {
+        $snapshot_data: [
+          { type: 4, data: { width: 390 } }, // no href
+          { type: 4, data: { href: 42 } }, // non-string href
+          { type: 4 }, // no data
+        ],
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const events = out?.properties.$snapshot_data as any[];
+    expect(events[0].data.width).toBe(390);
+    expect(events[1].data.href).toBe(42);
+    expect(events[2].data).toBeUndefined();
+  });
+
   it('is wired as the before_send hook in the init options', () => {
     expect(POSTHOG_INIT_OPTIONS.before_send).toBe(sanitizeUrls);
   });
