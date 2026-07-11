@@ -62,7 +62,7 @@ beforeEach(async () => {
 });
 
 describe('scripts/seed.mjs — emulator-backed seed-owned replace semantics', () => {
-  it('fresh seed writes exactly 87 active seed prompts with boolean spicy flags', async () => {
+  it('fresh seed writes exactly 80 active seed prompts with boolean spicy flags', async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       const db = ctx.firestore();
       await applySeed(db);
@@ -70,11 +70,11 @@ describe('scripts/seed.mjs — emulator-backed seed-owned replace semantics', ()
         snap.data(),
       );
 
-      expect(seeded).toHaveLength(87);
+      expect(seeded).toHaveLength(80);
       expect(seeded.every((item) => item.createdBy === 'seed')).toBe(true);
       expect(seeded.every((item) => item.status === 'active')).toBe(true);
       expect(seeded.filter((item) => item.spicy === true)).toHaveLength(24);
-      expect(seeded.filter((item) => item.spicy === false)).toHaveLength(63);
+      expect(seeded.filter((item) => item.spicy === false)).toHaveLength(56);
       expect(seeded.some((item) => item.isFreeSpace === true)).toBe(false);
     });
   });
@@ -107,7 +107,7 @@ describe('scripts/seed.mjs — emulator-backed seed-owned replace semantics', ()
       const byId = new Map(docs.map((snap) => [snap.id, snap.data()]));
       const seedOwned = docs.filter((snap) => snap.data().createdBy === 'seed');
 
-      expect(seedOwned).toHaveLength(87);
+      expect(seedOwned).toHaveLength(80);
       expect(byId.has('stale-seed')).toBe(false);
       expect(byId.get('player-prompt')?.text).toBe('player prompt');
       expect(byId.get('player-prompt')?.createdBy).toBe('player-1');
@@ -139,7 +139,7 @@ describe('scripts/seed.mjs — verifySeedPool against a live (emulator) Firestor
       await applySeed(db);
       const report = verifySeedPool(await readPool(db), ITEMS);
       expect(report.ok).toBe(true);
-      expect(report.seedOwned).toBe(87);
+      expect(report.seedOwned).toBe(80);
       expect(report.missing).toEqual([]);
       expect(report.stale).toEqual([]);
     });
@@ -152,9 +152,9 @@ describe('scripts/seed.mjs — verifySeedPool against a live (emulator) Firestor
       // reseed was skipped: the live pool is still the pre-#135 seed set.
       const oldPool = [
         { text: 'Threesome', spicy: true }, // survived into the new pool
-        { text: 'Make out with Patti LuPone', spicy: true }, // retired by #135
-        { text: 'Dance-floor blowjob', spicy: true }, // retired by #135
-        { text: '3 loads in one day', spicy: true }, // retired by #135
+        { text: 'Make out with Patti LuPone', spicy: true }, // retired
+        { text: 'Sex with four gays, each from a different continent', spicy: true }, // renamed out
+        { text: '3 loads in one day', spicy: true }, // renamed out
       ];
       for (const { text, spicy } of oldPool) {
         await setDoc(doc(db, 'events', EVENT, 'items', seedItemDocId(text)), {
@@ -170,14 +170,14 @@ describe('scripts/seed.mjs — verifySeedPool against a live (emulator) Firestor
 
       const before = verifySeedPool(await readPool(db), ITEMS);
       expect(before.ok).toBe(false);
-      expect(before.missing.length).toBe(86); // every new entry except 'Threesome'
+      expect(before.missing.length).toBe(79); // every new entry except 'Threesome'
       expect(before.stale.length).toBe(3); // the retired entries
 
       // Running the seed (what was skipped in prod) reconciles the pool.
       await applySeed(db);
       const after = verifySeedPool(await readPool(db), ITEMS);
       expect(after.ok).toBe(true);
-      expect(after.seedOwned).toBe(87);
+      expect(after.seedOwned).toBe(80);
     });
   });
 });

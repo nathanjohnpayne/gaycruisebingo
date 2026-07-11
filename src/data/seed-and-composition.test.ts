@@ -7,18 +7,18 @@ import { dealBoard, CENTER, type DealItem } from '../game/logic';
 // when the script is the entry module.
 import { EVENT_SEED, ITEMS as SCRIPT_ITEMS } from '../../scripts/seed.mjs';
 
-// Covers specs/seed-and-composition.md (#129): the 87-entry pool replacement
-// (24 spicy / 63 tame) and the stratified spicy/tame Board composition rule.
+// Covers specs/seed-and-composition.md (#129, refreshed #187): the 80-entry pool
+// replacement (24 spicy / 56 tame) and the stratified spicy/tame Board composition rule.
 
-describe('SEED_ITEMS — the canonical 87-entry pool', () => {
-  it('has exactly 87 entries: 24 spicy, 63 tame', () => {
-    expect(SEED_ITEMS.length).toBe(87);
+describe('SEED_ITEMS — the canonical 80-entry pool', () => {
+  it('has exactly 80 entries: 24 spicy, 56 tame', () => {
+    expect(SEED_ITEMS.length).toBe(80);
     expect(SEED_ITEMS.filter((i) => i.spicy).length).toBe(24);
-    expect(SEED_ITEMS.filter((i) => !i.spicy).length).toBe(63);
+    expect(SEED_ITEMS.filter((i) => !i.spicy).length).toBe(56);
   });
 
   it('has no duplicate text across the pool', () => {
-    expect(new Set(SEED_ITEMS.map((i) => i.text)).size).toBe(87);
+    expect(new Set(SEED_ITEMS.map((i) => i.text)).size).toBe(80);
   });
 
   it('never carries the 🔞 glyph in the display text (spicy is a tag, not text content)', () => {
@@ -30,7 +30,7 @@ describe('SEED_ITEMS — the canonical 87-entry pool', () => {
   });
 });
 
-// A synthetic pool built from the real 87-entry SEED_ITEMS, with ids assigned
+// A synthetic pool built from the real 80-entry SEED_ITEMS, with ids assigned
 // so each dealt cell's itemId can be traced back to its spicy-ness.
 const fullPool: DealItem[] = SEED_ITEMS.map((it, i) => ({
   id: `full${i}`,
@@ -156,8 +156,8 @@ describe('dealBoard — clamps a malformed spicyRatio instead of corrupting the 
 });
 
 describe('scripts/seed.mjs — replace semantics (no Firestore/emulator; plain import assertions)', () => {
-  it('exports the same 87-entry { text, spicy } pool as src/data/seed.ts SEED_ITEMS', () => {
-    expect(SCRIPT_ITEMS.length).toBe(87);
+  it('exports the same 80-entry { text, spicy } pool as src/data/seed.ts SEED_ITEMS', () => {
+    expect(SCRIPT_ITEMS.length).toBe(80);
     expect(SCRIPT_ITEMS).toEqual(SEED_ITEMS);
   });
 
