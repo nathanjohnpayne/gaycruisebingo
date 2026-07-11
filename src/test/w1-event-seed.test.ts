@@ -116,12 +116,12 @@ describe('w1-event-seed: prompt pool density (ADR 0003)', () => {
     expect(ITEMS.length).toBeGreaterThanOrEqual(24);
   });
 
-  // w1-seed-and-composition (#129) supersedes ADR 0003's original ~30-50
-  // "dense" band with a canonical 87-entry pool (24 spicy / 63 tame) — a
+  // w1-seed-and-composition (#129, refreshed #187) supersedes ADR 0003's original
+  // ~30-50 "dense" band with a canonical 80-entry pool (24 spicy / 56 tame) — a
   // deliberate, ticket-accepted decision, not a regression of the density
   // intent (still comfortably above the 24-prompt deal floor).
-  it('seeds the canonical 87-entry pool (w1-seed-and-composition)', () => {
-    expect(ITEMS.length).toBe(87);
+  it('seeds the canonical 80-entry pool (w1-seed-and-composition)', () => {
+    expect(ITEMS.length).toBe(80);
   });
 
   it('seeds unique, non-empty prompt { text, spicy } entries — content-hash doc ids (hashed on text) collapse duplicates', () => {
@@ -146,8 +146,8 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
   it('reports ok for a live pool that matches the canonical ITEMS exactly', () => {
     const report = verifySeedPool(liveFromCanonical());
     expect(report.ok).toBe(true);
-    expect(report.expected).toBe(87);
-    expect(report.seedOwned).toBe(87);
+    expect(report.expected).toBe(80);
+    expect(report.seedOwned).toBe(80);
     expect(report.missing).toEqual([]);
     expect(report.stale).toEqual([]);
     expect(report.mismatched).toEqual([]);
@@ -173,10 +173,10 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
   });
 
   it('flags a canonical prompt that was never seeded as missing', () => {
-    const live = liveFromCanonical().filter((d) => d.text !== 'Scabies');
+    const live = liveFromCanonical().filter((d) => d.text !== 'Fivesome');
     const report = verifySeedPool(live);
     expect(report.ok).toBe(false);
-    expect(report.missing.map((m: { text: string }) => m.text)).toEqual(['Scabies']);
+    expect(report.missing.map((m: { text: string }) => m.text)).toEqual(['Fivesome']);
     expect(report.stale).toEqual([]);
   });
 
@@ -238,11 +238,11 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     ]);
 
     const missingFlag = liveFromCanonical().map((d) =>
-      d.text === 'Scabies' ? { ...d, spicy: undefined as unknown as boolean } : d,
+      d.text === 'Eat carbs' ? { ...d, spicy: undefined as unknown as boolean } : d,
     );
     expect(verifySeedPool(missingFlag).ok).toBe(false);
     expect(verifySeedPool(missingFlag).mismatched.map((m: { text: string }) => m.text)).toEqual([
-      'Scabies',
+      'Eat carbs',
     ]);
   });
 
@@ -284,16 +284,16 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     }
   });
 
-  // The exact production condition: the live pool is still the OLD (pre-#135)
-  // seed set — a couple of prompts that survived into the new pool, plus retired
-  // ones — and none of the ~86 new entries. verifySeedPool must catch it as both
+  // The exact production condition: the live pool is still an OLD seed set — one
+  // prompt that survived into the current pool, plus retired/renamed ones — and
+  // none of the other ~79 new entries. verifySeedPool must catch it as both
   // missing (new entries absent) AND stale (retired entries lingering).
   it('reproduces the #129 incident: an un-reseeded OLD pool drifts on both axes', () => {
     const oldLive: LiveDoc[] = [
-      // Survived unchanged into the new pool, followed by prompts retired/renamed by #135.
+      // 'Threesome' survived unchanged; the rest were retired/renamed out of the pool.
       'Threesome',
       'Make out with Patti LuPone',
-      'Dance-floor blowjob',
+      'Sex with four gays, each from a different continent',
       '3 loads in one day',
     ].map((text) => ({
       id: seedItemDocId(text),
@@ -306,9 +306,13 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     }));
     const report = verifySeedPool(oldLive);
     expect(report.ok).toBe(false);
-    expect(report.missing.length).toBe(86); // every new-pool entry except 'Threesome'
+    expect(report.missing.length).toBe(79); // every new-pool entry except 'Threesome'
     expect(report.stale.map((s: { text: string }) => s.text).sort()).toEqual(
-      ['3 loads in one day', 'Dance-floor blowjob', 'Make out with Patti LuPone'].sort(),
+      [
+        '3 loads in one day',
+        'Make out with Patti LuPone',
+        'Sex with four gays, each from a different continent',
+      ].sort(),
     );
   });
 });
