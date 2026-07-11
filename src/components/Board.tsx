@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText } from '../hooks/useData';
 import { setMark, resolveDisplayName } from '../data/api';
+import { eventTitle } from '../format';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
   broadcastBingo,
@@ -885,7 +886,9 @@ export default function Board() {
           behavior via `claimMode` above (proof-required opens the proof sheet on
           tap); it just no longer competes with the title for the line. */}
       <div className="card-meta">
-        <span>{event?.name ?? 'This cruise'}</span>
+        <span>
+          {event ? eventTitle(event.name, event.sailStart, event.sailEnd) : 'This cruise'}
+        </span>
       </div>
       <div className="bingo-head">
         {['B', 'I', 'N', 'G', 'O'].map((l) => (
