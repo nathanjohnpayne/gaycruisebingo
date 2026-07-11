@@ -14,14 +14,15 @@
     "test:rules": "firebase emulators:exec --only firestore,storage \"vitest run --config vitest.rules.config.ts\"",
     "test:functions": "npm --prefix functions install && vitest run --config vitest.functions.config.ts",
     "test:e2e": "scripts/test-e2e.sh",
+    "test:synthetic": "playwright test --config playwright.synthetic.config.ts",
     "emulator": "firebase emulators:start --only auth,firestore,storage",
     "seed": "node scripts/seed.mjs",
     "verify:seed": "GOOGLE_CLOUD_PROJECT=gaycruisebingo VITE_EVENT_ID=med-2026 node scripts/seed.mjs --verify",
     "bugs:pull": "node scripts/bug-reports.mjs pull",
     "bugs:archive": "node scripts/bug-reports.mjs archive",
     "bugs:disposition": "node scripts/bug-reports.mjs disposition",
-    "deploy": "npm run build && scripts/firebase/op-firebase-deploy",
-    "deploy:hosting": "npm run build && scripts/firebase/op-firebase-deploy --only hosting",
+    "deploy": "scripts/deploy.sh",
+    "deploy:hosting": "scripts/deploy.sh --only hosting",
     "pretest:e2e": "playwright install chromium"
   },
   "dependencies": {

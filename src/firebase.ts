@@ -10,6 +10,7 @@ import { getStorage, connectStorageEmulator } from 'firebase/storage';
 import { getFunctions, connectFunctionsEmulator } from 'firebase/functions';
 import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-check';
 import { getAnalytics, isSupported, type Analytics } from 'firebase/analytics';
+import { isSyntheticProbe } from './synthetic-probe';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -72,11 +73,13 @@ if (import.meta.env.VITE_RECAPTCHA_SITE_KEY) {
 /** Which event this build points at (schema supports many; v1 uses one). */
 export const EVENT_ID = import.meta.env.VITE_EVENT_ID || 'med-2026';
 
-// Analytics only loads in supported (browser, https) contexts with a measurement id.
+// Analytics only loads in supported (browser, https) contexts with a measurement
+// id — and never for the uptime synthetic (#142), whose load-only probe must not
+// emit a GA4 page_view into real product metrics.
 export let analytics: Analytics | null = null;
 isSupported()
   .then((ok) => {
-    if (ok && firebaseConfig.measurementId) analytics = getAnalytics(app);
+    if (ok && firebaseConfig.measurementId && !isSyntheticProbe()) analytics = getAnalytics(app);
   })
   .catch(() => {
     /* analytics unavailable; ignore */

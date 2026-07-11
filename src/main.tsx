@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ThemeProvider } from './theme/ThemeContext';
 import { useEventDoc, useMyPlayer } from './hooks/useData';
 import { initPostHog, phIdentify, phReset, phPageview } from './posthog';
+import { isSyntheticProbe } from './synthetic-probe';
 import type { ThemeId } from './types';
 import App from './App';
 import ConsentNotice from './components/ConsentNotice';
@@ -14,8 +15,11 @@ import AcceptableUse from './components/AcceptableUse';
 import './theme/themes.css';
 import './index.css';
 
-// Initialize client-side PostHog once (alongside GA4). No-op without a key. (#96)
-initPostHog();
+// Initialize client-side PostHog once (alongside GA4). No-op without a key (#96)
+// and skipped for the uptime synthetic (#142) so its load-only probe never fires
+// analytics — all ph* calls guard on init, so skipping this suppresses PostHog
+// entirely for that load.
+if (!isSyntheticProbe()) initPostHog();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('root element missing');

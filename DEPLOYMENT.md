@@ -487,6 +487,9 @@ scripts/deploy.sh --skip-build
 # Skip the Cloudflare purge (no CF env vars set, or purge separately)
 scripts/deploy.sh --skip-cf-purge
 
+# Skip the post-deploy app-mount synthetic (see Post-Deployment Verification)
+scripts/deploy.sh --skip-synthetic
+
 # Break-glass: bypass the main-only / must-be-current-with-origin guards
 scripts/deploy.sh --force
 ```
@@ -577,23 +580,33 @@ That makes `gcloud` default to the project-specific impersonated configuration f
 
 ## Rollback Procedure
 
-Firebase Hosting supports instant rollback:
+Firebase Hosting supports instant rollback. The **Firebase Console → Hosting → Release history → Roll back** button is the one-click path. Via the CLI, clone a previous version onto the `live` channel (note: `hosting:channel:deploy` deploys the *current local* build to a channel — it does not roll back):
 
 ```bash
-# List recent releases
+# List recent releases to find the version id to restore
 firebase hosting:releases:list
 
-# Roll back via CLI
-firebase hosting:channel:deploy live --release-id <VERSION_ID>
+# Clone that version onto live (site-id is the Hosting site, e.g. gaycruisebingo)
+firebase hosting:clone <site-id>:@<VERSION_ID> <site-id>:live
 ```
-
-Or use Firebase Console → Hosting → Release History → Roll back.
 
 ## Post-Deployment Verification
 
-1. Open the live URL in an incognito window
-2. Verify core app functionality
-3. Check browser DevTools → Console for errors
+A synthetic check asserts the deployed app **actually mounts and renders its root**, not merely that Firebase Hosting returns `200` for the shell (issue #142). The 2026-07-09 outage (#141) was invisible to a 200-only check: the HTML shell and `<title>` loaded (`200 OK`) and only the client JS crashed on init (`auth/invalid-api-key`), leaving a blank page. The synthetic loads the live site in headless Chromium and fails unless the `GAY CRUISE BINGO` root heading renders and no Firebase init error or uncaught exception appears on load. It is load-and-assert only — it never signs in or writes, so it creates no Auth/Firestore/Storage side effects.
+
+It runs in two complementary places, both automatic:
+
+- **Post-deploy gate** — the last step of `scripts/deploy.sh` runs the synthetic against the live origin after the cache purge, so a broken deploy is caught immediately. On failure the deploy exits non-zero and points at the rollback below. Skip it with `--skip-synthetic`, or aim it elsewhere with `SYNTHETIC_URL=…`. Requires Playwright Chromium locally (`npx playwright install chromium`, the same browser `npm run test:e2e` uses).
+- **Scheduled synthetic** — `.github/workflows/synthetic-uptime.yml` runs every 15 minutes against `https://gaycruisebingo.com/`, catching an outage from any cause (not just a deploy). A failure surfaces as a red workflow run, GitHub's scheduled-failure email, and a single deduplicated tracking issue (opened on first failure, commented on continued failure, auto-closed on recovery).
+
+Run it by hand at any time (defaults to production; override the target with `SYNTHETIC_URL`):
+
+```bash
+npm run test:synthetic
+SYNTHETIC_URL=https://gaycruisebingo.com/ npm run test:synthetic
+```
+
+For a deeper manual spot-check after a significant release, still open the live URL in an incognito window, exercise a core flow, and scan DevTools → Console. If the synthetic fails, roll back per [Rollback Procedure](#rollback-procedure).
 
 ## CI/CD Integration
 

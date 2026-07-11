@@ -30,12 +30,15 @@ set -euo pipefail
 #   scripts/deploy.sh --force               # bypass branch + freshness guards
 #   scripts/deploy.sh --skip-build          # assume dist/ is already built
 #   scripts/deploy.sh --skip-cf-purge       # skip the Cloudflare purge step
+#   scripts/deploy.sh --skip-synthetic      # skip the post-deploy app-mount check
 #
 # Environment:
 #   BUILD_CMD            Build command (default: "npm run build").
 #   CF_API_TOKEN         Cloudflare API token with Purge Cache permission.
 #                        Typical source: 1Password (op read ...).
 #   CF_ZONE_ID           Cloudflare zone ID for the project domain.
+#   SYNTHETIC_URL        Origin the post-deploy synthetic loads
+#                        (default: https://gaycruisebingo.com/). See #142.
 #   DEPLOY_ALLOW_DIRTY   Set to "1" to bypass the clean-working-tree guard.
 #                        Break-glass only — never set during routine deploys.
 #                        See DEPLOYMENT.md § Deploy guards.
@@ -45,6 +48,7 @@ set -euo pipefail
 FORCE=false
 BUILD_SKIP=false
 CF_PURGE_SKIP=false
+SYNTHETIC_SKIP=false
 DEPLOY_ARGS=()
 
 usage() {
@@ -56,6 +60,7 @@ while [[ $# -gt 0 ]]; do
     --force)         FORCE=true; shift ;;
     --skip-build)    BUILD_SKIP=true; shift ;;
     --skip-cf-purge) CF_PURGE_SKIP=true; shift ;;
+    --skip-synthetic) SYNTHETIC_SKIP=true; shift ;;
     -h|--help)       usage; exit 0 ;;
     --)              shift; DEPLOY_ARGS+=("$@"); break ;;
     *)               DEPLOY_ARGS+=("$1"); shift ;;
@@ -177,6 +182,25 @@ else
   bash -euo pipefail -c -- "$BUILD_CMD"
 fi
 
+# Step 1.5: Ensure the post-deploy synthetic browser is present BEFORE we
+# publish (#142 Codex P2). The synthetic (Step 4) needs Playwright Chromium; if
+# it is missing, install it here — before op-firebase-deploy — so a missing probe
+# browser fails the deploy up front rather than after the release is already
+# live, which would report a healthy site as a failed deploy.
+if [[ "$SYNTHETIC_SKIP" != "true" ]]; then
+  echo ">> Ensuring Playwright Chromium (post-deploy synthetic prerequisite)"
+  # --with-deps so the browser can actually LAUNCH: on a clean Linux runner the
+  # binary alone is not enough (missing native libs), and a browser that installs
+  # but cannot launch would let the deploy publish and only then fail the probe.
+  # On macOS (the usual deploy host) --with-deps just installs the browser.
+  if ! npx playwright install --with-deps chromium; then
+    echo "   Could not install Playwright Chromium — aborting before publishing." >&2
+    echo "   Fix the tooling, or re-run with --skip-synthetic to deploy without" >&2
+    echo "   the post-deploy app-mount check." >&2
+    exit 1
+  fi
+fi
+
 # Step 2: Deploy
 echo ">> Deploying via op-firebase-deploy"
 # Bash 3.2 + `set -u`: expanding an empty `${DEPLOY_ARGS[@]}` aborts
@@ -213,6 +237,41 @@ else
     exit 1
   fi
   echo "   Cache purged."
+fi
+
+# Step 4: Post-deploy synthetic gate (issue #142)
+#
+# Assert the DEPLOYED app actually mounts and renders its root — the signal a
+# Hosting-200 check misses. The 2026-07-09 outage (#141) returned 200 for the
+# shell while the client JS crashed on init (`auth/invalid-api-key`), leaving a
+# blank page; a rules regression that blocks first paint fails the same way.
+# Runs against the live origin (SYNTHETIC_URL, default the production domain)
+# AFTER the cache purge above, so it sees what users will get. This is the
+# deploy-to-live-then-verify posture: on failure it exits non-zero and points at
+# the rollback so a broken deploy is caught immediately rather than by a user.
+if [[ "$SYNTHETIC_SKIP" == "true" ]]; then
+  echo ">> Post-deploy synthetic skipped (--skip-synthetic)"
+else
+  SYNTHETIC_URL="${SYNTHETIC_URL:-https://gaycruisebingo.com/}"
+  echo ">> Post-deploy synthetic: asserting the app mounts at $SYNTHETIC_URL"
+  if ! SYNTHETIC_URL="$SYNTHETIC_URL" npm run --silent test:synthetic; then
+    cat >&2 <<EOF
+
+✗ Post-deploy synthetic FAILED: the deployed app did not mount cleanly at
+  $SYNTHETIC_URL (blank page, a Firebase init error such as auth/invalid-api-key,
+  or an uncaught exception). The deploy is live but likely broken.
+
+  Roll back now — Firebase Console → Hosting → Release history → Roll back is
+  the one-click path; or via the CLI (see DEPLOYMENT.md § Rollback Procedure):
+    firebase hosting:releases:list                          # find the prior version id
+    firebase hosting:clone <site-id>:@<VERSION_ID> <site-id>:live
+
+  (If this is a "browser not found" error, run: npx playwright install chromium,
+   then re-run: npm run test:synthetic)
+EOF
+    exit 1
+  fi
+  echo "   App mounts. Synthetic passed."
 fi
 
 echo ">> Deploy complete."
