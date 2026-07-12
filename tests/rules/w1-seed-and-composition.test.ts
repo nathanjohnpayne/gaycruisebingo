@@ -13,7 +13,14 @@ import {
 } from 'firebase/firestore';
 // @ts-expect-error — scripts/seed.mjs is a plain-JS node script with no type
 // declarations. The exported payload helpers are import-safe and side-effect-free.
-import { ITEMS, adminRoster, eventWritePayload, seedItemDocId, seedItemMutations, verifySeedPool } from '../../scripts/seed.mjs';
+import {
+  ALL_ITEMS,
+  adminRoster,
+  eventWritePayload,
+  seedItemDocId,
+  seedItemMutations,
+  verifySeedPool,
+} from '../../scripts/seed.mjs';
 
 const RULES_PATH = fileURLToPath(new URL('../../firestore.rules', import.meta.url));
 const EVENT = 'seed-composition';
@@ -62,7 +69,7 @@ beforeEach(async () => {
 });
 
 describe('scripts/seed.mjs — emulator-backed seed-owned replace semantics', () => {
-  it('fresh seed writes exactly 80 active seed prompts with boolean spicy flags', async () => {
+  it('fresh seed writes exactly 80 active main prompts + 28 active embark + 28 active farewell prompts, all boolean spicy', async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       const db = ctx.firestore();
       await applySeed(db);
@@ -70,11 +77,15 @@ describe('scripts/seed.mjs — emulator-backed seed-owned replace semantics', ()
         snap.data(),
       );
 
-      expect(seeded).toHaveLength(80);
+      expect(seeded).toHaveLength(136);
       expect(seeded.every((item) => item.createdBy === 'seed')).toBe(true);
       expect(seeded.every((item) => item.status === 'active')).toBe(true);
+      expect(seeded.every((item) => item.status !== 'pending')).toBe(true);
+      expect(seeded.filter((item) => item.pool === 'main')).toHaveLength(80);
+      expect(seeded.filter((item) => item.pool === 'embark')).toHaveLength(28);
+      expect(seeded.filter((item) => item.pool === 'farewell')).toHaveLength(28);
       expect(seeded.filter((item) => item.spicy === true)).toHaveLength(24);
-      expect(seeded.filter((item) => item.spicy === false)).toHaveLength(56);
+      expect(seeded.filter((item) => item.spicy === false)).toHaveLength(112);
       expect(seeded.some((item) => item.isFreeSpace === true)).toBe(false);
     });
   });
@@ -107,7 +118,7 @@ describe('scripts/seed.mjs — emulator-backed seed-owned replace semantics', ()
       const byId = new Map(docs.map((snap) => [snap.id, snap.data()]));
       const seedOwned = docs.filter((snap) => snap.data().createdBy === 'seed');
 
-      expect(seedOwned).toHaveLength(80);
+      expect(seedOwned).toHaveLength(136);
       expect(byId.has('stale-seed')).toBe(false);
       expect(byId.get('player-prompt')?.text).toBe('player prompt');
       expect(byId.get('player-prompt')?.createdBy).toBe('player-1');
@@ -134,13 +145,13 @@ async function readPool(db: Firestore) {
 // drift check that catches that gap; these run it against a real (emulator)
 // Firestore end-to-end — the seed writes, then the check reads the same docs back.
 describe('scripts/seed.mjs — verifySeedPool against a live (emulator) Firestore', () => {
-  it('a fresh seed leaves the live pool matching the canonical ITEMS (verify ok)', async () => {
+  it('a fresh seed leaves the live pool matching the canonical ALL_ITEMS (verify ok)', async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       const db = ctx.firestore();
       await applySeed(db);
-      const report = verifySeedPool(await readPool(db), ITEMS);
+      const report = verifySeedPool(await readPool(db), ALL_ITEMS);
       expect(report.ok).toBe(true);
-      expect(report.seedOwned).toBe(80);
+      expect(report.seedOwned).toBe(136);
       expect(report.missing).toEqual([]);
       expect(report.stale).toEqual([]);
     });
@@ -169,16 +180,16 @@ describe('scripts/seed.mjs — verifySeedPool against a live (emulator) Firestor
         });
       }
 
-      const before = verifySeedPool(await readPool(db), ITEMS);
+      const before = verifySeedPool(await readPool(db), ALL_ITEMS);
       expect(before.ok).toBe(false);
-      expect(before.missing.length).toBe(79); // every new entry except 'Threesome'
+      expect(before.missing.length).toBe(135); // every ALL_ITEMS entry except 'Threesome'
       expect(before.stale.length).toBe(3); // the retired entries
 
       // Running the seed (what was skipped in prod) reconciles the pool.
       await applySeed(db);
-      const after = verifySeedPool(await readPool(db), ITEMS);
+      const after = verifySeedPool(await readPool(db), ALL_ITEMS);
       expect(after.ok).toBe(true);
-      expect(after.seedOwned).toBe(80);
+      expect(after.seedOwned).toBe(136);
     });
   });
 });

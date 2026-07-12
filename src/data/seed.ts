@@ -1,3 +1,5 @@
+import type { DayDef } from '../types';
+
 // The free space + the 80 other prompts that seed a new event's pool
 // (24 spicy / 56 tame — see specs/seed-and-composition.md).
 export const FREE_TEXT = 'Complain about circuit music';
@@ -84,4 +86,193 @@ export const SEED_ITEMS: { text: string; spicy: boolean }[] = [
   { text: `Dance to the "Total Eclipse of the Heart" remix`, spicy: false },
   { text: `Fuck a drag queen out of drag`, spicy: true },
   { text: `Fuck a drag queen IN drag`, spicy: true },
+];
+
+// The two curated tutorial pools (daily-cards-spec § "Tutorial item lists"), each
+// verbatim, in spec order — 28 entries, all tame (tutorial pools are unstratified,
+// so they carry no spicy split). Curated pools are admin-editable but never go
+// through the pending-approval gate #210 adds to `main`; seeded with
+// `status: 'active'` directly (see scripts/seed.mjs's write path).
+export const EMBARK_ITEMS: { text: string; spicy: false; pool: 'embark' }[] = [
+  { text: `Get your favorite dessert`, spicy: false, pool: 'embark' },
+  { text: `Find your muster station`, spicy: false, pool: 'embark' },
+  { text: `Get lost finding your cabin`, spicy: false, pool: 'embark' },
+  { text: `Ride an elevator the wrong way`, spicy: false, pool: 'embark' },
+  { text: `Locate the late-night pizza`, spicy: false, pool: 'embark' },
+  { text: `First soft-serve of the cruise`, spicy: false, pool: 'embark' },
+  { text: `Toast at the sailaway party`, spicy: false, pool: 'embark' },
+  { text: `Wave goodbye to land`, spicy: false, pool: 'embark' },
+  { text: `Hear the ship's horn`, spicy: false, pool: 'embark' },
+  { text: `Meet someone from another country`, spicy: false, pool: 'embark' },
+  { text: `Learn a crew member's name`, spicy: false, pool: 'embark' },
+  { text: `Befriend a bartender`, spicy: false, pool: 'embark' },
+  { text: `Compliment a stranger's outfit`, spicy: false, pool: 'embark' },
+  { text: `Ask "where are you from?" three times`, spicy: false, pool: 'embark' },
+  { text: `Exchange Instagrams with a new friend`, spicy: false, pool: 'embark' },
+  { text: `Spot matching Speedos`, spicy: false, pool: 'embark' },
+  { text: `Unpack a truly unhinged outfit`, spicy: false, pool: 'embark' },
+  { text: `Plan tomorrow's party look`, spicy: false, pool: 'embark' },
+  { text: `Test the bed (nap counts)`, spicy: false, pool: 'embark' },
+  { text: `Stateroom mirror selfie`, spicy: false, pool: 'embark' },
+  { text: `Balcony or porthole photo`, spicy: false, pool: 'embark' },
+  { text: `Order a frozen drink with zero shame`, spicy: false, pool: 'embark' },
+  { text: `Sunscreen a stranger's back (or volunteer yours)`, spicy: false, pool: 'embark' },
+  { text: `Scope out the gym you'll never use`, spicy: false, pool: 'embark' },
+  { text: `Find the theater`, spicy: false, pool: 'embark' },
+  { text: `Locate the Dick Deck (reconnaissance only)`, spicy: false, pool: 'embark' },
+  { text: `Sign up for something you'll never attend`, spicy: false, pool: 'embark' },
+  { text: `Overhear someone already complaining`, spicy: false, pool: 'embark' },
+];
+
+export const FAREWELL_ITEMS: { text: string; spicy: false; pool: 'farewell' }[] = [
+  { text: `One last sunrise or sunset photo`, spicy: false, pool: 'farewell' },
+  { text: `Say goodbye to your cruise boyfriend`, spicy: false, pool: 'farewell' },
+  { text: `Exchange numbers with your new best friend`, spicy: false, pool: 'farewell' },
+  { text: `Promise to visit someone in their city`, spicy: false, pool: 'farewell' },
+  { text: `Say "see you next year"—and mean it`, spicy: false, pool: 'farewell' },
+  { text: `Book next year's cruise (or swear you will)`, spicy: false, pool: 'farewell' },
+  { text: `Final soft-serve`, spicy: false, pool: 'farewell' },
+  { text: `Thank your cabin steward by name`, spicy: false, pool: 'farewell' },
+  { text: `Thank the bartender who carried you`, spicy: false, pool: 'farewell' },
+  { text: `One last lap around the ship`, spicy: false, pool: 'farewell' },
+  { text: `Last dance to one more song`, spicy: false, pool: 'farewell' },
+  { text: `Group photo with your chosen family`, spicy: false, pool: 'farewell' },
+  { text: `Cry (or valiantly almost cry)`, spicy: false, pool: 'farewell' },
+  { text: `Find glitter somewhere impossible`, spicy: false, pool: 'farewell' },
+  { text: `Suitcase no longer closes`, spicy: false, pool: 'farewell' },
+  { text: `Wear your softest airport look`, spicy: false, pool: 'farewell' },
+  { text: `Breakfast in sunglasses, one last time`, spicy: false, pool: 'farewell' },
+  { text: `Swap favorite memories of the week`, spicy: false, pool: 'farewell' },
+  { text: `"I'm never drinking again" (sincere)`, spicy: false, pool: 'farewell' },
+  { text: `Post the photo dump`, spicy: false, pool: 'farewell' },
+  { text: `Screenshot the group chat's new name`, spicy: false, pool: 'farewell' },
+  { text: `Set a reunion date`, spicy: false, pool: 'farewell' },
+  { text: `Give away your leftover sunscreen`, spicy: false, pool: 'farewell' },
+  { text: `Realize you never used the gym`, spicy: false, pool: 'farewell' },
+  { text: `Hum the song of the week`, spicy: false, pool: 'farewell' },
+  { text: `Take home a (legal) souvenir`, spicy: false, pool: 'farewell' },
+  { text: `Five-star shoutout for your favorite crew member`, spicy: false, pool: 'farewell' },
+  { text: `Stand at the back of the ship and feel things`, spicy: false, pool: 'farewell' },
+];
+
+// 08:00 Europe/Rome (CEST, UTC+2 for the whole July sailing window — no ship-clock
+// drift handling needed per daily-cards-spec § "Itinerary and schedule") on `date`,
+// as an ms-epoch constant. Index 0 (the embark tutorial Day) is the spec's one
+// exception — unlocked "from the moment the Event opens" rather than 08:00 on its
+// date — seeded as `0` (epoch), a sensible default that resolves to "always
+// unlocked" since `unlockAt <= now` is true for any real clock value; there is no
+// separate "event open" timestamp in the current data model to seed against.
+function unlockAt0800Rome(date: string): number {
+  return Date.parse(`${date}T08:00:00+02:00`);
+}
+
+// The ten-Day mapping that drives the whole feature's unlock/theme/pool machinery
+// (daily-cards-spec § "Itinerary and schedule" + "Free space per day"). All eight
+// main-day themed Days share `pool: 'main'` — theme is visual only, per the
+// spec's already-made decision that all eight themed days deal from the shared
+// main pool. `snapshotItemIds` stamping is the scheduler's job (#202), not
+// seeded here.
+export const DAYS: DayDef[] = [
+  {
+    index: 0,
+    date: '2026-07-15',
+    port: 'Trieste',
+    portEmoji: '🇮🇹',
+    theme: 'welcome-aboard',
+    pool: 'embark',
+    tutorial: true,
+    unlockAt: 0,
+    freeText: 'You made it aboard',
+  },
+  {
+    index: 1,
+    date: '2026-07-16',
+    port: 'Split',
+    portEmoji: '🇭🇷',
+    theme: 'get-sporty',
+    pool: 'main',
+    tutorial: false,
+    unlockAt: unlockAt0800Rome('2026-07-16'),
+  },
+  {
+    index: 2,
+    date: '2026-07-17',
+    port: 'Valletta',
+    portEmoji: '🇲🇹',
+    theme: 'duty-free',
+    pool: 'main',
+    tutorial: false,
+    unlockAt: unlockAt0800Rome('2026-07-17'),
+  },
+  {
+    index: 3,
+    date: '2026-07-18',
+    port: 'Palermo',
+    portEmoji: '🇮🇹',
+    theme: 'glamiators',
+    pool: 'main',
+    tutorial: false,
+    unlockAt: unlockAt0800Rome('2026-07-18'),
+  },
+  {
+    index: 4,
+    date: '2026-07-19',
+    port: 'Sorrento',
+    portEmoji: '🇮🇹',
+    theme: 'neon-playground',
+    pool: 'main',
+    tutorial: false,
+    unlockAt: unlockAt0800Rome('2026-07-19'),
+  },
+  {
+    index: 5,
+    date: '2026-07-20',
+    port: 'Rome (Civitavecchia)',
+    portEmoji: '🇮🇹',
+    theme: 'summer-white',
+    pool: 'main',
+    tutorial: false,
+    unlockAt: unlockAt0800Rome('2026-07-20'),
+  },
+  {
+    index: 6,
+    date: '2026-07-21',
+    port: 'Nice',
+    portEmoji: '🇫🇷',
+    theme: 'dog-tag',
+    pool: 'main',
+    tutorial: false,
+    unlockAt: unlockAt0800Rome('2026-07-21'),
+  },
+  {
+    index: 7,
+    date: '2026-07-22',
+    port: 'Marseille',
+    portEmoji: '🇫🇷',
+    theme: 'revival-disco',
+    pool: 'main',
+    tutorial: false,
+    unlockAt: unlockAt0800Rome('2026-07-22'),
+  },
+  {
+    index: 8,
+    date: '2026-07-23',
+    port: 'Sea Day',
+    portEmoji: '🌊',
+    theme: 'seriously-pink',
+    pool: 'main',
+    tutorial: false,
+    unlockAt: unlockAt0800Rome('2026-07-23'),
+  },
+  {
+    index: 9,
+    date: '2026-07-24',
+    port: 'Barcelona',
+    portEmoji: '🇪🇸',
+    theme: 'so-long-farewell',
+    pool: 'farewell',
+    tutorial: true,
+    unlockAt: unlockAt0800Rome('2026-07-24'),
+    freeText: 'We had the best damn time',
+  },
 ];
