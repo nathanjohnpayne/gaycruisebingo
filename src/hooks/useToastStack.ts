@@ -36,7 +36,11 @@ export function __resetToastStackForTests(): void {
 }
 
 /** Registers this toast's desire to show, returns whether it won a slot plus
- *  its `stackIndex` (0 = topmost, -1 if it lost out and keeps retrying). */
+ *  its `stackIndex` (0 = topmost, -1 if it lost out and keeps retrying) and
+ *  `visibleCount` — how many toasts are ACTUALLY showing right now (1 or 2),
+ *  not the fixed capacity. CSS needs the real count, not MAX_VISIBLE_TOASTS,
+ *  to park a lone toast in the bottom slot instead of one slot above it
+ *  (Codex review, PR #238). */
 export function useToastSlot(id: string, priority: ToastPriority, wantsToShow: boolean) {
   useEffect(() => {
     const existing = requests.find((r) => r.id === id);
@@ -56,14 +60,16 @@ export function useToastSlot(id: string, priority: ToastPriority, wantsToShow: b
     };
   }, [id, priority, wantsToShow]);
 
-  const rankIndex = rank(useSyncExternalStore(subscribe, getSnapshot, getSnapshot)).findIndex((r) => r.id === id);
+  const ranked = rank(useSyncExternalStore(subscribe, getSnapshot, getSnapshot));
+  const rankIndex = ranked.findIndex((r) => r.id === id);
   // Gate on the CURRENT render's `wantsToShow`, not just the (possibly stale)
   // registered request: the registration effect above only reconciles
   // `requests` after commit, so a caller whose `wantsToShow` just flipped
   // false would otherwise still read `visible: true` for one extra render off
   // its now-stale request (Codex review, PR #238).
   const visible = wantsToShow && rankIndex !== -1 && rankIndex < MAX_VISIBLE_TOASTS;
-  return { visible, stackIndex: visible ? rankIndex : -1 };
+  const visibleCount = Math.min(ranked.length, MAX_VISIBLE_TOASTS);
+  return { visible, stackIndex: visible ? rankIndex : -1, visibleCount };
 }
 
 // --- First-Mark signal (install nudge trigger) ------------------------------

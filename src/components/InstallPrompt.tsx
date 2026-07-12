@@ -37,7 +37,7 @@ export default function InstallPrompt() {
   const hasMarkedSquare = useHasMarkedSquare();
 
   const wantsToShow = !standalone && !dismissed && hasMarkedSquare && (!!deferred || showIOSHint);
-  const { visible, stackIndex } = useToastSlot(TOAST_ID, 'invitational', wantsToShow);
+  const { visible, stackIndex, visibleCount } = useToastSlot(TOAST_ID, 'invitational', wantsToShow);
 
   useEffect(() => {
     document.body.classList.toggle(VISIBLE_CLASS, visible);
@@ -58,7 +58,11 @@ export default function InstallPrompt() {
   };
 
   return (
-    <div className="install-prompt" role="note" style={{ '--toast-index': stackIndex } as CSSProperties}>
+    <div
+      className="install-prompt"
+      role="note"
+      style={{ '--toast-index': stackIndex, '--toast-count': visibleCount } as CSSProperties}
+    >
       {deferred ? (
         <>
           <p>Full screen, works offline at sea.</p>

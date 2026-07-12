@@ -59,5 +59,9 @@ export function track(name: GA4EventName, params?: Record<string, unknown>): voi
   // Install nudge trigger (#219, daily-cards-spec § "Install nudge and
   // update banner"): reuses this existing `mark_square` call site as the
   // signal instead of a new one in Board.tsx — see useToastStack's module doc.
-  if (name === 'mark_square') markSquareOccurred();
+  // Gated on `marked === true` (Codex review, PR #238): Board.doMark fires
+  // this same event for unmarking too, and an unmark shouldn't count as
+  // "the Player marked a Square on this device" (e.g. marks synced from
+  // another device, then undone here first).
+  if (name === 'mark_square' && params?.marked === true) markSquareOccurred();
 }

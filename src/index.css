@@ -1286,21 +1286,23 @@ a {
 /* ---------- install + update toasts ---------- */
 /* Shared bottom-toast shell: .install-prompt (specs/w1-pwa.md) and .update-prompt
    (specs/app-update-reload-prompt.md, restyled by specs/d15-pwa-toasts.md).
-   `--toast-index` (0 = topmost) is set inline by each component from
+   `--toast-index` (0 = topmost) and `--toast-count` (how many toasts are
+   ACTUALLY visible right now, 1 or 2) are set inline by each component from
    `useToastSlot` (src/hooks/useToastStack.ts, #219) — urgent (update) outranks
    invitational (install) — shifting a toast up one slot per rank so both can
-   stack above the tab bar instead of one hiding the other. `--toast-max-index`
-   (MAX_VISIBLE_TOASTS - 1, keep in sync with useToastStack.ts) inverts the
-   offset so stackIndex 0 lands at the LARGEST bottom offset — the physically
-   topmost slot, matching "0 = topmost" — instead of the smallest one (Codex
-   review, PR #238): a lower stackIndex (urgent) must render above a higher one
-   (invitational), never the reverse. */
+   stack above the tab bar instead of one hiding the other. `--toast-count - 1`
+   inverts the offset so stackIndex 0 lands at the LARGEST bottom offset — the
+   physically topmost slot, matching "0 = topmost" — instead of the smallest
+   one (Codex review, PR #238): a lower stackIndex (urgent) must render above a
+   higher one (invitational), never the reverse. Using the real `--toast-count`
+   instead of a fixed MAX_VISIBLE_TOASTS-1 keeps a LONE toast in the bottom
+   slot (index 0 of 1) rather than floating one slot above an empty one
+   (Codex review, PR #238). */
 .install-prompt,
 .update-prompt {
   --toast-slot-height: 54px;
-  --toast-max-index: 1;
   position: fixed;
-  bottom: calc((var(--toast-max-index, 1) - var(--toast-index, 0)) * var(--toast-slot-height));
+  bottom: calc((var(--toast-count, 1) - 1 - var(--toast-index, 0)) * var(--toast-slot-height));
   left: 0;
   right: 0;
   z-index: 55;
@@ -1333,7 +1335,7 @@ a {
    this base so stacked toasts (#219) sit above one another. */
 body:has(.tabs) .install-prompt,
 body:has(.tabs) .update-prompt {
-  bottom: calc(75px + env(safe-area-inset-bottom) + ((var(--toast-max-index, 1) - var(--toast-index, 0)) * var(--toast-slot-height)));
+  bottom: calc(75px + env(safe-area-inset-bottom) + ((var(--toast-count, 1) - 1 - var(--toast-index, 0)) * var(--toast-slot-height)));
 }
 /* Reserve extra .app bottom clearance while a toast is up, ~64px/toast — see
    specs/w1-pwa.md for the (unverified, jsdom-has-no-layout) estimate rationale.

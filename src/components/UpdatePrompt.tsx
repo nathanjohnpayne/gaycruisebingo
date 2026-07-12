@@ -50,7 +50,7 @@ export default function UpdatePrompt() {
   const claimSheetOpen = useClaimSheetOpen();
 
   const wantsToShow = needRefresh && !claimSheetOpen;
-  const { visible, stackIndex } = useToastSlot(TOAST_ID, 'urgent', wantsToShow);
+  const { visible, stackIndex, visibleCount } = useToastSlot(TOAST_ID, 'urgent', wantsToShow);
 
   useEffect(() => {
     document.body.classList.toggle(VISIBLE_CLASS, visible);
@@ -62,7 +62,11 @@ export default function UpdatePrompt() {
   if (!visible) return null;
 
   return (
-    <div className="update-prompt" role="status" style={{ '--toast-index': stackIndex } as CSSProperties}>
+    <div
+      className="update-prompt"
+      role="status"
+      style={{ '--toast-index': stackIndex, '--toast-count': visibleCount } as CSSProperties}
+    >
       <p>A fresh build just docked&mdash;your marks are safe.</p>
       <button className="btn primary" onClick={() => void updateServiceWorker(true)}>
         Reload
