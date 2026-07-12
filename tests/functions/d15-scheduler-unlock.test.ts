@@ -1,0 +1,421 @@
+import { describe, it, expect } from 'vitest';
+import {
+  isDueForSnapshot,
+  daysDueForSnapshot,
+  activeSnapshotIds,
+  finaleTimes,
+  finaleActions,
+  isEventAdmin,
+  LAST_CALL_LEAD_MS,
+  stampDaySnapshot,
+  runScheduledUnlock,
+  manualUnlockNow,
+  UnlockPermissionError,
+  type AdminFirestore,
+  type DayLike,
+  type EventLike,
+} from '../../functions/src/unlockDay';
+
+// specs/d15-scheduler-unlock.md — the Phase 1.5 daily scheduler (#202,
+// daily-cards-spec § "Unlock mechanics" / "Scoring and social surfaces"). Pure
+// decision logic + an idempotent, DI'd write path (mirrors autohide.ts): the
+// snapshot-at-unlock stamp, the finale two-beat finish (20:00 Day 9 last-call /
+// 08:00 Day 10 freeze + podium), and the admin "unlock now" fallback. Every
+// Firestore seam is a fake — no live runtime. Runs via `npm run test:functions`.
+
+// --- In-memory Firestore fake ---------------------------------------------------
+
+interface StoredItem {
+  id: string;
+  status: string;
+  pool?: string;
+  isFreeSpace?: boolean;
+  reportCount?: number;
+  createdBy?: string;
+  createdAt?: number;
+  approvedAt?: number;
+}
+interface StoredMoment {
+  id: string;
+  [k: string]: unknown;
+}
+
+/** A minimal in-memory stand-in for the admin-SDK surface unlockDay.ts injects. */
+function makeDb(seed: {
+  eventId: string;
+  event: EventLike;
+  items?: StoredItem[];
+  moments?: StoredMoment[];
+}): AdminFirestore & { readEvent(): EventLike; moments(): StoredMoment[] } {
+  const docs: Record<string, Record<string, unknown> | undefined> = {
+    [`events/${seed.eventId}`]: { ...seed.event } as Record<string, unknown>,
+  };
+  const items = [...(seed.items ?? [])];
+  const moments = [...(seed.moments ?? [])];
+  let momentSeq = moments.length;
+
+  const snapshotOf = (path: string) => {
+    const data = docs[path];
+    return { exists: data !== undefined, id: path.split('/').pop() as string, data: () => data };
+  };
+
+  const docRef = (path: string) => ({
+    get: async () => snapshotOf(path),
+    set: async (data: Record<string, unknown>) => {
+      docs[path] = { ...data };
+      return undefined;
+    },
+  });
+
+  const collectionRef = (path: string) => {
+    const filters: Array<[string, unknown]> = [];
+    const backing = (): StoredMoment[] | StoredItem[] =>
+      path.endsWith('/items') ? items : path.endsWith('/moments') ? moments : [];
+    const api: any = {
+      where(field: string, _op: string, value: unknown) {
+        filters.push([field, value]);
+        return api;
+      },
+      async get() {
+        const rows = (backing() as Array<Record<string, unknown>>).filter((row) =>
+          filters.every(([f, v]) => row[f] === v),
+        );
+        return { docs: rows.map((row) => ({ exists: true, id: row.id as string, data: () => row })) };
+      },
+      doc(id?: string) {
+        if (path.endsWith('/moments')) {
+          const mid = id ?? `m${++momentSeq}`;
+          return {
+            get: async () => ({ exists: false, id: mid, data: () => undefined }),
+            set: async (data: Record<string, unknown>) => {
+              // Upsert by id, mirroring Firestore's `doc(id).set` overwrite so a
+              // deterministic-id (`kind`) re-post replaces rather than duplicates.
+              const at = moments.findIndex((m) => m.id === mid);
+              if (at >= 0) moments[at] = { id: mid, ...data };
+              else moments.push({ id: mid, ...data });
+              return undefined;
+            },
+          };
+        }
+        return docRef(`${path}/${id}`);
+      },
+    };
+    return api;
+  };
+
+  return {
+    doc: (path: string) => docRef(path),
+    collection: (path: string) => collectionRef(path),
+    async runTransaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
+      const tx = {
+        get: async (ref: { get(): Promise<unknown> }) => ref.get(),
+        update: (ref: { set(d: Record<string, unknown>): Promise<unknown> }, data: Record<string, unknown>) => {
+          // merge onto the current doc (the surface only ever updates the event doc)
+          const current = (docs[`events/${seed.eventId}`] ?? {}) as Record<string, unknown>;
+          docs[`events/${seed.eventId}`] = { ...current, ...data };
+          void ref;
+        },
+      };
+      return fn(tx);
+    },
+    readEvent: () => docs[`events/${seed.eventId}`] as unknown as EventLike,
+    moments: () => moments,
+  };
+}
+
+// Clock anchors (ms epoch); the exact values don't matter, only their ordering.
+const D9_UNLOCK = Date.UTC(2026, 6, 24, 6, 0); // Day 9 08:00 Europe/Rome (summer = UTC+2)
+const D10_UNLOCK = Date.UTC(2026, 6, 25, 6, 0); // Day 10 08:00 Europe/Rome
+
+function mainDays(): DayLike[] {
+  return [
+    { index: 8, pool: 'main', unlockAt: D9_UNLOCK }, // Day 9
+    { index: 9, pool: 'farewell', unlockAt: D10_UNLOCK }, // Day 10 (farewell)
+  ];
+}
+
+describe('isDueForSnapshot / daysDueForSnapshot — the due-and-unstamped gate', () => {
+  it('is due when unlockAt has passed and no snapshot exists', () => {
+    expect(isDueForSnapshot({ index: 0, pool: 'main', unlockAt: 100 }, 200)).toBe(true);
+  });
+  it('is NOT due when unlockAt is still in the future', () => {
+    expect(isDueForSnapshot({ index: 0, pool: 'main', unlockAt: 300 }, 200)).toBe(false);
+  });
+  it('is NOT due once a snapshot exists — even an empty one (idempotency)', () => {
+    expect(isDueForSnapshot({ index: 0, pool: 'main', unlockAt: 100, snapshotItemIds: [] }, 200)).toBe(false);
+    expect(isDueForSnapshot({ index: 0, pool: 'main', unlockAt: 100, snapshotItemIds: ['a'] }, 200)).toBe(false);
+  });
+  it('selects only the due, unstamped Days', () => {
+    const days: DayLike[] = [
+      { index: 0, pool: 'main', unlockAt: 100 },
+      { index: 1, pool: 'main', unlockAt: 100, snapshotItemIds: ['x'] },
+      { index: 2, pool: 'main', unlockAt: 500 },
+    ];
+    expect(daysDueForSnapshot(days, 200).map((d) => d.index)).toEqual([0]);
+  });
+});
+
+describe('activeSnapshotIds — the frozen pool mirrors the live deal pool', () => {
+  const OPEN = { cutoff: Number.MAX_SAFE_INTEGER }; // no cutoff exclusion
+
+  it('keeps only the requested pool and defaults a missing pool to main', () => {
+    const items = [
+      { id: 'a', pool: 'main' },
+      { id: 'b', pool: 'embark' },
+      { id: 'c' }, // legacy, no pool → main
+      { id: 'd', pool: 'farewell' },
+    ];
+    expect(activeSnapshotIds(items, { pool: 'main', ...OPEN })).toEqual(['a', 'c']);
+    expect(activeSnapshotIds(items, { pool: 'embark', ...OPEN })).toEqual(['b']);
+    expect(activeSnapshotIds(items, { pool: 'farewell', ...OPEN })).toEqual(['d']);
+  });
+
+  it('drops isFreeSpace sentinels — the free center is dealt separately (#228)', () => {
+    const items = [
+      { id: 'a', pool: 'main' },
+      { id: 'free', pool: 'main', isFreeSpace: true },
+    ];
+    expect(activeSnapshotIds(items, { pool: 'main', ...OPEN })).toEqual(['a']);
+  });
+
+  it('drops community-hidden and banned-author items, like the live pool (#228)', () => {
+    const items = [
+      { id: 'ok', pool: 'main', reportCount: 1, createdBy: 'u1' },
+      { id: 'reported', pool: 'main', reportCount: 5, createdBy: 'u2' },
+      { id: 'banned', pool: 'main', reportCount: 0, createdBy: 'villain' },
+    ];
+    const ids = activeSnapshotIds(items, {
+      pool: 'main',
+      ...OPEN,
+      reportHideThreshold: 5,
+      bannedUids: ['villain'],
+    });
+    expect(ids).toEqual(['ok']);
+  });
+
+  it('fails OPEN on a non-positive threshold or empty ban roster (no over-filtering)', () => {
+    const items = [{ id: 'a', pool: 'main', reportCount: 99, createdBy: 'u1' }];
+    expect(activeSnapshotIds(items, { pool: 'main', ...OPEN, reportHideThreshold: 0 })).toEqual(['a']);
+    expect(activeSnapshotIds(items, { pool: 'main', ...OPEN, bannedUids: [] })).toEqual(['a']);
+  });
+
+  it('excludes items that entered the pool AFTER the Day cutoff (approvedAt ?? createdAt)', () => {
+    const items = [
+      { id: 'legacy', pool: 'main' }, // no timestamps → fail open, kept
+      { id: 'created-before', pool: 'main', createdAt: 100 },
+      { id: 'created-after', pool: 'main', createdAt: 300 },
+      { id: 'approved-before', pool: 'main', createdAt: 50, approvedAt: 150 },
+      { id: 'approved-after', pool: 'main', createdAt: 50, approvedAt: 250 },
+    ];
+    expect(activeSnapshotIds(items, { pool: 'main', cutoff: 200 })).toEqual([
+      'legacy',
+      'created-before',
+      'approved-before',
+    ]);
+  });
+});
+
+describe('stampDaySnapshot — the snapshot at unlock (AC 1)', () => {
+  it('stamps a due, unstamped Day with exactly the active items in its pool', async () => {
+    const db = makeDb({
+      eventId: 'e1',
+      event: { days: mainDays() },
+      items: [
+        { id: 'a', status: 'active', pool: 'main' },
+        { id: 'b', status: 'active', pool: 'main' },
+        { id: 'c', status: 'pending', pool: 'main' }, // not active → excluded
+        { id: 'd', status: 'active', pool: 'embark' }, // wrong pool → excluded
+        { id: 'legacy', status: 'active' }, // no pool → main → included
+      ],
+    });
+    const result = await stampDaySnapshot(db, 'e1', 8, { now: () => D9_UNLOCK + 1 });
+    expect(result).toBe('stamped');
+    const day = db.readEvent().days!.find((d) => d.index === 8)!;
+    expect(day.snapshotItemIds).toEqual(['a', 'b', 'legacy']);
+  });
+
+  it('freezes only what the live pool would deal: no free-space, hidden, banned, or late items (#228)', async () => {
+    const db = makeDb({
+      eventId: 'e1',
+      event: {
+        days: mainDays(),
+        settings: { reportHideThreshold: 5 },
+        bannedUids: ['villain'],
+      },
+      items: [
+        { id: 'keep', status: 'active', pool: 'main', createdBy: 'u1', createdAt: D9_UNLOCK - 1000 },
+        { id: 'free', status: 'active', pool: 'main', isFreeSpace: true },
+        { id: 'reported', status: 'active', pool: 'main', reportCount: 5, createdBy: 'u2' },
+        { id: 'banned', status: 'active', pool: 'main', createdBy: 'villain' },
+        { id: 'late', status: 'active', pool: 'main', createdBy: 'u3', createdAt: D9_UNLOCK + 10_000 },
+      ],
+    });
+    // Run late (10s after unlock): the `late` item, created after the 08:00 cutoff,
+    // must still be excluded because the snapshot freezes the pool AS OF unlockAt.
+    const result = await stampDaySnapshot(db, 'e1', 8, { now: () => D9_UNLOCK + 20_000 });
+    expect(result).toBe('stamped');
+    expect(db.readEvent().days!.find((d) => d.index === 8)!.snapshotItemIds).toEqual(['keep']);
+  });
+
+  it('leaves a Day whose unlockAt is still in the future untouched (AC: future Day)', async () => {
+    const db = makeDb({
+      eventId: 'e1',
+      event: { days: mainDays() },
+      items: [{ id: 'a', status: 'active', pool: 'farewell' }],
+    });
+    const result = await stampDaySnapshot(db, 'e1', 9, { now: () => D10_UNLOCK - 1 });
+    expect(result).toBe('not-due');
+    expect(db.readEvent().days!.find((d) => d.index === 9)!.snapshotItemIds).toBeUndefined();
+  });
+
+  it('is idempotent: a second run against an already-stamped Day is a no-op (AC 1 retry)', async () => {
+    const db = makeDb({
+      eventId: 'e1',
+      event: { days: mainDays() },
+      items: [{ id: 'a', status: 'active', pool: 'main' }],
+    });
+    const first = await stampDaySnapshot(db, 'e1', 8, { now: () => D9_UNLOCK + 1 });
+    expect(first).toBe('stamped');
+    const stampedIds = db.readEvent().days!.find((d) => d.index === 8)!.snapshotItemIds;
+
+    // A new active item appears AFTER the first stamp — a re-run must NOT pick it up.
+    const second = await stampDaySnapshot(db, 'e1', 8, { now: () => D9_UNLOCK + 5000 });
+    expect(second).toBe('already-stamped');
+    expect(db.readEvent().days!.find((d) => d.index === 8)!.snapshotItemIds).toEqual(stampedIds);
+  });
+});
+
+describe('finaleTimes / finaleActions — the two-beat finish (AC 3)', () => {
+  it('anchors last-call to Day 9 08:00 + 12h = 20:00 and freeze to the farewell unlock', () => {
+    const t = finaleTimes(mainDays())!;
+    expect(t.lastCallAt).toBe(D9_UNLOCK + LAST_CALL_LEAD_MS);
+    expect(t.farewellUnlockAt).toBe(D10_UNLOCK);
+    expect(t.lastCallDayIndex).toBe(8);
+    expect(t.podiumDayIndex).toBe(9);
+  });
+
+  it('returns null when there is no farewell Day (a non-Phase-1.5 event)', () => {
+    expect(finaleTimes([{ index: 0, pool: 'main', unlockAt: 1 }])).toBeNull();
+  });
+
+  it('posts last-call in [20:00 Day9, 08:00 Day10) and only when not already posted', () => {
+    const t = finaleTimes(mainDays())!;
+    const base = { lastCallPosted: false, podiumPosted: false };
+    expect(finaleActions(t, t.lastCallAt, base).postLastCall).toBe(true);
+    expect(finaleActions(t, t.lastCallAt - 1, base).postLastCall).toBe(false); // before 20:00
+    expect(finaleActions(t, t.farewellUnlockAt, base).postLastCall).toBe(false); // freeze supersedes
+    expect(finaleActions(t, t.lastCallAt, { ...base, lastCallPosted: true }).postLastCall).toBe(false); // dedup
+  });
+
+  it('freezes at/after the farewell unlock only while not yet frozen', () => {
+    const t = finaleTimes(mainDays())!;
+    const base = { lastCallPosted: false, podiumPosted: false };
+    expect(finaleActions(t, t.farewellUnlockAt, base).freeze).toBe(true);
+    expect(finaleActions(t, t.farewellUnlockAt - 1, base).freeze).toBe(false);
+    expect(finaleActions(t, t.farewellUnlockAt, { ...base, frozenAt: 123 }).freeze).toBe(false);
+  });
+
+  it('posts the podium at/after the farewell unlock only while not already posted', () => {
+    const t = finaleTimes(mainDays())!;
+    const base = { lastCallPosted: false, podiumPosted: false };
+    expect(finaleActions(t, t.farewellUnlockAt, base).postPodium).toBe(true);
+    expect(finaleActions(t, t.farewellUnlockAt - 1, base).postPodium).toBe(false);
+    expect(finaleActions(t, t.farewellUnlockAt, { ...base, podiumPosted: true }).postPodium).toBe(false);
+  });
+
+  it('keeps the podium retry open after a run that froze but failed to post it (#228)', () => {
+    const t = finaleTimes(mainDays())!;
+    // An earlier run flipped frozenAt but its podium write failed transiently.
+    const d = finaleActions(t, t.farewellUnlockAt + 60_000, {
+      frozenAt: t.farewellUnlockAt,
+      lastCallPosted: true,
+      podiumPosted: false,
+    });
+    expect(d.freeze).toBe(false); // already frozen — never re-freeze
+    expect(d.postPodium).toBe(true); // but the podium beat is still owed
+  });
+});
+
+describe('runScheduledUnlock — the finale beats through the write path (AC 3)', () => {
+  it('at 20:00 Day 9 posts exactly one last_call Moment and does not touch frozenAt', async () => {
+    const db = makeDb({ eventId: 'e1', event: { days: mainDays() } });
+    const at2000Day9 = D9_UNLOCK + LAST_CALL_LEAD_MS;
+    await runScheduledUnlock(db, 'e1', { now: () => at2000Day9 });
+    await runScheduledUnlock(db, 'e1', { now: () => at2000Day9 + 60_000 }); // retry same window
+
+    const lastCalls = db.moments().filter((m) => m.kind === 'last_call');
+    expect(lastCalls).toHaveLength(1);
+    expect(lastCalls[0].dayIndex).toBe(8);
+    expect(lastCalls[0].id).toBe('last_call'); // deterministic id → renders in the Feed (#228)
+    expect(db.moments().filter((m) => m.kind === 'podium')).toHaveLength(0);
+    expect(db.readEvent().frozenAt).toBeUndefined();
+  });
+
+  it('at 08:00 Day 10 sets frozenAt and posts exactly one podium Moment', async () => {
+    const db = makeDb({ eventId: 'e1', event: { days: mainDays() } });
+    await runScheduledUnlock(db, 'e1', { now: () => D10_UNLOCK });
+    await runScheduledUnlock(db, 'e1', { now: () => D10_UNLOCK + 60_000 }); // retry
+
+    expect(db.readEvent().frozenAt).toBe(D10_UNLOCK);
+    const podiums = db.moments().filter((m) => m.kind === 'podium');
+    expect(podiums).toHaveLength(1);
+    expect(podiums[0].dayIndex).toBe(9);
+    expect(podiums[0].id).toBe('podium'); // deterministic id → renders in the Feed (#228)
+    // The farewell Day's own snapshot is stamped by the same 08:00 run.
+    expect(db.readEvent().days!.find((d) => d.index === 9)!.snapshotItemIds).toEqual([]);
+  });
+
+  it('stamps frozenAt with the scheduled 08:00 cutoff even when the run is late (#228)', async () => {
+    const db = makeDb({ eventId: 'e1', event: { days: mainDays() } });
+    // A recovery run fires two hours late; frozenAt must still be the 08:00 cutoff,
+    // not the run clock, so post-08:00 marks never slip into the frozen standings.
+    await runScheduledUnlock(db, 'e1', { now: () => D10_UNLOCK + 2 * 60 * 60 * 1000 });
+    expect(db.readEvent().frozenAt).toBe(D10_UNLOCK);
+  });
+});
+
+describe('manualUnlockNow — the admin fallback (AC 2)', () => {
+  it('is admin-gated: isEventAdmin only accepts a uid on the roster', () => {
+    const event: EventLike = { admins: ['admin-1'] };
+    expect(isEventAdmin(event, 'admin-1')).toBe(true);
+    expect(isEventAdmin(event, 'someone-else')).toBe(false);
+    expect(isEventAdmin(event, undefined)).toBe(false);
+    expect(isEventAdmin({}, 'admin-1')).toBe(false);
+  });
+
+  it('produces the identical snapshot the scheduled path would for the same Day', async () => {
+    const seed = () => ({
+      eventId: 'e1',
+      event: { days: mainDays(), admins: ['admin-1'] },
+      items: [
+        { id: 'a', status: 'active', pool: 'main' },
+        { id: 'b', status: 'active', pool: 'main' },
+      ],
+    });
+    const now = () => D9_UNLOCK + 1;
+
+    const scheduled = makeDb(seed());
+    await stampDaySnapshot(scheduled, 'e1', 8, { now });
+
+    const manual = makeDb(seed());
+    const result = await manualUnlockNow(manual, 'admin-1', 'e1', 8, { now });
+
+    expect(result).toBe('stamped');
+    const manualIds = manual.readEvent().days!.find((d) => d.index === 8)!.snapshotItemIds;
+    const scheduledIds = scheduled.readEvent().days!.find((d) => d.index === 8)!.snapshotItemIds;
+    expect(manualIds).toEqual(scheduledIds);
+    expect(manualIds).toEqual(['a', 'b']);
+  });
+
+  it('denies a non-admin caller with UnlockPermissionError and writes nothing', async () => {
+    const db = makeDb({
+      eventId: 'e1',
+      event: { days: mainDays(), admins: ['admin-1'] },
+      items: [{ id: 'a', status: 'active', pool: 'main' }],
+    });
+    await expect(manualUnlockNow(db, 'not-an-admin', 'e1', 8, { now: () => D9_UNLOCK + 1 })).rejects.toBeInstanceOf(
+      UnlockPermissionError,
+    );
+    expect(db.readEvent().days!.find((d) => d.index === 8)!.snapshotItemIds).toBeUndefined();
+  });
+});

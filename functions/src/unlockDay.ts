@@ -1,0 +1,481 @@
+/**
+ * Phase 1.5 daily scheduler core (issue #202, daily-cards-spec § "Unlock
+ * mechanics" / "Security rules and functions (shape only)" / "Scoring and social
+ * surfaces"). Owns the scheduled TRIGGERS and the snapshot / freeze WRITES only:
+ *
+ *   1. Snapshot at unlock — for every Day whose `unlockAt` has passed and which
+ *      carries no `snapshotItemIds` yet, stamp the Day with the ids of every
+ *      `status: 'active'` item in that Day's pool at that moment. Idempotent: a
+ *      Day that already carries a snapshot (even an empty one) is never
+ *      re-stamped, so retries and a second same-day run are no-ops.
+ *   2. The finale two-beat finish — at 20:00 on Day 9 post exactly one
+ *      `last_call` Moment (frozenAt untouched); at 08:00 on Day 10 (the farewell
+ *      Day's `unlockAt`) set `EventDoc.frozenAt` and post exactly one `podium`
+ *      Moment. The standings / podium CONTENT is #212 / #217; these Moments carry
+ *      only the minimal payload those tickets render.
+ *   3. A manual admin "unlock now" fallback (`manualUnlockNow`) that forces the
+ *      SAME idempotent snapshot for one Day on demand, so function lag / failure
+ *      can never leave a Day dealing from an unfrozen pool — and can never
+ *      diverge from the scheduled path's semantics.
+ *
+ * Every decision is a pure, injectable function so the whole flow is unit-testable
+ * without a Functions runtime (mirrors `autohide.ts`'s split between decision
+ * logic and the thin `index.ts` trigger seam). The Firestore surface is passed in
+ * — this module imports no `firebase-admin` / `firebase-functions`, so it never
+ * touches a live backend under test. Best-effort throughout: a single Day or beat
+ * failing is logged and skipped, never crashing the scheduled run (ADR 0001;
+ * mirrors `autohide.ts` / `notify.ts`).
+ */
+
+// --- Minimal domain shapes (local, so this module stays decoupled from the app
+// package — mirrors autohide.ts's ReportableDoc approach). --------------------
+
+/** The subset of a `DayDef` the scheduler reads/writes. */
+export interface DayLike {
+  index: number;
+  pool: string; // 'main' | 'embark' | 'farewell'
+  unlockAt: number; // ms epoch
+  snapshotItemIds?: string[];
+}
+
+/** The subset of an `EventDoc` the scheduler reads. */
+export interface EventLike {
+  days?: DayLike[];
+  frozenAt?: number | null;
+  admins?: string[];
+  /** ADR 0004 Phase 0 community auto-hide threshold (mirrors the live deal pool). */
+  settings?: { reportHideThreshold?: number };
+  /** ADR 0004 Phase 0 event-scoped ban roster (#108; mirrors the live deal pool). */
+  bannedUids?: string[];
+}
+
+/** The finale Moment kinds this ticket posts. */
+export type FinaleMomentKind = 'last_call' | 'podium';
+
+// --- Pure decisions -------------------------------------------------------------
+
+/**
+ * A Day is due for a snapshot iff its `unlockAt` has passed AND it carries no
+ * snapshot yet. `snapshotItemIds == null` (absent/undefined) is the ONLY
+ * unstamped state: an empty array `[]` is a valid stamp (a Day whose pool had no
+ * active items at unlock) and must NOT be re-stamped — that is the idempotency
+ * guarantee.
+ */
+export function isDueForSnapshot(day: DayLike, now: number): boolean {
+  return day.unlockAt <= now && day.snapshotItemIds == null;
+}
+
+/** The Days due for a snapshot at `now`, in schedule order. */
+export function daysDueForSnapshot(days: DayLike[], now: number): DayLike[] {
+  return days.filter((d) => isDueForSnapshot(d, now));
+}
+
+/**
+ * The shape of an active item doc the snapshot reads. Mirrors the fields the live
+ * deal pool (`src/data/api.ts` joinAndDeal) inspects, so a frozen Day Card draws
+ * from the SAME pool a Player sees live.
+ */
+export interface SnapshotItem {
+  id: string;
+  pool?: string;
+  isFreeSpace?: boolean;
+  reportCount?: number;
+  createdBy?: string;
+  createdAt?: number;
+  approvedAt?: number;
+}
+
+/** The pool + moderation + cutoff context a snapshot is filtered against. */
+export interface SnapshotFilter {
+  pool: string;
+  /**
+   * The Day's canonical unlock moment (`day.unlockAt`), NOT the run clock: an item
+   * that only entered the pool AFTER unlock must not slip into a delayed/manual run's
+   * snapshot and retroactively change an already-open Day's pool.
+   */
+  cutoff: number;
+  reportHideThreshold?: number;
+  bannedUids?: readonly string[];
+}
+
+/**
+ * ADR 0004 Phase 0 community auto-hide — local mirror of `src/data/moderation.ts`'s
+ * `isReportHidden` (this module stays decoupled from the app package, like
+ * `autohide.ts`). True iff `reportCount` has REACHED a POSITIVE threshold; fails
+ * OPEN for a missing/non-positive threshold.
+ */
+function isReportHidden(reportCount: number, threshold: number | undefined): boolean {
+  return typeof threshold === 'number' && threshold > 0 && reportCount >= threshold;
+}
+
+/**
+ * ADR 0004 Phase 0 event-scoped ban — local mirror of `src/data/moderation.ts`'s
+ * `isBanned`. True iff `uid` is on the roster; fails OPEN for a missing/malformed
+ * roster.
+ */
+function isBanned(uid: string | undefined, bannedUids: readonly string[] | undefined): boolean {
+  return !!uid && Array.isArray(bannedUids) && bannedUids.includes(uid);
+}
+
+/**
+ * The ids that make up a Day's snapshot: the `status: 'active'` items in that Day's
+ * pool that the LIVE deal pool would also deal. Items are pre-filtered to `active`
+ * by the query; this applies the SAME predicates `src/data/api.ts` applies before
+ * `dealBoard`, so a frozen card can never surface content the live pool hides:
+ *
+ *   - pool split, defaulting a missing `pool` to `'main'` so legacy (pre-Phase-1.5)
+ *     active items — read as `'main'` by `itemConverter` — land in a main snapshot;
+ *   - drop `isFreeSpace` sentinels (the free center is dealt separately; the create
+ *     rule does not constrain the flag, so a raw client write could carry it);
+ *   - drop community-hidden (`isReportHidden`) and banned-author (`isBanned`) items;
+ *   - drop items that entered the pool AFTER the Day's `unlockAt` cutoff — a snapshot
+ *     is the active pool AS OF the unlock moment, even when the run is delayed. An
+ *     item's pool-entry time is `approvedAt` (Phase 1.5 approval flow) falling back to
+ *     `createdAt` (legacy items created directly `active`); a doc missing both is kept
+ *     (fail open), matching the moderation predicates' open-failure posture.
+ */
+export function activeSnapshotIds(items: SnapshotItem[], filter: SnapshotFilter): string[] {
+  const { pool, cutoff, reportHideThreshold, bannedUids } = filter;
+  return items
+    .filter((it) => (it.pool ?? 'main') === pool)
+    .filter((it) => !it.isFreeSpace)
+    .filter((it) => !isReportHidden(it.reportCount ?? 0, reportHideThreshold))
+    .filter((it) => !isBanned(it.createdBy, bannedUids))
+    .filter((it) => {
+      const enteredAt = it.approvedAt ?? it.createdAt;
+      return enteredAt == null || enteredAt <= cutoff;
+    })
+    .map((it) => it.id);
+}
+
+/** 20:00 Day 9 sits 12h after Day 9's 08:00 `unlockAt`; 08:00 Day 10 → freeze. */
+export const LAST_CALL_LEAD_MS = 12 * 60 * 60 * 1000;
+
+export interface FinaleTimes {
+  lastCallAt: number;
+  farewellUnlockAt: number;
+  lastCallDayIndex: number;
+  podiumDayIndex: number;
+}
+
+/**
+ * Resolve the finale clock boundaries from the Day schedule. The farewell Day
+ * (pool `'farewell'`, Day 10) anchors the freeze/podium at its own `unlockAt`
+ * (08:00 disembark morning, the standard rule). The last-call beat is Day 9's
+ * 08:00 `unlockAt` + 12h = 20:00 Day 9 (a same-day forward offset, so no
+ * midnight/DST cross); if Day 9 is somehow absent it falls back to
+ * `farewellUnlockAt - 12h` (the 08:00→08:00 gap less the last night). Returns
+ * `null` when there is no farewell Day (a non-Phase-1.5 event), so callers skip
+ * the finale entirely. DST caveat: the 12h wall gap assumes the sailing window
+ * does not cross a Europe/Rome DST switch — true for this event; the 20:00 cron
+ * lands inside `[lastCallAt, farewellUnlockAt)` under standard time.
+ */
+export function finaleTimes(days: DayLike[]): FinaleTimes | null {
+  const farewell = days.find((d) => d.pool === 'farewell');
+  if (!farewell) return null;
+  const dayNine = days.find((d) => d.index === farewell.index - 1);
+  const lastCallAt = dayNine ? dayNine.unlockAt + LAST_CALL_LEAD_MS : farewell.unlockAt - LAST_CALL_LEAD_MS;
+  return {
+    lastCallAt,
+    farewellUnlockAt: farewell.unlockAt,
+    lastCallDayIndex: farewell.index - 1,
+    podiumDayIndex: farewell.index,
+  };
+}
+
+export interface FinaleDecision {
+  postLastCall: boolean;
+  freeze: boolean;
+  postPodium: boolean;
+}
+
+/**
+ * Given the finale boundaries, `now`, and the current state (`frozenAt`, whether the
+ * `last_call` / `podium` Moments already exist), decide which beats fire:
+ *
+ *   - `postLastCall`: `now` is in `[lastCallAt, farewellUnlockAt)` and no last-call
+ *     Moment exists yet. The upper bound means once the freeze time arrives the
+ *     podium supersedes it; the already-posted guard makes a same-window retry a no-op.
+ *   - `freeze`: `now` has reached the farewell unlock and the event is not yet frozen
+ *     (the actual flip is transactional and exactly-once).
+ *   - `postPodium`: `now` has reached the farewell unlock and no podium Moment exists
+ *     yet. DECOUPLED from the freeze flip on purpose (Codex #228): if an earlier run
+ *     froze but its podium write failed transiently, the freeze guard now blocks
+ *     re-freezing, but the podium retry stays open until the Moment actually lands.
+ *     Concurrent double-posts collapse onto the one deterministic-id doc.
+ */
+export function finaleActions(
+  times: FinaleTimes,
+  now: number,
+  state: { frozenAt?: number | null; lastCallPosted: boolean; podiumPosted: boolean },
+): FinaleDecision {
+  const atFreeze = now >= times.farewellUnlockAt;
+  return {
+    postLastCall: now >= times.lastCallAt && now < times.farewellUnlockAt && !state.lastCallPosted,
+    freeze: atFreeze && state.frozenAt == null,
+    postPodium: atFreeze && !state.podiumPosted,
+  };
+}
+
+/** An event admin is any uid on the event's `admins` roster (mirrors `isAdmin` in firestore.rules). */
+export function isEventAdmin(event: EventLike | undefined, uid: string | undefined): boolean {
+  return !!uid && Array.isArray(event?.admins) && event.admins.includes(uid);
+}
+
+/** Thrown by `manualUnlockNow` for a non-admin caller; mapped to an HttpsError at the trigger seam. */
+export class UnlockPermissionError extends Error {}
+
+// --- Injectable admin-SDK Firestore surface (minimal) ---------------------------
+
+interface DocSnapshot {
+  readonly exists: boolean;
+  readonly id: string;
+  data(): Record<string, unknown> | undefined;
+}
+interface DocRef {
+  get(): Promise<DocSnapshot>;
+  set(data: Record<string, unknown>): Promise<unknown>;
+}
+interface QueryRef {
+  where(field: string, op: string, value: unknown): QueryRef;
+  get(): Promise<{ docs: DocSnapshot[] }>;
+}
+interface CollectionRef extends QueryRef {
+  doc(id?: string): DocRef;
+}
+interface Transaction {
+  get(ref: DocRef): Promise<DocSnapshot>;
+  update(ref: DocRef, data: Record<string, unknown>): void;
+}
+/** The minimal admin-SDK Firestore surface the scheduler uses. */
+export interface AdminFirestore {
+  doc(path: string): DocRef;
+  collection(path: string): CollectionRef;
+  runTransaction<T>(updateFunction: (tx: Transaction) => Promise<T>): Promise<T>;
+}
+
+export type SnapshotResult = 'stamped' | 'already-stamped' | 'not-due' | 'no-event' | 'no-day';
+
+export interface UnlockDeps {
+  /** Current time; defaults to `Date.now`. */
+  now?: () => number;
+}
+
+async function queryActiveItems(db: AdminFirestore, eventId: string): Promise<SnapshotItem[]> {
+  const snap = await db.collection(`events/${eventId}/items`).where('status', '==', 'active').get();
+  return snap.docs.map((d) => {
+    const data = d.data() ?? {};
+    return {
+      id: d.id,
+      pool: data.pool as string | undefined,
+      isFreeSpace: data.isFreeSpace as boolean | undefined,
+      reportCount: data.reportCount as number | undefined,
+      createdBy: data.createdBy as string | undefined,
+      createdAt: data.createdAt as number | undefined,
+      approvedAt: data.approvedAt as number | undefined,
+    };
+  });
+}
+
+async function hasMoment(db: AdminFirestore, eventId: string, kind: FinaleMomentKind): Promise<boolean> {
+  const snap = await db.collection(`events/${eventId}/moments`).where('kind', '==', kind).get();
+  return snap.docs.length > 0;
+}
+
+async function postFinaleMoment(
+  db: AdminFirestore,
+  eventId: string,
+  kind: FinaleMomentKind,
+  dayIndex: number,
+  now: number,
+): Promise<void> {
+  // Minimal, scheduler-posted payload: the standings / podium CONTENT is #212 /
+  // #217, which read this beat by `kind` + `dayIndex`. No human author — a
+  // `system` uid keeps the MomentDoc shape intact without impersonating a Player.
+  //
+  // Write at the DETERMINISTIC `kind` id, not an auto-id: the public Feed read
+  // (`hasCanonicalMomentId`, src/hooks/useData.ts) only renders these singleton
+  // finale beats when `moment.id === moment.kind`, so an auto-id moment would exist
+  // in Firestore but never surface (Codex #228 P1). The deterministic id also makes
+  // a retry overwrite the one doc rather than fan out duplicates.
+  await db.collection(`events/${eventId}/moments`).doc(kind).set({
+    kind,
+    uid: 'system',
+    displayName: '',
+    photoURL: null,
+    createdAt: now,
+    dayIndex,
+  });
+}
+
+// --- Snapshot stamping ----------------------------------------------------------
+
+/**
+ * Idempotently stamp one Day's `snapshotItemIds`. Reads the event, locates the
+ * Day by its `index`, and — if the Day is due (`unlockAt` passed) and unstamped —
+ * queries the Day's active pool items, then writes the snapshot inside a
+ * transaction that RE-CONFIRMS the Day is still unstamped and still due (a
+ * concurrent run or the manual path may have won the race). Returns what it did.
+ * The item query runs before the transaction (mirrors `autohide.ts`); the
+ * transactional re-read is the idempotency guard, not the query.
+ */
+export async function stampDaySnapshot(
+  db: AdminFirestore,
+  eventId: string,
+  dayIndex: number,
+  deps: UnlockDeps = {},
+): Promise<SnapshotResult> {
+  const now = (deps.now ?? Date.now)();
+  const eventRef = db.doc(`events/${eventId}`);
+  const pre = (await eventRef.get()).data() as EventLike | undefined;
+  if (!pre) return 'no-event';
+  const days = Array.isArray(pre.days) ? pre.days : [];
+  const day = days.find((d) => d.index === dayIndex);
+  if (!day) return 'no-day';
+  if (day.unlockAt > now) return 'not-due';
+  if (day.snapshotItemIds != null) return 'already-stamped';
+
+  const items = await queryActiveItems(db, eventId);
+  // Filter the frozen pool by the SAME predicates the live deal path applies, AS OF
+  // this Day's unlock moment — so a delayed/manual run can never freeze in content
+  // the live pool hides, nor items approved after the Day opened (Codex #228).
+  const snapshotItemIds = activeSnapshotIds(items, {
+    pool: day.pool,
+    cutoff: day.unlockAt,
+    reportHideThreshold: pre.settings?.reportHideThreshold,
+    bannedUids: pre.bannedUids,
+  });
+
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(eventRef);
+    const ev = snap.data() as EventLike | undefined;
+    if (!ev) return 'no-event';
+    const arr = Array.isArray(ev.days) ? [...ev.days] : [];
+    const i = arr.findIndex((d) => d.index === dayIndex);
+    if (i < 0) return 'no-day';
+    if (arr[i].unlockAt > now) return 'not-due';
+    if (arr[i].snapshotItemIds != null) return 'already-stamped'; // re-confirm: never overwrite an existing snapshot
+    arr[i] = { ...arr[i], snapshotItemIds };
+    tx.update(eventRef, { days: arr });
+    return 'stamped';
+  });
+}
+
+/**
+ * Transactionally set `frozenAt` to the scheduled cutoff iff it is not already set.
+ * Exactly-once: only the run that flips it from unset returns `true`, so a retry or
+ * a racing run no-ops. The stamped value is the farewell Day's `unlockAt` (the 08:00
+ * freeze cutoff), NOT the run clock (Codex #228): a delayed or manual recovery run
+ * must not push the freeze boundary later and let post-08:00 marks into the standings.
+ */
+async function freezeStandings(db: AdminFirestore, eventId: string, frozenAt: number): Promise<boolean> {
+  const eventRef = db.doc(`events/${eventId}`);
+  return db.runTransaction(async (tx) => {
+    const ev = (await tx.get(eventRef)).data() as EventLike | undefined;
+    if (!ev || ev.frozenAt != null) return false;
+    tx.update(eventRef, { frozenAt });
+    return true;
+  });
+}
+
+// --- Finale beats ---------------------------------------------------------------
+
+/**
+ * Run the finale two-beat check for one event. Best-effort: each beat is
+ * independently try/caught so one failing (e.g. a Moment write) never blocks the
+ * other or crashes the run. Guards make it safe to call on any day and any number
+ * of times — a non-finale day, or a re-run, simply posts nothing.
+ */
+export async function runFinaleBeats(db: AdminFirestore, eventId: string, deps: UnlockDeps = {}): Promise<void> {
+  const now = (deps.now ?? Date.now)();
+  const event = (await db.doc(`events/${eventId}`).get()).data() as EventLike | undefined;
+  if (!event) return;
+  const times = finaleTimes(Array.isArray(event.days) ? event.days : []);
+  if (!times) return;
+
+  const [lastCallPosted, podiumPosted] = await Promise.all([
+    hasMoment(db, eventId, 'last_call'),
+    hasMoment(db, eventId, 'podium'),
+  ]);
+  const { postLastCall, freeze, postPodium } = finaleActions(times, now, {
+    frozenAt: event.frozenAt,
+    lastCallPosted,
+    podiumPosted,
+  });
+
+  if (postLastCall) {
+    try {
+      await postFinaleMoment(db, eventId, 'last_call', times.lastCallDayIndex, now);
+    } catch (err) {
+      console.error('runFinaleBeats: last_call post failed', eventId, err);
+    }
+  }
+  // Freeze and podium are INDEPENDENT best-effort beats (Codex #228): freezing stamps
+  // the scheduled 08:00 cutoff exactly-once, while the podium retries on its own guard
+  // until the Moment lands — so a run that froze but failed to post the podium does not
+  // strand the finale. Both are idempotent (the frozenAt flip; the deterministic-id
+  // podium doc), so a re-run or a race is safe.
+  if (freeze) {
+    try {
+      await freezeStandings(db, eventId, times.farewellUnlockAt);
+    } catch (err) {
+      console.error('runFinaleBeats: freeze failed', eventId, err);
+    }
+  }
+  if (postPodium) {
+    try {
+      await postFinaleMoment(db, eventId, 'podium', times.podiumDayIndex, now);
+    } catch (err) {
+      console.error('runFinaleBeats: podium post failed', eventId, err);
+    }
+  }
+}
+
+// --- Orchestration --------------------------------------------------------------
+
+/**
+ * One scheduled sweep for one event: stamp every due Day's snapshot (each
+ * best-effort, so one Day failing never blocks the rest), then run the finale
+ * beats. Returns how many Days it stamped on this run. The scheduled trigger in
+ * `index.ts` calls this per active event.
+ */
+export async function runScheduledUnlock(
+  db: AdminFirestore,
+  eventId: string,
+  deps: UnlockDeps = {},
+): Promise<{ stamped: number }> {
+  const now = (deps.now ?? Date.now)();
+  const event = (await db.doc(`events/${eventId}`).get()).data() as EventLike | undefined;
+  if (!event) return { stamped: 0 };
+  const days = Array.isArray(event.days) ? event.days : [];
+  let stamped = 0;
+  for (const day of daysDueForSnapshot(days, now)) {
+    try {
+      if ((await stampDaySnapshot(db, eventId, day.index, deps)) === 'stamped') stamped++;
+    } catch (err) {
+      console.error('runScheduledUnlock: stampDaySnapshot failed', eventId, day.index, err);
+    }
+  }
+  await runFinaleBeats(db, eventId, deps);
+  return { stamped };
+}
+
+/**
+ * The manual admin "unlock now" fallback: force the SAME idempotent snapshot for
+ * one Day on demand (function lag / failure). Denies a non-admin caller by
+ * throwing `UnlockPermissionError`; on success runs the identical
+ * `stampDaySnapshot` the scheduled path uses, so the two can never diverge.
+ */
+export async function manualUnlockNow(
+  db: AdminFirestore,
+  callerUid: string | undefined,
+  eventId: string,
+  dayIndex: number,
+  deps: UnlockDeps = {},
+): Promise<SnapshotResult> {
+  const event = (await db.doc(`events/${eventId}`).get()).data() as EventLike | undefined;
+  if (!isEventAdmin(event, callerUid)) {
+    throw new UnlockPermissionError('Only an event admin can unlock a Day.');
+  }
+  return stampDaySnapshot(db, eventId, dayIndex, deps);
+}
