@@ -204,10 +204,13 @@ export interface ProofDoc {
   // Whether the photo came from the live camera or the photo library — stamps
   // the 🖼️ Feed badge on library picks (daily-cards-spec § "Square tap"; #190).
   // Optional: absent on Proofs written before the two-affordance photo body.
-  source?: 'camera' | 'library';
+  // `null` (not just absent) is in the contract: attachProof ALWAYS writes the
+  // key, storing `null` for audio/text/camera picks, so reads must model it.
+  source?: 'camera' | 'library' | null;
   // Which Day this Proof belongs to, so the Feed reads "Day 2 · Get Sporty".
-  // Optional until the day-scoped claim flow (#211) stamps it.
-  dayIndex?: number;
+  // Optional until the day-scoped claim flow (#211) stamps it; `null` when the
+  // write carries no viewed Day (attachProof always writes the key).
+  dayIndex?: number | null;
 }
 
 export interface ClaimDoc {

@@ -196,7 +196,7 @@ describe('ProofFeed — the Proof IS the Feed entry (ADR 0002)', () => {
     expect(cards[0]).toHaveTextContent('Day 2 · Get Sporty');
     // …the camera pick (no source, no dayIndex) carries neither.
     expect(cards[1]).not.toHaveTextContent('🖼️');
-    expect(cards[1].querySelector('.day-chip')).toBeNull();
+    expect(cards[1].querySelector('.proof-day-chip')).toBeNull();
   });
 
   it('shows the empty state once server snapshots arrive with no proofs and no moments', () => {

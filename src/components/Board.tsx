@@ -1227,9 +1227,14 @@ export default function Board() {
           // override hides the 🖼️ Library pick.
           photoProofSource={event?.settings?.photoProofSource ?? 'camera_or_library'}
           stripExif={event?.settings?.stripPhotoExif ?? true}
-          // The viewed Day (from the Player's Board doc) and the Square's live
-          // Tally count for the "🔥 Marked by N others" heat line.
-          dayIndex={board?.dayIndex}
+          // The viewed Day and the Square's live Tally count for the
+          // "🔥 Marked by N others" heat line. When a Day schedule is live the
+          // Day switcher can display any unlocked Day while the single legacy
+          // Board still reads `dayIndex: 0`, so stamp the SELECTED `viewedIndex`
+          // (what the Player is actually claiming from) — not the Board doc's
+          // index, which would badge every Day-2+ claim as Day 1 (Codex P2).
+          // Fall back to the Board doc index only when there is no schedule.
+          dayIndex={hasDays ? viewedIndex : board?.dayIndex}
           tallyCount={proofTargetTally}
           // The proofed-mark completion verdict (PR #110 round 2 finding 1): a
           // successful attachProof reports the SAME win-transition shape setMark

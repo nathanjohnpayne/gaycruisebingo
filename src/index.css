@@ -882,8 +882,11 @@ a {
   color: var(--ink);
   font-style: italic;
 }
-/* The Feed Day chip (#211): "Day 2 · Get Sporty" beside the timestamp. */
-.day-chip {
+/* The Feed Day chip (#211): "Day 2 · Get Sporty" beside the timestamp. Its own
+   class (NOT the DaySwitcher's `.day-chip`, defined earlier): reusing that class
+   let this later block override the switcher's navigation-chip padding/radius/
+   color/margins whenever a Day schedule was live (Codex P2). */
+.proof-day-chip {
   margin-left: 8px;
   padding: 1px 8px;
   border-radius: 999px;

@@ -68,7 +68,7 @@ function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: str
             {/* Day chip (#211): "Day 2 · Get Sporty" from the Proof's dayIndex, so
                 the Feed reads as a cruise diary. Absent on pre-dayIndex Proofs. */}
             {typeof proof.dayIndex === 'number' && (
-              <span className="day-chip">{dayChipLabel(proof.dayIndex, days)}</span>
+              <span className="proof-day-chip">{dayChipLabel(proof.dayIndex, days)}</span>
             )}
           </div>
         </div>
