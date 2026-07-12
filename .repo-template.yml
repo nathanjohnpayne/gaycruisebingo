@@ -28,6 +28,10 @@ spec_test_map:
     - src/components/TutorialBanner.test.tsx
     - src/components/DaySwitcher.test.tsx
     - src/components/Board.test.tsx
+  # d15-coach-overlay's coverage spans two files neither named for the spec.
+  d15-coach-overlay:
+    - src/components/CoachOverlay.test.tsx
+    - src/components/d15-more-menu.test.tsx
 # Glob patterns that identify test files. Supplements the default
 # ("tests/**/*.test.*") which doesn't cover shell-based tests or the
 # Vite app's colocated unit tests under src/.

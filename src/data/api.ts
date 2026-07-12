@@ -24,16 +24,22 @@ import { itemsCol } from './paths';
 import { FREE_TEXT } from './seed';
 import {
   dealBoard,
+  dayDealState,
   completedLines,
   countMarked,
   isBlackout,
   type DealItem,
 } from '../game/logic';
-import type { Cell, ClaimMode, EventDoc, UserDoc } from '../types';
+import type { Cell, ClaimMode, DayDef, EventDoc, ItemDoc, UserDoc } from '../types';
 
 // Raw (converter-free) refs for writes, to keep partial merges simple.
 const rawUser = (uid: string) => doc(db, 'users', uid);
 const rawBoard = (uid: string) => doc(db, 'events', EVENT_ID, 'boards', uid);
+// A Player's Day Card write ref: events/{EVENT_ID}/days/{dayIndex}/boards/{uid}
+// (daily-cards-spec § "Data model"). `String(dayIndex)` is the canonical decimal
+// segment the day-scoped firestore.rules gate accepts (#201).
+const rawDayBoard = (dayIndex: number, uid: string) =>
+  doc(db, 'events', EVENT_ID, 'days', String(dayIndex), 'boards', uid);
 const rawPlayer = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
 const rawItems = () => collection(db, 'events', EVENT_ID, 'items');
 const rawItem = (id: string) => doc(db, 'events', EVENT_ID, 'items', id);
@@ -363,6 +369,109 @@ export async function joinAndDeal(u: User): Promise<boolean> {
   );
   await batch.commit();
   return true; // dealt a NEW board — an actual join
+}
+
+/**
+ * Deal a Player's Day Card for one Day, lazily, on first open at/after the Day's
+ * `unlockAt` (daily-cards-spec § "Unlock mechanics"). The pool is drawn ONLY
+ * from that Day's frozen `snapshotItemIds` Day Snapshot — never a live
+ * `status: 'active'` query — so a Prompt approved mid-cruise can only "get in"
+ * for a Day whose snapshot has not yet been stamped, never an already-dealt one.
+ *
+ * Returns `true` only when it dealt a NEW Day Card. It is a no-op (`false`) when:
+ *   - the Day is still `locked` (`now < unlockAt`),
+ *   - the Day is unlocked but its snapshot is not yet stamped (`waking` —
+ *     scheduler lag; the client shows the wait state rather than dealing from an
+ *     unfrozen pool), or
+ *   - a Day Card already exists for this Player+Day (mirrors `joinAndDeal`'s
+ *     existing-board early return; re-opening never re-deals).
+ */
+export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
+  const [existing, eventSnap] = await Promise.all([
+    getDoc(rawDayBoard(dayIndex, u.uid)),
+    getDoc(rawEvent()).catch(() => null),
+  ]);
+  // Existing Day Card → no-op, exactly like joinAndDeal's board-exists guard.
+  if (existing.exists()) return false;
+
+  const eventData = eventSnap?.exists() ? (eventSnap.data() as Partial<EventDoc>) : null;
+  const days = Array.isArray(eventData?.days) ? (eventData.days as DayDef[]) : [];
+  const day = days[dayIndex];
+  // No such Day (unmigrated/out-of-range event) → nothing to deal.
+  if (!day) return false;
+
+  // The single deal gate (dayDealState): only 'ready' — unlocked AND snapshot
+  // stamped — proceeds. 'locked' and 'waking' both return a no-op here; the
+  // client renders the matching preview/wait state from the same helper.
+  const state = dayDealState({
+    unlockAt: day.unlockAt,
+    snapshotItemIds: day.snapshotItemIds,
+    now: Date.now(),
+    hasBoard: false,
+  });
+  if (state !== 'ready') return false;
+
+  const snapshotIds = day.snapshotItemIds ?? [];
+
+  // Resolve the frozen snapshot ids to their Prompt text/spicy by reading those
+  // specific item docs — NOT a live `status: 'active'` collection query. Pool
+  // MEMBERSHIP is the snapshot alone; this only hydrates the text/spicy the deal
+  // needs. A snapshot id whose doc is missing or is the free space is dropped.
+  const itemSnaps = await Promise.all(snapshotIds.map((id) => getDoc(rawItem(id)).catch(() => null)));
+  const pool: DealItem[] = itemSnaps
+    .filter((s): s is NonNullable<typeof s> => !!s && s.exists())
+    .map((s) => ({ id: s.id, data: s.data() as Partial<ItemDoc> }))
+    .filter(({ data }) => data.isFreeSpace !== true)
+    .map(({ id, data }) => ({ id, text: String(data.text ?? ''), spicy: data.spicy === true }));
+
+  // No repeats across the cruise: exclude every Prompt already on ANY OTHER Day
+  // Card this Player holds (daily-cards-spec § "No repeats across the cruise") —
+  // NOT just lower indexes. A mid-cruise joiner opens the LATEST unlocked Day
+  // first (the Board's default), so an earlier Day can be dealt AFTER a later
+  // one; reading only days 0..dayIndex-1 would let that later card's Prompts
+  // repeat. `dealBoard`'s exclusion resets on its own once the pool is exhausted,
+  // so we always pass the full cross-cruise history.
+  const otherCards = await Promise.all(
+    days
+      .map((_, i) => i)
+      .filter((i) => i !== dayIndex)
+      .map((i) => getDoc(rawDayBoard(i, u.uid)).catch(() => null)),
+  );
+  const excludeIds = new Set<string>();
+  for (const snap of otherCards) {
+    if (!snap || !snap.exists()) continue;
+    const cells = (snap.data() as { cells?: Cell[] }).cells ?? [];
+    for (const c of cells) if (c.itemId) excludeIds.add(c.itemId);
+  }
+
+  // Tutorial pools (embark/farewell) are seeded all-tame → deal unstratified so
+  // no spicy target is forced against an all-tame snapshot. Main days keep the
+  // event's stratified spicy share.
+  const stratify = day.pool === 'main';
+  const spicyRatio =
+    typeof eventData?.settings?.spicyRatio === 'number' ? eventData.settings.spicyRatio : 0.4;
+
+  // Per-Day seed: mix the Player's stable seed with the Day index so each Day
+  // Card has its own deterministic layout rather than repeating Day 0's.
+  const seed = (seedFromUid(u.uid) ^ Math.imul(dayIndex + 1, 0x9e3779b1)) >>> 0;
+  const cells = dealBoard(pool, day.freeText ?? FREE_TEXT, seed, spicyRatio, {
+    excludeIds,
+    stratify,
+  });
+  const now = Date.now();
+
+  const batch = writeBatch(db);
+  batch.set(rawDayBoard(dayIndex, u.uid), { uid: u.uid, dayIndex, seed, createdAt: now, cells });
+  // Seed this Day's per-Day stat bucket (players/{uid}.dayStats[dayIndex]) so the
+  // cruise-wide aggregates and the per-Day breakdown share one shape; the Mark
+  // path folds real progress in later.
+  batch.set(
+    rawPlayer(u.uid),
+    { dayStats: { [dayIndex]: { bingoCount: 0, squaresMarked: 0, firstBingoAt: null } } },
+    { merge: true },
+  );
+  await batch.commit();
+  return true; // dealt a NEW Day Card
 }
 
 /**
