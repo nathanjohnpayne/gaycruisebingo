@@ -808,7 +808,15 @@ export default function Board() {
   feedCtx.current = {
     uid,
     displayName,
-    photoURL: player ? player.photoURL : (user?.photoURL ?? null),
+    // `?? null` guards the undefined case, not just null: `dealDayCard` can create
+    // the player row with ONLY a `dayStats` bucket (the join-vs-deal race,
+    // api.ts:291), so a LOADED `player` can still lack the `photoURL` field
+    // entirely (undefined, despite PlayerDoc typing it `string | null`). Passing
+    // that undefined into a Moment `setDoc` throws "Unsupported field value:
+    // undefined" and silently loses the whole BINGO/Blackout/First-to-BINGO
+    // broadcast. Coalescing to null keeps the "loaded row's null photo wins over
+    // the stale auth photo" intent while never handing undefined to Firestore.
+    photoURL: (player ? player.photoURL : user?.photoURL) ?? null,
     players,
     identityKnown,
     rosterConfirmed,
@@ -1513,9 +1521,13 @@ export default function Board() {
           // source, never two. photoURL keys on whether `player` is loaded rather
           // than `??`-chaining: PlayerDoc.photoURL is nullable, and a loaded row
           // with a null photo means "no avatar" — that null must win over the
-          // stale auth photo, not be masked by it.
+          // stale auth photo, not be masked by it. The trailing `?? null` guards
+          // the UNDEFINED case (not just null): `dealDayCard` can create the
+          // player row with only a `dayStats` bucket (api.ts:291), so a loaded
+          // `player` can lack `photoURL` entirely — and undefined into a proof
+          // `setDoc`/transaction throws, dropping the proofed Mark's attribution.
           displayName={displayName}
-          photoURL={player ? player.photoURL : (user.photoURL ?? null)}
+          photoURL={(player ? player.photoURL : user.photoURL) ?? null}
           cells={cells}
           cell={proofTarget}
           claimMode={claimMode}
