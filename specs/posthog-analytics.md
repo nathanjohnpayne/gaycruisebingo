@@ -19,7 +19,7 @@ Full capture is **enabled** by owner decision (#193 reverses the original #96 lo
 - `capture_pageview: 'history_change'` and `capture_pageleave: true`
 - `person_profiles: 'identified_only'`
 
-The one exception is **URL hygiene**: `before_send: sanitizeUrls` strips query/hash from URL properties so query-string secrets (e.g. Firebase auth-handler OAuth params) are never stored. These options are exported as `POSTHOG_INIT_OPTIONS` so the policy is unit-tested. `ConsentNotice.tsx` discloses to users that analytics — including session replay — is used; its dismissal key is versioned so the updated disclosure re-shows once to prior visitors. It is a notice, not a gate (GA4 and PostHog both fire without an opt-in), consistent with the existing analytics model.
+The one exception is **URL hygiene**: `before_send: sanitizeUrls` strips query/hash from the URL-bearing fields it can reach — event `properties`, the `$set` / `$set_once` person-property bags, and the rrweb Meta (type 4) / Custom-event (type 5) hrefs inside `$snapshot` replay data — so query-string secrets (e.g. Firebase auth-handler OAuth params or invite codes) do not surface in those URLs, on events or in the session-replay timeline. This scrub is scoped to URLs only; the rest of the replay payload (DOM content, typed inputs) is recorded unmasked per the owner decision above. These options are exported as `POSTHOG_INIT_OPTIONS` so the policy is unit-tested. `ConsentNotice.tsx` discloses to users that analytics — including session replay — is used; its dismissal key is versioned so the updated disclosure re-shows once to prior visitors. It is a notice, not a gate (GA4 and PostHog both fire without an opt-in), consistent with the existing analytics model.
 
 ## Tested by
 
