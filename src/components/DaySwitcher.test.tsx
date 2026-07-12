@@ -1,0 +1,98 @@
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
+import type { DayDef } from '../types';
+import DaySwitcher, { dayStates, defaultViewedIndex } from './DaySwitcher';
+
+// specs/d15-day-switcher.md: the ten-chip Day strip (daily-cards-spec §
+// "Day switcher"). Covers chip ORDER and STATE (past ✓ / today filled /
+// locked 🔒), the today-index derivation used to default the viewed Day,
+// and that a tap — including a tap on a locked chip — only reports the
+// index via `onSelect`, never writes anything (the "open the preview"
+// behavior belongs entirely to the caller, Board).
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function makeDays(count = 10, startUnlock = 0): DayDef[] {
+  return Array.from({ length: count }, (_, index) => ({
+    index,
+    date: `2026-07-${String(15 + index).padStart(2, '0')}`,
+    port: `Port ${index}`,
+    portEmoji: '🇭🇷',
+    theme: 'get-sporty',
+    pool: 'main',
+    tutorial: index === 0 || index === count - 1,
+    unlockAt: startUnlock + index * DAY_MS,
+  }));
+}
+
+describe('dayStates / defaultViewedIndex', () => {
+  it('classifies past/today/locked from unlockAt vs now', () => {
+    const days = makeDays();
+    // now sits partway through Day 3 (index 3 is the latest unlocked Day).
+    const now = days[3].unlockAt + 1000;
+    const states = dayStates(days, now);
+    expect(states).toEqual([
+      'past',
+      'past',
+      'past',
+      'today',
+      'locked',
+      'locked',
+      'locked',
+      'locked',
+      'locked',
+      'locked',
+    ]);
+    expect(defaultViewedIndex(days, now)).toBe(3);
+  });
+
+  it('falls back to Day 0 when the Event has not opened yet', () => {
+    const days = makeDays(10, Date.now() + DAY_MS);
+    const now = Date.now();
+    expect(dayStates(days, now).every((s) => s === 'locked')).toBe(true);
+    expect(defaultViewedIndex(days, now)).toBe(0);
+  });
+});
+
+describe('<DaySwitcher />', () => {
+  it('renders ten chips in Day order with the correct past/today/locked state per chip', () => {
+    const days = makeDays();
+    const now = days[3].unlockAt + 1000;
+    render(<DaySwitcher days={days} viewedIndex={3} onSelect={vi.fn()} now={now} />);
+    const chips = screen.getAllByRole('tab');
+    expect(chips).toHaveLength(10);
+    expect(chips[0]).toHaveClass('day-chip-past');
+    expect(chips[1]).toHaveClass('day-chip-past');
+    expect(chips[2]).toHaveClass('day-chip-past');
+    expect(chips[3]).toHaveClass('day-chip-today');
+    expect(chips[3]).toHaveClass('selected');
+    for (let i = 4; i < 10; i++) {
+      expect(chips[i]).toHaveClass('day-chip-locked');
+      expect(chips[i].textContent).toContain('🔒');
+    }
+    // Past chips carry the ✓ glyph; today carries none.
+    expect(chips[0].textContent).toContain('✓');
+    expect(chips[3].textContent).not.toContain('✓');
+    expect(chips[3].textContent).not.toContain('🔒');
+  });
+
+  it('tapping a locked chip only reports its index — it never marks or deals anything', () => {
+    const days = makeDays();
+    const now = days[3].unlockAt + 1000;
+    const onSelect = vi.fn();
+    render(<DaySwitcher days={days} viewedIndex={3} onSelect={onSelect} now={now} />);
+    const chips = screen.getAllByRole('tab');
+    fireEvent.click(chips[7]); // a locked chip
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(7);
+  });
+
+  it('tapping a past chip reports its index too', () => {
+    const days = makeDays();
+    const now = days[3].unlockAt + 1000;
+    const onSelect = vi.fn();
+    render(<DaySwitcher days={days} viewedIndex={3} onSelect={onSelect} now={now} />);
+    fireEvent.click(screen.getAllByRole('tab')[1]);
+    expect(onSelect).toHaveBeenCalledWith(1);
+  });
+});

@@ -17,6 +17,11 @@ spec_test_map:
     - src/test/rtl-smoke.test.tsx
     - tests/rules/firestore-harness.test.ts
     - tests/e2e/smoke.spec.ts
+  # d15-day-switcher's coverage is component-named, not spec-basename-named
+  # (the ticket's own "Tests to add" list), so map both explicitly.
+  d15-day-switcher:
+    - src/components/DaySwitcher.test.tsx
+    - src/components/Board.test.tsx
 # Glob patterns that identify test files. Supplements the default
 # ("tests/**/*.test.*") which doesn't cover shell-based tests or the
 # Vite app's colocated unit tests under src/.
