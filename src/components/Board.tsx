@@ -33,6 +33,8 @@ import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '.
 import LoadingState from './LoadingState';
 import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
 import TutorialBanner, { WarmUpTag } from './TutorialBanner';
+import FarewellPodium from './FarewellPodium';
+import { farewellPinIndex } from '../data/finale';
 import CoachOverlay from './CoachOverlay';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
@@ -913,9 +915,13 @@ export default function Board() {
   // Adopt today's Day as the viewed default the FIRST render `days` is
   // non-empty; guarded to fire once so it can never override a Player's own
   // later chip tap (adjust-during-render, mirroring `edgeStateUid` above).
+  // Once the cruise has ended (`frozenAt` set + farewell Day unlocked) the
+  // farewell Day — podium included — is pinned as the default view (#217,
+  // `farewellPinIndex`); before the freeze it falls back to today's Day.
   if (!viewedIndexInitialized.current && hasDays) {
     viewedIndexInitialized.current = true;
-    setViewedIndex(defaultViewedIndex(days, Date.now()));
+    const initNow = Date.now();
+    setViewedIndex(farewellPinIndex(days, event?.frozenAt, initNow) ?? defaultViewedIndex(days, initNow));
   }
   const viewedDay = hasDays ? (days[viewedIndex] ?? days[0]) : undefined;
   // `now`, not `Date.now()` — see the unlock timer above (Codex P2, PR #230):
@@ -1200,6 +1206,15 @@ export default function Board() {
           <div className="board-header">
             <WarmUpTag />
           </div>
+        )}
+        {/* The farewell podium (#217, daily-cards-spec § "Farewell view"):
+            shown on the farewell Day once the standings freeze (`frozenAt`
+            set), ABOVE the goodbye banner below — this ticket owns the
+            podium and its stacking order; the goodbye copy is
+            TutorialBanner's. `buildPodium` freezes out the farewell Day's
+            own marks, so a post-freeze goodbye tap never moves the podium. */}
+        {viewedDay?.pool === 'farewell' && event?.frozenAt != null && (
+          <FarewellPodium players={players} days={days} />
         )}
         {viewedDay && <TutorialBanner day={viewedDay} />}
         <div className="bingo-head">
