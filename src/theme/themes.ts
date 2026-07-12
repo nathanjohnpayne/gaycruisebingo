@@ -72,4 +72,19 @@ export const THEMES: ThemeMeta[] = [
     description:
       'A hot afternoon of pink silliness, Barbie energy, and frivolous dolled-up fun.',
   },
+  // Phase 1.5 tutorial-day themes (daily-cards-spec § "Theme reference",
+  // issue #206). Appended after the eight party themes so no existing
+  // THEMES index shifts; neon-playground stays first/default.
+  {
+    id: 'welcome-aboard',
+    label: 'Welcome Aboard',
+    emoji: '⚓',
+    description: 'You made it. Learn the game, find the soft-serve, wave goodbye to land.',
+  },
+  {
+    id: 'so-long-farewell',
+    label: 'So Long, Farewell',
+    emoji: '👋',
+    description: 'Last one. Mark your goodbyes—then go book next year.',
+  },
 ];

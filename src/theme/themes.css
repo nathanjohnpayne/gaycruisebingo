@@ -144,3 +144,37 @@
   --shadow: rgba(255, 79, 176, 0.45);
   --on-gradient: #000;
 }
+
+/* Phase 1.5 tutorial-day themes (daily-cards-spec § "Theme reference" /
+   "Proposed palettes for the two new themes", issue #206). Palettes verbatim
+   from the spec; both clear the 4.5:1 text floor as-proposed (see
+   specs/d15-two-themes.md), so no deepening was needed. */
+[data-theme='welcome-aboard'] {
+  /* nautical: deep-sea navy, ocean cyan, brass */
+  --bg: #051019;
+  --panel: #0a1a28;
+  --ink: #eaf6ff;
+  --dim: #9fbcd0;
+  --primary: #33c6ff;
+  --secondary: #ffbe5c;
+  --accent: #ffd23f;
+  --cell: #0a1a28;
+  --border: rgba(51, 198, 255, 0.35);
+  --shadow: rgba(51, 198, 255, 0.4);
+  --on-gradient: #000;
+}
+
+[data-theme='so-long-farewell'] {
+  /* dusk sailaway: deep plum, sunset coral, peach */
+  --bg: #140b12;
+  --panel: #1e1019;
+  --ink: #fff0ea;
+  --dim: #d0a8ab;
+  --primary: #ff8b6a;
+  --secondary: #feb47b;
+  --accent: #ffd23f;
+  --cell: #1e1019;
+  --border: rgba(255, 139, 106, 0.35);
+  --shadow: rgba(255, 139, 106, 0.4);
+  --on-gradient: #000;
+}
