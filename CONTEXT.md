@@ -12,6 +12,22 @@ A phone-first, live, social bingo game for one cruise at a time. The card's prom
 
 **Theme**: One of the eight Atlantis party looks the whole app reskins into (Neon Playground is the default). Cosmetic only.
 
+### Days & pools
+
+**Day**: One calendar day of the sailing, owning a date, port, Theme, and unlock state. The Event owns an ordered list of ten Days. _Avoid_: Round, stage
+
+**Day Card**: A Player's Board for one Day — same 5×5 contract as today, now one per Player per Day. "Board" continues to mean this object; "Day Card" is the player-facing name.
+
+**Tutorial Day**: The embark and disembark Days. Dealt from their own curated pools, framed as onboarding/farewell rather than competition.
+
+**Pool**: Which item set a Prompt belongs to — `main`, `embark`, or `farewell`. Only `main` accepts player submissions.
+
+**Pending**: A submitted Prompt awaiting admin approval. Invisible to players; never dealt.
+
+**Day Snapshot**: The frozen list of approved Prompts captured at a Day's unlock moment. All of that Day's deals draw from the snapshot, so everyone's card reflects the same pool regardless of when they first open it.
+
+**Tally Card**: The Feed's live, aggregated entry for one Prompt on one Day — bumped toward the top as new Players mark it. A rendering of the Tally, not a new record. _Avoid_: Wave, streak
+
 ### The card & play
 
 **Board**: One Player's frozen 5×5 card for the Event — 24 sampled prompts plus the free centre. Private to its owner; dealt once and never reshuffled. _Avoid_: Card (fine informally), grid
