@@ -377,6 +377,10 @@ export default function Board() {
   const [freePulse, setFreePulse] = useState(0);
   const [proofTarget, setProofTarget] = useState<Cell | null>(null);
   const [tallyTarget, setTallyTarget] = useState<Cell | null>(null);
+  // The open Claim sheet's social heat line (#211): reuse the SAME per-Prompt
+  // Tally subscription the TallyBadge uses — no new read — for the Square the
+  // sheet is open on. useTally accepts a null id (no proofTarget → no sub).
+  const { count: proofTargetTally } = useTally(proofTarget?.itemId ?? null);
   // Edge refs for the COSMETIC Celebration UI only (issue #104). The public Moment
   // broadcast moved OFF this snapshot-diffing machinery and ONTO the action path —
   // doMark reads `setMark`'s synchronous win-transition verdict and enqueues into a
@@ -1033,6 +1037,15 @@ export default function Board() {
           cell={proofTarget}
           claimMode={claimMode}
           currentFirstBingoAt={player?.firstBingoAt ?? null}
+          // Event admin knobs, read defensively with the spec defaults (#211).
+          // `photoProofSource` is NEVER tied to claimMode — only this event-level
+          // override hides the 🖼️ Library pick.
+          photoProofSource={event?.settings?.photoProofSource ?? 'camera_or_library'}
+          stripExif={event?.settings?.stripPhotoExif ?? true}
+          // The viewed Day (from the Player's Board doc) and the Square's live
+          // Tally count for the "🔥 Marked by N others" heat line.
+          dayIndex={board?.dayIndex}
+          tallyCount={proofTargetTally}
           // The proofed-mark completion verdict (PR #110 round 2 finding 1): a
           // successful attachProof reports the SAME win-transition shape setMark
           // returns, and it rides the SAME broadcast pipeline — a proof_required

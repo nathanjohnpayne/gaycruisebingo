@@ -47,24 +47,34 @@ vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' 
 import ProofFeed from './ProofFeed';
 
 type SnapCb = (snap: unknown) => void;
-// ProofFeed subscribes to BOTH proofs (useProofFeed) and moments (useMoments) via
-// useFeed, so route each onSnapshot by target: the proofs sub is a query()
-// ({ query: [...] }); the moments sub is a bare collection ref. `fire` delivers a
-// proofs snapshot plus (by default) an empty moments snapshot in one act(), so
-// existing call sites — `sub.fire(colSnap([...]))` — keep working unchanged.
-function captureOnNext(): { fire: (proofs: unknown, moments?: unknown) => void } {
-  const captured: { proofs: SnapCb | null; moments: SnapCb | null } = { proofs: null, moments: null };
+// ProofFeed subscribes to THREE targets via useFeed + its own useEventDoc: the
+// proofs sub is a query() ({ query: [...] }); the moments sub is a bare
+// collection ref (kind 'collection'); and the event doc — read by useMoments's
+// moderation AND by ProofFeed's #211 Day-chip resolution — is a doc ref (kind
+// 'doc'). Route each by shape so the event doc's onNext never lands in the
+// moments slot (it expects a doc snapshot with .exists(), not a collection
+// snapshot). `fire` delivers proofs + an empty moments snapshot + an empty event
+// doc, so existing call sites — `sub.fire(colSnap([...]))` — keep working.
+const emptyDocSnap = { exists: () => false, data: () => undefined, metadata: { fromCache: false } };
+function captureOnNext(): { fire: (proofs: unknown, moments?: unknown, event?: unknown) => void } {
+  const captured: { proofs: SnapCb | null; moments: SnapCb | null; event: SnapCb | null } = {
+    proofs: null,
+    moments: null,
+    event: null,
+  };
   H.onSnapshot.mockImplementation((target: unknown, _options: unknown, onNext: SnapCb) => {
     if (target && typeof target === 'object' && 'query' in (target as object)) captured.proofs = onNext;
+    else if (target && typeof target === 'object' && (target as { kind?: string }).kind === 'doc') captured.event = onNext;
     else captured.moments = onNext;
     return () => {};
   });
   return {
-    fire: (proofs: unknown, moments: unknown = colSnap([])) => {
+    fire: (proofs: unknown, moments: unknown = colSnap([]), event: unknown = emptyDocSnap) => {
       if (!captured.proofs || !captured.moments) throw new Error('feed not fully subscribed');
       act(() => {
         captured.proofs!(proofs);
         captured.moments!(moments);
+        captured.event?.(event);
       });
     },
   };
@@ -158,6 +168,35 @@ describe('ProofFeed — the Proof IS the Feed entry (ADR 0002)', () => {
 
     expect(screen.getByText('Still Here')).toBeInTheDocument();
     expect(screen.getByText(/Backing cell was clobbered/)).toBeInTheDocument();
+  });
+
+  it('#211: badges a source:"library" Proof 🖼️ and renders a "Day N · Theme" chip from dayIndex', () => {
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+
+    // Deliver an event whose days[1] is the get-sporty theme so the chip resolves
+    // "Day 2 · Get Sporty" (dayChipLabel is 1-based).
+    const eventSnap = {
+      exists: () => true,
+      data: () => ({ days: [{ index: 0, theme: 'neon-playground' }, { index: 1, theme: 'get-sporty' }] }),
+      metadata: { fromCache: false },
+    };
+    sub.fire(
+      colSnap([
+        proof({ id: 'lib', createdAt: 3000, type: 'photo', mediaURL: 'https://x/l.jpg', source: 'library', dayIndex: 1, displayName: 'Library Larry' }),
+        proof({ id: 'cam', createdAt: 2000, type: 'photo', mediaURL: 'https://x/c.jpg', source: 'camera', displayName: 'Camera Cathy' }),
+      ]),
+      colSnap([]),
+      eventSnap,
+    );
+
+    const cards = document.querySelectorAll('.proof');
+    // The library pick carries the 🖼️ badge and the resolved Day chip…
+    expect(cards[0]).toHaveTextContent('🖼️');
+    expect(cards[0]).toHaveTextContent('Day 2 · Get Sporty');
+    // …the camera pick (no source, no dayIndex) carries neither.
+    expect(cards[1]).not.toHaveTextContent('🖼️');
+    expect(cards[1].querySelector('.day-chip')).toBeNull();
   });
 
   it('shows the empty state once server snapshots arrive with no proofs and no moments', () => {

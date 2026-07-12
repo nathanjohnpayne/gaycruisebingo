@@ -583,6 +583,25 @@ a {
   font-weight: 600;
   margin-bottom: 12px;
 }
+/* The social heat line (#211): "🔥 Marked by N others" under the sheet title. */
+.heat-line {
+  font-size: 12px;
+  color: var(--muted);
+  margin: -6px 0 12px;
+}
+/* The two photo affordances (#190): 📷 Take photo + 🖼️ Library, each a .btn
+   <label> wrapping a hidden file input so the whole pill is the tap target. */
+.photo-affordances {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.photo-affordance {
+  flex: 1;
+  min-width: 120px;
+  text-align: center;
+  cursor: pointer;
+}
 /* The 🎖️ Cross My Heart pledge (issue #181): its own full-width row above the
    proof-type segments — never a fourth segment — so the label stays on one
    line at 320px. Enabled (glowing like a selected segment) only in honor
@@ -766,6 +785,21 @@ a {
   border-left: 3px solid var(--primary);
   color: var(--ink);
   font-style: italic;
+}
+/* The Feed Day chip (#211): "Day 2 · Get Sporty" beside the timestamp. */
+.day-chip {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--cell);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* The 🖼️ library-source badge (#190) rides inline in the Proof's name line. */
+.proof-source-badge {
+  font-size: 13px;
 }
 
 /* ---------- feed moments ---------- */
