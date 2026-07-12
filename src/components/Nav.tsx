@@ -1,5 +1,4 @@
 import { useAuth } from '../auth/AuthContext';
-import ThemeSwitcher from './ThemeSwitcher';
 import TabBar from './TabBar';
 
 /**
@@ -16,8 +15,10 @@ import TabBar from './TabBar';
  *
  * The two stacked header lines (today's port + theme) are placeholder-only
  * here: wiring them to live `EventDoc.days[]` data is #205's job, which depends
- * on this ticket AND the schema ticket. `ThemeSwitcher` stays mounted where it
- * is — its relocation into More is #208's change, not this thin revision's.
+ * on this ticket AND the schema ticket. `ThemeSwitcher` no longer mounts here —
+ * #208 relocated it into `More.tsx` (daily-cards-spec § "More menu"), the one
+ * piece of Nav's Phase 1.5 simplification `d15-tab-contract` deliberately left
+ * for this ticket.
  */
 export default function Nav() {
   const { user } = useAuth();
@@ -36,7 +37,6 @@ export default function Nav() {
           <span className="day-identity-line">—</span>
         </div>
       </div>
-      <ThemeSwitcher />
       <TabBar morePhotoURL={user?.photoURL ?? null} />
     </>
   );

@@ -36,6 +36,9 @@ vi.mock('./hooks/useData', () => ({
   // ProfileEditor now renders as the Nav header avatar (#143), so the App shell
   // pulls in useMyUser too; an inert stub keeps it out of this test's focus.
   useMyUser: () => ({ data: null, loading: false, hasServerData: false }),
+  // More.tsx (#208) reads the Admin-row badge count on every mount, admin or
+  // not; an inert stub keeps that badge subscription out of this test's focus.
+  usePendingItemCount: () => ({ count: 0, loading: false }),
 }));
 
 import App from './App';

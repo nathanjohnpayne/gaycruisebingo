@@ -252,12 +252,12 @@ describe('Board render', () => {
     expect(screen.queryByRole('button', { name: reDeal })).toBeNull();
     expect(screen.queryByText(reDeal)).toBeNull();
     // A freshly dealt card exposes only the permanent Free Space feedback control
-    // — no proof buttons, and certainly no re-deal button. The only other button
-    // is the 18+ · Guidelines pill in the Board footer (#143), app chrome rather
-    // than a card affordance.
-    expect(screen.queryAllByRole('button')).toHaveLength(2);
+    // — no proof buttons, and certainly no re-deal button. The former 18+ ·
+    // Guidelines pill in the Board footer (#143) relocated to the More menu as
+    // `AcceptableUse variant="row"` (#208, specs/d15-more-menu.md) — Board no
+    // longer mounts it, so it's no longer app chrome sharing this surface.
+    expect(screen.queryAllByRole('button')).toHaveLength(1);
     expect(screen.getByRole('button', { name: FREE_TEXT })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /guidelines/i })).toBeInTheDocument();
   });
 });
 

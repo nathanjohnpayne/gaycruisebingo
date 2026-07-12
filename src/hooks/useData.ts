@@ -395,6 +395,27 @@ export function useMyClaims(uid: string | undefined) {
 }
 
 /**
+ * The count for the More menu's Admin row badge (#208, daily-cards-spec §
+ * "More menu" § Admin): Prompts awaiting approval (`ItemDoc.status ===
+ * 'pending'`, the #200 schema / #210 write-path approval flow). Deliberately
+ * its OWN small subscription rather than reusing `useAllItems` — an admin-
+ * only read (`firestore.rules`: "Pending/rejected items readable only by
+ * admins + submitter") that More mounts unconditionally alongside the rest of
+ * the menu, so it must stay cheap and must never open for a non-admin. Pass
+ * `enabled=false` (a non-admin viewer) to open NO subscription — mirrors
+ * `useItems`'s `enabled` gate. 0/hidden until #210 starts writing pending
+ * items is expected, not broken (the field itself shipped with #200, before
+ * anything writes it).
+ */
+export function usePendingItemCount(enabled = true) {
+  const { data, loading } = useColSub<ItemDoc>(
+    enabled ? query(itemsCol(), where('status', '==', 'pending')) : null,
+    enabled ? 'items-pending' : 'items-pending:disabled',
+  );
+  return { count: data.length, loading };
+}
+
+/**
  * Admin views: everything, including hidden/reported. Deliberately applies
  * NEITHER hide — not the `status` hard-hide, not the ADR 0004 Phase 0 threshold
  * auto-hide — so an Admin can reach content the community auto-hide has removed

@@ -208,6 +208,12 @@ export default function Admin() {
   // that overlaps admins is rejected by the rules, so BanControl suppresses the Ban
   // action for an admin-authored row (Codex P2, PR #122 round 2).
   const admins = event?.admins ?? [];
+  // Prompts awaiting approval (#200 schema, #210 write path) — the SAME count
+  // the More menu's Admin row badges (`usePendingItemCount`), derived here from
+  // the console's own already-subscribed `items` (no extra listener) so the
+  // console and the badge can never disagree. 0 until #210 starts writing
+  // `status: 'pending'` items — expected, not broken.
+  const pendingCount = items.filter((it) => it.status === 'pending').length;
   // Prompts needing moderation attention: reported at least once, or already
   // hard-hidden. Derived from useAllItems (already subscribed) so the queue opens
   // NO extra listener, and UNfiltered by the threshold so an auto-hidden Prompt
@@ -347,7 +353,10 @@ export default function Admin() {
       </div>
 
       <div className="admin-section">
-        <h3>Prompts ({items.length})</h3>
+        <h3>
+          Prompts ({items.length})
+          {pendingCount > 0 && <span className="pill">{pendingCount} pending</span>}
+        </h3>
         <div className="list">
           {items.map((it) => (
             <div key={it.id} className="row">

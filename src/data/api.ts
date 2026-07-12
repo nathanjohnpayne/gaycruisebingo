@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  deleteField,
   doc,
   getDoc,
   getDocFromCache,
@@ -769,4 +770,16 @@ export async function reportItem(id: string): Promise<void> {
 /** Let a player set a display theme preference on their player row. */
 export async function savePlayerTheme(uid: string, theme: string): Promise<void> {
   await setDoc(rawPlayer(uid), { theme }, { merge: true });
+}
+
+/**
+ * Clear a player's saved cross-device theme pick (More menu § "Theme" —
+ * picking Auto). Without this, `players/{uid}.theme` keeps the last concrete
+ * pick, so `ThemeProvider`'s cross-device-adopt effect re-applies it on the
+ * next load/device and Auto silently stops following the day (Codex P2 on
+ * #232). Deletes the field rather than writing a sentinel so a stale reader
+ * never mistakes "explicitly cleared" for a real ThemeId.
+ */
+export async function clearPlayerTheme(uid: string): Promise<void> {
+  await setDoc(rawPlayer(uid), { theme: deleteField() }, { merge: true });
 }
