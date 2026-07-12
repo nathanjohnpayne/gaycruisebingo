@@ -22,6 +22,9 @@ const RULES_PATH = fileURLToPath(new URL('../../firestore.rules', import.meta.ur
 const EVENT = 'cruise';
 const [ADMIN, ALICE, BOB, CAROL] = ['admin-uid', 'alice', 'bob', 'carol'];
 const NOW = () => Date.now();
+// Day 0 is UNLOCKED (unlockAt an hour in the past); the day-scoped Board write
+// gate reads this Day's `unlockAt` from the Event doc's `days` DayDef[] array.
+const PAST = () => NOW() - 3600_000;
 
 let testEnv: RulesTestEnvironment;
 const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
@@ -54,20 +57,24 @@ beforeEach(async () => {
   await testEnv.clearFirestore();
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const s = ctx.firestore();
-    await setDoc(doc(s, `events/${EVENT}`), { name: 'Cruise', status: 'active', defaultTheme: 'neon-playground', claimMode: 'honor', admins: [ADMIN], settings: { reportHideThreshold: 3 } });
+    await setDoc(doc(s, `events/${EVENT}`), { name: 'Cruise', status: 'active', defaultTheme: 'neon-playground', claimMode: 'honor', admins: [ADMIN], settings: { reportHideThreshold: 3 }, days: [{ index: 0, unlockAt: PAST() }] });
     await setDoc(doc(s, at(`tally/item1/markers/${CAROL}`)), { uid: CAROL, displayName: 'Carol', markedAt: NOW() });
   });
 });
 
 describe('firestore.rules — self-writable-by-design guard (w3-security-hardening)', () => {
   it('ADR 0001: boards/players stay self-writable for the owner; cross-player writes denied', async () => {
-    const board = (uid: string) => ({ uid, seed: 1, createdAt: NOW(), cells: [] });
+    // Phase 1.5 moved Boards under days/{dayIndex} (daily-cards-spec § Data model
+    // + Migration); the self-writable-by-design posture is unchanged — it just
+    // rides on the day-scoped path with the unlock-time gate on top (Day 0 is
+    // unlocked, so the owner write clears the gate).
+    const board = (uid: string, dayIndex: number) => ({ uid, dayIndex, seed: 1, createdAt: NOW(), cells: [] });
     const player = (uid: string) => ({ uid, displayName: uid, photoURL: null, joinedAt: NOW(), bingoCount: 0, squaresMarked: 0, firstBingoAt: null });
     // Self-write ALLOWED — the honor-system model, not a hole to lock down.
-    await assertSucceeds(setDoc(doc(db(ALICE), at(`boards/${ALICE}`)), board(ALICE)));
+    await assertSucceeds(setDoc(doc(db(ALICE), at(`days/0/boards/${ALICE}`)), board(ALICE, 0)));
     await assertSucceeds(setDoc(doc(db(ALICE), at(`players/${ALICE}`)), player(ALICE)));
     // Cross-player writes DENIED by isOwner(uid).
-    await assertFails(setDoc(doc(db(ALICE), at(`boards/${BOB}`)), board(BOB)));
+    await assertFails(setDoc(doc(db(ALICE), at(`days/0/boards/${BOB}`)), board(BOB, 0)));
     await assertFails(setDoc(doc(db(ALICE), at(`players/${BOB}`)), player(BOB)));
   });
 

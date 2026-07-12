@@ -25,6 +25,9 @@ const RULES_PATH = fileURLToPath(new URL('../../firestore.rules', import.meta.ur
 const EVENT = 'cruise';
 const [ADMIN, ALICE, BOB, CAROL] = ['admin-uid', 'alice', 'bob', 'carol'];
 const NOW = () => Date.now();
+// Day 0 is UNLOCKED (unlockAt an hour in the past); the day-scoped Board write
+// gate reads this Day's `unlockAt` from the Event doc's `days` DayDef[] array.
+const PAST = () => NOW() - 3600_000;
 
 let testEnv: RulesTestEnvironment;
 const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
@@ -84,6 +87,7 @@ beforeEach(async () => {
       claimMode: 'honor',
       admins: [ADMIN],
       settings: { reportHideThreshold: 3 },
+      days: [{ index: 0, unlockAt: PAST() }],
     });
     await setDoc(doc(s, at('items/item1')), {
       text: 'Saw a drag show',
@@ -120,8 +124,13 @@ beforeEach(async () => {
 
 describe('firestore.rules — honor-system invariants', () => {
   it('ADR 0001: boards/players are self-writable; cross-player writes denied', async () => {
-    const board = (uid: string) => ({
+    // Phase 1.5 moved Boards under days/{dayIndex} (daily-cards-spec § Data model
+    // + Migration); the self-writable-by-design posture is unchanged — it just
+    // rides on the day-scoped path with the unlock-time gate on top (Day 0 is
+    // unlocked, so the owner write clears the gate).
+    const board = (uid: string, dayIndex: number) => ({
       uid,
+      dayIndex,
       seed: 1,
       createdAt: NOW(),
       cells: [],
@@ -135,8 +144,8 @@ describe('firestore.rules — honor-system invariants', () => {
       squaresMarked: 0,
       firstBingoAt: null,
     });
-    await assertSucceeds(setDoc(doc(db(ALICE), at(`boards/${ALICE}`)), board(ALICE)));
-    await assertFails(setDoc(doc(db(ALICE), at(`boards/${BOB}`)), board(BOB)));
+    await assertSucceeds(setDoc(doc(db(ALICE), at(`days/0/boards/${ALICE}`)), board(ALICE, 0)));
+    await assertFails(setDoc(doc(db(ALICE), at(`days/0/boards/${BOB}`)), board(BOB, 0)));
     await assertSucceeds(setDoc(doc(db(ALICE), at(`players/${ALICE}`)), player(ALICE)));
     await assertFails(setDoc(doc(db(ALICE), at(`players/${BOB}`)), player(BOB)));
   });
