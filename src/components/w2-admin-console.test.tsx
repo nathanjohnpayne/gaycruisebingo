@@ -197,7 +197,12 @@ describe('Report queue (specs/w2-admin-console.md)', () => {
     render(<Admin />);
 
     fireEvent.click(within(queue()).getByTitle('Delete'));
-    expect(H.deleteProof).toHaveBeenCalledWith('gone', 'proofs/e/u/gone.jpg');
+    // #246: deleteProof now carries day-scoping opts. This fixture's Event has no
+    // `days[]`, so the admin delete is legacy-mode (daily false, no tutorial set).
+    expect(H.deleteProof).toHaveBeenCalledWith('gone', 'proofs/e/u/gone.jpg', {
+      daily: false,
+      tutorialDayIndexes: undefined,
+    });
   });
 
   it('keeps a hard-hidden ZERO-count Proof reachable with Restore + Delete (clear-then-restore, Codex P2 round 2)', () => {
@@ -221,7 +226,10 @@ describe('Report queue (specs/w2-admin-console.md)', () => {
     fireEvent.click(q.getByRole('button', { name: 'Restore' }));
     expect(H.restoreProof).toHaveBeenCalledWith('half-lifted');
     fireEvent.click(q.getByTitle('Delete'));
-    expect(H.deleteProof).toHaveBeenCalledWith('half-lifted', 'proofs/e/u/half-lifted.jpg');
+    expect(H.deleteProof).toHaveBeenCalledWith('half-lifted', 'proofs/e/u/half-lifted.jpg', {
+      daily: false,
+      tutorialDayIndexes: undefined,
+    });
   });
 
   it('surfaces reported Prompts in the queue and omits unreported ones', () => {

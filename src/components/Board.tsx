@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { Lock } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, isBanned } from '../hooks/useData';
-import { setMark, resolveDisplayName } from '../data/api';
+import { useBoard, useDayBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, isBanned } from '../hooks/useData';
+import { setMark, dealDayCard, resolveDisplayName } from '../data/api';
 import { eventTitle } from '../format';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
@@ -22,7 +22,7 @@ import {
 // the proofed-mark completion verdict ProofSheet reports back (PR #110 round 2
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
-import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge } from '../game/logic';
+import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet } from '../game/logic';
 import { fitTextSize } from '../game/fitText';
 import { useTextSize } from '../hooks/useTextSize';
 import { track } from '../analytics';
@@ -457,7 +457,19 @@ function formatUnlockAt(unlockAt: number, timezone: string | undefined): string 
  * click handler is wired to any Square here, so a tap is a structural
  * no-op — there is nothing to call `setMark` with.
  */
-function LockedDayPreview({ day, timezone }: { day: DayDef; timezone: string | undefined }) {
+function LockedDayPreview({
+  day,
+  timezone,
+  waking = false,
+}: {
+  day: DayDef;
+  timezone: string | undefined;
+  // `waking` (daily-cards-spec § "Client fallback"): the Day's `unlockAt` has
+  // passed but the scheduler hasn't stamped its snapshot yet, so the card can't be
+  // dealt from a frozen pool. Same themed chrome; the badge/caption say "waking up"
+  // instead of "unlocks at" (the date is in the past, so the unlock copy misreads).
+  waking?: boolean;
+}) {
   const description = themeDescription(day.theme);
   const freeText = day.freeText ?? FREE_TEXT;
   return (
@@ -492,9 +504,14 @@ function LockedDayPreview({ day, timezone }: { day: DayDef; timezone: string | u
         ))}
       </div>
       <div className="day-lock-badge">
-        <Lock className="day-lock-icon" aria-hidden="true" /> Unlocks {formatUnlockAt(day.unlockAt, timezone)}
+        <Lock className="day-lock-icon" aria-hidden="true" />{' '}
+        {waking ? 'Waking up—dealing today’s squares' : `Unlocks ${formatUnlockAt(day.unlockAt, timezone)}`}
       </div>
-      <p className="day-lock-caption muted">24 fresh squares land at 8. Come back after coffee.</p>
+      <p className="day-lock-caption muted">
+        {waking
+          ? 'Today’s card is being dealt. Give it a moment, then come back.'
+          : '24 fresh squares land at 8. Come back after coffee.'}
+      </p>
     </div>
   );
 }
@@ -502,7 +519,10 @@ function LockedDayPreview({ day, timezone }: { day: DayDef; timezone: string | u
 export default function Board() {
   const { user } = useAuth();
   const uid = user?.uid;
-  const { data: board, loading: boardLoading, hasServerData: boardConfirmed } = useBoard(uid);
+  // The single legacy Board (pre-1.5 events with no `days[]` schedule). In daily-
+  // cards mode the rendered Board is the DAY-SCOPED one below; this stays the
+  // source only for legacy events (#246).
+  const { data: legacyBoard, loading: legacyBoardLoading, hasServerData: legacyBoardConfirmed } = useBoard(uid);
   const { data: player, loading: playerLoading, hasServerData: playerConfirmed } = useMyPlayer(uid);
   // ONE resolution of the caller's public display name, fed to BOTH the per-Prompt
   // Tally marker (setMark, below) AND the new-Proof attribution (ProofSheet), so a
@@ -527,6 +547,39 @@ export default function Board() {
   // practice, and #78 pins auth as its explicit pre-load fallback.
   const identityKnown = !playerLoading && (player !== null || playerConfirmed);
   const { data: event } = useEventDoc();
+  // The Day schedule (daily-cards-spec § "Data model"): `[]` on a not-yet-migrated
+  // (legacy) Event or while the doc loads, which keeps the entire day-scoped path
+  // below inert and Board's single-Board rendering byte-identical to pre-1.5.
+  const days: DayDef[] = event?.days ?? [];
+  const hasDays = days.length > 0;
+  // The Day switcher's viewed-Day index (daily-cards-spec § "Day switcher"). Held
+  // up here (before the day-scoped Board subscription that keys on it) so switching
+  // a chip re-subscribes to that Day's own Board. Defaults to 0 and is adopted to
+  // today's Day the first render `days` is non-empty (guarded once — see the
+  // adjust-during-render block below), independent of the app-wide Theme.
+  const [viewedIndex, setViewedIndex] = useState(0);
+  const viewedIndexInitialized = useRef(false);
+  // The VIEWED Day's own Board (#246): in daily mode this — not the legacy single
+  // Board — is what renders, so every Day shows its OWN 24 squares and marks fold
+  // into that Day's bucket. `undefined` dayIndex opens no subscription (legacy
+  // events), so `useDayBoard` is inert there.
+  const {
+    data: dayBoard,
+    loading: dayBoardLoading,
+    hasServerData: dayBoardConfirmed,
+  } = useDayBoard(uid, hasDays ? viewedIndex : undefined);
+  // The ACTIVE Board the whole component renders/marks against: the viewed Day's
+  // Board in daily mode, the single legacy Board otherwise. In daily mode the
+  // day-scoped subscription clears its previous doc only in a passive effect AFTER
+  // its key changes (useDocSub), so for a render or two right after a Day switch
+  // `dayBoard` can still be the PRIOR Day's board. Accepting it would briefly
+  // render — and accept Mark taps against — the wrong Day's card. Gate on
+  // `dayBoard.dayIndex === viewedIndex` so a stale board reads as "not yet dealt"
+  // (the "Dealing…" transient) until the correct Day's board loads (Codex #247 P2).
+  const dayBoardForView = hasDays && dayBoard?.dayIndex === viewedIndex ? dayBoard : null;
+  const board = hasDays ? dayBoardForView : legacyBoard;
+  const boardLoading = hasDays ? dayBoardLoading : legacyBoardLoading;
+  const boardConfirmed = hasDays ? dayBoardConfirmed : legacyBoardConfirmed;
   // The known-players roster — the SAME data the Leaderboard's First-to-BINGO pin
   // reads (useLeaderboard) — used to derive whether THIS Player is first to BINGO
   // when broadcasting the ceremonial Moment (ADR 0001). Read into a ref below so
@@ -568,16 +621,6 @@ export default function Board() {
     setClaimSheetOpen(!!proofTarget);
     return () => setClaimSheetOpen(false);
   }, [proofTarget]);
-  // The Day switcher's viewed-Day index (daily-cards-spec § "Day switcher"),
-  // independent of the app-wide Theme (ThemeContext) and of the header's
-  // "today" line (Nav.tsx, #203) — this state ONLY drives the board area's
-  // own retint and which Day's chrome/preview renders here. Defaults to
-  // today's Day the first render `event.days` arrives non-empty (the
-  // adjust-during-render pattern already used elsewhere in this file, e.g.
-  // `edgeStateUid` below); `viewedIndexInitialized` guards it to ONE
-  // adoption so a later render never stomps the Player's own selection.
-  const [viewedIndex, setViewedIndex] = useState(0);
-  const viewedIndexInitialized = useRef(false);
   // The locked/unlocked read below (`viewedLocked`) is only re-evaluated on a
   // render — with no OTHER state change due while idling on a locked Day, a
   // player who leaves the Card tab open across an `unlockAt` rollover (e.g.
@@ -601,6 +644,54 @@ export default function Board() {
     const timer = setTimeout(() => setNow(Date.now()), nextUnlock - Date.now());
     return () => clearTimeout(timer);
   }, [event?.days, now]);
+  // Lazy per-Day dealing (#246, daily-cards-spec § "Unlock mechanics"): on opening
+  // an UNLOCKED Day whose snapshot is stamped (`dayDealState === 'ready'`) that has
+  // no Day Card for this Player yet, deal it from that Day's frozen snapshot
+  // (`dealDayCard` draws from `snapshotItemIds`, excludes cross-cruise repeats, and
+  // applies the stratified/tutorial deal). A Day that is `locked` (future),
+  // `waking` (unlocked-by-clock but snapshot not yet stamped — scheduler lag), or
+  // already `dealt` deals NOTHING here. `dealDayCard` re-checks all of this
+  // server-side and no-ops on an existing card, so the in-flight ref only avoids
+  // firing the same deal twice while one is in flight; gating on `dayBoardConfirmed`
+  // keeps a cache-miss (board unknown) from dealing a second card over an existing
+  // one. Fire-and-forget: the day-scoped subscription renders the card once written.
+  const dealingDaysRef = useRef<Set<string>>(new Set());
+  // The Day index whose lazy deal has FAILED (thin/malformed snapshot, or a
+  // repeatedly-denied write), so the render can surface a retry instead of sitting
+  // on "Dealing…" forever (Codex #247 P2). `dealNonce` bumps on a manual retry so
+  // the deal effect re-fires even though nothing else in its deps changed.
+  const [dayDealError, setDayDealError] = useState<number | null>(null);
+  const [dealNonce, setDealNonce] = useState(0);
+  useEffect(() => {
+    if (!hasDays || !user) return;
+    const day = days[viewedIndex] ?? days[0];
+    // A dealt board for the viewed Day clears any prior deal error for it.
+    if (board) {
+      if (dayDealError !== null) setDayDealError(null);
+      return;
+    }
+    if (!day || !dayBoardConfirmed) return;
+    const state = dayDealState({
+      unlockAt: day.unlockAt,
+      snapshotItemIds: day.snapshotItemIds,
+      now,
+      hasBoard: false,
+    });
+    if (state !== 'ready') return;
+    const key = `${user.uid}:${day.index}`;
+    if (dealingDaysRef.current.has(key)) return;
+    dealingDaysRef.current.add(key);
+    const dealIndex = day.index;
+    void dealDayCard(user, dealIndex)
+      .catch(() => {
+        // A denied/failed deal leaves the board null; surface a retry for the
+        // viewed Day rather than an indefinite "Dealing…" spinner. Scoped to the
+        // acted Day so switching away/among Days never shows a stale error.
+        setDayDealError(dealIndex);
+      })
+      .finally(() => dealingDaysRef.current.delete(key));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `days`/`day` derive from event?.days; deps track the fields the deal actually reads.
+  }, [hasDays, user, event?.days, viewedIndex, board, dayBoardConfirmed, now, dealNonce]);
   // Edge refs for the COSMETIC Celebration UI only (issue #104). The public Moment
   // broadcast moved OFF this snapshot-diffing machinery and ONTO the action path —
   // doMark reads `setMark`'s synchronous win-transition verdict and enqueues into a
@@ -627,9 +718,14 @@ export default function Board() {
   // The pending Moment queue needs NO reset here — it is module state keyed BY uid
   // (src/data/moments.ts), so a held win for the previous account can never drain
   // under the new one.
-  const edgeStateUid = useRef(uid);
-  if (edgeStateUid.current !== uid) {
-    edgeStateUid.current = uid;
+  // Keyed on the account AND (in daily mode) the VIEWED Day (#246): each Day has
+  // its OWN Board, so switching Days is a board-identity change just like an
+  // account switch — re-baseline the celebration edges so a Day that already holds
+  // a standing bingo/blackout on first view never spuriously re-animates the win.
+  const edgeStateKey = hasDays ? `${uid ?? 'none'}:${viewedIndex}` : (uid ?? 'none');
+  const edgeStateUid = useRef(edgeStateKey);
+  if (edgeStateUid.current !== edgeStateKey) {
+    edgeStateUid.current = edgeStateKey;
     initialized.current = false;
     wasBingoLines.current = 0;
     wasBlackout.current = false;
@@ -904,33 +1000,41 @@ export default function Board() {
 
   if (!uid) return null;
 
-  // The Day schedule (daily-cards-spec § "Data model"), read-only off the
-  // Event doc — `[]` on a not-yet-migrated Event (eventConverter's default)
-  // or while it's still loading, which keeps every switcher/retint/locked-
-  // preview addition below completely inert and Board's pre-existing
-  // single-Board rendering exactly as it was (every test fixture that
-  // doesn't set `event.days` exercises that untouched path).
-  const days: DayDef[] = event?.days ?? [];
-  const hasDays = days.length > 0;
-  // Adopt today's Day as the viewed default the FIRST render `days` is
-  // non-empty; guarded to fire once so it can never override a Player's own
-  // later chip tap (adjust-during-render, mirroring `edgeStateUid` above).
-  // Once the cruise has ended (`frozenAt` set + farewell Day unlocked) the
-  // farewell Day — podium included — is pinned as the default view (#217,
-  // `farewellPinIndex`); before the freeze it falls back to today's Day.
+  // `days`/`hasDays` are resolved once at the top of the component (the
+  // day-scoped Board subscription keys on them). Adopt today's Day as the viewed
+  // default the FIRST render `days` is non-empty; guarded to fire once so it can
+  // never override a Player's own later chip tap (adjust-during-render, mirroring
+  // `edgeStateUid` above). Once the cruise has ended (`frozenAt` set + farewell
+  // Day unlocked) the farewell Day — podium included — is pinned as the default
+  // view (#217, `farewellPinIndex`); before the freeze it falls back to today's Day.
   if (!viewedIndexInitialized.current && hasDays) {
     viewedIndexInitialized.current = true;
     const initNow = Date.now();
     setViewedIndex(farewellPinIndex(days, event?.frozenAt, initNow) ?? defaultViewedIndex(days, initNow));
   }
   const viewedDay = hasDays ? (days[viewedIndex] ?? days[0]) : undefined;
-  // `now`, not `Date.now()` — see the unlock timer above (Codex P2, PR #230):
-  // this read must be the SAME clock the timer bumps, so the rollover flips
-  // the lock via a state update instead of only on the next unrelated render.
-  const viewedLocked = viewedDay != null && viewedDay.unlockAt > now;
+  // The viewed Day's deal state (#246), folding the schedule + clock + the
+  // day-scoped Board through `dayDealState`: `locked` (future → preview),
+  // `waking` (unlocked-by-clock but the snapshot isn't stamped yet → "waking up"
+  // wait, deal NOTHING), `ready` (unlocked + snapshot present, deal on open), or
+  // `dealt` (a Board exists → render it). `now`, not `Date.now()` — the SAME
+  // clock the unlock timer bumps (Codex P2, PR #230), so a rollover flips the
+  // state via a state update, not only on the next unrelated render.
+  const viewedState = viewedDay
+    ? dayDealState({
+        unlockAt: viewedDay.unlockAt,
+        snapshotItemIds: viewedDay.snapshotItemIds,
+        now,
+        hasBoard: !!board,
+      })
+    : undefined;
   const daySwitcher = hasDays ? (
     <DaySwitcher days={days} viewedIndex={viewedIndex} onSelect={setViewedIndex} />
   ) : null;
+  // The tutorial (embark/farewell) Day indexes, threaded to the Mark/proof write
+  // paths so the persisted cruise-wide `firstBingoAt` excludes them (spec §
+  // "Resolved decisions" #2). `undefined` for legacy events excludes nothing.
+  const tutorialDayIndexes = hasDays ? [...tutorialDayIndexSet(days)] : undefined;
   const cardMeta = (
     <div className="card-meta">
       <span>
@@ -939,28 +1043,56 @@ export default function Board() {
     </div>
   );
 
-  // A locked viewed Day never has a Board to deal or show — this branch is
-  // orthogonal to the `!board` guard below, which is about the ONE existing
-  // (today's) Board this Player already has. Per-Day Board fetching is
-  // #204's scope; this ticket only decides WHICH chrome to render for the
-  // viewed Day (daily-cards-spec § "Locked Day preview"). No inline
-  // Guidelines mount here (#208 retired every Board-inline/pathname-gated
-  // AcceptableUse mount for the single More-menu row —
-  // w3-security-hardening.test.tsx "reachable from every signed-in route"):
-  // the tab bar (Nav, App.tsx) renders alongside Board regardless of lock
-  // state, so More — and Guidelines inside it — stays reachable on a locked
-  // Day exactly like any other route, with no per-branch mount needed.
-  if (viewedDay && viewedLocked) {
+  // A `locked` (future) or `waking` (unlocked-by-clock, snapshot not yet stamped)
+  // viewed Day has no Board to deal or show — render the themed preview and deal
+  // NOTHING (daily-cards-spec § "Locked Day preview" / "Client fallback"). This
+  // branch is orthogonal to the `!board` guard below (which handles a `ready` Day
+  // whose card is mid-deal). No inline Guidelines mount here (#208 retired every
+  // Board-inline/pathname-gated AcceptableUse mount for the single More-menu row —
+  // w3-security-hardening.test.tsx "reachable from every signed-in route"): the tab
+  // bar (Nav, App.tsx) renders alongside Board regardless of state, so More — and
+  // Guidelines inside it — stays reachable here exactly like any other route.
+  if (viewedDay && (viewedState === 'locked' || viewedState === 'waking')) {
     return (
       <>
         {cardMeta}
         {daySwitcher}
-        <LockedDayPreview day={viewedDay} timezone={event?.timezone} />
+        <LockedDayPreview
+          day={viewedDay}
+          timezone={event?.timezone}
+          waking={viewedState === 'waking'}
+        />
       </>
     );
   }
 
   if (!board) {
+    // A lazy per-Day deal that FAILED for the viewed Day (thin/malformed snapshot
+    // or a repeatedly-denied write) surfaces a retry instead of an indefinite
+    // "Dealing…" spinner (Codex #247 P2). Retry clears the in-flight guard + error
+    // and bumps the deal nonce so the effect re-attempts.
+    if (hasDays && dayDealError === viewedIndex) {
+      return (
+        <>
+          {cardMeta}
+          {daySwitcher}
+          <div className="center muted" role="alert">
+            <p>We couldn’t deal this day’s card.</p>
+            <p>Check your connection, then retry.</p>
+            <button
+              className="btn"
+              onClick={() => {
+                if (uid) dealingDaysRef.current.delete(`${uid}:${viewedIndex}`);
+                setDayDealError(null);
+                setDealNonce((n) => n + 1);
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        </>
+      );
+    }
     // A Board is dealt once at join from the active, non-free Prompt pool
     // (ADR 0003). dealBoard needs >= MIN_POOL prompts (ADR 0004); with fewer the
     // deal throws and no Board is ever written, so a bare `!board` check would
@@ -982,8 +1114,16 @@ export default function Board() {
     // This pre-deal empty state only explains the shortage; the auto-retry watches
     // the post-failure DealError state, not this one, so this copy still must not
     // promise automatic dealing here.)
+    // Legacy-only (#246): this thin-pool guard reads the live `main` pool
+    // (`useItems`), which is the join-deal source only in single-Board mode. In
+    // daily mode a Day Card deals from that Day's FROZEN `snapshotItemIds`, not the
+    // live pool, and a tutorial Day deals from the embark/farewell pool `useItems`
+    // doesn't even surface — so the live-main count is the wrong measure and would
+    // false-positive on a Day whose snapshot is fine. A `ready` day with no card
+    // yet falls through to the "Dealing…" state while `dealDayCard` runs.
     const activePool = items.filter((i) => !i.isFreeSpace);
     if (
+      !hasDays &&
       !boardLoading &&
       !poolLoading &&
       boardConfirmed &&
@@ -1023,20 +1163,36 @@ export default function Board() {
     // enqueue; the next attributable render accepts taps normally.
     if (!cellsAttributable) return;
     try {
+      // The first-bingo stamp `computeMark` preserves is per-BOARD, and in daily
+      // mode each Day has its OWN board — so the "current first bingo" for a Mark is
+      // the VIEWED Day's bucket, never the cruise-wide root (which would restamp an
+      // earlier main-day bingo into this Day's honor — Codex #247 P2). The
+      // knownFirstBingoAt tri-state still gates: `undefined` (row unknown) is
+      // preserved so setMark omits the field rather than clobbering the server value.
+      const rootFirstBingoKnown = knownFirstBingoAt(player, playerLoading, playerConfirmed);
+      const currentFirstBingoAt =
+        rootFirstBingoKnown === undefined
+          ? undefined
+          : hasDays
+            ? (player?.dayStats?.[viewedIndex]?.firstBingoAt ?? null)
+            : rootFirstBingoKnown;
       const res = await setMark({
         uid,
         cells,
         index: c.index,
         nextMarked,
         claimMode,
-        currentFirstBingoAt: knownFirstBingoAt(player, playerLoading, playerConfirmed),
+        currentFirstBingoAt,
         displayName: identityKnown ? displayName : undefined,
-        // Stamp the viewed Day (#216) so the Mark's Tally marker groups into the
-        // right per-`(itemId, dayIndex)` Feed card — mirrors the `dayIndex` the
-        // proof/claim sheet already carries below. Board still deals `dayIndex: 0`,
-        // so this is the SELECTED `viewedIndex` when the schedule is live, else the
-        // dealt board's own dayIndex.
+        // Stamp the viewed Day (#216, #246) so the Mark writes the right day-scoped
+        // Board and its Tally marker groups into the right per-`(itemId, dayIndex)`
+        // Feed card. In daily mode this is the SELECTED `viewedIndex` (the Day the
+        // Player is looking at); legacy falls back to the dealt board's own dayIndex.
         dayIndex: hasDays ? viewedIndex : board?.dayIndex,
+        // Route the Mark to the DAY-SCOPED board + fold its stats into
+        // `dayStats[viewedIndex]` (#246). Legacy events keep the single-board path.
+        daily: hasDays,
+        tutorialDayIndexes,
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
@@ -1377,6 +1533,10 @@ export default function Board() {
           // index, which would badge every Day-2+ claim as Day 1 (Codex P2).
           // Fall back to the Board doc index only when there is no schedule.
           dayIndex={hasDays ? viewedIndex : board?.dayIndex}
+          // Route a proofed Mark to the DAY-SCOPED board + fold its stats into
+          // `dayStats[viewedIndex]` (#246), the SAME path the honor Mark takes.
+          daily={hasDays}
+          tutorialDayIndexes={tutorialDayIndexes}
           tallyCount={proofTargetTally}
           // The proofed-mark completion verdict (PR #110 round 2 finding 1): a
           // successful attachProof reports the SAME win-transition shape setMark

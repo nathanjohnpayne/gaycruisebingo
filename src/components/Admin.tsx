@@ -35,6 +35,7 @@ import {
   unbanUser,
 } from '../data/admin';
 import { deleteProof } from '../data/proofs';
+import { tutorialDayIndexSet } from '../game/logic';
 import { THEMES } from '../theme/themes';
 import type { ClaimMode, DayDef, EventDoc, ItemDoc, ProofDoc, ThemeId } from '../types';
 
@@ -106,11 +107,15 @@ function ProofQueueRow({
   threshold,
   bannedUids,
   admins,
+  days,
 }: {
   proof: ProofDoc;
   threshold: number | undefined;
   bannedUids: string[];
   admins: string[];
+  // The Event's Day schedule (#246): present ⇒ daily-cards mode, so a proof
+  // deletion unmarks the DAY-SCOPED board for the Proof's own `dayIndex`.
+  days: DayDef[] | undefined;
 }) {
   const autoHidden = isReportHidden(p.reportCount, threshold);
   return (
@@ -141,7 +146,16 @@ function ProofQueueRow({
         </button>
       )}
       <BanControl uid={p.uid} bannedUids={bannedUids} admins={admins} />
-      <button className="iconbtn" title="Delete" onClick={() => deleteProof(p.id, p.storagePath)}>
+      <button
+        className="iconbtn"
+        title="Delete"
+        onClick={() =>
+          deleteProof(p.id, p.storagePath, {
+            daily: !!days?.length,
+            tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
+          })
+        }
+      >
         🗑
       </button>
     </div>
@@ -576,6 +590,7 @@ export default function Admin() {
                 threshold={threshold}
                 bannedUids={bannedUids}
                 admins={admins}
+                days={event?.days}
               />
             ) : (
               <ItemQueueRow

@@ -4,6 +4,7 @@ import { reportProof, deleteProof } from '../data/proofs';
 import { track } from '../analytics';
 import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
+import { tutorialDayIndexSet } from '../game/logic';
 import { THEMES } from '../theme/themes';
 import type { BoardDoc, DayDef, MomentDoc, MomentKind, ProofDoc, TallyCard as TallyCardData } from '../types';
 
@@ -76,7 +77,19 @@ function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: str
           ⚑
         </button>
         {viewerUid === proof.uid && (
-          <button className="iconbtn" title="Delete" onClick={() => deleteProof(proof.id, proof.storagePath).catch(console.error)}>
+          <button
+            className="iconbtn"
+            title="Delete"
+            onClick={() =>
+              // Daily-cards mode (#246): unmark the backing cell on the Proof's OWN
+              // day-scoped Board + fold the owner's stats into that Day's bucket.
+              // `days` present ⇒ daily; the Proof carries its own `dayIndex`.
+              deleteProof(proof.id, proof.storagePath, {
+                daily: !!days?.length,
+                tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
+              }).catch(console.error)
+            }
+          >
             🗑
           </button>
         )}

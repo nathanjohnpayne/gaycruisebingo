@@ -28,6 +28,10 @@ const H = vi.hoisted(() => ({
 
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
+  // In daily mode Board reads the VIEWED Day's board here (#246). The suite's
+  // fixtures set `H.board` with a `dayIndex` matching the viewed Day, so returning
+  // it for any requested index renders that Day's card exactly as before.
+  useDayBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
@@ -57,6 +61,10 @@ vi.mock('../data/doubts', () => ({
 }));
 vi.mock('../data/api', () => ({
   setMark: H.setMark,
+  // Lazy per-Day deal (#246): the suite pre-sets `H.board`, so the deal effect's
+  // `if (board) return` guard short-circuits and this is never actually invoked;
+  // stubbed so the import resolves.
+  dealDayCard: vi.fn(() => Promise.resolve(false)),
   resolveDisplayName: (
     profile: { displayName?: unknown } | null | undefined,
     fallback: string | null | undefined,

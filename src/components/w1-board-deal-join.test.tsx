@@ -100,6 +100,10 @@ vi.mock('../hooks/useData', () => ({
     loading: H.data.boardLoading,
     hasServerData: H.data.boardServer,
   }),
+  // Daily-cards day-scoped Board (#246). These fixtures are legacy (no `days[]`),
+  // so Board reads `useBoard` above and this stays inert; the factory must still
+  // export it so Board's module resolves.
+  useDayBoard: () => ({ data: null, loading: false, hasServerData: true }),
   useMyPlayer: () => ({ data: H.data.player, loading: false, hasServerData: true }),
   // Board reads the saved users/{uid} profile to attribute the Tally marker (#31);
   // a null profile falls back to the auth name, which these fixtures don't assert.
@@ -136,6 +140,12 @@ import { dealBoard, MIN_POOL, CENTER, type DealItem } from '../game/logic';
 import { FREE_TEXT, SEED_ITEMS } from '../data/seed';
 
 const SIGNED_IN = { uid: 'sailor-1', displayName: 'Sailor', photoURL: null } as unknown as User;
+// joinAndDeal (#246) reads the Event FIRST to pick its mode: a `days[]` schedule ⇒
+// day-scoped daily mode (no legacy board), else the pre-1.5 single-board deal these
+// legacy tests exercise. A doc that exists with NO `days` selects the legacy path,
+// so it leads every sequenced getDoc mock below (event → board → profile). The
+// same read supplies threshold/spicyRatio/bannedUids, so those move onto it too.
+const EVENT_LEGACY = { exists: () => true, data: () => ({}) };
 const SIGNED_IN_WITH_PHOTO = {
   uid: 'sailor-1',
   displayName: 'Sailor',
@@ -400,11 +410,13 @@ describe('Board pool-listener gate (Codex P3)', () => {
 
 describe('joinAndDeal freeze-at-join', () => {
   it('does not re-deal when a Board already exists for the uid', async () => {
-    H.getDoc.mockResolvedValueOnce({ exists: () => true });
+    H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
+      .mockResolvedValueOnce({ exists: () => true }); // Board already exists
 
     await joinAndDeal(SIGNED_IN);
 
-    expect(H.getDoc).toHaveBeenCalledTimes(1); // board check only — no profile read for returning Players
+    expect(H.getDoc).toHaveBeenCalledTimes(2); // event (mode) + board check — no profile read for returning Players
     expect(H.getDocs).not.toHaveBeenCalled(); // never reads the pool
     expect(H.batchSet).not.toHaveBeenCalled(); // never re-writes the Board
     expect(H.batchCommit).not.toHaveBeenCalled();
@@ -453,8 +465,8 @@ describe('joinAndDeal freeze-at-join', () => {
 });
 
 describe('joinAndDeal community auto-hide at the deal path (specs/w2-admin-console.md, Codex P2 PR #107 finding 1)', () => {
-  // joinAndDeal reads the event doc (the 3rd getDoc call: board, profile, event)
-  // for reportHideThreshold and drops community-hidden Prompts from the deal pool,
+  // joinAndDeal reads the event doc FIRST (the mode decision, #246: event, board,
+  // profile) for reportHideThreshold and drops community-hidden Prompts from the deal pool,
   // the SAME predicate useItems applies to the live pool — a new Player's frozen
   // card must not contain a Prompt that is hidden everywhere else.
   const eventThreshold = (threshold: number) => ({
@@ -472,9 +484,9 @@ describe('joinAndDeal community auto-hide at the deal path (specs/w2-admin-conso
     ];
     const docs = [...clean, ...hidden].map((it) => ({ data: () => it }));
     H.getDoc
+      .mockResolvedValueOnce(eventThreshold(4)) // event doc → mode (legacy) + threshold 4
       .mockResolvedValueOnce({ exists: () => false }) // no Board yet
-      .mockResolvedValueOnce({ exists: () => false }) // no saved profile
-      .mockResolvedValueOnce(eventThreshold(4)); // event doc → threshold 4
+      .mockResolvedValueOnce({ exists: () => false }); // no saved profile
     H.getDocs.mockResolvedValueOnce({ docs });
 
     await joinAndDeal(SIGNED_IN);
@@ -494,9 +506,9 @@ describe('joinAndDeal community auto-hide at the deal path (specs/w2-admin-conso
     const hidden = Array.from({ length: 5 }, (_, i) => ({ ...mkItem(`hot-${i}`), reportCount: 9 }));
     const docs = [...clean, ...hidden].map((it) => ({ data: () => it }));
     H.getDoc
+      .mockResolvedValueOnce(eventThreshold(4))
       .mockResolvedValueOnce({ exists: () => false })
-      .mockResolvedValueOnce({ exists: () => false })
-      .mockResolvedValueOnce(eventThreshold(4));
+      .mockResolvedValueOnce({ exists: () => false });
     H.getDocs.mockResolvedValueOnce({ docs });
 
     await expect(joinAndDeal(SIGNED_IN)).rejects.toThrow(/at least 24 prompts/);
@@ -508,9 +520,9 @@ describe('joinAndDeal community auto-hide at the deal path (specs/w2-admin-conso
     // still deal, because a non-positive threshold is inactive.
     const docs = activeItems(24).map((it) => ({ data: () => ({ ...it, reportCount: 3 }) }));
     H.getDoc
+      .mockResolvedValueOnce(eventThreshold(0)) // non-positive → inactive
       .mockResolvedValueOnce({ exists: () => false })
-      .mockResolvedValueOnce({ exists: () => false })
-      .mockResolvedValueOnce(eventThreshold(0)); // non-positive → inactive
+      .mockResolvedValueOnce({ exists: () => false });
     H.getDocs.mockResolvedValueOnce({ docs });
 
     await joinAndDeal(SIGNED_IN);
@@ -520,15 +532,15 @@ describe('joinAndDeal community auto-hide at the deal path (specs/w2-admin-conso
     expect(H.batchCommit).toHaveBeenCalledTimes(1);
   });
 
-  it('falls open when the event doc is unreadable — the deal proceeds unfiltered', async () => {
-    // The event read fails (offline / permission race). joinAndDeal must fall open
-    // to no threshold filtering rather than blocking the deal, exactly like a
-    // missing profile falls back to the auth identity.
+  it('falls open on a MISSING threshold — a readable event with no settings deals unfiltered', async () => {
+    // A readable event doc with no `settings.reportHideThreshold` must fall open to
+    // no filtering (not block the deal), exactly like a missing profile falls back
+    // to the auth identity. EVENT_LEGACY is readable + has no days → legacy mode.
     const docs = activeItems(24).map((it) => ({ data: () => ({ ...it, reportCount: 50 }) }));
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // readable, no threshold → falls open, legacy mode
       .mockResolvedValueOnce({ exists: () => false }) // no Board yet
-      .mockResolvedValueOnce({ exists: () => false }) // no saved profile
-      .mockRejectedValueOnce(new Error('offline')); // event read fails — caught, falls open
+      .mockResolvedValueOnce({ exists: () => false }); // no saved profile
     H.getDocs.mockResolvedValueOnce({ docs });
 
     await joinAndDeal(SIGNED_IN);
@@ -536,6 +548,16 @@ describe('joinAndDeal community auto-hide at the deal path (specs/w2-admin-conso
     const boardWrite = H.batchSet.mock.calls[0][1] as BoardDoc;
     expect(boardWrite.cells.filter((c) => !c.free)).toHaveLength(24); // still deals
     expect(H.batchCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it('FAILS CLOSED when the event-mode read errors — never guesses legacy (CodeRabbit #247)', async () => {
+    // A genuine event-read failure must propagate (retryable dealError), not be
+    // guessed as legacy mode — guessing legacy would misroute a real daily event to
+    // the day-scoped-rules-denied legacy board. The read is the FIRST getDoc.
+    H.getDoc.mockRejectedValueOnce(new Error('offline'));
+
+    await expect(joinAndDeal(SIGNED_IN)).rejects.toThrow(/offline/);
+    expect(H.batchCommit).not.toHaveBeenCalled(); // no board/player written on a mode-read failure
   });
 });
 
@@ -551,6 +573,7 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
 
   it('prefers the saved profile name and custom avatar over the Google identity', async () => {
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
       .mockResolvedValueOnce({ exists: () => false }) // no Board yet
       .mockResolvedValueOnce({
         exists: () => true,
@@ -573,6 +596,7 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
 
   it('keeps the live Google photo when the saved profile has no custom avatar', async () => {
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
       .mockResolvedValueOnce({ exists: () => false }) // no Board yet
       .mockResolvedValueOnce({
         exists: () => true,
@@ -597,6 +621,7 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
     // before denormalizing (Codex P2, PR #66 round 3). A non-string
     // displayName falls back to the auth name; same for a >100-char one.
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
       .mockResolvedValueOnce({ exists: () => false }) // no Board yet
       .mockResolvedValueOnce({
         exists: () => true,
@@ -614,6 +639,7 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
 
   it('ignores a saved name longer than the 100-char cap', async () => {
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
       .mockResolvedValueOnce({ exists: () => false })
       .mockResolvedValueOnce({
         exists: () => true,
@@ -628,6 +654,7 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
 
   it('ignores an empty / whitespace-only saved name', async () => {
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
       .mockResolvedValueOnce({ exists: () => false })
       .mockResolvedValueOnce({
         exists: () => true,
@@ -645,6 +672,7 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
     // an http:// (or javascript:/data:) value saved into the self-writable
     // profile must not be denormalized into the public row.
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
       .mockResolvedValueOnce({ exists: () => false })
       .mockResolvedValueOnce({
         exists: () => true,
@@ -667,6 +695,7 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
 
   it('rejects a custom photo that does not parse as a URL at all', async () => {
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
       .mockResolvedValueOnce({ exists: () => false })
       .mockResolvedValueOnce({
         exists: () => true,
@@ -683,6 +712,7 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
     // users/{uid} is unvalidated, so customPhoto can hold any type (round 4,
     // Codex P3). A truthy non-boolean must not publish the saved photo.
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
       .mockResolvedValueOnce({ exists: () => false })
       .mockResolvedValueOnce({
         exists: () => true,
@@ -701,6 +731,7 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
 
   it('ignores a numeric customPhoto (1) — the flag must be exactly true', async () => {
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
       .mockResolvedValueOnce({ exists: () => false })
       .mockResolvedValueOnce({
         exists: () => true,
@@ -728,6 +759,7 @@ describe('joinAndDeal Player-row attribution (Codex P2 on PR #67, api half)', ()
 
   it('falls back to the auth identity when the profile read fails outright', async () => {
     H.getDoc
+      .mockResolvedValueOnce(EVENT_LEGACY) // mode decision → legacy single-board
       .mockResolvedValueOnce({ exists: () => false }) // no Board yet
       .mockRejectedValueOnce(new Error('offline')); // profile read fails — must not block the deal
     H.getDocs.mockResolvedValueOnce(healthyPoolDocs());

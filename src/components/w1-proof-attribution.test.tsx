@@ -25,6 +25,7 @@ vi.mock('../auth/AuthContext', () => ({
 }));
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
+  useDayBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),

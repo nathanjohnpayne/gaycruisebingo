@@ -223,6 +223,11 @@ export interface ClaimDoc {
   status: 'pending' | 'confirmed' | 'rejected';
   createdAt: number;
   resolvedBy?: string | null;
+  // Which Day's board the claimed mark lives on (#246). Present on claims created
+  // in daily-cards mode, so `confirmClaim`/`rejectClaim` resolve against the
+  // day-scoped board `days/{dayIndex}/boards/{uid}` and fold `dayStats[dayIndex]`.
+  // Absent on legacy claims → the single event-level board.
+  dayIndex?: number;
 }
 
 // ---- Phase 2: social core (Tally / Doubts / Moments) ----

@@ -1,6 +1,6 @@
-import { doc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
-import { completedLines, countMarked, isBlackout } from '../game/logic';
+import { completedLines, countMarked, isBlackout, foldDayStat, tutorialDayIndexSet, type DayStats } from '../game/logic';
 import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef } from '../types';
 
@@ -9,6 +9,9 @@ const item = (id: string) => doc(db, 'events', EVENT_ID, 'items', id);
 const proof = (id: string) => doc(db, 'events', EVENT_ID, 'proofs', id);
 const claim = (id: string) => doc(db, 'events', EVENT_ID, 'claims', id);
 const board = (uid: string) => doc(db, 'events', EVENT_ID, 'boards', uid);
+// The day-scoped board a daily-mode claim resolves against (#246).
+const dayBoard = (dayIndex: number, uid: string) =>
+  doc(db, 'events', EVENT_ID, 'days', String(dayIndex), 'boards', uid);
 const player = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
 // A per-Prompt Tally marker (ADR 0002): the same path setMark/attachProof write.
 const marker = (itemId: string, uid: string) =>
@@ -168,10 +171,25 @@ async function resolve(
   adminUid: string,
   status: 'confirmed' | 'rejected',
 ): Promise<void> {
+  // Daily mode (#246, Codex #247 P2): a claim created on a day-scoped board carries
+  // its `dayIndex`, so resolve against `days/{dayIndex}/boards/{uid}` and fold the
+  // owner's `dayStats[dayIndex]` — the SAME routing attachProof/setMark use. Legacy
+  // claims (no dayIndex) resolve the single event-level board. The tutorial set for
+  // the cruise-wide first-bingo exclusion is read once, outside the atomic txn
+  // (stable config, not part of the board/player invariant).
+  const daily = typeof c.dayIndex === 'number';
+  const boardRef = daily ? dayBoard(c.dayIndex as number, c.uid) : board(c.uid);
+  let isTutorialDay: ((i: number) => boolean) | undefined;
+  if (daily) {
+    const evSnap = await getDoc(evt()).catch(() => null);
+    const days = (evSnap?.data()?.days as DayDef[] | undefined) ?? [];
+    const set = tutorialDayIndexSet(days);
+    isTutorialDay = (i: number) => set.has(i);
+  }
   await runTransaction(db, async (tx) => {
     // Read board + player inside the txn so a concurrent mark/proof from the same
     // player isn't clobbered by a stale snapshot (mirrors setMark/attachProof).
-    const bSnap = await tx.get(board(c.uid));
+    const bSnap = await tx.get(boardRef);
     if (!bSnap.exists()) return;
     const pSnap = await tx.get(player(c.uid));
     const cells = (bSnap.data().cells as Cell[]) ?? [];
@@ -179,13 +197,29 @@ async function resolve(
     const bingoCount = completedLines(next).length;
     const squares = countMarked(next);
     const blackout = isBlackout(next);
-    const existingFirst = pSnap.exists() ? ((pSnap.data().firstBingoAt as number | null) ?? null) : null;
+    // The prior first-bingo stamp is per-BOARD: in daily mode read the VIEWED Day's
+    // bucket, not the cruise-wide root (which would restamp a cross-Day time).
+    const priorDayStats = pSnap.exists() ? (pSnap.data().dayStats as DayStats | undefined) : undefined;
+    const existingFirst = daily
+      ? (priorDayStats?.[c.dayIndex as number]?.firstBingoAt ?? null)
+      : (pSnap.exists() ? ((pSnap.data().firstBingoAt as number | null) ?? null) : null);
     // Clear the first-bingo stamp when the resolved board has no bingo (rejecting
     // a claim can remove the last line); keep the earliest stamp otherwise.
     const firstBingoAt = bingoCount > 0 ? (existingFirst ?? Date.now()) : null;
 
-    tx.set(board(c.uid), { cells: next }, { merge: true });
-    tx.set(player(c.uid), { squaresMarked: squares, bingoCount, blackout, firstBingoAt }, { merge: true });
+    tx.set(boardRef, { cells: next }, { merge: true });
+    if (daily) {
+      const playerWrite = foldDayStat({
+        priorDayStats,
+        dayIndex: c.dayIndex as number,
+        bucket: { bingoCount, squaresMarked: squares, firstBingoAt },
+        blackout,
+        isTutorialDay,
+      });
+      tx.set(player(c.uid), playerWrite, { merge: true });
+    } else {
+      tx.set(player(c.uid), { squaresMarked: squares, bingoCount, blackout, firstBingoAt }, { merge: true });
+    }
     // Tally symmetry (ADR 0002): wherever a write flips a cell marked→unmarked it
     // must delete that cell's per-Prompt Tally marker, and wherever it flips
     // →marked it must ensure the marker (setMark and attachProof do). Rejecting a

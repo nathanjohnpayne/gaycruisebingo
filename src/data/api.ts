@@ -263,6 +263,63 @@ export async function hasCachedBoard(uid: string): Promise<boolean> {
  * is not a join.
  */
 export async function joinAndDeal(u: User): Promise<boolean> {
+  // Decide the MODE from the Event before touching any board (#246): the Phase 1.5
+  // day-scoped firestore.rules removed the top-level events/{eventId}/boards/{uid}
+  // path entirely, so reading OR writing the legacy board when the Event carries a
+  // `days[]` schedule is a DENIED operation. When the schedule is present there is
+  // no event-level board at all — a Player's Day Cards are dealt lazily, one per
+  // Day, on first open (`dealDayCard`) — so join only ensures the Player's identity
+  // row exists (name/avatar + zeroed cruise aggregates) for the leaderboard and the
+  // per-Day stat folds. Legacy events (no `days[]`) keep the exact pre-1.5 behavior.
+  //
+  // FAIL CLOSED on a read ERROR (CodeRabbit #247): a genuine event-read failure
+  // must NOT be guessed as legacy mode — that would misroute a real daily event
+  // down the legacy `events/{eventId}/boards/{uid}` path the day-scoped rules deny.
+  // So the read is NOT `.catch`-swallowed: a transient failure propagates and
+  // runDeal surfaces the retryable dealError, exactly like any other deal failure.
+  // A readable-but-empty/missing event (no `days[]`) is a legitimate legacy signal;
+  // the threshold/ban fields then fall open on the absent keys as before.
+  const joinEventSnap = await getDoc(rawEvent());
+  const joinEventData = joinEventSnap.exists() ? (joinEventSnap.data() as Partial<EventDoc>) : null;
+  const daily = Array.isArray(joinEventData?.days) && joinEventData.days.length > 0;
+
+  if (daily) {
+    // Daily mode: no legacy board to read/deal. Ensure the Player row carries its
+    // identity + zeroed cruise aggregates. The identity is resolved the SAME
+    // validated way as the legacy branch below (saved profile → auth fallback).
+    //
+    // This must NOT early-return merely because a row EXISTS: `App` renders `Board`
+    // while `runDeal()` is still in flight, so the lazy Day-Card effect can call
+    // `dealDayCard()` concurrently — and that write creates `players/{uid}` with
+    // ONLY a `dayStats` bucket. If that write wins the race, an `exists()`-only
+    // guard would return early and the row would be stranded WITHOUT
+    // uid/displayName/photoURL/joinedAt (a nameless leaderboard entry — Codex #247
+    // P2). So the identity fields are ALWAYS merged, and the zeroed aggregates are
+    // seeded only for fields the row doesn't already carry — so a concurrent
+    // `dayStats` write (or real earlier progress) is never reset to 0. The return
+    // value reports whether this was a genuine first join (no identity yet), so the
+    // `join_event` analytic still fires exactly once.
+    const existingPlayer = await getDoc(rawPlayer(u.uid));
+    const existing = existingPlayer.exists() ? (existingPlayer.data() as Partial<UserDoc & { joinedAt: number; bingoCount: number; squaresMarked: number; firstBingoAt: number | null; blackout: boolean }>) : null;
+    const alreadyJoined = existing != null && typeof existing.joinedAt === 'number';
+    const profileSnap = await getDoc(rawUser(u.uid)).catch(() => null);
+    const profile = profileSnap?.exists() ? (profileSnap.data() as Partial<UserDoc>) : null;
+    const savedPhoto = profile && isHttpsUrl(profile.photoURL) ? profile.photoURL : null;
+    const displayName = resolveDisplayName(profile, u.displayName);
+    const photoURL =
+      profile?.customPhoto === true ? (savedPhoto ?? u.photoURL ?? null) : (u.photoURL ?? null);
+    // Identity always merged; aggregates only for fields not already present, so a
+    // racing `dealDayCard` dayStats write is never clobbered back to zero.
+    const seed: Record<string, unknown> = { uid: u.uid, displayName, photoURL };
+    if (existing?.joinedAt == null) seed.joinedAt = Date.now();
+    if (typeof existing?.bingoCount !== 'number') seed.bingoCount = 0;
+    if (typeof existing?.squaresMarked !== 'number') seed.squaresMarked = 0;
+    if (existing?.firstBingoAt === undefined) seed.firstBingoAt = null;
+    if (typeof existing?.blackout !== 'boolean') seed.blackout = false;
+    await setDoc(rawPlayer(u.uid), seed, { merge: true });
+    return !alreadyJoined; // a genuine first join (no prior identity) is the analytic-worthy event
+  }
+
   const existing = await getDoc(rawBoard(u.uid));
   if (existing.exists()) return false;
 
@@ -275,10 +332,9 @@ export async function joinAndDeal(u: User): Promise<boolean> {
   // value wins. One extra read, join-path only (returning Players early-return
   // above), fetched alongside the pool; best-effort — a missing or unreadable
   // profile falls back to the auth values rather than blocking the deal.
-  const [profileSnap, snap, eventSnap] = await Promise.all([
+  const [profileSnap, snap] = await Promise.all([
     getDoc(rawUser(u.uid)).catch(() => null),
     getDocs(query(itemsCol(), where('status', '==', 'active'))),
-    getDoc(rawEvent()).catch(() => null),
   ]);
   const profile = profileSnap?.exists() ? (profileSnap.data() as Partial<UserDoc>) : null;
   // Validate before denormalizing (Codex P2 on PR #66 round 3): users/{uid} is
@@ -307,7 +363,9 @@ export async function joinAndDeal(u: User): Promise<boolean> {
   // so it adds no latency. A missing/unreadable event doc, or an unset/non-positive
   // threshold, falls open to no filtering via `isReportHidden` — exactly the live
   // pool's behavior.
-  const eventData = eventSnap?.exists() ? (eventSnap.data() as Partial<EventDoc>) : null;
+  // Reuse the `joinEventData` already read up top for the mode decision — no
+  // second event round trip.
+  const eventData = joinEventData;
   const threshold =
     typeof eventData?.settings?.reportHideThreshold === 'number'
       ? eventData.settings.reportHideThreshold
@@ -653,6 +711,13 @@ export async function setMark(params: {
   // Optional: absent (legacy / no schedule) excludes nothing — the Leaderboard
   // and day-meta surfaces apply the exclusion at render time regardless.
   tutorialDayIndexes?: number[];
+  // Daily-cards mode gate (#246): when the Event carries a `days[]` schedule the
+  // Mark writes the DAY-SCOPED board at events/{eventId}/days/{dayIndex}/boards/{uid}
+  // — one board per Player per Day — instead of the single legacy
+  // events/{eventId}/boards/{uid}. Absent/false keeps the pre-1.5 single-board
+  // path byte-identical, so legacy events (and every mock-Firestore unit test that
+  // doesn't set it) are untouched.
+  daily?: boolean;
   database?: Firestore;
 }): Promise<{
   cells: Cell[];
@@ -691,6 +756,7 @@ async function runSetMark(
     displayName?: string;
     dayIndex?: number;
     tutorialDayIndexes?: number[];
+    daily?: boolean;
   },
   database: Firestore,
 ): Promise<{
@@ -701,7 +767,16 @@ async function runSetMark(
   blackoutTransition: boolean;
 }> {
   const { uid } = params;
-  const boardRef = doc(database, 'events', EVENT_ID, 'boards', uid);
+  // Daily-cards mode (#246): route the Mark to the DAY-SCOPED board
+  // events/{eventId}/days/{dayIndex}/boards/{uid} — one board per Player per Day,
+  // so each Day's marks fold into their own bucket and can never sum into one
+  // (the pre-1.5 single-board double-count). `String(dayIndex)` is the canonical
+  // decimal segment the day-scoped firestore.rules gate accepts (#201). In daily
+  // mode the caller (Board) always passes the viewed `dayIndex`, so the board path
+  // is known up front without reading the cache. Legacy mode is unchanged.
+  const boardRef = params.daily === true
+    ? doc(database, 'events', EVENT_ID, 'days', String(params.dayIndex ?? 0), 'boards', uid)
+    : doc(database, 'events', EVENT_ID, 'boards', uid);
   const playerRef = doc(database, 'events', EVENT_ID, 'players', uid);
 
   let baseCells = params.cells;
