@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import type { EventDoc, PlayerDoc } from '../types';
 
 // specs/w2-leaderboard.md, RTL layer (issue #35). Leaderboard is presentational
@@ -32,6 +33,9 @@ vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../hooks/useData', () => ({
   useLeaderboard: () => ({ players: H.players, loading: H.loading }),
   useEventDoc: () => ({ data: H.event, loading: false }),
+  // #218: no Proofs fixtured in this suite — an empty map keeps every row
+  // chip-less, which is orthogonal to the pin/filter/tie-break assertions here.
+  useLatestProofByUid: () => ({ latestByUid: {}, loading: false }),
   // Mirrors src/data/moderation.ts isBanned (#108). The event fixtures here carry no
   // bannedUids, so it filters nothing and these pin/filter assertions are unchanged;
   // the ban filter itself is pinned in src/components/w2-ban-console.test.tsx.
@@ -98,7 +102,7 @@ beforeEach(() => {
 
 describe('Leaderboard — the First to BINGO pin tracks earliest firstBingoAt, not rank', () => {
   it('pins "1st BINGO" on the earliest first-bingo Player even though a later-bingo Player outranks them', () => {
-    const { container } = render(<Leaderboard />);
+    const { container } = render(<Leaderboard />, { wrapper: MemoryRouter });
 
     const earlyBirdRow = screen.getByText('Early Bird').closest('.row');
     const topDogRow = screen.getByText('Top Dog').closest('.row');
@@ -115,7 +119,7 @@ describe('Leaderboard — the First to BINGO pin tracks earliest firstBingoAt, n
   });
 
   it('shows the "· BLACKOUT" suffix only for a Blackout Player', () => {
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
 
     expect(screen.getByText('Top Dog').closest('.row')).toHaveTextContent('BLACKOUT');
     expect(screen.getByText('Early Bird').closest('.row')).not.toHaveTextContent('BLACKOUT');
@@ -125,13 +129,13 @@ describe('Leaderboard — the First to BINGO pin tracks earliest firstBingoAt, n
 
 describe('Leaderboard — filters narrow the visible subset without reordering', () => {
   it('defaults to "All": every Player shown in ranked order', () => {
-    const { container } = render(<Leaderboard />);
+    const { container } = render(<Leaderboard />, { wrapper: MemoryRouter });
     expect(names(container)).toEqual(['Top Dog', 'Early Bird', 'Middle', 'No Bingo Yet']);
   });
 
   it('"With BINGO" hides the no-bingo Player but keeps the rest in the same relative order', async () => {
     const user = userEvent.setup();
-    const { container } = render(<Leaderboard />);
+    const { container } = render(<Leaderboard />, { wrapper: MemoryRouter });
 
     await user.click(screen.getByRole('button', { name: 'With BINGO' }));
 
@@ -140,7 +144,7 @@ describe('Leaderboard — filters narrow the visible subset without reordering',
 
   it('"Blackout" narrows to only the Blackout Player', async () => {
     const user = userEvent.setup();
-    const { container } = render(<Leaderboard />);
+    const { container } = render(<Leaderboard />, { wrapper: MemoryRouter });
 
     await user.click(screen.getByRole('button', { name: 'Blackout' }));
 
@@ -149,7 +153,7 @@ describe('Leaderboard — filters narrow the visible subset without reordering',
 
   it('switching back to "All" restores the full, still-unreordered roster', async () => {
     const user = userEvent.setup();
-    const { container } = render(<Leaderboard />);
+    const { container } = render(<Leaderboard />, { wrapper: MemoryRouter });
 
     await user.click(screen.getByRole('button', { name: 'Blackout' }));
     await user.click(screen.getByRole('button', { name: 'All' }));
@@ -159,7 +163,7 @@ describe('Leaderboard — filters narrow the visible subset without reordering',
 
   it('marks the active filter with aria-pressed, exactly one at a time', async () => {
     const user = userEvent.setup();
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
 
     expect(screen.getByRole('button', { name: 'All' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByRole('button', { name: 'With BINGO' })).toHaveAttribute('aria-pressed', 'false');
@@ -173,7 +177,7 @@ describe('Leaderboard — filters narrow the visible subset without reordering',
   it('shows an empty-filter state (not the global empty state) when no Player matches the filter', async () => {
     H.players = [earlyBird]; // no Blackout Player in this roster
     const user = userEvent.setup();
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
 
     await user.click(screen.getByRole('button', { name: 'Blackout' }));
 
@@ -187,14 +191,14 @@ describe('Leaderboard — filters narrow the visible subset without reordering',
 describe('Leaderboard — global loading/empty-roster states are unaffected by the filter feature', () => {
   it('renders the loading state with no filter row', () => {
     H.loading = true;
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
     expect(screen.getByRole('status')).toHaveTextContent('Tallying the leaderboard…');
     expect(screen.queryByRole('button', { name: 'All' })).toBeNull();
   });
 
   it('renders "No players yet" with no filter row when the roster itself is empty', () => {
     H.players = [];
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
     expect(screen.getByText(/no players yet/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'All' })).toBeNull();
   });
@@ -202,7 +206,7 @@ describe('Leaderboard — global loading/empty-roster states are unaffected by t
 
 describe('Leaderboard — the Share action sits below the ranked list (#174)', () => {
   it('renders "Share leaderboard" AFTER both the filter row and the list, not wedged above them', () => {
-    const { container } = render(<Leaderboard />);
+    const { container } = render(<Leaderboard />, { wrapper: MemoryRouter });
     const share = screen.getByRole('button', { name: /share leaderboard/i });
     const filters = container.querySelector('.lb-filters');
     const list = container.querySelector('.list');
@@ -218,7 +222,7 @@ describe('Leaderboard — the Share action sits below the ranked list (#174)', (
   it('keeps the Share action reachable in an empty-filter view (Codex): compact empty state, not the 70vh .center', async () => {
     H.players = [earlyBird]; // no Blackout Player, so the Blackout filter is empty
     const user = userEvent.setup();
-    const { container } = render(<Leaderboard />);
+    const { container } = render(<Leaderboard />, { wrapper: MemoryRouter });
 
     await user.click(screen.getByRole('button', { name: 'Blackout' }));
 

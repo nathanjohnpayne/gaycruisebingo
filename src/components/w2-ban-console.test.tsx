@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import type { EventDoc, ItemDoc, ProofDoc, PlayerDoc } from '../types';
 
 // specs/w2-ban-console.md, component layer (RTL-jsdom). Two surfaces:
@@ -268,7 +269,7 @@ describe('Leaderboard — presentational ban filter + first-bingo split (specs/w
     // component computed firstBingoUid from the ban-filtered roster instead.
     H.players = [player('first-banned', 'First Banned', 100), player('later-ok', 'Later OK', 200)];
     H.event = { ...H.event, bannedUids: ['first-banned'] } as EventDoc;
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
 
     expect(screen.queryByText('First Banned')).toBeNull(); // row hidden from the view
     expect(screen.getByText('Later OK')).toBeInTheDocument(); // the other Player shows
@@ -281,7 +282,7 @@ describe('Leaderboard — presentational ban filter + first-bingo split (specs/w
     // Proves the ban filter is what removed the badge above, not a broken fixture.
     H.players = [player('first-banned', 'First Banned', 100), player('later-ok', 'Later OK', 200)];
     H.event = { ...H.event, bannedUids: [] } as EventDoc;
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
 
     const row = screen.getByText('First Banned').closest('.row') as HTMLElement;
     expect(within(row).getByText('1st BINGO')).toBeInTheDocument();

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -58,6 +59,9 @@ vi.mock('../hooks/useData', () => ({
   useMyPlayer: () => ({ data: null, loading: true, hasServerData: false }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   useLeaderboard: () => ({ players: H.players, loading: H.leaderboardLoading }),
+  // #218: no Proofs fixtured in this suite — an empty map keeps every row
+  // chip-less, which is orthogonal to the Share Card assertions here.
+  useLatestProofByUid: () => ({ latestByUid: {}, loading: false }),
   // Mirrors src/data/moderation.ts isBanned (#108); the fixtures carry no bannedUids,
   // so it filters nothing and the share-card standings are unchanged. The ban filter
   // is pinned in src/components/w2-ban-console.test.tsx.
@@ -841,7 +845,7 @@ describe('Leaderboard — share affordance', () => {
   });
 
   it('renders a "Share leaderboard" button', () => {
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
     expect(screen.getByRole('button', { name: 'Share leaderboard' })).toBeInTheDocument();
   });
 
@@ -851,7 +855,7 @@ describe('Leaderboard — share affordance', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const user = userEvent.setup();
 
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
     await user.click(screen.getByRole('button', { name: 'Share leaderboard' }));
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
@@ -882,7 +886,7 @@ describe('Leaderboard — share affordance', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const user = userEvent.setup();
 
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
     expect(toBlobMock).not.toHaveBeenCalled(); // no mount-eager render here (deliberate)
 
     await user.hover(screen.getByRole('button', { name: 'Share leaderboard' }));
@@ -916,7 +920,7 @@ describe('Leaderboard — share affordance', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const user = userEvent.setup();
 
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
     await user.click(screen.getByRole('button', { name: 'Share leaderboard' }));
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
@@ -934,7 +938,7 @@ describe('Leaderboard — share affordance', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const user = userEvent.setup();
 
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
     await user.click(screen.getByRole('button', { name: 'Blackout' })); // neither fixture Player has one
     expect(screen.getByText(/no one matches this filter/i)).toBeInTheDocument();
 
@@ -951,7 +955,7 @@ describe('Leaderboard — share affordance', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true }); // no canShare
     const user = userEvent.setup();
 
-    render(<Leaderboard />);
+    render(<Leaderboard />, { wrapper: MemoryRouter });
     await user.click(screen.getByRole('button', { name: 'Share leaderboard' }));
 
     await waitFor(() => expect(shareMock).toHaveBeenCalled());

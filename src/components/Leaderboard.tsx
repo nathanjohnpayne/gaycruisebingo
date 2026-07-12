@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
-import { useEventDoc, useLeaderboard, isBanned } from '../hooks/useData';
+import { useNavigate } from 'react-router-dom';
+import { useEventDoc, useLeaderboard, useLatestProofByUid, isBanned } from '../hooks/useData';
 import { cruiseFirstBingoUid, perDayHonors, tutorialDayIndexSet } from '../game/logic';
 import { track } from '../analytics';
 import { renderLeaderboardShareCard, shareCardBlob, SHARE_CARD_APP_NAME, type LeaderboardShareRow } from './ShareCard';
 import Avatar from './Avatar';
-import type { PlayerDoc } from '../types';
+import type { PlayerDoc, ProofDoc } from '../types';
 import LoadingState from './LoadingState';
 
 function when(ts: number | null): string {
@@ -40,6 +41,19 @@ function matchesFilter(p: PlayerDoc, filter: LeaderboardFilter): boolean {
     default:
       return true;
   }
+}
+
+// The Leaderboard row's latest-proof media chip set (#218): 📷/🎙️/✍️ per
+// `ProofDoc.type`, plus 🖼️ layered on for a library-sourced photo (the #211
+// Feed badge). Stays emoji per #220's rule. `[]` when `proof` is `undefined`.
+function proofChips(proof: ProofDoc | undefined): string[] {
+  if (!proof) return [];
+  const chips: string[] = [];
+  if (proof.type === 'photo') chips.push('📷');
+  if (proof.type === 'audio') chips.push('🎙️');
+  if (proof.type === 'text') chips.push('✍️');
+  if (proof.type === 'photo' && proof.source === 'library') chips.push('🖼️');
+  return chips;
 }
 
 // Share Card row cap (issue #36): a fixed-size card can't fit the whole
@@ -83,6 +97,8 @@ function buildShareStandings(
 export default function Leaderboard() {
   const { players, loading } = useLeaderboard();
   const { data: event } = useEventDoc();
+  const { latestByUid } = useLatestProofByUid();
+  const navigate = useNavigate();
   const [filter, setFilter] = useState<LeaderboardFilter>('all');
   // The most recent warmed-up card render, keyed by the inputs it was built
   // from (the roster array's identity + the resolved event name) so a tap
@@ -256,6 +272,9 @@ export default function Leaderboard() {
         <div className="list">
           {visible.map((p, i) => {
             const isFirst = p.uid === firstBingoUid;
+            // Presentational-only (#218): decorates an already-ranked row,
+            // never feeds rank/filter — see `proofChips` above.
+            const chips = proofChips(latestByUid[p.uid]);
             return (
               <div key={p.uid} className={'row' + (isFirst ? ' leader' : '')}>
                 <div className="rank">{i + 1}</div>
@@ -267,6 +286,16 @@ export default function Leaderboard() {
                     {p.blackout ? ' · BLACKOUT' : ''} · {when(p.firstBingoAt)}
                   </div>
                 </div>
+                {chips.length > 0 && (
+                  <button
+                    type="button"
+                    className="lb-proof-chips"
+                    aria-label={`${p.displayName}'s latest proof — view in Feed`}
+                    onClick={() => navigate('/feed')}
+                  >
+                    {chips.join('')}
+                  </button>
+                )}
                 {isFirst && <div className="badge">1st BINGO</div>}
               </div>
             );
