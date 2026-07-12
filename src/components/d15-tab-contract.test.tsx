@@ -31,13 +31,16 @@ describe('d15 More tab icon = player avatar, ellipsis fallback signed-out', () =
       </MemoryRouter>,
     );
 
-  it('renders More as an avatar <img> with a photo URL, ellipsis glyph when signed out', () => {
+  it('renders More as an avatar <img> with a photo URL, a Lucide ellipsis glyph when signed out', () => {
     const withPhoto = render('https://example.com/photo.jpg');
     expect(withPhoto).toContain('<img');
     expect(withPhoto).toContain('src="https://example.com/photo.jpg"');
     expect(withPhoto).toContain('alt="More"');
     const signedOut = render(null);
     expect(signedOut).not.toContain('<img');
-    expect(signedOut).toContain('⋯');
+    // specs/d15-icons-lucide.md: the fallback is now the lucide-react
+    // `Ellipsis` icon (className `tab-ellipsis`), not a literal '⋯' character.
+    expect(signedOut).toContain('tab-ellipsis');
+    expect(signedOut).not.toContain('⋯');
   });
 });

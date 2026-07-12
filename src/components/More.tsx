@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogOut, ChevronRight } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useEventDoc, usePendingItemCount } from '../hooks/useData';
 import { useInstallPrompt } from '../hooks/useInstallPrompt';
@@ -45,7 +46,9 @@ export default function More() {
 
       {/* 2. Theme — Auto (match the day) + every party/tutorial theme. */}
       <div className="more-section">
-        <h3>Theme</h3>
+        <h3>
+          <Palette className="more-section-icon" aria-hidden="true" /> Theme
+        </h3>
         <ThemeSwitcher />
       </div>
 
@@ -53,11 +56,27 @@ export default function More() {
       <div className="more-section">
         <h3>Play</h3>
         <div className="more-rows">
-          <MoreRow title="Cruise schedule" sub="Ports, parties, unlock times" onClick={() => setPanel('schedule')} />
-          <MoreRow title="Suggest a square" sub="Add a prompt to the pool" onClick={() => setPanel('suggest')} />
-          <MoreRow title="How to play" sub="Replay the badge legend" onClick={() => setPanel('howToPlay')} />
+          <MoreRow
+            icon={CalendarDays}
+            title="Cruise schedule"
+            sub="Ports, parties, unlock times"
+            onClick={() => setPanel('schedule')}
+          />
+          <MoreRow
+            icon={Lightbulb}
+            title="Suggest a square"
+            sub="Add a prompt to the pool"
+            onClick={() => setPanel('suggest')}
+          />
+          <MoreRow
+            icon={GraduationCap}
+            title="How to play"
+            sub="Replay the badge legend"
+            onClick={() => setPanel('howToPlay')}
+          />
           {showInstallRow && (
             <button type="button" className="more-row" onClick={deferred ? install : undefined}>
+              <Download className="more-row-icon" aria-hidden="true" />
               <span className="more-row-text">
                 <span className="more-row-title">Install the app</span>
                 <span className="more-row-sub">
@@ -84,7 +103,12 @@ export default function More() {
       {isAdmin && (
         <div className="more-section">
           <div className="more-rows">
-            <MoreRow title="Admin" badge={pendingCount > 0 ? pendingCount : undefined} onClick={() => setPanel('admin')} />
+            <MoreRow
+              icon={Wrench}
+              title="Admin"
+              badge={pendingCount > 0 ? pendingCount : undefined}
+              onClick={() => setPanel('admin')}
+            />
           </div>
         </div>
       )}
@@ -92,6 +116,7 @@ export default function More() {
       {/* 7. Sign out — last, visually quiet. */}
       <div className="more-section">
         <button type="button" className="more-row more-row-quiet" onClick={() => signOutUser()}>
+          <LogOut className="more-row-icon" aria-hidden="true" />
           <span className="more-row-text">
             <span className="more-row-title">Sign out</span>
           </span>
@@ -131,13 +156,22 @@ export default function More() {
   );
 }
 
-/** One tappable row in the menu: title, optional subtitle, optional count badge. */
+/**
+ * One tappable row in the menu: a leading Lucide icon (daily-cards-spec
+ * § "Iconography — Lucide" › More menu), title, optional subtitle, optional
+ * count badge, and a trailing `chevron-right` — every `MoreRow` opens a
+ * sub-panel, so the chevron is unconditional here (the quiet Sign-out row
+ * and the Install row are plain `<button>`s outside this helper and don't
+ * get one, since neither navigates to a sub-panel).
+ */
 function MoreRow({
+  icon: Icon,
   title,
   sub,
   badge,
   onClick,
 }: {
+  icon: typeof Palette;
   title: string;
   sub?: string;
   badge?: number;
@@ -145,11 +179,13 @@ function MoreRow({
 }) {
   return (
     <button type="button" className="more-row" onClick={onClick}>
+      <Icon className="more-row-icon" aria-hidden="true" />
       <span className="more-row-text">
         <span className="more-row-title">{title}</span>
         {sub && <span className="more-row-sub">{sub}</span>}
       </span>
       {typeof badge === 'number' && <span className="pill more-badge">{badge}</span>}
+      <ChevronRight className="more-row-chevron" aria-hidden="true" />
     </button>
   );
 }
