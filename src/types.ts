@@ -233,6 +233,32 @@ export interface TallyEntry {
   uid: string;
   displayName: string;
   markedAt: number; // ms epoch
+  // Day-scoped Tally Cards (#216): the Mark's own attributes, stamped so the
+  // Feed can group markers of the SAME `(itemId, dayIndex)` into one live Tally
+  // Card and label it. Optional/back-compat — legacy per-Prompt markers written
+  // before #216 carry neither, so they contribute to the Square badge (`useTally`
+  // counts every marker of the Prompt) but never form a day-scoped Feed card.
+  // `itemText` is denormalized here (the marker path carries only `itemId`) so a
+  // Tally Card can render "…got 'Balcony or porthole photo'" without a pool read.
+  dayIndex?: number;
+  itemText?: string;
+}
+
+// One live Tally Card in the Feed (#216): a derived, per-`(itemId, dayIndex)`
+// aggregation of the Prompt's markers — NOT a stored record. The Feed renders one
+// once anyone marks the Prompt on a Day and drops it when the group empties. Its
+// `count`/names/avatars are the LIVE tally; `lastMarkedAt` is DERIVED as the max
+// of the group's marker times (the parent `tally` doc is admin-only-write, so a
+// Mark cannot stamp it client-side). `displayBump` is the debounced sort key the
+// merge orders on (see `nextDisplayBumpTime`) so a hot square can't churn the Feed.
+export interface TallyCard {
+  itemId: string;
+  dayIndex: number;
+  itemText: string;
+  count: number;
+  markers: TallyEntry[]; // chronological (earliest first), like `useTally`
+  lastMarkedAt: number; // max(marker.markedAt) over the group
+  displayBump: number; // debounced Feed-position time (>= its previous value)
 }
 
 // The public, attributed per-Prompt Tally: who has marked a given Prompt, plus

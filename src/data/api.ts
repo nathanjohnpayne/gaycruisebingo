@@ -638,6 +638,11 @@ export async function setMark(params: {
   // so direct callers (the offline durability harness) can omit it and fall back
   // to the cached player row's already-denormalized name — see `markerDisplayName`.
   displayName?: string;
+  // The viewed Day the Mark belongs to (#216), stamped onto the Tally marker so
+  // the Feed can group markers into a per-`(itemId, dayIndex)` Tally Card. Optional
+  // — a caller with no Day context (the offline harness) omits it and the marker
+  // stays a legacy per-Prompt entry (Square-badge only, no day-scoped Feed card).
+  dayIndex?: number;
   database?: Firestore;
 }): Promise<{
   cells: Cell[];
@@ -674,6 +679,7 @@ async function runSetMark(
     claimMode: ClaimMode;
     currentFirstBingoAt: number | null | undefined;
     displayName?: string;
+    dayIndex?: number;
   },
   database: Firestore,
 ): Promise<{
@@ -745,10 +751,23 @@ async function runSetMark(
   if (tallyItemId) {
     const markerRef = doc(database, 'events', EVENT_ID, 'tally', tallyItemId, 'markers', uid);
     if (params.nextMarked) {
+      // Day-scoped Tally Cards (#216): stamp the viewed `dayIndex` and the Prompt
+      // TEXT onto the marker so the Feed can group markers of the SAME
+      // `(itemId, dayIndex)` into one live card and label it without a pool read.
+      // Both are ADDITIVE fields the marker create rule already permits (it
+      // validates uid/displayName/markedAt, not the full key set), so no
+      // firestore.rules change — and the marker path stays the per-Prompt
+      // `tally/{itemId}/markers/{uid}`, so the Square badge (`useTally`) and the
+      // Doubt `exists()` gate are untouched. The Feed re-sort time is DERIVED
+      // (`max(marker.markedAt)`), never a client write to the admin-only parent
+      // tally doc. `dayIndex` is omitted (not `undefined`, which Firestore
+      // rejects) when the caller has no Day context.
       batch.set(markerRef, {
         uid,
         displayName: markerDisplayName(params.displayName, cachedPlayerName),
         markedAt: now,
+        itemText: toggled!.text,
+        ...(typeof params.dayIndex === 'number' ? { dayIndex: params.dayIndex } : {}),
       });
     } else {
       batch.delete(markerRef);
