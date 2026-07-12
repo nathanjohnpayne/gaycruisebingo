@@ -37,7 +37,6 @@ function savedTextSize(): TextSize | null {
  */
 let textSize: TextSize = savedTextSize() ?? DEFAULT_TEXT_SIZE;
 const subscribers = new Set<() => void>();
-let applied = false;
 
 /** Reflects the current pick onto `<html data-text-size>` so `index.css`'s
  *  scale variables cascade everywhere on the page — mirrors ThemeContext's
@@ -50,11 +49,13 @@ function applyToDocument(size: TextSize): void {
   }
 }
 
-function ensureApplied(): void {
-  if (applied) return;
-  applied = true;
-  applyToDocument(textSize);
-}
+// Apply the saved pick at module init — unconditionally, not only once some
+// component happens to mount `useTextSize` (PR #237 Codex finding: a reload
+// straight into a route that renders neither Board nor More, e.g. /feed or
+// /ranks, otherwise never reflects a saved Small/Large pick onto `<html>`,
+// so body text silently falls back to the medium CSS default on those
+// routes until the Player happens to visit a subscribing one).
+applyToDocument(textSize);
 
 function setState(next: TextSize): void {
   textSize = next;
@@ -63,7 +64,6 @@ function setState(next: TextSize): void {
 }
 
 function subscribe(onStoreChange: () => void): () => void {
-  ensureApplied();
   subscribers.add(onStoreChange);
   return () => subscribers.delete(onStoreChange);
 }
@@ -80,7 +80,9 @@ function getSnapshot(): TextSize {
 export function __resetTextSizeStateForTests(): void {
   textSize = savedTextSize() ?? DEFAULT_TEXT_SIZE;
   subscribers.clear();
-  applied = false;
+  // Mirrors the unconditional module-init application above — a reset
+  // simulates a fresh page load/reload, which now applies immediately too.
+  applyToDocument(textSize);
 }
 
 /**

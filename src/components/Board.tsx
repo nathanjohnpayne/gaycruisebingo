@@ -65,20 +65,48 @@ function SquareText({ text }: { text: string }) {
     const el = ref.current;
     const cell = el?.parentElement;
     if (!el || !cell) return;
-    // Reset to the CSS-computed ceiling before measuring — a shrink applied
-    // for a PREVIOUS (longer) prompt must never cap this one's ceiling.
-    el.style.fontSize = '';
-    const baseSize = parseFloat(window.getComputedStyle(el).fontSize);
-    if (!Number.isFinite(baseSize) || baseSize <= 0) return;
-    const cellRect = cell.getBoundingClientRect();
-    // .cell's own 4px padding on every side (index.css) — the usable box
-    // the text actually has to fit inside is the cell minus that padding.
-    const CELL_PADDING = 8;
-    const box = {
-      width: Math.max(0, cellRect.width - CELL_PADDING),
-      height: Math.max(0, cellRect.height - CELL_PADDING),
+
+    // Applies the fitted size directly to the DOM every time this runs,
+    // independent of React state — `setFontSize` alone isn't enough: two
+    // different prompts can both bottom out at the same fitted number (PR
+    // #237 Codex finding), and React bails out of re-rendering (and thus
+    // re-applying the `style` prop) when a state update doesn't change the
+    // value. Writing `el.style.fontSize` imperatively here guarantees the
+    // shrink is always (re)applied, whether or not the number moved.
+    const measure = () => {
+      // Reset to the CSS-computed ceiling before measuring — a shrink
+      // applied for a PREVIOUS (longer) prompt or a PREVIOUS (larger) cell
+      // size must never cap this one's ceiling.
+      el.style.fontSize = '';
+      const baseSize = parseFloat(window.getComputedStyle(el).fontSize);
+      if (!Number.isFinite(baseSize) || baseSize <= 0) return;
+      const cellRect = cell.getBoundingClientRect();
+      // .cell's own 4px padding on every side (index.css) — the usable box
+      // the text actually has to fit inside is the cell minus that padding.
+      const CELL_PADDING = 8;
+      const box = {
+        width: Math.max(0, cellRect.width - CELL_PADDING),
+        height: Math.max(0, cellRect.height - CELL_PADDING),
+      };
+      const fitted = fitTextSize(text, box, { baseSize });
+      if (fitted != null) el.style.fontSize = `${fitted}px`;
+      setFontSize(fitted);
     };
-    setFontSize(fitTextSize(text, box, { baseSize }));
+
+    measure();
+
+    // Recompute on any cell-size change (phone rotation, split-screen,
+    // desktop resize, sidebar toggling the grid's column count, etc.) — PR
+    // #237 Codex finding: without this, an already-mounted Square keeps the
+    // font size fitted to its OLD box until `text` or the S/M/L pick next
+    // changes, so a prompt that fit at the old width can overflow or clip
+    // at a narrower one. ResizeObserver is unavailable in some older/jsdom
+    // test environments, so this is a best-effort enhancement, not a hard
+    // dependency of the guard (the effect above still fits on mount/change).
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(cell);
+    return () => observer.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- textSize only retriggers the DOM re-read above; see the doc comment.
   }, [text, textSize]);
 

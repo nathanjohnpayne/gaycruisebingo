@@ -295,7 +295,13 @@ a {
 }
 .free-prompt {
   max-width: 100%;
-  font-size: clamp(7px, 1.9vw, 10px);
+  /* S/M/L pick (specs/d15-text-size.md, PR #237 Codex finding): the free
+     centre Square's prompt is the one Square that never goes through
+     `SquareText`'s auto-fit guard (its text is a fixed, day-scoped string,
+     not measured against the cell box), but it still needs to honor the
+     Player's text-size pick like every other Square's prompt does — same
+     `--text-scale` multiplier `.cell`'s own font-size ceiling reads. */
+  font-size: calc(clamp(7px, 1.9vw, 10px) * var(--text-scale, 1));
   font-weight: 700;
   line-height: 1.05;
 }
