@@ -23,6 +23,7 @@ import {
 import type { AttachProofResult } from '../data/proofs';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge } from '../game/logic';
 import { track } from '../analytics';
+import { setClaimSheetOpen } from '../hooks/useToastStack';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '../types';
@@ -472,6 +473,13 @@ export default function Board() {
   // Tally subscription the TallyBadge uses — no new read — for the Square the
   // sheet is open on. useTally accepts a null id (no proofTarget → no sub).
   const { count: proofTargetTally } = useTally(proofTarget?.itemId ?? null);
+  // Reports ProofSheet's open state to UpdatePrompt (#219, useToastStack) —
+  // UpdatePrompt mounts outside the auth-gated tree with no other view into
+  // this state, and defers its reload offer while a proof is mid-capture.
+  useEffect(() => {
+    setClaimSheetOpen(!!proofTarget);
+    return () => setClaimSheetOpen(false);
+  }, [proofTarget]);
   // The Day switcher's viewed-Day index (daily-cards-spec § "Day switcher"),
   // independent of the app-wide Theme (ThemeContext) and of the header's
   // "today" line (Nav.tsx, #203) — this state ONLY drives the board area's

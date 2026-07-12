@@ -1,5 +1,7 @@
 import { useEffect } from 'react';
+import type { CSSProperties } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
+import { useClaimSheetOpen, useToastSlot } from '../hooks/useToastStack';
 
 /** How often a long-lived tab asks the browser to re-check `/sw.js` for a new
  *  deploy (`registration.update()`). 60s matches the poll cadence Nathan's other
@@ -11,20 +13,23 @@ const UPDATE_CHECK_INTERVAL_MS = 60_000;
  *  bottom clearance off it, same mechanism as InstallPrompt's
  *  `install-prompt-visible` (see specs/w1-pwa.md). */
 const VISIBLE_CLASS = 'update-prompt-visible';
+/** Toast-stack id (#219, "urgent" priority) — see useToastStack.ts. */
+const TOAST_ID = 'update';
 
 /**
  * Update-reload banner (specs/app-update-reload-prompt.md, #178): with
  * `registerType: 'prompt'` (vite.config.ts) the new service worker installs and
  * waits instead of activating under the running page; `useRegisterSW` flips
  * `needRefresh` when that happens, and this banner offers Reload
- * (`updateServiceWorker(true)` — activate the waiting worker, then reload onto
- * the new build) or Not now (session-only dismiss; the waiting worker still
- * activates on the next full app launch, so nobody stays stale forever).
- * `onRegisteredSW` arms a periodic `registration.update()` check so a tab left
- * open for days — the norm at sea — discovers a new deploy without navigating.
- * Mounted at `main.tsx` alongside `ConsentNotice`/`InstallPrompt` (stable,
- * outside the auth-gated tree — see #17) so the prompt reaches players on every
- * screen, including signed-out SignIn.
+ * (`updateServiceWorker(true)`) or Not now (session-only dismiss). Mounted at
+ * `main.tsx` alongside `ConsentNotice`/`InstallPrompt` (#17).
+ *
+ * #219 (specs/d15-pwa-toasts.md): also checks `useClaimSheetOpen()` (reported
+ * by Board.tsx via `setClaimSheetOpen`) so a proof capture in progress is
+ * never interrupted by a reload offer; `needRefresh` itself is untouched, so
+ * closing the sheet shows the banner immediately. Final visibility is then
+ * arbitrated by `useToastSlot` alongside the install nudge ("urgent" always
+ * outranks its "invitational" rating).
  */
 export default function UpdatePrompt() {
   const {
@@ -42,19 +47,23 @@ export default function UpdatePrompt() {
       }, UPDATE_CHECK_INTERVAL_MS);
     },
   });
+  const claimSheetOpen = useClaimSheetOpen();
+
+  const wantsToShow = needRefresh && !claimSheetOpen;
+  const { visible, stackIndex } = useToastSlot(TOAST_ID, 'urgent', wantsToShow);
 
   useEffect(() => {
-    document.body.classList.toggle(VISIBLE_CLASS, needRefresh);
+    document.body.classList.toggle(VISIBLE_CLASS, visible);
     return () => {
       document.body.classList.remove(VISIBLE_CLASS);
     };
-  }, [needRefresh]);
+  }, [visible]);
 
-  if (!needRefresh) return null;
+  if (!visible) return null;
 
   return (
-    <div className="update-prompt" role="status">
-      <p>A new version of Gay Cruise Bingo is ready.</p>
+    <div className="update-prompt" role="status" style={{ '--toast-index': stackIndex } as CSSProperties}>
+      <p>A fresh build just docked&mdash;your marks are safe.</p>
       <button className="btn primary" onClick={() => void updateServiceWorker(true)}>
         Reload
       </button>
