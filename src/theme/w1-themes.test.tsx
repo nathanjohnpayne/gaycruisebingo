@@ -330,6 +330,33 @@ describe('ThemeContext — Auto: match the day (specs/d15-more-menu.md § Theme)
     expect(screen.getByTestId('theme')).toHaveTextContent('seriously-pink');
   });
 
+  // Codex P3 on #232: a malformed/stale `players/{uid}.theme` (e.g. a
+  // retired ThemeId from older data) must not become the active `data-theme`
+  // — the pre-Auto async-default path validated with `isThemeId` before
+  // applying, and the playerTheme-adopt effect needs the same runtime guard,
+  // not just the TS `ThemeId` type (which the actual Firestore read doesn't
+  // enforce).
+  it('ignores a malformed async-arriving playerTheme instead of adopting it', () => {
+    const { rerender } = render(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty" playerTheme={null}>
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('preference')).toHaveTextContent('auto');
+
+    rerender(
+      <ThemeProvider
+        defaultTheme="neon-playground"
+        autoThemeId="get-sporty"
+        playerTheme={'retired-theme-id' as unknown as (typeof THEMES)[number]['id']}
+      >
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('preference')).toHaveTextContent('auto');
+    expect(screen.getByTestId('theme')).toHaveTextContent('get-sporty');
+  });
+
   it('never lets an async-arriving playerTheme override a local gcb.theme override', () => {
     window.localStorage.setItem(STORAGE_KEY, 'seriously-pink');
     const { rerender } = render(

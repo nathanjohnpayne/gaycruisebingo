@@ -1,7 +1,7 @@
 import { useTheme } from '../theme/ThemeContext';
 import { THEMES } from '../theme/themes';
 import { useAuth } from '../auth/AuthContext';
-import { savePlayerTheme } from '../data/api';
+import { savePlayerTheme, clearPlayerTheme } from '../data/api';
 import { track } from '../analytics';
 
 /**
@@ -25,6 +25,10 @@ export default function ThemeSwitcher() {
         onClick={() => {
           setTheme('auto');
           track('theme_change', { theme: 'auto' });
+          // Un-save the cross-device pick too (Codex P2 on #232) — otherwise
+          // ThemeProvider's playerTheme-adopt effect re-applies the old
+          // concrete theme on the next load/device and Auto never sticks.
+          if (user) clearPlayerTheme(user.uid).catch(() => {});
         }}
       >
         🧭 Auto — match the day

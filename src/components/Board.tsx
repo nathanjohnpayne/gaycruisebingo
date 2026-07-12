@@ -25,7 +25,6 @@ import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdg
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
-import AcceptableUse from './AcceptableUse';
 import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 import LoadingState from './LoadingState';
 import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
@@ -838,14 +837,19 @@ export default function Board() {
   // orthogonal to the `!board` guard below, which is about the ONE existing
   // (today's) Board this Player already has. Per-Day Board fetching is
   // #204's scope; this ticket only decides WHICH chrome to render for the
-  // viewed Day (daily-cards-spec § "Locked Day preview").
+  // viewed Day (daily-cards-spec § "Locked Day preview"). No inline
+  // Guidelines mount here (#208 retired every Board-inline/pathname-gated
+  // AcceptableUse mount for the single More-menu row —
+  // w3-security-hardening.test.tsx "reachable from every signed-in route"):
+  // the tab bar (Nav, App.tsx) renders alongside Board regardless of lock
+  // state, so More — and Guidelines inside it — stays reachable on a locked
+  // Day exactly like any other route, with no per-branch mount needed.
   if (viewedDay && viewedLocked) {
     return (
       <>
         {cardMeta}
         {daySwitcher}
         <LockedDayPreview day={viewedDay} timezone={event?.timezone} />
-        <AcceptableUse />
       </>
     );
   }

@@ -83,6 +83,11 @@ export function ThemeProvider({
   // no explicit in-session pick already made) — see `playerTheme` above.
   useEffect(() => {
     if (!playerTheme) return;
+    // A malformed/stale Firestore value (older data, since-removed theme id)
+    // must not become the active `data-theme` — the previous async-default
+    // path validated before applying, and this adopt effect needs the same
+    // guard (Codex P3 on #232).
+    if (!isThemeId(playerTheme)) return;
     if (savedTheme() !== null) return; // a local override already wins — never touch it
     setPreferenceState((prev) => (prev === 'auto' ? playerTheme : prev));
   }, [playerTheme]);
