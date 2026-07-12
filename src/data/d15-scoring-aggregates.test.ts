@@ -1,0 +1,159 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Cell } from '../types';
+
+// specs/d15-scoring-aggregates.md — data-layer unit tests, no Firestore/emulator.
+//   1. setMark folds a Mark into `dayStats[dayIndex]` (the marked Board's own
+//      dayIndex) and writes the summed cruise-wide root alongside — leaving other
+//      Days' buckets untouched (a nested { merge:true } write).
+//   2. dayMeta.ts writers: the write-once per-Day First to BINGO pin and the
+//      per-card blackout Moment that names its Day, both cache-pre-checked and
+//      fire-and-forget (mirroring moments.ts).
+
+type FakeSnap = { exists: () => boolean; data: () => unknown };
+
+const { setSpy, commitSpy, getDocFromCacheSpy, setDocSpy } = vi.hoisted(() => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setSpy: vi.fn((..._args: any[]) => {}),
+  commitSpy: vi.fn(() => Promise.resolve()),
+  getDocFromCacheSpy: vi.fn((): Promise<FakeSnap> => Promise.reject(new Error('no cache'))),
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  setDocSpy: vi.fn((..._args: any[]): Promise<void> => Promise.resolve()),
+}));
+
+vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'med-2026' }));
+vi.mock('firebase/firestore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('firebase/firestore')>();
+  return {
+    ...actual,
+    doc: (_db: unknown, ...segments: string[]) => ({ path: segments.join('/') }),
+    writeBatch: () => ({ set: setSpy, commit: commitSpy, delete: vi.fn() }),
+    getDocFromCache: getDocFromCacheSpy,
+    setDoc: setDocSpy,
+    addDoc: vi.fn(),
+    runTransaction: vi.fn(),
+  };
+});
+
+import { setMark } from './api';
+import { pinDayFirstBingo, broadcastDayBlackout } from './dayMeta';
+
+const EVENT_ID = 'med-2026';
+const flush = () => new Promise((r) => setTimeout(r, 0));
+
+function dealt(): Cell[] {
+  return Array.from({ length: 25 }, (_, index) => ({
+    index,
+    itemId: index === 12 ? null : `i${index}`,
+    text: index === 12 ? 'FREE' : `p${index}`,
+    free: index === 12,
+    marked: index === 12,
+    markedAt: null,
+  }));
+}
+
+const snap = (data: unknown): FakeSnap => ({ exists: () => true, data: () => data });
+
+describe('setMark folds into dayStats[dayIndex] and derives the cruise-wide root', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("credits the Board's own Day and leaves other Days' buckets untouched", async () => {
+    // Cached Board carries dayIndex 3; cached Player already has a Day-2 bucket.
+    getDocFromCacheSpy
+      .mockResolvedValueOnce(snap({ cells: dealt(), dayIndex: 3 })) // board read
+      .mockResolvedValueOnce(
+        snap({
+          firstBingoAt: 500,
+          displayName: 'Marker',
+          dayStats: { 2: { bingoCount: 1, squaresMarked: 5, firstBingoAt: 500 } },
+        }),
+      ); // player read
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 3,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+    });
+
+    // Three writes: board, player, Tally marker (same batch as always).
+    expect(setSpy.mock.calls[1][0].path).toBe(`events/${EVENT_ID}/players/u1`);
+    const playerWrite = setSpy.mock.calls[1][1] as {
+      dayStats: Record<number, unknown>;
+      bingoCount: number;
+      squaresMarked: number;
+      firstBingoAt: number | null;
+    };
+    // Only the marked Day (3) is written — Day 2 is preserved by the nested merge.
+    expect(playerWrite.dayStats).toEqual({
+      3: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null },
+    });
+    // Root re-derives over Day 2 (prior) + Day 3 (this mark): 1 bingo, 6 squares,
+    // earliest main-game first-bingo still Day 2's 500.
+    expect(playerWrite.bingoCount).toBe(1);
+    expect(playerWrite.squaresMarked).toBe(6);
+    expect(playerWrite.firstBingoAt).toBe(500);
+    expect(setSpy.mock.calls[1][2]).toEqual({ merge: true });
+  });
+
+  it('defaults to Day 0 for a legacy single Board with no cached dayIndex', async () => {
+    // No cache for either doc (rejections) — the fresh single-Board shape.
+    await setMark({
+      uid: 'u2',
+      cells: dealt(),
+      index: 5,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+    });
+    const playerWrite = setSpy.mock.calls[1][1] as { dayStats: Record<number, unknown> };
+    expect(playerWrite.dayStats).toEqual({
+      0: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null },
+    });
+  });
+});
+
+describe('dayMeta.pinDayFirstBingo (write-once per-Day honor)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('creates the day-meta doc with the attributed firstBingo payload on a cache miss', async () => {
+    await pinDayFirstBingo(4, { uid: 'u1', displayName: 'Alice', photoURL: null }, 1234);
+    expect(setDocSpy).toHaveBeenCalledTimes(1);
+    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/days/4/meta/4`);
+    expect(setDocSpy.mock.calls[0][1]).toEqual({
+      firstBingo: { uid: 'u1', displayName: 'Alice', at: 1234 },
+    });
+  });
+
+  it('skips the write when the Day honor is already in the local cache', async () => {
+    getDocFromCacheSpy.mockResolvedValueOnce(snap({ firstBingo: { uid: 'x', displayName: 'X', at: 1 } }));
+    await pinDayFirstBingo(4, { uid: 'u1', displayName: 'Alice', photoURL: null }, 1234);
+    expect(setDocSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('dayMeta.broadcastDayBlackout (per-card blackout Moment naming the Day)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('posts a blackout Moment carrying the dayIndex on a cache miss', async () => {
+    broadcastDayBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
+    await flush();
+    expect(setDocSpy).toHaveBeenCalledTimes(1);
+    // Deterministic id ${uid}-blackout (create-only + immutable per rules).
+    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout`);
+    expect(setDocSpy.mock.calls[0][1]).toMatchObject({
+      kind: 'blackout',
+      uid: 'u1',
+      displayName: 'Alice',
+      dayIndex: 4,
+    });
+  });
+
+  it('skips the broadcast when the Moment is already in the local cache', async () => {
+    getDocFromCacheSpy.mockResolvedValueOnce(snap({ kind: 'blackout', uid: 'u1' }));
+    broadcastDayBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
+    await flush();
+    expect(setDocSpy).not.toHaveBeenCalled();
+  });
+});

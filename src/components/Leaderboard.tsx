@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useEventDoc, useLeaderboard, isBanned } from '../hooks/useData';
+import { cruiseFirstBingoUid, perDayHonors, tutorialDayIndexSet } from '../game/logic';
 import { track } from '../analytics';
 import { renderLeaderboardShareCard, shareCardBlob, SHARE_CARD_APP_NAME, type LeaderboardShareRow } from './ShareCard';
 import Avatar from './Avatar';
@@ -97,17 +98,20 @@ export default function Leaderboard() {
   if (loading) return <LoadingState label="Tallying the leaderboard…" />;
   if (!players.length) return <div className="center muted">No players yet. Be the first.</div>;
 
-  // First to BINGO is the earliest firstBingoAt across ALL Players — a
-  // ceremonial, self-reported honour (ADR 0001), not a rank. It is computed
-  // over the FULL, RAW roster (never the filtered `visible` subset below, and
-  // never the ban-filtered roster) so the pin's identity can't shift depending
-  // on which filter is selected OR on who is banned: a ban never rewrites who
-  // was first to BINGO — that already happened (specs/w2-ban-console.md §
-  // Leaderboard). Only whether that Player's row is currently VISIBLE can change.
-  const withBingo = players
-    .filter((p) => p.firstBingoAt != null)
-    .sort((a, b) => (a.firstBingoAt as number) - (b.firstBingoAt as number));
-  const firstBingoUid = withBingo[0]?.uid;
+  // Cruise-wide First to BINGO is the earliest bingo across the MAIN-GAME Days —
+  // a ceremonial, self-reported honour (ADR 0001), not a rank. Tutorial Days
+  // (embark/farewell) are EXCLUDED from this headline honor (daily-cards-spec §
+  // "Resolved decisions" #2): the embark card is trivially easy and live before
+  // anyone boards, so it must never decide the pin before the cruise starts. The
+  // exclusion is derived per-Player from `dayStats`; a roster that predates Day
+  // Cards (no `dayStats`) falls back to the legacy root `firstBingoAt`, so a
+  // pre-Phase-1.5 board is unchanged. Computed over the FULL, RAW roster (never
+  // the filtered `visible` subset below, and never the ban-filtered roster) so
+  // the pin's identity can't shift on which filter is selected OR on who is
+  // banned: a ban never rewrites who was first to BINGO (specs/w2-ban-console.md
+  // § Leaderboard). Only whether that Player's row is currently VISIBLE changes.
+  const tutorialDays = tutorialDayIndexSet(event?.days);
+  const firstBingoUid = cruiseFirstBingoUid(players, (i) => tutorialDays.has(i));
 
   // The Admin ban (#108) is PRESENTATIONAL and applied HERE, in the view only — the
   // shared `useLeaderboard` roster stays RAW so Board's First-to-BINGO ceremony reads
@@ -117,6 +121,20 @@ export default function Leaderboard() {
   // simply gone) — a later Player is NEVER promoted to first.
   const bannedUids = event?.bannedUids ?? [];
   const roster = players.filter((p) => !isBanned(p.uid, bannedUids));
+
+  // The per-Day First to BINGO honors strip (daily-cards-spec § "Scoring and
+  // social surfaces"): each Day's OWN earliest bingo, derived from the roster's
+  // `dayStats`. Every Day gets its own daily honor — tutorial Days included (their
+  // exclusion is only from the cruise-wide headline pin above). Derived from the
+  // ban-filtered `roster` so a banned Player's honor never displays, and only
+  // renders once a Player has bingoed on some Day (empty on a pre-Day-Cards
+  // roster, so the strip is absent there).
+  const honors = perDayHonors(roster);
+  const dayLabel = (dayIndex: number): string => {
+    const d = event?.days?.find((day) => day.index === dayIndex);
+    if (!d) return `Day ${dayIndex + 1}`;
+    return `Day ${dayIndex + 1} · ${d.port}${d.portEmoji ? ` ${d.portEmoji}` : ''}`;
+  };
 
   // Filters narrow this render's visible subset of the already-ranked,
   // ban-filtered roster — a plain `.filter`, never a `.sort`, so the relative
@@ -216,6 +234,19 @@ export default function Leaderboard() {
           </button>
         ))}
       </div>
+      {honors.length > 0 && (
+        <div className="lb-honors" aria-label="Daily First to BINGO">
+          <div className="lb-honors-title">Daily First to BINGO</div>
+          <ul className="lb-honors-strip">
+            {honors.map((h) => (
+              <li key={h.dayIndex} className="lb-honor">
+                <span className="lb-honor-day">{dayLabel(h.dayIndex)}</span>
+                <span className="lb-honor-name">{h.displayName}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {visible.length === 0 ? (
         // Compact (NOT the 70vh `.center`) so the below-list "Share leaderboard"
         // action stays reachable in an empty-filter view (Codex, #174): the share

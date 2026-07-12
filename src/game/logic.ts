@@ -1,5 +1,5 @@
 // Pure, framework-free game logic. No Firebase, no React — fully unit-testable.
-import type { Cell, PlayerDoc } from '../types';
+import type { Cell, DayDef, PlayerDoc } from '../types';
 
 export const GRID = 5;
 export const CENTER = 12;
@@ -295,4 +295,205 @@ export function dayDealState(params: {
   if (params.now < params.unlockAt) return 'locked';
   if (params.snapshotItemIds == null) return 'waking';
   return 'ready';
+}
+
+// --- Cruise-wide scoring aggregation (daily-cards-spec § "Scoring and social
+// surfaces", #212) -----------------------------------------------------------
+//
+// With ten Day Cards, a Player's `PlayerDoc.bingoCount`/`squaresMarked`/
+// `firstBingoAt` root fields are no longer one Board's totals — they are
+// cruise-wide aggregates over `PlayerDoc.dayStats`, one bucket per Day Card.
+// These pure helpers own that derivation so the write path (`foldDayStat` in
+// data/api.ts) and the read surfaces (Leaderboard) share ONE source of truth.
+// The tie-break ORDER (`comparePlayers`) is unchanged — only its inputs are.
+
+/** One Day Card's contribution to a Player's cruise totals. */
+export type DayStat = { bingoCount: number; squaresMarked: number; firstBingoAt: number | null };
+export type DayStats = Record<number, DayStat>;
+
+/** The set of tutorial (embark/farewell) Day indexes from an Event's schedule.
+ *  The cruise-wide First to BINGO honor excludes these Days (spec § "Resolved
+ *  decisions" #2) — every other aggregate still counts them. */
+export function tutorialDayIndexSet(days: readonly DayDef[] | undefined): Set<number> {
+  const s = new Set<number>();
+  for (const d of days ?? []) if (d.tutorial) s.add(d.index);
+  return s;
+}
+
+/** Sum `bingoCount` + `squaresMarked` across EVERY Day Card, tutorial Days
+ *  included — the embark card is real pre-freeze play (spec § "Implementation
+ *  notes": cruise-wide totals). */
+export function sumDayStats(dayStats: DayStats | undefined): {
+  bingoCount: number;
+  squaresMarked: number;
+} {
+  let bingoCount = 0;
+  let squaresMarked = 0;
+  for (const stat of Object.values(dayStats ?? {})) {
+    bingoCount += stat.bingoCount;
+    squaresMarked += stat.squaresMarked;
+  }
+  return { bingoCount, squaresMarked };
+}
+
+/** The cruise-wide First to BINGO time: the earliest `firstBingoAt` across the
+ *  MAIN-GAME Days only — tutorial Days are excluded even when their bingo is
+ *  numerically earlier (the embark card is trivially easy and live before anyone
+ *  boards, so it must never decide the headline honor). Returns `null` when no
+ *  main-game Day carries a first bingo. */
+export function cruiseFirstBingoAt(
+  dayStats: DayStats | undefined,
+  isTutorialDay: (dayIndex: number) => boolean,
+): number | null {
+  let earliest: number | null = null;
+  for (const [key, stat] of Object.entries(dayStats ?? {})) {
+    if (isTutorialDay(Number(key))) continue;
+    if (stat.firstBingoAt == null) continue;
+    if (earliest == null || stat.firstBingoAt < earliest) earliest = stat.firstBingoAt;
+  }
+  return earliest;
+}
+
+/** Derive a Player's cruise-wide root totals from their per-Day `dayStats`:
+ *  bingos/squares summed over all Days, First to BINGO restricted to main-game
+ *  Days. This is exactly the `PlayerDoc` root shape the Leaderboard ranks on. */
+export function aggregatePlayerStats(
+  dayStats: DayStats | undefined,
+  isTutorialDay: (dayIndex: number) => boolean,
+): DayStat {
+  return {
+    ...sumDayStats(dayStats),
+    firstBingoAt: cruiseFirstBingoAt(dayStats, isTutorialDay),
+  };
+}
+
+/**
+ * A Player's EFFECTIVE cruise First to BINGO for the Leaderboard pin: the
+ * tutorial-excluded earliest over `dayStats` when the Player has any per-Day
+ * breakdown, else the legacy root `firstBingoAt` (a pre-Phase-1.5 or
+ * single-Board roster carries no `dayStats`, so its root value stands). This is
+ * what makes the "1st BINGO" pin cruise-wide-restricted without regressing a
+ * roster that predates Day Cards.
+ */
+export function effectiveCruiseFirstBingoAt(
+  player: Pick<PlayerDoc, 'firstBingoAt' | 'dayStats'>,
+  isTutorialDay: (dayIndex: number) => boolean,
+): number | null {
+  if (player.dayStats && Object.keys(player.dayStats).length > 0) {
+    return cruiseFirstBingoAt(player.dayStats, isTutorialDay);
+  }
+  return player.firstBingoAt;
+}
+
+/** The uid of the cruise-wide First to BINGO holder across a roster — the
+ *  earliest effective (tutorial-excluded) first bingo. `undefined` when nobody
+ *  holds a qualifying main-game bingo. */
+export function cruiseFirstBingoUid(
+  players: readonly PlayerDoc[],
+  isTutorialDay: (dayIndex: number) => boolean,
+): string | undefined {
+  let best: { uid: string; at: number } | undefined;
+  for (const p of players) {
+    const at = effectiveCruiseFirstBingoAt(p, isTutorialDay);
+    if (at == null) continue;
+    if (!best || at < best.at) best = { uid: p.uid, at };
+  }
+  return best?.uid;
+}
+
+/** A Player-write bucket: the day/root stats, with `firstBingoAt` OPTIONAL so a
+ *  `{ merge: true }` write can OMIT it (the #75 unknown-state preserve). */
+export type StatWrite = { bingoCount: number; squaresMarked: number; firstBingoAt?: number | null };
+
+/**
+ * Fold `computeMark`'s per-Board result (which IS one Day Card's stat bucket)
+ * into a Player's `dayStats`, then re-derive the cruise-wide root totals — the
+ * write-path composition the Mark path (`setMark`) commits. Returns a
+ * `{ merge: true }`-friendly partial: `dayStats` carries ONLY the marked Day's
+ * bucket (a nested merge preserves every other Day's entry on the server), plus
+ * the summed root `bingoCount`/`squaresMarked` and the cruise-wide `firstBingoAt`.
+ *
+ * `firstBingoAt` is OMITTED — from BOTH the Day bucket and the root — exactly
+ * when `computeMark` omitted it AND this Day has no prior stamp: the unknown-
+ * local-state case (#75, a cache-miss Mark while a bingo already stood), so the
+ * merge preserves whatever earlier stamp the server holds rather than writing a
+ * value derived from unknown state. Every other case writes a concrete stamp.
+ */
+export function foldDayStat(params: {
+  priorDayStats: DayStats | undefined;
+  dayIndex: number;
+  bucket: StatWrite;
+  blackout: boolean;
+  isTutorialDay?: (dayIndex: number) => boolean;
+}): {
+  dayStats: Record<number, StatWrite>;
+  bingoCount: number;
+  squaresMarked: number;
+  blackout: boolean;
+  firstBingoAt?: number | null;
+} {
+  const { priorDayStats, dayIndex, bucket, blackout } = params;
+  const isTutorialDay = params.isTutorialDay ?? (() => false);
+  const prior = priorDayStats ?? {};
+  const priorBucket = prior[dayIndex];
+  const omitFirst = !('firstBingoAt' in bucket);
+  // Preserve only when the fold gave no value AND this Day holds no prior stamp
+  // — otherwise there is a concrete value to write (the fold's, or the Day's own
+  // earlier stamp on an unknown-while-standing further mark).
+  const preserve = omitFirst && priorBucket?.firstBingoAt == null;
+  const dayFirst = omitFirst ? (priorBucket?.firstBingoAt ?? null) : (bucket.firstBingoAt ?? null);
+
+  const dayBucket: StatWrite = { bingoCount: bucket.bingoCount, squaresMarked: bucket.squaresMarked };
+  if (!preserve) dayBucket.firstBingoAt = dayFirst;
+
+  // The merged view for the SUM + earliest math (this Day resolved to dayFirst).
+  const merged: DayStats = {
+    ...prior,
+    [dayIndex]: { bingoCount: bucket.bingoCount, squaresMarked: bucket.squaresMarked, firstBingoAt: dayFirst },
+  };
+  const { bingoCount, squaresMarked } = sumDayStats(merged);
+
+  const out: {
+    dayStats: Record<number, StatWrite>;
+    bingoCount: number;
+    squaresMarked: number;
+    blackout: boolean;
+    firstBingoAt?: number | null;
+  } = { dayStats: { [dayIndex]: dayBucket }, bingoCount, squaresMarked, blackout };
+  if (!preserve) out.firstBingoAt = cruiseFirstBingoAt(merged, isTutorialDay);
+  return out;
+}
+
+/** One Day's pinned First to BINGO honor, derived from the roster's `dayStats`. */
+export interface DayHonor {
+  dayIndex: number;
+  uid: string;
+  displayName: string;
+  firstBingoAt: number;
+}
+
+/**
+ * The per-Day First to BINGO honors strip: for each Day any Player has bingoed
+ * on, the Player with the earliest `firstBingoAt` on that Day. Every Day gets
+ * its own daily honor — tutorial Days included (their exclusion is ONLY from the
+ * cruise-wide headline, not their own per-Day pin). Sorted by Day index.
+ */
+export function perDayHonors(players: readonly PlayerDoc[]): DayHonor[] {
+  const best = new Map<number, DayHonor>();
+  for (const p of players) {
+    for (const [key, stat] of Object.entries(p.dayStats ?? {})) {
+      if (stat.firstBingoAt == null) continue;
+      const dayIndex = Number(key);
+      const cur = best.get(dayIndex);
+      if (!cur || stat.firstBingoAt < cur.firstBingoAt) {
+        best.set(dayIndex, {
+          dayIndex,
+          uid: p.uid,
+          displayName: p.displayName,
+          firstBingoAt: stat.firstBingoAt,
+        });
+      }
+    }
+  }
+  return [...best.values()].sort((a, b) => a.dayIndex - b.dayIndex);
 }
