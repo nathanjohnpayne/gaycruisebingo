@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { Camera, Mic, PenLine, Images, X } from 'lucide-react';
 import { attachProof, type AttachProofResult } from '../data/proofs';
 import { track } from '../analytics';
 import { safeMediaUrl } from './safeMediaUrl';
@@ -142,7 +143,11 @@ export default function ProofSheet(props: Props) {
   };
 
   const tabs: ProofType[] = ['photo', 'audio', 'text'];
-  const label: Record<ProofType, string> = { photo: '📷 Photo', audio: '🎙 Sound', text: '✍️ Callout' };
+  const label: Record<ProofType, string> = { photo: 'Photo', audio: 'Sound', text: 'Callout' };
+  // Lucide segment glyphs (daily-cards-spec § "Iconography — Lucide" › Claim
+  // sheet): camera / mic / pen-line, one per proof type — the segmented
+  // control's emoji labels retire in favor of these.
+  const segIcon: Record<ProofType, typeof Camera> = { photo: Camera, audio: Mic, text: PenLine };
   // Scheme-guard the object-URL previews before they reach an <img>/<audio> src
   // (CodeQL js/xss-through-dom #1). createObjectURL only ever yields blob:, so this
   // is a belt-and-braces guard on the flagged sink; the Feed reuses the same guard.
@@ -159,7 +164,15 @@ export default function ProofSheet(props: Props) {
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-title">Proof for “{cell.text}”</div>
+        <div className="sheet-header">
+          <div className="sheet-title">Proof for “{cell.text}”</div>
+          {/* The claim sheet's dismiss `x` (daily-cards-spec § "Iconography —
+              Lucide" › Claim sheet) — an icon-only close alongside the
+              existing "Cancel" action button below; either dismisses. */}
+          <button type="button" className="sheet-dismiss" aria-label="Close" onClick={onClose}>
+            <X aria-hidden="true" />
+          </button>
+        </div>
         {typeof tallyCount === 'number' && heatOthers > 0 && (
           // The social heat line (ADR 0002): reuses the Prompt's already-subscribed
           // Tally count — no new read, no new doc — so a Player sees the pack has
@@ -188,11 +201,14 @@ export default function ProofSheet(props: Props) {
           </button>
         )}
         <div className="seg">
-          {tabs.map((t) => (
-            <button key={t} className={'seg-btn' + (type === t ? ' on' : '')} onClick={() => setType(t)}>
-              {label[t]}
-            </button>
-          ))}
+          {tabs.map((t) => {
+            const SegIcon = segIcon[t];
+            return (
+              <button key={t} className={'seg-btn' + (type === t ? ' on' : '')} onClick={() => setType(t)}>
+                <SegIcon className="seg-btn-icon" aria-hidden="true" /> {label[t]}
+              </button>
+            );
+          })}
         </div>
 
         {type === 'photo' && (
@@ -209,12 +225,12 @@ export default function ProofSheet(props: Props) {
                   Enter/Space opens the picker. `.photo-affordance:focus-within`
                   moves the visible focus ring onto the pill. */}
               <label className="btn photo-affordance">
-                📷 Take photo
+                <Camera className="photo-affordance-icon" aria-hidden="true" /> Take photo
                 <input type="file" accept="image/*" capture="environment" className="visually-hidden" onChange={onPhoto('camera')} />
               </label>
               {photoProofSource !== 'camera_only' && (
                 <label className="btn photo-affordance">
-                  🖼️ Library
+                  <Images className="photo-affordance-icon" aria-hidden="true" /> Library
                   <input type="file" accept="image/*" className="visually-hidden" onChange={onPhoto('library')} />
                 </label>
               )}

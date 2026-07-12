@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { Lock } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText } from '../hooks/useData';
 import { setMark, resolveDisplayName } from '../data/api';
@@ -403,7 +404,7 @@ function LockedDayPreview({ day, timezone }: { day: DayDef; timezone: string | u
         ))}
       </div>
       <div className="day-lock-badge">
-        <span aria-hidden="true">🔒</span> Unlocks {formatUnlockAt(day.unlockAt, timezone)}
+        <Lock className="day-lock-icon" aria-hidden="true" /> Unlocks {formatUnlockAt(day.unlockAt, timezone)}
       </div>
       <p className="day-lock-caption muted">24 fresh squares land at 8. Come back after coffee.</p>
     </div>
