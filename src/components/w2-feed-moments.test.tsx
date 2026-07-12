@@ -51,6 +51,7 @@ vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user, loading: false }) }));
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
+  useDayBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
   useEventDoc: () => ({ data: { claimMode: H.claimMode }, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),

@@ -60,6 +60,7 @@ vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user, loading: false }) }));
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
+  useDayBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: true }),
   // honor mode so a tap marks straight through (no ProofSheet detour).
   useEventDoc: () => ({ data: { claimMode: 'honor' }, loading: false }),

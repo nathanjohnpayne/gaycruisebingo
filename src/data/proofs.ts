@@ -2,14 +2,52 @@ import { collection, doc, increment, runTransaction, updateDoc } from 'firebase/
 import { db, EVENT_ID } from '../firebase';
 import { uploadProofMedia, deleteStoragePath } from './storage';
 import { markerDisplayName } from './attribution';
-import { completedLines, countMarked, isBlackout } from '../game/logic';
+import { completedLines, countMarked, isBlackout, foldDayStat, type DayStats } from '../game/logic';
 import type { Cell, ClaimMode, ProofDoc, ProofType } from '../types';
 
 const rawProofs = () => collection(db, 'events', EVENT_ID, 'proofs');
 const rawProof = (id: string) => doc(db, 'events', EVENT_ID, 'proofs', id);
 const rawClaims = () => collection(db, 'events', EVENT_ID, 'claims');
 const rawBoard = (uid: string) => doc(db, 'events', EVENT_ID, 'boards', uid);
+// The day-scoped Board write ref (#246, daily-cards-spec § "Data model"): one
+// Board per Player per Day at events/{eventId}/days/{dayIndex}/boards/{uid}.
+// `String(dayIndex)` is the canonical decimal segment the rules gate accepts (#201).
+const rawDayBoard = (dayIndex: number, uid: string) =>
+  doc(db, 'events', EVENT_ID, 'days', String(dayIndex), 'boards', uid);
 const rawPlayer = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
+
+/**
+ * The `{ merge: true }` player-stats write a proofed Mark / proof deletion
+ * commits: in daily-cards mode (#246) the per-Board result is ONE Day Card's
+ * bucket, folded into `players/{uid}.dayStats[dayIndex]` with the cruise-wide
+ * root aggregates re-derived (`foldDayStat`) — exactly what the honor-Mark path
+ * (`setMark` → `foldDayStat`) writes, so both paths share the scoring shape and a
+ * proofed win on Day N credits Day N alone. In legacy mode it is the pre-1.5
+ * flat root write. `tutorialDayIndexes` scopes the cruise-wide First-to-BINGO
+ * exclusion (spec § "Resolved decisions" #2); absent excludes nothing.
+ */
+function playerStatWrite(params: {
+  daily: boolean;
+  dayIndex: number;
+  priorDayStats: DayStats | undefined;
+  bingoCount: number;
+  squaresMarked: number;
+  firstBingoAt: number | null;
+  blackout: boolean;
+  tutorialDayIndexes?: number[];
+}) {
+  const { daily, dayIndex, priorDayStats, bingoCount, squaresMarked, firstBingoAt, blackout } = params;
+  if (!daily) return { squaresMarked, bingoCount, firstBingoAt, blackout };
+  return foldDayStat({
+    priorDayStats,
+    dayIndex,
+    bucket: { bingoCount, squaresMarked, firstBingoAt },
+    blackout,
+    isTutorialDay: params.tutorialDayIndexes
+      ? (i: number) => params.tutorialDayIndexes!.includes(i)
+      : undefined,
+  });
+}
 // A per-Prompt Tally marker: events/{EVENT_ID}/tally/{itemId}/markers/{uid} (ADR
 // 0002) — the SAME path setMark's honor-Mark marker uses. Raw ref (converter-free),
 // matching the board/player/proof writes in these transactions and setMark's write.
@@ -34,6 +72,12 @@ export interface AttachProofArgs {
   source?: 'camera' | 'library';
   // The Day this Proof belongs to, so the Feed reads "Day 2 · Get Sporty".
   dayIndex?: number;
+  // Daily-cards mode (#246): write the DAY-SCOPED board + fold the player stats
+  // into `dayStats[dayIndex]` (see `playerStatWrite`). Absent/false keeps the
+  // pre-1.5 single-board flat write. `tutorialDayIndexes` scopes the cruise-wide
+  // First-to-BINGO exclusion.
+  daily?: boolean;
+  tutorialDayIndexes?: number[];
   // Strip EXIF/GPS from a photo before upload (event `stripPhotoExif`, default
   // true); threaded straight to uploadProofMedia — this layer never reads the blob.
   stripExif?: boolean;
@@ -104,7 +148,7 @@ export interface AttachProofResult {
  * drain has actually clobbered the projection.
  */
 export async function attachProof(args: AttachProofArgs): Promise<AttachProofResult> {
-  const { uid, displayName, photoURL, cells, cellIndex, itemId, itemText, claimMode, currentFirstBingoAt, source, dayIndex, stripExif, proof } =
+  const { uid, displayName, photoURL, cells, cellIndex, itemId, itemText, claimMode, currentFirstBingoAt, source, dayIndex, daily, tutorialDayIndexes, stripExif, proof } =
     args;
   const now = Date.now();
   const pRef = doc(rawProofs());
@@ -128,7 +172,11 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
   // re-runs against fresh reads, so the verdict always describes the COMMITTED
   // attempt's fold. runTransaction resolves with the callback's return value.
   return await runTransaction(db, async (tx): Promise<AttachProofResult> => {
-    const boardRef = rawBoard(uid);
+    // Daily mode (#246): the Mark lives on the DAY-SCOPED board and its stats fold
+    // into that Day's bucket — the SAME routing the honor Mark (`setMark`) uses, so
+    // a proofed claim on the viewed Day never writes the (now rules-denied) legacy
+    // board nor double-credits another Day. Legacy mode is unchanged.
+    const boardRef = daily === true ? rawDayBoard(dayIndex ?? 0, uid) : rawBoard(uid);
     const playerRef = rawPlayer(uid);
     const markerRef = itemId ? rawMarker(itemId, uid) : null;
     // Read board + player before any write — a Firestore transaction requires ALL
@@ -180,7 +228,20 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
       dayIndex: typeof dayIndex === 'number' ? dayIndex : null,
     });
     tx.set(boardRef, { cells: next }, { merge: true });
-    tx.set(playerRef, { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
+    tx.set(
+      playerRef,
+      playerStatWrite({
+        daily: daily === true,
+        dayIndex: dayIndex ?? 0,
+        priorDayStats: playerSnap.data()?.dayStats as DayStats | undefined,
+        bingoCount,
+        squaresMarked: squares,
+        firstBingoAt,
+        blackout,
+        tutorialDayIndexes,
+      }),
+      { merge: true },
+    );
     // Per-Prompt Tally (ADR 0002): a proofed Mark self-publishes the SAME attributed
     // marker a bare honor Mark does (setMark) — EVERY Mark, proofed or not, tallies.
     // The cell above is set marked:true in BOTH claim modes (proof_required →
@@ -241,7 +302,15 @@ export async function reportProof(id: string): Promise<void> {
   await updateDoc(rawProof(id), { reportCount: increment(1) });
 }
 
-export async function deleteProof(id: string, storagePath?: string | null): Promise<void> {
+export async function deleteProof(
+  id: string,
+  storagePath?: string | null,
+  // Daily-cards mode (#246): unmark the backing cell on the DAY-SCOPED board for
+  // the Proof's OWN `dayIndex` and fold the owner's stats into that Day's bucket,
+  // mirroring `attachProof`. Absent/false keeps the pre-1.5 flat single-board
+  // unmark. `tutorialDayIndexes` scopes the cruise-wide First-to-BINGO exclusion.
+  opts?: { daily?: boolean; tutorialDayIndexes?: number[] },
+): Promise<void> {
   // Storage first (ordering preserved): if the blob delete throws we keep the
   // doc so the media isn't orphaned.
   if (storagePath) await deleteStoragePath(storagePath);
@@ -255,7 +324,9 @@ export async function deleteProof(id: string, storagePath?: string | null): Prom
       // A deleted proof must not leave its square marked-but-uncredited (in
       // proof_required mode a marked cell is backed by this proof). Unmark the
       // backing cell and recompute the owner's derived stats in the same txn.
-      const boardRef = rawBoard(proof.uid);
+      const daily = opts?.daily === true;
+      const proofDayIndex = typeof proof.dayIndex === 'number' ? proof.dayIndex : 0;
+      const boardRef = daily ? rawDayBoard(proofDayIndex, proof.uid) : rawBoard(proof.uid);
       const playerRef = rawPlayer(proof.uid);
       const boardSnap = await tx.get(boardRef);
       const cells = boardSnap.data()?.cells as Cell[] | undefined;
@@ -291,7 +362,20 @@ export async function deleteProof(id: string, storagePath?: string | null): Prom
         const blackout = isBlackout(next);
         const firstBingoAt = bingoCount > 0 ? existingFirst : null;
         tx.set(boardRef, { cells: next }, { merge: true });
-        tx.set(playerRef, { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });
+        tx.set(
+          playerRef,
+          playerStatWrite({
+            daily,
+            dayIndex: proofDayIndex,
+            priorDayStats: playerSnap.data()?.dayStats as DayStats | undefined,
+            bingoCount,
+            squaresMarked: squares,
+            firstBingoAt,
+            blackout,
+            tutorialDayIndexes: opts?.tutorialDayIndexes,
+          }),
+          { merge: true },
+        );
         // Unmarking removes exactly that Player's per-Prompt Tally entry (ADR 0002),
         // mirroring the cell flip — reached only when the cell is still backed by
         // THIS proof (a genuine unmark), and only for a non-free Prompt. Same marker

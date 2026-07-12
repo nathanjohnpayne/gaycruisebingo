@@ -28,6 +28,7 @@ const H = vi.hoisted(() => ({
 
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
+  useDayBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
@@ -60,6 +61,7 @@ vi.mock('../data/doubts', () => ({
 }));
 vi.mock('../data/api', () => ({
   setMark: H.setMark,
+  dealDayCard: vi.fn(() => Promise.resolve(false)),
   resolveDisplayName: (
     profile: { displayName?: unknown } | null | undefined,
     fallback: string | null | undefined,

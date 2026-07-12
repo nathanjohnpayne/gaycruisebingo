@@ -31,6 +31,7 @@ vi.mock('../auth/AuthContext', () => ({
 }));
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
+  useDayBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
   // honor mode: a claim tap opens ProofSheet and its 🎖️ pledge marks through
   // setMark (issue #181) — the mocked sheet below exposes the pledge trigger.
