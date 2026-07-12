@@ -24,30 +24,49 @@ service cloud.firestore {
     // #221 (d15-admin-schedule) — the Schedule editor's write-time lock:
     // "changing a locked-future Day's theme is safe, changing an
     // already-unlocked Day is disallowed" (daily-cards-spec § "Itinerary and
-    // schedule"). `theme` is the ONLY DayDef field this ticket's write path
-    // (`setDayTheme`, src/data/admin.ts) ever changes — this check only cares
-    // whether a Day's `theme` moved between the existing doc and the incoming
-    // one; it is silent on every other DayDef field the same way the parent
-    // events/{eventId} rule is silent on config fields it doesn't validate.
-    // `oldDay.unlockAt` (the EXISTING/pre-write value, never the incoming one)
-    // is the lock's source of truth — an admin write can never change
-    // unlockAt through this same path anyway (the client only ever sends
-    // `{ days }` with one theme swapped), so reading it from either side would
-    // agree in practice, but reading old is the one that can't be spoofed by
-    // a hand-built payload smuggling a future unlockAt alongside a changed
-    // theme on an already-unlocked Day.
-    // Guarded with 'in' checks (same idiom as the settings/bannedUids guards
-    // above) BEFORE any field access: some existing rules-test fixtures (e.g.
-    // w0-firestore-rules.test.ts) seed a minimal `days` entry with no `theme`
-    // key at all — a bare `newDay.theme` on such an object errors out (denies
-    // EVERY write, including ones that never touch `days`), so a missing
-    // `theme` on either side short-circuits to "nothing to lock" rather than
-    // erroring.
+    // schedule"). The ticket's own write path (`setDayTheme`, src/data/admin.ts)
+    // only ever swaps `theme` on a future Day, but the SERVER guarantee cannot
+    // trust that: a hand-built direct-SDK payload from an admin could change any
+    // DayDef field. So the lock clamps BOTH `theme` and `unlockAt` on an
+    // already-unlocked Day (Codex P2 ×2) — a theme change, a theme REMOVAL, and
+    // an `unlockAt` reschedule are all denied once the Day has opened, closing
+    // the two two-step bypasses (drop-then-re-add theme; push unlockAt into the
+    // future then change theme). Every OTHER DayDef field stays unvalidated, the
+    // same way the parent events/{eventId} rule is silent on config it doesn't
+    // check. The lock reads the EXISTING `unlockAt` (pre-write, never the
+    // incoming one a payload could spoof) as its source of truth.
+    // A Day is LOCKED once its EXISTING `unlockAt` (the pre-write value, the
+    // lock's source of truth — never the incoming one, which a hand-built
+    // payload could spoof) has already passed. A Day with no `unlockAt` key at
+    // all (some rules-test fixtures seed a minimal `days` entry — e.g.
+    // w0-firestore-rules.test.ts) is treated as NOT locked, so a write that
+    // never means to touch the schedule lock isn't denied by a missing field.
+    function dayLocked(oldDay) {
+      return ('unlockAt' in oldDay) && request.time.toMillis() >= oldDay.unlockAt;
+    }
+    // A DayDef `theme`/`unlockAt` field is UNCHANGED across the write iff it is
+    // absent on both sides, or present on both sides with an equal value. Each
+    // field is presence-guarded with `in` (same idiom as the settings/bannedUids
+    // guards above) BEFORE any dot access, so a fixture Day with no `theme`/
+    // `unlockAt` key never errors the whole write — and only LITERAL dot access
+    // is used (dynamic `day[key]` indexing errors in the rules language).
+    // Treating "present on one side, absent on the other" as CHANGED is what
+    // closes the theme-removal bypass (Codex P2): an incoming Day that DROPS
+    // `theme` on an already-unlocked Day is a change, not "nothing to lock".
+    function daySchedUnchanged(newDay, oldDay) {
+      return ('theme' in newDay) == ('theme' in oldDay)
+        && (!('theme' in newDay) || newDay.theme == oldDay.theme)
+        && ('unlockAt' in newDay) == ('unlockAt' in oldDay)
+        && (!('unlockAt' in newDay) || newDay.unlockAt == oldDay.unlockAt);
+    }
+    // "Locked once unlocked" (daily-cards-spec § "Itinerary and schedule"): once
+    // a Day has unlocked, NEITHER its `theme` NOR its `unlockAt` may change. A
+    // still-future Day is fully editable (theme swaps AND unlockAt reschedules).
+    // Clamping `unlockAt` too (Codex P2) closes the two-step bypass where a write
+    // that changes only an unlocked Day's `unlockAt` (theme unchanged) moved the
+    // lock source into the future, letting a SECOND write then change the theme.
     function dayThemeChangeOk(newDay, oldDay) {
-      return !('theme' in newDay)
-        || !('theme' in oldDay)
-        || newDay.theme == oldDay.theme
-        || (('unlockAt' in oldDay) && request.time.toMillis() < oldDay.unlockAt);
+      return !dayLocked(oldDay) || daySchedUnchanged(newDay, oldDay);
     }
 
     // Applies dayThemeChangeOk across the whole `days` array. Firestore rules

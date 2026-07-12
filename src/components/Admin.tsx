@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import {
   useEventDoc,
@@ -321,7 +321,23 @@ function ScheduleRow({
  * comment for why `days` can't be updated by dot-path).
  */
 function ScheduleTab({ days }: { days: DayDef[] }) {
-  const now = Date.now();
+  // Advance `now` exactly when the EARLIEST still-locked Day unlocks, mirroring
+  // the Board's unlock timer (Codex P2, PR #230): without it an admin who leaves
+  // the Schedule tab open across an `unlockAt` rollover would keep a just-unlocked
+  // row's dropdown enabled until an unrelated re-render, letting them start a write
+  // the server rule now (correctly) rejects. The timer re-renders the row disabled
+  // at the moment its Day locks. Depends on `days` so it re-arms as the schedule
+  // changes, not on every render.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const nextUnlock = days
+      .map((d) => d.unlockAt)
+      .filter((t) => t > Date.now())
+      .sort((a, b) => a - b)[0];
+    if (nextUnlock == null) return;
+    const timer = setTimeout(() => setNow(Date.now()), nextUnlock - Date.now());
+    return () => clearTimeout(timer);
+  }, [days, now]);
   return (
     <div className="admin-section">
       <h3>Schedule{days.length ? ` (${days.length})` : ''}</h3>

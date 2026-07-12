@@ -96,9 +96,23 @@ export const setEventTheme = (theme: ThemeId) => updateDoc(evt(), { defaultTheme
 // check client-side (the UI's disabled dropdown is the courtesy, the rule is
 // the guarantee) — it trusts the caller to have already excluded
 // past/unlocked Days from the set of dayIndex values it invokes with.
+// Re-read the freshest `days` INSIDE a transaction before writing the whole
+// array back (Codex P2): the caller hands its already-subscribed snapshot, but a
+// wholesale array write from a stale snapshot would clobber any concurrent change
+// to a DIFFERENT Day that landed after that snapshot — another admin's theme edit
+// on another row, or a future scheduler stamp (`snapshotItemIds`, #202) on an
+// unlocked Day (which `dealDayCard` needs to leave the `waking` state). Merging
+// the single `theme` swap onto the CURRENT array, not the caller's copy, keeps
+// this edit surgical under concurrency. The `days` param is retained as the
+// fallback when the doc is somehow missing.
 export const setDayTheme = (days: DayDef[], dayIndex: number, theme: ThemeId): Promise<void> =>
-  updateDoc(evt(), {
-    days: days.map((d) => (d.index === dayIndex ? { ...d, theme } : d)),
+  runTransaction(db, async (tx) => {
+    const snap = await tx.get(evt());
+    const current =
+      (snap.exists() ? (snap.data().days as DayDef[] | undefined) : undefined) ?? days;
+    tx.update(evt(), {
+      days: current.map((d) => (d.index === dayIndex ? { ...d, theme } : d)),
+    });
   });
 
 // The Admin ban (#108): add/remove a uid on the event doc's `bannedUids` roster —

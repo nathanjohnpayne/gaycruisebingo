@@ -24,9 +24,15 @@ import { doc, setDoc, updateDoc } from 'firebase/firestore';
 const RULES_PATH = fileURLToPath(new URL('../../firestore.rules', import.meta.url));
 const EVENT = 'cruise';
 const [ADMIN, ALICE] = ['admin-uid', 'alice'];
-const NOW = () => Date.now();
-const PAST = () => NOW() - 3600_000; // an hour ago — this Day has already unlocked
-const FUTURE = () => NOW() + 3600_000; // an hour from now — still locked-future
+// Pin NOW at module load (like d15-firestore-rules.test.ts) so every
+// seededDays() call — the beforeEach seed AND a test body re-sending the array —
+// stamps IDENTICAL unlockAt values. A real Admin client re-sends the exact
+// `unlockAt` it holds from its subscription, so an UNCHANGED Day must compare
+// equal; a per-call Date.now() would drift by milliseconds and trip the
+// unlockAt-immutability lock on Days the write never meant to touch.
+const NOW = Date.now();
+const PAST = () => NOW - 3600_000; // an hour ago — this Day has already unlocked
+const FUTURE = () => NOW + 3600_000; // an hour from now — still locked-future
 
 let testEnv: RulesTestEnvironment;
 const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
@@ -117,5 +123,33 @@ describe('firestore.rules — Admin Schedule editor day-theme lock (specs/d15-ad
 
   it('an Admin write that leaves days untouched (e.g. claimMode) is unaffected by the lock', async () => {
     await assertSucceeds(updateDoc(eventDoc(db(ADMIN)), { claimMode: 'proof_required' }));
+  });
+
+  // Codex P2 (firestore.rules:48) — dropping `theme` on an already-unlocked Day
+  // is a CHANGE, not "nothing to lock": otherwise a follow-up write could add any
+  // new theme because `oldDay` no longer carries one, bypassing "locked once
+  // unlocked".
+  it('an Admin CANNOT drop the theme of a Day whose unlockAt has already passed', async () => {
+    const days = seededDays();
+    const { theme: _dropped, ...withoutTheme } = days[0];
+    days[0] = withoutTheme as (typeof days)[number];
+    await assertFails(updateDoc(eventDoc(db(ADMIN)), { days }));
+  });
+
+  // Codex P2 (firestore.rules:49) — rescheduling an already-unlocked Day's
+  // `unlockAt` (theme unchanged) is denied: otherwise pushing it into the future
+  // would re-open the theme lock for a second write.
+  it('an Admin CANNOT move the unlockAt of a Day that has already unlocked', async () => {
+    const days = seededDays();
+    days[0] = { ...days[0], unlockAt: FUTURE() };
+    await assertFails(updateDoc(eventDoc(db(ADMIN)), { days }));
+  });
+
+  // The flip side: a still-future Day stays fully editable — both its theme and
+  // its unlockAt may change before it opens.
+  it('an Admin CAN reschedule the unlockAt of a still-future Day', async () => {
+    const days = seededDays();
+    days[1] = { ...days[1], unlockAt: FUTURE() + 3600_000 };
+    await assertSucceeds(updateDoc(eventDoc(db(ADMIN)), { days }));
   });
 });
