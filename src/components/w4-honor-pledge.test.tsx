@@ -100,7 +100,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   H.user = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null };
   H.event = { claimMode: 'honor' } as EventDoc;
-  H.board = { uid: 'u1', seed: 1, createdAt: 0, cells: dealt() };
+  H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
   H.player = null;
   H.setMark.mockResolvedValue({ cells: [], bingo: false, blackout: false });
   H.attachProof.mockResolvedValue(undefined);
@@ -134,7 +134,7 @@ describe('honor mode — the claim opens the sheet; the pledge IS the claim', ()
     const user = userEvent.setup();
     const cells = dealt();
     cells[1] = { ...cells[1], marked: true, markedAt: 1, status: 'confirmed' };
-    H.board = { uid: 'u1', seed: 1, createdAt: 0, cells };
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells };
     render(<Board />);
 
     clickCell(0);
@@ -225,7 +225,7 @@ describe('pledge race hardening (Codex P2s, PR #184)', () => {
     // board — `cellsAttributable` alone passes now, which is exactly the gap:
     // the captured proofTarget belongs to the previous account's card.
     H.user = { uid: 'u2', displayName: 'Second Sailor', photoURL: null };
-    H.board = { uid: 'u2', seed: 2, createdAt: 0, cells: dealt('j') }; // a different dealt card
+    H.board = { uid: 'u2', dayIndex: 0, seed: 2, createdAt: 0, cells: dealt('j') }; // a different dealt card
     rerender(<Board />);
 
     // The render-time proofSourceLive close unmounts the dangling sheet…
@@ -243,7 +243,7 @@ describe('pledge race hardening (Codex P2s, PR #184)', () => {
     // The same account's listener echoes cell 0 now marked (another tab).
     const cells = dealt();
     cells[0] = { ...cells[0], marked: true, markedAt: 1, status: 'confirmed' };
-    H.board = { uid: 'u1', seed: 1, createdAt: 0, cells };
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells };
     rerender(<Board />);
 
     await waitFor(() => expect(screen.queryByText(/proof for/i)).toBeNull());
@@ -276,7 +276,7 @@ describe('proof-add opens — no pledge on an already-claimed Square', () => {
       H.event = { claimMode: mode } as EventDoc;
       const cells = dealt();
       cells[0] = { ...cells[0], marked: true, markedAt: 1, status: 'confirmed' };
-      H.board = { uid: 'u1', seed: 1, createdAt: 0, cells };
+      H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells };
       render(<Board />);
 
       fireEvent.click(screen.getAllByTitle('Add proof')[0]);

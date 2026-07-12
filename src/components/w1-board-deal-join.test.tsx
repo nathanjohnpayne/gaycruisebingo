@@ -149,6 +149,7 @@ function mkItem(id: string, isFreeSpace = false): ItemDoc {
     status: 'active',
     reportCount: 0,
     spicy: false,
+    pool: 'main',
   };
 }
 
@@ -210,7 +211,7 @@ describe('ensureUserProfile', () => {
 describe('Board render', () => {
   it('renders 25 Squares with the Free Space centre marked and reading the seeded FREE_TEXT', () => {
     const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+    H.data.board = { uid: SIGNED_IN.uid, dayIndex: 0, seed: 20260707, createdAt: 0, cells };
 
     const { container } = render(<Board />);
 
@@ -228,7 +229,7 @@ describe('Board render', () => {
 
   it('acknowledges a Free Space click without unmarking the permanent centre', () => {
     const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+    H.data.board = { uid: SIGNED_IN.uid, dayIndex: 0, seed: 20260707, createdAt: 0, cells };
 
     render(<Board />);
 
@@ -243,7 +244,7 @@ describe('Board render', () => {
 
   it('exposes no re-deal / Square-swap affordance (ADR 0003)', () => {
     const cells = dealBoard(dealPool, FREE_TEXT, 11);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 11, createdAt: 0, cells };
+    H.data.board = { uid: SIGNED_IN.uid, dayIndex: 0, seed: 11, createdAt: 0, cells };
 
     render(<Board />);
 
@@ -360,7 +361,7 @@ describe('Board deal guard (ADR 0004)', () => {
     expect(screen.queryByRole('alert')).toBeNull();
 
     const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+    H.data.board = { uid: SIGNED_IN.uid, dayIndex: 0, seed: 20260707, createdAt: 0, cells };
     H.data.boardServer = true;
     rerender(<Board />);
 
@@ -386,7 +387,7 @@ describe('Board pool-listener gate (Codex P3)', () => {
 
   it('opens no pool listener once a Player has a frozen Board', () => {
     const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+    H.data.board = { uid: SIGNED_IN.uid, dayIndex: 0, seed: 20260707, createdAt: 0, cells };
 
     render(<Board />);
 

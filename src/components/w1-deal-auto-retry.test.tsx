@@ -133,6 +133,7 @@ function mkItems(activeCount: number, free = 0): ItemDoc[] {
       status: 'active',
       reportCount: 0,
       spicy: false,
+      pool: 'main',
     });
   }
   for (let i = 0; i < free; i++) {
@@ -145,6 +146,7 @@ function mkItems(activeCount: number, free = 0): ItemDoc[] {
       status: 'active',
       reportCount: 0,
       spicy: false,
+      pool: 'main',
     });
   }
   return items;

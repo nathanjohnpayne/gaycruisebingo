@@ -146,7 +146,7 @@ function dealtWith(marked: number[]): Cell[] {
 }
 // `uid` defaults to u1; the account-switch tests build the OTHER account's board
 // (BoardDoc carries its owner's uid — the attribution Board checks, finding B).
-const boardWith = (marked: number[], uid = 'u1'): BoardDoc => ({ uid, seed: 1, createdAt: 0, cells: dealtWith(marked) });
+const boardWith = (marked: number[], uid = 'u1'): BoardDoc => ({ uid, dayIndex: 0, seed: 1, createdAt: 0, cells: dealtWith(marked) });
 const ROW0 = [0, 1, 2, 3, 4]; // a completed line → BINGO
 const FULL_CARD = Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12); // → Blackout
 

@@ -15,6 +15,7 @@ import type {
   TallyEntry,
   MomentDoc,
   DoubtDoc,
+  DayMetaDoc,
 } from '../types';
 
 function passthrough<T>(): FirestoreDataConverter<T> {
@@ -52,6 +53,14 @@ export const eventConverter: FirestoreDataConverter<EventDoc> = {
       // presentational hide/mute roster (ADR 0004 Phase 0) as [] rather than
       // undefined. Writes only ever emit a real array.
       bannedUids: Array.isArray(data.bannedUids) ? data.bannedUids : [],
+      // Event docs seeded/written before Phase 1.5 carry no `days`/`timezone`.
+      // Default a missing (or malformed non-array) `days` to [] and a missing
+      // `timezone` to 'Europe/Rome' (the July sailing's zone) so day-scheduling
+      // consumers read a real schedule/zone rather than undefined and a
+      // not-yet-migrated doc never throws downstream (daily-cards-spec §
+      // "Migration"). Writes only ever emit real values.
+      days: Array.isArray(data.days) ? data.days : [],
+      timezone: typeof data.timezone === 'string' ? data.timezone : 'Europe/Rome',
     };
   },
 };
@@ -62,10 +71,18 @@ export const userConverter = passthrough<UserDoc>();
 // Items carry their doc id (used as the stable key when dealing boards).
 export const itemConverter: FirestoreDataConverter<ItemDoc> = {
   toFirestore: (data) => data as DocumentData,
-  fromFirestore: (snap: QueryDocumentSnapshot) => ({
-    ...(snap.data() as Omit<ItemDoc, 'id'>),
-    id: snap.id,
-  }),
+  fromFirestore: (snap: QueryDocumentSnapshot) => {
+    const data = snap.data() as Omit<ItemDoc, 'id'>;
+    return {
+      ...data,
+      id: snap.id,
+      // Items seeded/written before Phase 1.5 carry no `pool`; default a missing
+      // field to 'main' (mirrors the `bannedUids` default above) so existing
+      // Prompts read as main-pool without a data backfill (daily-cards-spec §
+      // "Migration"). Writes only ever emit a real pool.
+      pool: data.pool ?? 'main',
+    };
+  },
 };
 
 export const proofConverter: FirestoreDataConverter<ProofDoc> = {
@@ -122,3 +139,9 @@ export const doubtConverter: FirestoreDataConverter<DoubtDoc> = {
     id: snap.id,
   }),
 };
+
+// A per-Day honor doc (daily-cards-spec § "Data model"), read from
+// events/{EVENT_ID}/days/{dayIndex}/meta. Passthrough — no `id` to pin, because
+// the doc id IS the dayIndex, encoded in the path (the reading ticket, #212,
+// owns the path helper). Holds that Day's own First to BINGO.
+export const dayMetaConverter = passthrough<DayMetaDoc>();

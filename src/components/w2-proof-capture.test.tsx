@@ -285,7 +285,7 @@ describe('Board — proof-to-mark gating (ADR 0001: friction, not trust)', () =>
 
   it('proof_required: tapping an unmarked Square opens ProofSheet and does NOT mark', async () => {
     H.event = { claimMode: 'proof_required' } as EventDoc;
-    H.board = { uid: 'u1', seed: 1, createdAt: 0, cells: dealt() };
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
 
     render(<Board />);
     clickCell(0); // a non-free, unmarked Square
@@ -297,7 +297,7 @@ describe('Board — proof-to-mark gating (ADR 0001: friction, not trust)', () =>
   it('proof_required: cancelling the sheet leaves the Square unmarked', async () => {
     const user = userEvent.setup();
     H.event = { claimMode: 'proof_required' } as EventDoc;
-    H.board = { uid: 'u1', seed: 1, createdAt: 0, cells: dealt() };
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
 
     render(<Board />);
     clickCell(0);
@@ -314,7 +314,7 @@ describe('Board — proof-to-mark gating (ADR 0001: friction, not trust)', () =>
     H.event = { claimMode: 'proof_required' } as EventDoc;
     const cells = dealt();
     cells[0] = { ...cells[0], marked: true, markedAt: 1, status: 'confirmed' };
-    H.board = { uid: 'u1', seed: 1, createdAt: 0, cells };
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells };
 
     render(<Board />);
     clickCell(0);
@@ -327,7 +327,7 @@ describe('Board — proof-to-mark gating (ADR 0001: friction, not trust)', () =>
   it('honor: a claim tap opens the sheet, and the 🎖️ pledge marks WITHOUT any Proof (issue #181; a Proof never gates credit)', async () => {
     const user = userEvent.setup();
     H.event = { claimMode: 'honor' } as EventDoc;
-    H.board = { uid: 'u1', seed: 1, createdAt: 0, cells: dealt() };
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
 
     render(<Board />);
     clickCell(0);
