@@ -12,6 +12,7 @@ import ItemPool from './ItemPool';
 import Admin from './Admin';
 import BugReport from './BugReport';
 import AcceptableUse from './AcceptableUse';
+import CoachOverlay from './CoachOverlay';
 
 /**
  * The More tab (#208, daily-cards-spec § "More menu"): profile, theme, text
@@ -64,7 +65,7 @@ export default function More() {
         <div className="more-rows">
           <MoreRow title="Cruise schedule" sub="Ports, parties, unlock times" onClick={() => setPanel('schedule')} />
           <MoreRow title="Suggest a square" sub="Add a prompt to the pool" onClick={() => setPanel('suggest')} />
-          <MoreRow title="How to play" sub="The three-beat replay" onClick={() => setPanel('howToPlay')} />
+          <MoreRow title="How to play" sub="Replay the badge legend" onClick={() => setPanel('howToPlay')} />
           {showInstallRow && (
             <button type="button" className="more-row" onClick={deferred ? install : undefined}>
               <span className="more-row-text">
@@ -124,9 +125,12 @@ export default function More() {
         </MorePanel>
       )}
       {panel === 'howToPlay' && (
-        <MorePanel title="How to play" onClose={closePanel}>
-          <HowToPlay />
-        </MorePanel>
+        // The real first-open coach overlay (#214), reopened on demand.
+        // `forceOpen` bypasses the per-Event dismissal read (a replay isn't
+        // "already seen it" bookkeeping); CoachOverlay renders its own
+        // complete backdrop/dialog, so this replaces `MorePanel` rather
+        // than nesting inside it — see specs/d15-coach-overlay.md.
+        <CoachOverlay forceOpen onDismiss={closePanel} />
       )}
       {panel === 'admin' && isAdmin && (
         <MorePanel title="Admin" onClose={closePanel}>
@@ -307,25 +311,3 @@ function ScheduleList({ event }: { event: { days: import('../types').DayDef[]; t
   );
 }
 
-/**
- * How to play (issue #208 § Play): a static rendering of the Embark view's
- * "How this works" three beats (daily-cards-spec § "Embark (tutorial) view").
- * Copy is verbatim from the spec — do not paraphrase. The real first-open
- * coach-overlay replay wiring is #214, which depends on this ticket for the
- * mount point; this row is deliberately just the static copy until then.
- */
-function HowToPlay() {
-  return (
-    <ol className="more-howtoplay">
-      <li>
-        <b>Mark what happens.</b> Tap a square when you see it, do it, or survive it.
-      </li>
-      <li>
-        <b>Five in a row is BINGO.</b> The center is free. Blackout the card if you're ambitious.
-      </li>
-      <li>
-        <b>The feed is the proof.</b> Attach a pic, doubt a friend, watch the Moments roll in.
-      </li>
-    </ol>
-  );
-}

@@ -19,6 +19,16 @@ export const itemsCol = () =>
   collection(db, 'events', EVENT_ID, 'items').withConverter(itemConverter);
 export const boardRef = (uid: string) =>
   doc(db, 'events', EVENT_ID, 'boards', uid).withConverter(boardConverter);
+// A Player's Day Card: the day-scoped Board at
+// events/{EVENT_ID}/days/{dayIndex}/boards/{uid} (daily-cards-spec § "Data
+// model"; firestore.rules day-scoped board gate, #201). The `{dayIndex}` path
+// segment must be the CANONICAL decimal form the rules accept — `String(0)` is
+// '0', never a zero-padded '00' alias (the rules reject non-canonical aliases
+// that would mint a parallel Day-0 board at a distinct path).
+export const dayBoardRef = (dayIndex: number, uid: string) =>
+  doc(db, 'events', EVENT_ID, 'days', String(dayIndex), 'boards', uid).withConverter(
+    boardConverter,
+  );
 export const playersCol = () =>
   collection(db, 'events', EVENT_ID, 'players').withConverter(playerConverter);
 export const playerRef = (uid: string) =>

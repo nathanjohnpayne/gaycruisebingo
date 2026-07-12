@@ -125,6 +125,9 @@ vi.mock('../hooks/useData', () => ({
   useMyProofs: () => ({ proofs: [], loading: false, hasServerData: true }),
   useProofsForItemText: () => ({ proofs: [], loading: false, hasServerData: true }),
 }));
+// CoachOverlay (#214) mounts unconditionally with cells, adding its own CTA
+// button — off-topic here (re-deal-affordance assertions), so stub it out.
+vi.mock('./CoachOverlay', () => ({ default: () => null }));
 
 // Real modules under test — imported after the mocks are declared.
 import Board from './Board';
