@@ -45,16 +45,47 @@ const DEFAULT_TIMEZONE = 'Europe/Rome';
 /**
  * Resolve a persisted `timezone` to a usable IANA zone. A legacy Event doc
  * (seeded before Phase 1.5) carries no field; a malformed one can carry '',
- * whitespace, a non-string, or a bogus id like 'Mars/Olympus'. Any of those
- * would make `Intl`/day-scheduling throw or silently misbehave downstream, so
- * validate the string against `Intl.DateTimeFormat` (which throws a RangeError
- * on an unknown zone) and fall back to `Europe/Rome` otherwise.
+ * whitespace, a non-string, or a bogus id like 'Mars/Olympus'. The contract is
+ * a *real named IANA zone* — not an offset id ('+02:00', 'Etc/GMT+5') or a
+ * bare abbreviation ('EST'), which some runtimes' `Intl.DateTimeFormat` will
+ * happily accept even though day-scheduling consumers expect a canonical zone.
+ *
+ * Prefer membership in the runtime's canonical zone list
+ * (`Intl.supportedValuesOf('timeZone')`) where available; otherwise fall back
+ * to `Intl.DateTimeFormat` validation plus explicit rejection of offset-style
+ * ids, GMT/UTC/Etc zones, and separator-less abbreviations. Anything that
+ * fails resolves to `Europe/Rome`.
  */
 export function normalizeTimezone(raw: unknown): string {
   if (typeof raw !== 'string' || raw.trim() === '') return DEFAULT_TIMEZONE;
+  const tz = raw.trim();
+
+  // Canonical path: accept only zones the runtime lists as real IANA zones.
+  // `Intl.supportedValuesOf` is ES2022; the project's lib target is ES2021, so
+  // reach it through a narrowed cast rather than the ambient (untyped) global.
+  const supportedValuesOf = (
+    Intl as typeof Intl & {
+      supportedValuesOf?: (key: 'timeZone') => string[];
+    }
+  ).supportedValuesOf;
+  if (typeof supportedValuesOf === 'function') {
+    return supportedValuesOf('timeZone').includes(tz) ? tz : DEFAULT_TIMEZONE;
+  }
+
+  // Fallback for runtimes without `supportedValuesOf`: reject offset-style ids
+  // ('+02:00'), GMT/UTC/Etc zones ('Etc/GMT+5'), and separator-less
+  // abbreviations ('EST') before trusting `Intl.DateTimeFormat`, which on some
+  // runtimes accepts those even though they are not canonical named zones.
+  if (
+    /^[+-]\d/.test(tz) ||
+    /GMT|UTC|Etc\//i.test(tz) ||
+    !tz.includes('/')
+  ) {
+    return DEFAULT_TIMEZONE;
+  }
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone: raw });
-    return raw;
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return tz;
   } catch {
     return DEFAULT_TIMEZONE;
   }

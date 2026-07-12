@@ -115,6 +115,20 @@ describe('eventConverter (Phase 1.5 days/timezone defaults)', () => {
     );
     expect(good.timezone).toBe('Europe/London');
   });
+
+  it('rejects offset ids and bare abbreviations (only canonical named IANA zones)', () => {
+    // '+02:00'/'EST'/'Etc/GMT+5' are not real named zones — some runtimes'
+    // Intl.DateTimeFormat accepts them, but the contract requires a canonical
+    // zone, so they must coerce to Europe/Rome.
+    for (const bad of ['+02:00', 'EST', 'Etc/GMT+5', '']) {
+      const event = eventConverter.fromFirestore(snapshotOf({ ...legacyEvent, timezone: bad }));
+      expect(event.timezone).toBe('Europe/Rome');
+    }
+    for (const good of ['Europe/Rome', 'America/New_York']) {
+      const event = eventConverter.fromFirestore(snapshotOf({ ...legacyEvent, timezone: good }));
+      expect(event.timezone).toBe(good);
+    }
+  });
 });
 
 describe('boardConverter (Phase 1.5 dayIndex default)', () => {
