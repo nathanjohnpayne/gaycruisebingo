@@ -197,9 +197,13 @@ describe('addItem (Phase 1.5 pool stamp)', () => {
     addDocMock.mockClear();
     await addItem('player-uid', 'Cabin karaoke incident', true);
     expect(addDocMock).toHaveBeenCalledTimes(1);
+    // status: 'pending' (not 'active') as of #210/specs/d15-approvals.md — the
+    // approval-flow write itself is pinned in more depth over there
+    // (src/data/api.test.ts); this suite only re-asserts the pool stamp still
+    // rides along on the SAME write.
     expect(addDocMock).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ pool: 'main', status: 'active', spicy: true }),
+      expect.objectContaining({ pool: 'main', status: 'pending', spicy: true }),
     );
   });
 });

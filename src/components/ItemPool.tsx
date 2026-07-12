@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useItems } from '../hooks/useData';
+import { useItems, useMyPendingItems } from '../hooks/useData';
 import { addItem, checkItemRateLimit, itemRateLimitRemainingMs, reportItem } from '../data/api';
 import { track } from '../analytics';
 import LoadingState from './LoadingState';
@@ -13,6 +13,12 @@ import LoadingState from './LoadingState';
 const PRESAIL_NOTE =
   "Get your prompts in before we sail—once your card is dealt it's frozen, so a prompt added after that joins the pool for a future card, not yours.";
 
+// Phase 1.5 approval flow (#210, daily-cards-spec § "Item pools and the approval
+// flow"): a companion caption to PRESAIL_NOTE, not a replacement — PRESAIL_NOTE
+// explains freeze-on-deal, this one explains the NEW admin-review gate a
+// submission passes through before it can ever be dealt.
+const APPROVAL_NOTE = "New prompts go to admin review before they join the pool—yours will show here as “pending review” until then.";
+
 // Phase 0 client-side throttle copy — see `checkItemRateLimit` in
 // `../data/api` for why this is presentational only, not a security boundary.
 const ADD_THROTTLE_MESSAGE = 'Slow down—you can add another prompt in a few seconds.';
@@ -21,6 +27,10 @@ const REPORT_THROTTLE_MESSAGE = 'Slow down—you can report again in a few secon
 export default function ItemPool() {
   const { user } = useAuth();
   const { items, loading } = useItems();
+  // The submitter's own pending submissions (#210): `useItems` reads only
+  // `status == 'active'`, so a fresh `pending` add would otherwise vanish from
+  // this list the instant it lands. Merged in below, tagged "pending review".
+  const { items: myPending } = useMyPendingItems(user?.uid);
   const [text, setText] = useState('');
   const [spicy, setSpicy] = useState(false);
   const [addThrottled, setAddThrottled] = useState(false);
@@ -106,6 +116,9 @@ export default function ItemPool() {
       <p className="muted" style={{ fontSize: 12 }}>
         {PRESAIL_NOTE} {items.length} in the pool.
       </p>
+      <p className="muted" style={{ fontSize: 12 }}>
+        {APPROVAL_NOTE}
+      </p>
       {addThrottled && (
         <p className="muted" role="alert" style={{ fontSize: 12 }}>
           {ADD_THROTTLE_MESSAGE}
@@ -130,6 +143,20 @@ export default function ItemPool() {
               >
                 ⚑
               </button>
+            </div>
+          ))}
+          {/* Own pending submissions (#210): visible ONLY to their submitter,
+              never to other Players (mirrors the read rule's carve-out) — no
+              Report control, since reporting your own not-yet-live Prompt is
+              meaningless. */}
+          {myPending.map((it) => (
+            <div key={it.id} className="row">
+              <div className="grow">
+                <div className="name" style={{ fontWeight: 500 }}>
+                  {it.text}
+                  <span className="pill">pending review</span>
+                </div>
+              </div>
             </div>
           ))}
         </div>
