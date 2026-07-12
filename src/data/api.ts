@@ -749,11 +749,17 @@ export async function addItem(uid: string, text: string, spicy = false): Promise
     createdBy: uid,
     createdAt: Date.now(),
     isFreeSpace: false,
-    status: 'active',
+    // Phase 1.5 approval flow (daily-cards-spec § "Item pools and the approval
+    // flow", #210): a main-pool player submission now lands `pending`, invisible
+    // everywhere except the Admin Approvals queue and (as "pending review") its
+    // own submitter, until an admin approves (→ 'active') or rejects it. Curated
+    // pools (embark/farewell) are seeded/edited by admins directly — this path is
+    // the main pool's ONLY writer, so it is the only one the gate applies to.
+    status: 'pending',
     reportCount: 0,
     spicy,
     // Honor the now-required ItemDoc.pool: a player prompt-submission lands in
-    // the main game pool. Embark/farewell pools + the approval flow are #207/#210.
+    // the main game pool. Embark/farewell pools are seeded directly (#207).
     pool: 'main',
   });
 }
