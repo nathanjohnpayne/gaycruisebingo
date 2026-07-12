@@ -416,7 +416,13 @@ export function seedItemMutations(existingDocs, now = Date.now(), pool = ALL_ITE
 // ignored — they are not part of the canonical pool and must never count as drift.
 export function verifySeedPool(
   existingDocs,
-  pool = ITEMS,
+  // Defaults to ALL_ITEMS (main + embark + farewell), not the main-only ITEMS:
+  // both real call sites (seed()/verify() below) already pass ALL_ITEMS
+  // explicitly, and a caller that relies on the documented/default contract
+  // (an ad-hoc smoke check, a test that omits the argument) must not silently
+  // report OK while every embark/farewell seed doc is missing or stale
+  // (Codex P2, PR #229).
+  pool = ALL_ITEMS,
   reportHideThreshold = EVENT_SEED.settings.reportHideThreshold,
 ) {
   const expected = new Map(
@@ -567,14 +573,21 @@ async function seed() {
   const admins = adminRoster(process.env.ADMIN_UID);
 
   const eventRef = db.doc(`events/${EVENT_ID}`);
-  // Write `days` only when creating the Event, or when SEED_DAYS=1 explicitly
-  // opts into overwriting it (e.g. a deliberate itinerary migration). A routine
-  // reseed against an existing Event (to refresh prompts, grant an admin, etc.)
-  // must never clobber a live, admin-edited schedule (Codex P2, PR #229 —
-  // daily-cards-spec § "Itinerary and schedule": "the schedule stays
-  // admin-editable in the Admin console").
-  const eventExists = (await eventRef.get()).exists;
-  const includeDays = !eventExists || process.env.SEED_DAYS === '1';
+  // Write `days` when creating the Event, when the existing Event has no
+  // schedule yet (missing/empty `days`), or when SEED_DAYS=1 explicitly opts
+  // into overwriting it (e.g. a deliberate itinerary migration). A routine
+  // reseed against an existing Event that already HAS a schedule (to refresh
+  // prompts, grant an admin, etc.) must never clobber a live, admin-edited
+  // schedule (Codex P2, PR #229 — daily-cards-spec § "Itinerary and
+  // schedule": "the schedule stays admin-editable in the Admin console").
+  // Checking existence alone missed the case where the Event doc was created
+  // without a schedule (e.g. med-2026 pre-dating this migration): the
+  // existence check alone left `days` permanently missing until an operator
+  // knew to pass SEED_DAYS=1 (Codex P1, PR #229).
+  const existingEventSnap = await eventRef.get();
+  const existingDays = existingEventSnap.data()?.days;
+  const hasScheduledDays = Array.isArray(existingDays) && existingDays.length > 0;
+  const includeDays = !hasScheduledDays || process.env.SEED_DAYS === '1';
   await eventRef.set(eventWritePayload(admins, FieldValue.delete(), includeDays), {
     merge: true,
   });
