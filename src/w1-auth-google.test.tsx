@@ -70,7 +70,7 @@ describe('App surfaces a failed deal on the Card tab, shell intact', () => {
     expect(authState.value.retryDeal).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps Nav and the /items Prompts route reachable while the deal error is active', async () => {
+  it('keeps Nav and the other tabs reachable while the deal error is active', async () => {
     authState.value.dealError = POOL_MESSAGE;
     render(
       <MemoryRouter>
@@ -78,10 +78,13 @@ describe('App surfaces a failed deal on the Card tab, shell intact', () => {
       </MemoryRouter>,
     );
 
-    // The pool-guard recovery path: the Prompts tab is rendered by Nav and
-    // navigating there mounts the ItemPool page while the error stays active.
-    await userEvent.click(screen.getByRole('link', { name: 'Prompts' }));
-    expect(screen.getByPlaceholderText(/add a prompt/i)).toBeInTheDocument();
+    // Phase 1.5 (#203) dropped the Prompts tab — recovery prompt-adding now
+    // lives inside the More menu (#208). The shell stays navigable during the
+    // error: the More tab is rendered by Nav and navigating there mounts the
+    // More page (its sign-out affordance) while the Card error stays active.
+    expect(screen.queryByRole('link', { name: 'Prompts' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('link', { name: 'More' }));
+    expect(screen.getByRole('button', { name: /sign out/i })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     // Back on Card, the retry surface is still up — never a blank Board.

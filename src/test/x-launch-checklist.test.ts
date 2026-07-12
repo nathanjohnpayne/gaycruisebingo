@@ -25,17 +25,17 @@ describe('x-launch-checklist: seeded sail window (embarkation 2026-07-15)', () =
 
 describe('x-launch-checklist: one-handed reachability tab Nav contract', () => {
   it('documents exactly the tabs the runbook walks through, in the order the reachability check taps them', () => {
-    expect(TABS.map((t) => t.id)).toEqual(['card', 'feed', 'ranks', 'prompts', 'admin']);
-    expect(TABS.map((t) => t.label)).toEqual(['Card', 'Feed', 'Ranks', 'Prompts', 'Admin']);
+    // Phase 1.5 (#203, specs/d15-tab-contract.md): Prompts and Admin left the
+    // bar and mount inside More, so the set is Card · Feed · Ranks · More.
+    expect(TABS.map((t) => t.id)).toEqual(['card', 'feed', 'ranks', 'more']);
+    expect(TABS.map((t) => t.label)).toEqual(['Card', 'Feed', 'Ranks', 'More']);
   });
 
   it('pins the exact route paths the runbook quotes by URL, so a later route rename (e.g. /leaderboard → /ranks) breaks this test instead of stranding a dead URL in the doc', () => {
-    expect(TABS.map((t) => t.path)).toEqual(['/', '/feed', '/leaderboard', '/items', '/admin']);
+    expect(TABS.map((t) => t.path)).toEqual(['/', '/feed', '/leaderboard', '/more']);
   });
 
-  it('gates only the Admin tab on isAdmin — the runbook says "four tabs if signed in as a non-admin"', () => {
-    const adminOnlyIds = TABS.filter((t) => t.adminOnly).map((t) => t.id);
-    expect(adminOnlyIds).toEqual(['admin']);
-    expect(TABS.length).toBe(5);
+  it('exposes all four tabs universally — admin is now an in-menu concern inside More, not a tab-level gate', () => {
+    expect(TABS.length).toBe(4);
   });
 });
