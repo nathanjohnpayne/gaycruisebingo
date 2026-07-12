@@ -1,7 +1,18 @@
 import { NavLink } from 'react-router-dom';
+import { Grid3x3, Radio, Trophy, Ellipsis } from 'lucide-react';
 import { visibleTabs } from './tabs';
+import type { TabId } from './tabs';
 
 const cls = ({ isActive }: { isActive: boolean }) => 'tab' + (isActive ? ' active' : '');
+
+// Lucide chrome for the tab bar (daily-cards-spec § "Iconography — Lucide"):
+// Card `grid-3x3`, Feed `radio`, Ranks `trophy`. More wears the Player's
+// avatar (or the `ellipsis` fallback below) instead of a Lucide glyph.
+const TAB_ICONS: Partial<Record<TabId, typeof Grid3x3>> = {
+  card: Grid3x3,
+  feed: Radio,
+  ranks: Trophy,
+};
 
 /**
  * The bottom tab bar. Pure/presentational — takes its Firebase-derived value
@@ -17,27 +28,31 @@ const cls = ({ isActive }: { isActive: boolean }) => 'tab' + (isActive ? ' activ
 export default function TabBar({ morePhotoURL = null }: { morePhotoURL?: string | null }) {
   return (
     <nav className="tabs" aria-label="Primary">
-      {visibleTabs().map((tab) => (
-        <NavLink
-          key={tab.id}
-          to={tab.path}
-          end={tab.end}
-          className={cls}
-          aria-label={tab.id === 'more' ? tab.label : undefined}
-        >
-          {tab.id === 'more' ? (
-            morePhotoURL ? (
-              <img className="avatar tab-avatar" src={morePhotoURL} alt={tab.label} referrerPolicy="no-referrer" />
+      {visibleTabs().map((tab) => {
+        const Icon = TAB_ICONS[tab.id];
+        return (
+          <NavLink
+            key={tab.id}
+            to={tab.path}
+            end={tab.end}
+            className={cls}
+            aria-label={tab.id === 'more' ? tab.label : undefined}
+          >
+            {tab.id === 'more' ? (
+              morePhotoURL ? (
+                <img className="avatar tab-avatar" src={morePhotoURL} alt={tab.label} referrerPolicy="no-referrer" />
+              ) : (
+                <Ellipsis className="tab-ellipsis" aria-hidden="true" />
+              )
             ) : (
-              <span className="tab-ellipsis" aria-hidden="true">
-                ⋯
-              </span>
-            )
-          ) : (
-            tab.label
-          )}
-        </NavLink>
-      ))}
+              <>
+                {Icon && <Icon className="tab-icon" aria-hidden="true" />}
+                {tab.label}
+              </>
+            )}
+          </NavLink>
+        );
+      })}
     </nav>
   );
 }

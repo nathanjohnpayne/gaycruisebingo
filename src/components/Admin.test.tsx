@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
-import type { EventDoc, ItemDoc } from '../types';
+import type { DayDef, EventDoc, ItemDoc } from '../types';
 
 // specs/d15-approvals.md, component layer (RTL-jsdom). Drives the REAL Admin
 // console with the data boundary stubbed, focused on the NEW Approvals tab
@@ -41,6 +41,7 @@ const H = vi.hoisted(() => ({
   clearProofReports: vi.fn(),
   setClaimMode: vi.fn(),
   setEventTheme: vi.fn(),
+  setDayTheme: vi.fn(),
   banUser: vi.fn(),
   unbanUser: vi.fn(),
 }));
@@ -88,11 +89,17 @@ vi.mock('../data/admin', () => ({
   setItemSpicy: (...a: unknown[]) => H.setItemSpicy(...a),
   setClaimMode: (...a: unknown[]) => H.setClaimMode(...a),
   setEventTheme: (...a: unknown[]) => H.setEventTheme(...a),
+  setDayTheme: (...a: unknown[]) => H.setDayTheme(...a),
   banUser: (...a: unknown[]) => H.banUser(...a),
   unbanUser: (...a: unknown[]) => H.unbanUser(...a),
 }));
 vi.mock('../data/proofs', () => ({ deleteProof: (...a: unknown[]) => H.deleteProof(...a) }));
-vi.mock('../theme/themes', () => ({ THEMES: [{ id: 'neon-playground', emoji: '🎉', label: 'Neon' }] }));
+vi.mock('../theme/themes', () => ({
+  THEMES: [
+    { id: 'neon-playground', emoji: '🎉', label: 'Neon' },
+    { id: 'duty-free', emoji: '✈️', label: 'Duty Free' },
+  ],
+}));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user }) }));
 
 import Admin from './Admin';
@@ -110,6 +117,18 @@ const pendingItem = (id: string, over: Partial<ItemDoc> = {}): ItemDoc =>
     pool: 'main',
     ...over,
   }) as ItemDoc;
+
+const dayDef = (over: Partial<DayDef> = {}): DayDef => ({
+  index: 0,
+  date: '2026-07-16',
+  port: 'Split',
+  portEmoji: '🇭🇷',
+  theme: 'neon-playground',
+  pool: 'main',
+  tutorial: false,
+  unlockAt: Date.now() + 3600_000, // future by default — enabled
+  ...over,
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -189,5 +208,41 @@ describe('Admin Approvals tab (specs/d15-approvals.md)', () => {
     const row = screen.getByText('Toggle me').closest('.row') as HTMLElement;
     fireEvent.click(within(row).getByRole('checkbox'));
     expect(H.setItemSpicy).toHaveBeenCalledWith('p1', true);
+  });
+});
+
+describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
+  it('shows exactly the seeded Days in order, one row per Day', () => {
+    H.event = {
+      ...H.event,
+      days: [dayDef({ index: 0, date: '2026-07-15', port: 'Trieste', portEmoji: '🇮🇹' }), dayDef({ index: 1 })],
+    } as unknown as EventDoc;
+    render(<Admin />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    expect(screen.getByText(/Day 1 · 2026-07-15 · 🇮🇹 Trieste/)).toBeInTheDocument();
+    expect(screen.getByText(/Day 2 · 2026-07-16 · 🇭🇷 Split/)).toBeInTheDocument();
+  });
+
+  it("a future Day's theme dropdown is enabled and invokes setDayTheme(days, dayIndex, theme) on change", () => {
+    const days = [dayDef({ index: 0, unlockAt: Date.now() + 3600_000 })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    render(<Admin />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    const select = screen.getByLabelText('Day 1 theme') as HTMLSelectElement;
+    expect(select.disabled).toBe(false);
+    fireEvent.change(select, { target: { value: 'duty-free' } });
+    expect(H.setDayTheme).toHaveBeenCalledWith(days, 0, 'duty-free');
+  });
+
+  it("a past/unlocked Day's theme dropdown is disabled", () => {
+    const days = [dayDef({ index: 0, unlockAt: Date.now() - 3600_000 })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    render(<Admin />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    const select = screen.getByLabelText('Day 1 theme') as HTMLSelectElement;
+    expect(select.disabled).toBe(true);
   });
 });

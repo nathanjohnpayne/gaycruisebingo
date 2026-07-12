@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { Lock } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText } from '../hooks/useData';
 import { setMark, resolveDisplayName } from '../data/api';
@@ -488,7 +489,7 @@ function LockedDayPreview({ day, timezone }: { day: DayDef; timezone: string | u
         ))}
       </div>
       <div className="day-lock-badge">
-        <span aria-hidden="true">🔒</span> Unlocks {formatUnlockAt(day.unlockAt, timezone)}
+        <Lock className="day-lock-icon" aria-hidden="true" /> Unlocks {formatUnlockAt(day.unlockAt, timezone)}
       </div>
       <p className="day-lock-caption muted">24 fresh squares land at 8. Come back after coffee.</p>
     </div>
@@ -1016,6 +1017,12 @@ export default function Board() {
         claimMode,
         currentFirstBingoAt: knownFirstBingoAt(player, playerLoading, playerConfirmed),
         displayName: identityKnown ? displayName : undefined,
+        // Stamp the viewed Day (#216) so the Mark's Tally marker groups into the
+        // right per-`(itemId, dayIndex)` Feed card — mirrors the `dayIndex` the
+        // proof/claim sheet already carries below. Board still deals `dayIndex: 0`,
+        // so this is the SELECTED `viewedIndex` when the schedule is live, else the
+        // dealt board's own dayIndex.
+        dayIndex: hasDays ? viewedIndex : board?.dayIndex,
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
