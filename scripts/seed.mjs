@@ -16,6 +16,11 @@
 // Falls back to a serviceAccountKey.json in the project root if one exists
 // (gitignored — do NOT commit).
 //
+// Itinerary (`days[]`): written only when the Event doc doesn't exist yet — the
+// schedule stays admin-editable in the Admin console afterward, so a routine
+// reseed leaves a live schedule untouched. Pass SEED_DAYS=1 to explicitly
+// overwrite `days` on an existing Event (a deliberate itinerary migration).
+//
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
@@ -183,9 +188,23 @@ export function adminRoster(raw = '') {
 // re-running this seed against an Event doc the previous seed already wrote —
 // which included `blackoutEnabled` — would otherwise leave that stale ADR 0004 field in
 // place forever. The sentinel actively deletes it instead of merely omitting it.
-export function eventWritePayload(admins, deleteBlackoutEnabled) {
+// `includeDays` defaults to true (a brand-new Event needs the itinerary written
+// once), but a routine reseed against an EXISTING Event must omit `days` — the
+// schedule stays admin-editable in the Admin console (daily-cards-spec §
+// "Itinerary and schedule": "party order can shift onboard"), and this payload
+// is written with `{ merge: true }`, so including `days` here would replace the
+// live `days[]` array wholesale on every reseed and silently discard any admin
+// edit (Codex P2, PR #229). `seed()` below decides `includeDays` by checking
+// whether the Event doc already exists (or via the explicit `SEED_DAYS=1`
+// migration override), not this function.
+export function eventWritePayload(admins, deleteBlackoutEnabled, includeDays = true) {
+  // Destructure `days` out rather than spreading it in conditionally: setting a
+  // key to `undefined` would still send `days: undefined` to the Admin SDK
+  // (which throws unless `ignoreUndefinedProperties` is set) instead of simply
+  // omitting the field from the merge write.
+  const { days, ...seedWithoutDays } = EVENT_SEED;
   return {
-    ...EVENT_SEED,
+    ...(includeDays ? EVENT_SEED : seedWithoutDays),
     settings: {
       ...EVENT_SEED.settings,
       blackoutEnabled: deleteBlackoutEnabled,
@@ -548,7 +567,15 @@ async function seed() {
   const admins = adminRoster(process.env.ADMIN_UID);
 
   const eventRef = db.doc(`events/${EVENT_ID}`);
-  await eventRef.set(eventWritePayload(admins, FieldValue.delete()), {
+  // Write `days` only when creating the Event, or when SEED_DAYS=1 explicitly
+  // opts into overwriting it (e.g. a deliberate itinerary migration). A routine
+  // reseed against an existing Event (to refresh prompts, grant an admin, etc.)
+  // must never clobber a live, admin-edited schedule (Codex P2, PR #229 —
+  // daily-cards-spec § "Itinerary and schedule": "the schedule stays
+  // admin-editable in the Admin console").
+  const eventExists = (await eventRef.get()).exists;
+  const includeDays = !eventExists || process.env.SEED_DAYS === '1';
+  await eventRef.set(eventWritePayload(admins, FieldValue.delete(), includeDays), {
     merge: true,
   });
 
