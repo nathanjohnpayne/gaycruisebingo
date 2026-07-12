@@ -50,32 +50,17 @@ const DEFAULT_TIMEZONE = 'Europe/Rome';
  * bare abbreviation ('EST'), which some runtimes' `Intl.DateTimeFormat` will
  * happily accept even though day-scheduling consumers expect a canonical zone.
  *
- * Prefer membership in the runtime's canonical zone list
- * (`Intl.supportedValuesOf('timeZone')`) where available; otherwise fall back
- * to `Intl.DateTimeFormat` validation plus explicit rejection of offset-style
- * ids, GMT/UTC/Etc zones, and separator-less abbreviations. Anything that
- * fails resolves to `Europe/Rome`.
+ * Validate/canonicalize with `Intl.DateTimeFormat` after explicitly rejecting
+ * offset-style ids, GMT/UTC/Etc zones, and separator-less abbreviations.
+ * `supportedValuesOf('timeZone')` is not enough by itself because runtimes can
+ * accept still-valid IANA aliases (for example Europe/Kyiv) while listing only
+ * the runtime's canonical spelling. Anything that fails resolves to
+ * `Europe/Rome`.
  */
 export function normalizeTimezone(raw: unknown): string {
   if (typeof raw !== 'string' || raw.trim() === '') return DEFAULT_TIMEZONE;
   const tz = raw.trim();
 
-  // Canonical path: accept only zones the runtime lists as real IANA zones.
-  // `Intl.supportedValuesOf` is ES2022; the project's lib target is ES2021, so
-  // reach it through a narrowed cast rather than the ambient (untyped) global.
-  const supportedValuesOf = (
-    Intl as typeof Intl & {
-      supportedValuesOf?: (key: 'timeZone') => string[];
-    }
-  ).supportedValuesOf;
-  if (typeof supportedValuesOf === 'function') {
-    return supportedValuesOf('timeZone').includes(tz) ? tz : DEFAULT_TIMEZONE;
-  }
-
-  // Fallback for runtimes without `supportedValuesOf`: reject offset-style ids
-  // ('+02:00'), GMT/UTC/Etc zones ('Etc/GMT+5'), and separator-less
-  // abbreviations ('EST') before trusting `Intl.DateTimeFormat`, which on some
-  // runtimes accepts those even though they are not canonical named zones.
   if (
     /^[+-]\d/.test(tz) ||
     /GMT|UTC|Etc\//i.test(tz) ||
@@ -84,8 +69,10 @@ export function normalizeTimezone(raw: unknown): string {
     return DEFAULT_TIMEZONE;
   }
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz });
-    return tz;
+    const canonical = new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone;
+    return canonical.includes('/') && !/GMT|UTC|Etc\//i.test(canonical)
+      ? canonical
+      : DEFAULT_TIMEZONE;
   } catch {
     return DEFAULT_TIMEZONE;
   }

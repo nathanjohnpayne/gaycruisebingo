@@ -129,6 +129,18 @@ describe('eventConverter (Phase 1.5 days/timezone defaults)', () => {
       expect(event.timezone).toBe(good);
     }
   });
+
+  it('accepts valid IANA aliases by returning the runtime canonical zone', () => {
+    const alias = 'Europe/Kyiv';
+    const canonical = new Intl.DateTimeFormat('en-US', {
+      timeZone: alias,
+    }).resolvedOptions().timeZone;
+
+    const event = eventConverter.fromFirestore(snapshotOf({ ...legacyEvent, timezone: alias }));
+
+    expect(event.timezone).toBe(canonical);
+    expect(event.timezone).not.toBe('Europe/Rome');
+  });
 });
 
 describe('boardConverter (Phase 1.5 dayIndex default)', () => {

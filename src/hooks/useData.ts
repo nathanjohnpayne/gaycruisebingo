@@ -183,6 +183,7 @@ export function useItems(enabled = true) {
     .filter(
       (i) =>
         i.status === 'active' &&
+        (i.pool ?? 'main') === 'main' &&
         !isReportHidden(i.reportCount, threshold) &&
         !isBanned(i.createdBy, bannedUids),
     )

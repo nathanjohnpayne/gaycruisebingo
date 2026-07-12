@@ -321,6 +321,7 @@ export async function joinAndDeal(u: User): Promise<boolean> {
     .filter(
       (it) =>
         !it.isFreeSpace &&
+        (it.pool ?? 'main') === 'main' &&
         !isReportHidden(it.reportCount, threshold) &&
         !isBanned(it.createdBy, bannedUids),
     )

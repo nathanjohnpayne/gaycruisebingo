@@ -423,6 +423,23 @@ describe('joinAndDeal freeze-at-join', () => {
     expect(dealtIds).not.toContain('free'); // the Free Space item is never sampled
   });
 
+  it('deals only from the main pool; embark/farewell tutorial prompts never land on the card', async () => {
+    const docs = [
+      ...activeItems(24),
+      { ...mkItem('embark-1'), pool: 'embark' as const },
+      { ...mkItem('farewell-1'), pool: 'farewell' as const },
+    ].map((it) => ({ data: () => it }));
+    H.getDocs.mockResolvedValueOnce({ docs });
+
+    await joinAndDeal(SIGNED_IN);
+
+    const boardWrite = H.batchSet.mock.calls[0][1] as BoardDoc;
+    const dealtIds = boardWrite.cells.filter((c) => !c.free).map((c) => c.itemId);
+    expect(dealtIds).toHaveLength(24);
+    expect(dealtIds).not.toContain('embark-1');
+    expect(dealtIds).not.toContain('farewell-1');
+  });
+
   it('propagates the pool<MIN_POOL guard and never persists a blank Board', async () => {
     const docs = activeItems(MIN_POOL - 1).map((it) => ({ data: () => it }));
     H.getDocs.mockResolvedValueOnce({ docs });
