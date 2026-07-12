@@ -96,6 +96,9 @@ vi.mock('../data/doubts', async (importOriginal) => {
   return { ...actual, raiseDoubt: H.raiseDoubt };
 });
 vi.mock('./ProofSheet', () => ({ default: () => null }));
+// CoachOverlay (#214) mounts unconditionally with cells and would collide
+// with this file's `.sheet-backdrop` queries — stubbed, same as ProofSheet.
+vi.mock('./CoachOverlay', () => ({ default: () => null }));
 
 import Board from './Board';
 

@@ -104,6 +104,9 @@ vi.mock('../analytics', () => ({ track: H.track }));
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: H.user, loading: false, signIn: vi.fn(), signOutUser: vi.fn() }),
 }));
+// CoachOverlay (#214) imports EVENT_ID from '../firebase' — mocked so
+// mounting Board here never touches the real Firebase app init.
+vi.mock('../firebase', () => ({ EVENT_ID: 'test-event' }));
 
 import Board from './Board';
 import ProofSheet from './ProofSheet';
