@@ -364,10 +364,11 @@ function ScheduleTab({ days }: { days: DayDef[] }) {
   );
 }
 
-// A −/+ stepper for `settings.reportHideThreshold` (#222), floored at 1 —
-// `isReportHidden` treats a non-positive threshold as "no filtering" (Codex
-// P2, PR #107 finding 2), so an unfloored stepper could silently disable
-// auto-hide instead of hiding after zero reports.
+// A −/+ stepper for `settings.reportHideThreshold` (#222), floored at 1 on
+// EVERY step (not just decrement) — `isReportHidden` treats a non-positive
+// threshold as "no filtering" (Codex P2, PR #107 finding 2), so a legacy
+// Event doc with an already-negative threshold must not be able to click +
+// its way to another non-positive value (Codex P2, PR #245 finding).
 function ReportThresholdStepper({ value, onChange }: { value: number; onChange: (n: number) => void }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -380,7 +381,7 @@ function ReportThresholdStepper({ value, onChange }: { value: number; onChange: 
         −
       </button>
       <span style={{ minWidth: 20, textAlign: 'center' }}>{value}</span>
-      <button className="iconbtn" aria-label="Increase auto-hide threshold" onClick={() => onChange(value + 1)}>
+      <button className="iconbtn" aria-label="Increase auto-hide threshold" onClick={() => onChange(Math.max(1, value + 1))}>
         +
       </button>
     </div>

@@ -269,13 +269,11 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
     } as unknown as EventDoc;
     H.claims = [{ id: 'c1', displayName: 'Alice', itemText: 'Do a thing' } as never];
     render(<Admin />);
-
     expect(within(row('Claim mode')).getByRole('button', { name: 'Proof req.' })).toHaveClass('on');
     expect(within(row('Claim mode')).getByText('A friction knob, not a trust level.')).toBeInTheDocument();
     expect(within(row('Photo proof source')).getByRole('button', { name: 'Camera only' })).toHaveClass('on');
     expect((within(row('Strip location data')).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
-    const visionCheckbox = within(row('AI image screen')).getByRole('checkbox') as HTMLInputElement;
-    expect(visionCheckbox.checked).toBe(false);
+    expect((within(row('AI image screen')).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
     expect(row('AI image screen').textContent).toMatch(/presentational/i);
     expect(within(row('Auto-hide after reports')).getByText('6')).toBeInTheDocument();
     expect(within(row('Pending claims')).getByText('1')).toBeInTheDocument();
@@ -290,37 +288,37 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
 
     fireEvent.click(within(row('Claim mode')).getByRole('button', { name: 'Admin-confirmed' }));
     expect(H.setClaimMode).toHaveBeenCalledWith('admin_confirmed');
-
     fireEvent.click(within(row('Photo proof source')).getByRole('button', { name: 'Camera only' }));
     expect(H.setPhotoProofSource).toHaveBeenCalledWith('camera_only');
-
     fireEvent.click(within(row('Strip location data')).getByRole('checkbox'));
     expect(H.setStripPhotoExif).toHaveBeenCalledWith(false);
-
     fireEvent.click(within(row('AI image screen')).getByRole('checkbox'));
     expect(H.setVisionGate).toHaveBeenCalledWith(false);
   });
 
-  it('the report-threshold stepper reads the current value, +/- invoke setReportHideThreshold, and floors at 1', () => {
+  it('the report-threshold stepper reads the current value and +/- invoke setReportHideThreshold', () => {
     H.event = { ...H.event, settings: { reportHideThreshold: 4 } } as unknown as EventDoc;
-    const { unmount } = render(<Admin />);
+    render(<Admin />);
     const stepperRow = row('Auto-hide after reports');
     expect(within(stepperRow).getByText('4')).toBeInTheDocument();
-
     fireEvent.click(within(stepperRow).getByRole('button', { name: 'Increase auto-hide threshold' }));
     expect(H.setReportHideThreshold).toHaveBeenCalledWith(5);
     fireEvent.click(within(stepperRow).getByRole('button', { name: 'Decrease auto-hide threshold' }));
     expect(H.setReportHideThreshold).toHaveBeenCalledWith(3);
-    unmount();
+  });
 
-    H.event = { ...H.event, settings: { reportHideThreshold: 1 } } as unknown as EventDoc;
+  // Legacy negative threshold (isReportHidden treats non-positive as "no filtering"):
+  // BOTH steps must clamp to a floor of 1, not just decrement (Codex P2, PR #245).
+  it('the stepper floors at 1 on both steps for an already-negative threshold', () => {
+    H.event = { ...H.event, settings: { reportHideThreshold: -2 } } as unknown as EventDoc;
     render(<Admin />);
-    const decrement = within(row('Auto-hide after reports')).getByRole('button', {
-      name: 'Decrease auto-hide threshold',
-    }) as HTMLButtonElement;
+    const stepperRow = row('Auto-hide after reports');
+    const decrement = within(stepperRow).getByRole('button', { name: 'Decrease auto-hide threshold' }) as HTMLButtonElement;
     expect(decrement.disabled).toBe(true);
     fireEvent.click(decrement);
-    expect(H.setReportHideThreshold).not.toHaveBeenCalledWith(0);
+    expect(H.setReportHideThreshold).not.toHaveBeenCalled();
+    fireEvent.click(within(stepperRow).getByRole('button', { name: 'Increase auto-hide threshold' }));
+    expect(H.setReportHideThreshold).toHaveBeenCalledWith(1);
   });
 
   it("the Pending claims row's count matches usePendingClaims() and its jump link targets #admin-pending-claims", () => {
