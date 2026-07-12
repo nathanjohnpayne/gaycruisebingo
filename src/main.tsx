@@ -30,12 +30,16 @@ if (!rootEl) throw new Error('root element missing');
  * event's admin-set default, and hand it to ThemeProvider so a player's
  * cross-device choice or the configured event default is actually applied. A
  * locally-saved theme and an explicit in-session pick still win (see ThemeProvider).
+ * `player?.theme` is handed down as `playerTheme` (NOT folded into
+ * `defaultTheme`) so ThemeProvider can tell "the Player's own cross-device
+ * pick" apart from "the event's Auto fallback" — see ThemeContext's
+ * `playerTheme` doc (Codex P2 on #232).
  */
 function ThemedApp() {
   const { user, loading } = useAuth();
   const { data: event } = useEventDoc(!!user);
   const { data: player } = useMyPlayer(user?.uid);
-  const defaultTheme: ThemeId = player?.theme ?? event?.defaultTheme ?? 'neon-playground';
+  const defaultTheme: ThemeId = event?.defaultTheme ?? 'neon-playground';
   // Today's Day's theme (daily-cards-spec § "More menu" — Auto), resolved here
   // (Firestore-backed `event`) and handed down precomputed so ThemeContext
   // itself stays Firestore-free, mirroring `defaultTheme` above.
@@ -54,7 +58,7 @@ function ThemedApp() {
   // SPA pageviews are autocaptured by posthog-js (`capture_pageview:
   // 'history_change'`, see posthog.ts), so no manual pageview call is needed here.
   return (
-    <ThemeProvider defaultTheme={defaultTheme} autoThemeId={autoThemeId}>
+    <ThemeProvider defaultTheme={defaultTheme} playerTheme={player?.theme ?? null} autoThemeId={autoThemeId}>
       <App />
     </ThemeProvider>
   );

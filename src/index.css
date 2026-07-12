@@ -995,7 +995,10 @@ body.update-prompt-visible .app {
   color: var(--ink);
   border-color: var(--primary);
 }
-.bug-report-trigger svg {
+/* Icon sizing/stroke is keyed off this class (not `.bug-report-trigger svg`)
+   so it survives `variant="row"`, where the trigger button uses `.more-row`
+   instead of `.bug-report-trigger` — see BugReport.tsx's `BugIcon`. */
+.bug-report-icon {
   width: 20px;
   height: 20px;
   fill: none;
@@ -1102,7 +1105,10 @@ body:has(.sheet-backdrop) .bug-report-trigger {
   color: var(--ink);
   border-color: var(--primary);
 }
-.guidelines-trigger svg {
+/* Icon sizing/fill is keyed off this class (not `.guidelines-trigger svg`)
+   so it survives `variant="row"`, where the trigger button uses `.more-row`
+   instead of `.guidelines-trigger` — see AcceptableUse.tsx. */
+.guidelines-icon {
   width: 18px;
   height: 18px;
   fill: currentcolor;

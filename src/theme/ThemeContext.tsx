@@ -48,14 +48,27 @@ const ThemeContext = createContext<ThemeContextValue>({
 export function ThemeProvider({
   children,
   defaultTheme = DEFAULT,
+  playerTheme = null,
   autoThemeId = null,
 }: {
   children: ReactNode;
-  /** The event/player-set default (main.tsx), used whenever Auto has no
+  /** The event's admin-set default (main.tsx), used whenever Auto has no
    *  `autoThemeId` to resolve against — the same fallback role `defaultTheme`
    *  played pre-Auto (adopted live on every render, no separate "arrived
-   *  async" effect needed since `theme` below is a pure derivation). */
+   *  async" effect needed since `theme` below is a pure derivation). Pure
+   *  event/app fallback ONLY — never the Player's own pick (see
+   *  `playerTheme`), so it can never outrank Auto's day-matching. */
   defaultTheme?: ThemeId;
+  /** The Player's own explicit cross-device pick (Firestore `player.theme`,
+   *  set via `savePlayerTheme` — main.tsx), arriving async after auth
+   *  resolves. Adopted as the active preference once, on arrival, but ONLY
+   *  when nothing more specific has already won: no local `gcb.theme`
+   *  override on this device, and preference is still `'auto'` (no explicit
+   *  in-session pick since mount). A concrete cross-device pick always
+   *  outranks Auto's day-matching — see the effect below (Codex P2 on
+   *  #232: `defaultTheme` used to carry this value and let `autoThemeId`
+   *  silently override it as soon as a Day was current). */
+  playerTheme?: ThemeId | null;
   /** Today's Day's ThemeId (daily-cards-spec § "More menu" Auto option),
    *  resolved by the caller from `EventDoc.days` (see `theme/autoTheme.ts`)
    *  so this Firestore-free module stays Firestore-free — mirrors how
@@ -65,11 +78,20 @@ export function ThemeProvider({
 }) {
   const [preference, setPreferenceState] = useState<ThemePreference>(() => savedTheme() ?? 'auto');
 
-  // The resolved CSS theme: an explicit pick wins outright; 'auto' resolves to
-  // today's Day theme when known, falling back to the event/player default
-  // while it isn't. A pure derivation (not stored state), so it re-resolves on
-  // every render as `autoThemeId`/`defaultTheme` arrive from Firestore — no
-  // separate "adopt the async default" effect required.
+  // Adopt the Player's cross-device explicit pick once it arrives from
+  // Firestore, but only when preference is still 'auto' (no local override,
+  // no explicit in-session pick already made) — see `playerTheme` above.
+  useEffect(() => {
+    if (!playerTheme) return;
+    if (savedTheme() !== null) return; // a local override already wins — never touch it
+    setPreferenceState((prev) => (prev === 'auto' ? playerTheme : prev));
+  }, [playerTheme]);
+
+  // The resolved CSS theme: an explicit pick (local, cross-device, or
+  // in-session) wins outright; 'auto' resolves to today's Day theme when
+  // known, falling back to the event default while it isn't. A pure
+  // derivation (not stored state), so it re-resolves on every render as
+  // `autoThemeId`/`defaultTheme` arrive from Firestore.
   const theme: ThemeId = preference === 'auto' ? (autoThemeId ?? defaultTheme) : preference;
 
   // Apply the theme to the DOM for CSS. Deliberately does NOT persist here —

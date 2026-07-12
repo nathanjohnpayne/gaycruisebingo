@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import InstallPrompt from './InstallPrompt';
+import { __resetInstallPromptStateForTests, useInstallPrompt } from '../hooks/useInstallPrompt';
 
 // Covers specs/w1-pwa.md: the beforeinstallprompt-driven install banner, the iOS
 // "Add to Home Screen" hint, install_pwa firing on prompt acceptance or a bare
@@ -56,6 +57,10 @@ describe('InstallPrompt', () => {
     track.mockClear();
     storage = createStorageStub();
     vi.stubGlobal('localStorage', storage);
+    // useInstallPrompt is now a module-level singleton (shared across mount
+    // points, Codex P2 on #232) — reset it between tests so each `it` starts
+    // from a clean, un-captured, un-installed state.
+    __resetInstallPromptStateForTests();
   });
 
   afterEach(() => {
@@ -178,5 +183,76 @@ describe('InstallPrompt', () => {
     await user.click(screen.getByRole('button', { name: /install/i }));
     await waitFor(() => expect(track).toHaveBeenCalledWith('install_pwa'));
     expect(document.body.classList.contains(VISIBLE_CLASS)).toBe(false);
+  });
+});
+
+// Codex P2s on #232: `beforeinstallprompt` is a one-shot browser event, and
+// the tracked-install guard must dedupe across mount points, not just within
+// one. useInstallPrompt is now a shared singleton store (see its module doc)
+// instead of one independent listener/state pair per mount — these cover
+// that sharing directly, with two simultaneous consumers standing in for the
+// always-mounted `InstallPrompt` banner and More's row (#208).
+describe('useInstallPrompt — shared across mount points (Codex P2 on #232)', () => {
+  beforeEach(() => {
+    track.mockClear();
+    __resetInstallPromptStateForTests();
+  });
+
+  function TwoConsumers() {
+    return (
+      <>
+        <div data-testid="a">
+          <Probe />
+        </div>
+        <div data-testid="b">
+          <Probe />
+        </div>
+      </>
+    );
+  }
+
+  function Probe() {
+    const { deferred, install, standalone } = useInstallPrompt();
+    return (
+      <button type="button" onClick={install}>
+        {standalone ? 'standalone' : deferred ? 'captured' : 'idle'}
+      </button>
+    );
+  }
+
+  it('a beforeinstallprompt captured while only one mount point is on screen still surfaces on a mount point that appears later', async () => {
+    // Mount ONLY the always-present banner first (More's row isn't on screen
+    // yet — the Player is on a different route), fire the one-shot event,
+    // THEN mount the second consumer — the exact "not on /more yet" scenario
+    // from the finding.
+    const { rerender } = render(
+      <div data-testid="a">
+        <Probe />
+      </div>,
+    );
+    fireOnWindow(makeBeforeInstallPromptEvent('accepted'));
+    await waitFor(() => expect(screen.getByTestId('a')).toHaveTextContent('captured'));
+
+    rerender(<TwoConsumers />);
+    // The second (later-mounted) consumer sees the SAME already-captured prompt.
+    expect(screen.getByTestId('b')).toHaveTextContent('captured');
+  });
+
+  it('install_pwa fires exactly once when appinstalled follows a button tap on one of two simultaneously-mounted consumers', async () => {
+    const user = userEvent.setup();
+    render(<TwoConsumers />);
+    fireOnWindow(makeBeforeInstallPromptEvent('accepted'));
+    await waitFor(() => expect(screen.getByTestId('a')).toHaveTextContent('captured'));
+    expect(screen.getByTestId('b')).toHaveTextContent('captured');
+
+    // Tap the button under mount point "a" only.
+    await user.click(screen.getByTestId('a').querySelector('button')!);
+    await waitFor(() => expect(track).toHaveBeenCalledWith('install_pwa'));
+    // The browser's own appinstalled follow-up must not double-count against
+    // mount point "b"'s independent (but shared-store) trackedInstall guard.
+    fireOnWindow(new Event('appinstalled'));
+    await waitFor(() => expect(screen.getByTestId('a')).toHaveTextContent('standalone'));
+    expect(screen.getByTestId('b')).toHaveTextContent('standalone');
+    expect(track).toHaveBeenCalledTimes(1);
   });
 });

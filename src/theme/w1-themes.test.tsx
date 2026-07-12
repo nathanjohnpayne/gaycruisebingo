@@ -303,6 +303,68 @@ describe('ThemeContext — Auto: match the day (specs/d15-more-menu.md § Theme)
     expect(screen.getByTestId('preference')).toHaveTextContent('seriously-pink');
     expect(screen.getByTestId('theme')).toHaveTextContent('seriously-pink');
   });
+
+  // Codex P2 on #232: `defaultTheme` used to carry the Player's cross-device
+  // pick (main.tsx's old `player?.theme ?? event?.defaultTheme ?? ...`), so a
+  // device with no local override started at `preference === 'auto'` and
+  // `autoThemeId` silently outranked the Player's saved pick as soon as a Day
+  // was current. `playerTheme` is now a distinct prop, adopted as the
+  // preference — never folded into the Auto resolution — so it outranks
+  // `autoThemeId` even though it arrives async after the Day's already known.
+  it('adopts an async-arriving playerTheme (cross-device pick) even with a current Day, on a device with no local override', () => {
+    const { rerender } = render(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty" playerTheme={null}>
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('preference')).toHaveTextContent('auto');
+    expect(screen.getByTestId('theme')).toHaveTextContent('get-sporty');
+
+    // The Player's saved cross-device pick arrives from Firestore after mount.
+    rerender(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty" playerTheme="seriously-pink">
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('preference')).toHaveTextContent('seriously-pink');
+    expect(screen.getByTestId('theme')).toHaveTextContent('seriously-pink');
+  });
+
+  it('never lets an async-arriving playerTheme override a local gcb.theme override', () => {
+    window.localStorage.setItem(STORAGE_KEY, 'seriously-pink');
+    const { rerender } = render(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty" playerTheme={null}>
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('preference')).toHaveTextContent('seriously-pink');
+
+    rerender(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty" playerTheme="get-sporty">
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('preference')).toHaveTextContent('seriously-pink');
+    expect(screen.getByTestId('theme')).toHaveTextContent('seriously-pink');
+  });
+
+  it('never lets an async-arriving playerTheme override an explicit in-session pick', async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty" playerTheme={null}>
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: 'pick seriously-pink' }));
+    expect(screen.getByTestId('preference')).toHaveTextContent('seriously-pink');
+
+    rerender(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty" playerTheme="get-sporty">
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('preference')).toHaveTextContent('seriously-pink');
+  });
 });
 
 describe('Theme metadata (specs/w1-themes.md)', () => {

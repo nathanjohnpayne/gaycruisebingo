@@ -150,6 +150,10 @@ function MoreRow({
   );
 }
 
+/** Elements the Tab-trap below will cycle between while a panel is open —
+ *  mirrors AcceptableUse.tsx's `FOCUSABLE_SELECTOR`. */
+const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 /**
  * A More sub-panel (Cruise schedule / Suggest a square / How to play / Admin):
  * reuses the app's existing sheet chrome (`.sheet-backdrop`/`.sheet`) so it
@@ -157,15 +161,37 @@ function MoreRow({
  * focus to the title on open and restores it to nothing in particular on
  * close (More itself regains focus naturally — these panels are reached from
  * a menu row, not a small icon trigger that benefits from a focus-restore
- * pin), closes on Escape or a backdrop click.
+ * pin), closes on Escape or a backdrop click. Traps Tab/Shift+Tab inside the
+ * panel while open (same pattern as BugReport.tsx / AcceptableUse.tsx) so
+ * keyboard and screen-reader users can't tab past Close into the obscured
+ * More menu or bottom nav behind the backdrop.
  */
 function MorePanel({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   const titleRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     titleRef.current?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      if (!focusable || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      // The title also holds focus (tabIndex=-1, the initial landing spot) but
+      // is deliberately excluded from FOCUSABLE_SELECTOR — treat it as
+      // preceding `first` so Shift+Tab from it still wraps to the end.
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === titleRef.current)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener('keydown', onKeyDown);
     return () => document.removeEventListener('keydown', onKeyDown);
@@ -174,6 +200,7 @@ function MorePanel({ title, onClose, children }: { title: string; onClose: () =>
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <div
+        ref={dialogRef}
         className="sheet more-panel"
         role="dialog"
         aria-modal="true"
