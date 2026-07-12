@@ -405,6 +405,7 @@ async function seed() {
       isFreeSpace: doc.data().isFreeSpace,
       status: doc.data().status,
       reportCount: doc.data().reportCount,
+      pool: doc.data().pool,
     })),
   );
   if (!report.ok) {
@@ -475,6 +476,7 @@ async function verify() {
       isFreeSpace: doc.data().isFreeSpace,
       status: doc.data().status,
       reportCount: doc.data().reportCount,
+      pool: doc.data().pool,
     })),
   );
   if (report.ok) {

@@ -12,8 +12,9 @@ export interface ThemeMeta {
   description: string;
 }
 
-// The eight Atlantis party themes, surfaced in the theme switcher. Descriptions
-// are copied verbatim from daily-cards-spec § "Theme reference".
+// The eight party themes, surfaced in the theme switcher. Descriptions track
+// daily-cards-spec § "Theme reference", paraphrased where needed to keep the
+// brand mark out of user-facing copy (PRD non-goal; see w1-themes guard test).
 export const THEMES: ThemeMeta[] = [
   {
     id: 'neon-playground',
@@ -48,7 +49,7 @@ export const THEMES: ThemeMeta[] = [
     label: 'Summer White',
     emoji: '🤍',
     description:
-      "Atlantis's pinnacle party. Dress up or down in white for a sexy, creative, irreverent night under the stars.",
+      'The pinnacle white party—dress up or down in white for a sexy, creative, irreverent night under the stars.',
   },
   {
     id: 'dog-tag',
