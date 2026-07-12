@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
-import { eventRef, itemsCol, boardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol } from '../data/paths';
+import { eventRef, itemsCol, boardRef, dayBoardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol } from '../data/paths';
 import { isReportHidden, isBanned, isSystemAuthor } from '../data/moderation';
-import { sortPlayers } from '../game/logic';
-import type { EventDoc, ItemDoc, BoardDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, MomentDoc, DoubtDoc } from '../types';
+import { sortPlayers, dayDealState, type DayDealState } from '../game/logic';
+import type { EventDoc, ItemDoc, BoardDoc, DayDef, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, MomentDoc, DoubtDoc } from '../types';
 
 // Both subs subscribe with includeMetadataChanges so the cache→server
 // transition is always observable: with the ADR 0006 persistent cache, a cold
@@ -200,6 +200,50 @@ export function useItems(enabled = true) {
 
 export function useBoard(uid: string | undefined) {
   return useDocSub<BoardDoc>(uid ? boardRef(uid) : null, `board:${uid ?? 'none'}`);
+}
+
+/**
+ * A Player's Day Card for one Day: the day-scoped Board subscription at
+ * events/{EVENT_ID}/days/{dayIndex}/boards/{uid} (daily-cards-spec § "Data
+ * model"). Pass `undefined` for either arg to open no subscription (e.g. before
+ * the viewer or the viewed Day is known). Named `useDayBoard` so the pre-1.5
+ * `useBoard(uid)` keeps its single-Board callers unchanged while day-aware
+ * surfaces move onto this one.
+ */
+export function useDayBoard(uid: string | undefined, dayIndex: number | undefined) {
+  const enabled = uid !== undefined && dayIndex !== undefined;
+  return useDocSub<BoardDoc>(
+    enabled ? dayBoardRef(dayIndex, uid) : null,
+    `dayboard:${uid ?? 'none'}:${dayIndex ?? 'none'}`,
+  );
+}
+
+/**
+ * The viewed Day's deal state for a Player: subscribes to the day-scoped Board
+ * and folds it with the DayDef schedule + the current clock through
+ * `dayDealState`, so a surface can distinguish `locked` (render the preview),
+ * `waking` (snapshot pending — show the "waking up" wait), `ready` (deal), and
+ * `dealt` (a Board exists) from ONE hook. The `board` and its `loading`/
+ * `hasServerData` flags are passed through so the caller can render the card
+ * once dealt. `state` is `undefined` until the DayDef and a server-backed Board
+ * snapshot are both known, so a first cache miss never reads as `ready`.
+ */
+export function useDayCard(
+  uid: string | undefined,
+  day: DayDef | undefined,
+  now: number = Date.now(),
+) {
+  const { data: board, loading, hasServerData } = useDayBoard(uid, day?.index);
+  const state: DayDealState | undefined =
+    day && hasServerData
+      ? dayDealState({
+          unlockAt: day.unlockAt,
+          snapshotItemIds: day.snapshotItemIds,
+          now,
+          hasBoard: !!board,
+        })
+      : undefined;
+  return { board, loading, hasServerData, state };
 }
 
 export function useMyPlayer(uid: string | undefined) {

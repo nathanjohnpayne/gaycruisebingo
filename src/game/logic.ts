@@ -101,19 +101,61 @@ function stratifiedPicks(pool: DealItem[], spicyRatio: number, rnd: () => number
   return interleavePicks(spicyPool.slice(0, spicyTaken), tamePool.slice(0, tameTaken));
 }
 
+/** Shuffle the whole pool and take the first 24 — no spicy/tame target. Used
+ * for tutorial (embark/farewell) Day Snapshots, which are seeded all-tame, so
+ * forcing a spicy ratio against them is meaningless (daily-cards-spec §
+ * "Unlock mechanics": "tutorial pools are all tame so they deal unstratified").
+ */
+function unstratifiedPicks(pool: DealItem[], rnd: () => number): DealItem[] {
+  return shuffle(pool, rnd).slice(0, 24);
+}
+
+/**
+ * Options for a per-Day deal (daily-cards-spec § "Unlock mechanics").
+ *   - `excludeIds`: Prompt ids already on this Player's earlier Day Cards, to be
+ *     kept off the new card (no-repeat-across-the-cruise). Exclusion is best-effort:
+ *     if honoring it would drop the usable pool below `MIN_POOL`, the pool is
+ *     exhausted (~80 main items ÷ 24/day ≈ 3⅓ Days) and the exclusion RESETS —
+ *     the full pool is used again, exactly the spec's reset boundary.
+ *   - `stratify`: false for all-tame tutorial pools (no spicy/tame target); the
+ *     default (true) keeps the 10-spicy/14-tame stratified composition.
+ */
+export interface DealOptions {
+  excludeIds?: ReadonlySet<string>;
+  stratify?: boolean;
+}
+
+/**
+ * Apply the no-repeat exclusion with the pool-exhaustion reset: drop every id in
+ * `excludeIds`, but if that would leave fewer than `MIN_POOL` Prompts to deal
+ * from, discard the exclusion and return the full pool (the cruise has cycled
+ * through the pool; repeats resume rather than starving the card). Returns the
+ * original array reference when there is nothing to exclude.
+ */
+function applyExclusion(pool: DealItem[], excludeIds?: ReadonlySet<string>): DealItem[] {
+  if (!excludeIds || excludeIds.size === 0) return pool;
+  const remaining = pool.filter((p) => !excludeIds.has(p.id));
+  return remaining.length >= MIN_POOL ? remaining : pool;
+}
+
 /** Deal a frozen 5x5 board: 24 sampled prompts + free center (index 12). */
 export function dealBoard(
   pool: DealItem[],
   freeText: string,
   seed: number,
   spicyRatio: number = 0.4,
+  opts: DealOptions = {},
 ): Cell[] {
+  // Honor the no-repeat exclusion BEFORE the MIN_POOL guard so the guard checks
+  // what will actually be dealt from; `applyExclusion` already resets the
+  // exclusion (returns the full pool) when honoring it would starve the deal.
+  const usablePool = applyExclusion(pool, opts.excludeIds);
   // A board needs MIN_POOL (24) non-free prompts; dealing from a smaller pool
   // would leave blank cells (itemId: null, empty text). Fail fast so callers
-  // (joinAndDeal) never persist a broken board. This guard fires before any
-  // stratification, so it is unaffected by ratio/backfill.
-  if (pool.length < MIN_POOL) {
-    throw new Error(`dealBoard needs at least ${MIN_POOL} prompts, received ${pool.length}.`);
+  // (joinAndDeal, dealDayCard) never persist a broken board. This guard fires
+  // before any stratification, so it is unaffected by ratio/backfill.
+  if (usablePool.length < MIN_POOL) {
+    throw new Error(`dealBoard needs at least ${MIN_POOL} prompts, received ${usablePool.length}.`);
   }
   const rnd = mulberry32(seed);
   // A malformed events/{id}.settings.spicyRatio (join-side only checks
@@ -123,7 +165,10 @@ export function dealBoard(
   // non-free cells, Codex #135). Clamp to a finite 0..1, falling back to the
   // default ratio when the value isn't usably numeric at all.
   const ratio = Number.isFinite(spicyRatio) ? Math.min(1, Math.max(0, spicyRatio)) : 0.4;
-  const picks = stratifiedPicks(pool, ratio, rnd);
+  const picks =
+    opts.stratify === false
+      ? unstratifiedPicks(usablePool, rnd)
+      : stratifiedPicks(usablePool, ratio, rnd);
   const cells: Cell[] = [];
   let p = 0;
   for (let i = 0; i < 25; i++) {
@@ -215,4 +260,33 @@ export function comparePlayers(a: Rankable, b: Rankable): number {
 
 export function sortPlayers<T extends Rankable>(players: T[]): T[] {
   return players.slice().sort(comparePlayers);
+}
+
+/**
+ * The four states a Day Card can be in for a given Player, derived purely from
+ * the DayDef schedule, the current clock, and whether the Player already has a
+ * Board for that Day (daily-cards-spec § "Unlock mechanics"). This is the single
+ * gate both the deal write path (`dealDayCard`) and the client (`useDayCard`)
+ * read, so "when do we deal / what do we render" has one source of truth.
+ *
+ *   - `locked` — `now < unlockAt`: the Day is not open. Render the locked
+ *     preview; never deal.
+ *   - `waking` — unlocked, but `snapshotItemIds` is not yet stamped (scheduler
+ *     lag). Show the "waking up" wait state; NEVER deal from a live pool.
+ *   - `ready` — unlocked and the Day Snapshot is present, no Board yet: deal.
+ *   - `dealt` — the Player already has a Board for this Day: a no-op (re-opening
+ *     an already-dealt Day never re-deals).
+ */
+export type DayDealState = 'locked' | 'waking' | 'ready' | 'dealt';
+
+export function dayDealState(params: {
+  unlockAt: number;
+  snapshotItemIds?: string[];
+  now: number;
+  hasBoard: boolean;
+}): DayDealState {
+  if (params.hasBoard) return 'dealt';
+  if (params.now < params.unlockAt) return 'locked';
+  if (!params.snapshotItemIds || params.snapshotItemIds.length === 0) return 'waking';
+  return 'ready';
 }
