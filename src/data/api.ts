@@ -271,8 +271,16 @@ export async function joinAndDeal(u: User): Promise<boolean> {
   // Day, on first open (`dealDayCard`) — so join only ensures the Player's identity
   // row exists (name/avatar + zeroed cruise aggregates) for the leaderboard and the
   // per-Day stat folds. Legacy events (no `days[]`) keep the exact pre-1.5 behavior.
-  const joinEventSnap = await getDoc(rawEvent()).catch(() => null);
-  const joinEventData = joinEventSnap?.exists() ? (joinEventSnap.data() as Partial<EventDoc>) : null;
+  //
+  // FAIL CLOSED on a read ERROR (CodeRabbit #247): a genuine event-read failure
+  // must NOT be guessed as legacy mode — that would misroute a real daily event
+  // down the legacy `events/{eventId}/boards/{uid}` path the day-scoped rules deny.
+  // So the read is NOT `.catch`-swallowed: a transient failure propagates and
+  // runDeal surfaces the retryable dealError, exactly like any other deal failure.
+  // A readable-but-empty/missing event (no `days[]`) is a legitimate legacy signal;
+  // the threshold/ban fields then fall open on the absent keys as before.
+  const joinEventSnap = await getDoc(rawEvent());
+  const joinEventData = joinEventSnap.exists() ? (joinEventSnap.data() as Partial<EventDoc>) : null;
   const daily = Array.isArray(joinEventData?.days) && joinEventData.days.length > 0;
 
   if (daily) {

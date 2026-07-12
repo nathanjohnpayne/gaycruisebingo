@@ -532,13 +532,13 @@ describe('joinAndDeal community auto-hide at the deal path (specs/w2-admin-conso
     expect(H.batchCommit).toHaveBeenCalledTimes(1);
   });
 
-  it('falls open when the event doc is unreadable — the deal proceeds unfiltered', async () => {
-    // The event read fails (offline / permission race). joinAndDeal must fall open
-    // to no threshold filtering rather than blocking the deal, exactly like a
-    // missing profile falls back to the auth identity.
+  it('falls open on a MISSING threshold — a readable event with no settings deals unfiltered', async () => {
+    // A readable event doc with no `settings.reportHideThreshold` must fall open to
+    // no filtering (not block the deal), exactly like a missing profile falls back
+    // to the auth identity. EVENT_LEGACY is readable + has no days → legacy mode.
     const docs = activeItems(24).map((it) => ({ data: () => ({ ...it, reportCount: 50 }) }));
     H.getDoc
-      .mockRejectedValueOnce(new Error('offline')) // event read fails — caught, falls open + legacy mode
+      .mockResolvedValueOnce(EVENT_LEGACY) // readable, no threshold → falls open, legacy mode
       .mockResolvedValueOnce({ exists: () => false }) // no Board yet
       .mockResolvedValueOnce({ exists: () => false }); // no saved profile
     H.getDocs.mockResolvedValueOnce({ docs });
@@ -548,6 +548,16 @@ describe('joinAndDeal community auto-hide at the deal path (specs/w2-admin-conso
     const boardWrite = H.batchSet.mock.calls[0][1] as BoardDoc;
     expect(boardWrite.cells.filter((c) => !c.free)).toHaveLength(24); // still deals
     expect(H.batchCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it('FAILS CLOSED when the event-mode read errors — never guesses legacy (CodeRabbit #247)', async () => {
+    // A genuine event-read failure must propagate (retryable dealError), not be
+    // guessed as legacy mode — guessing legacy would misroute a real daily event to
+    // the day-scoped-rules-denied legacy board. The read is the FIRST getDoc.
+    H.getDoc.mockRejectedValueOnce(new Error('offline'));
+
+    await expect(joinAndDeal(SIGNED_IN)).rejects.toThrow(/offline/);
+    expect(H.batchCommit).not.toHaveBeenCalled(); // no board/player written on a mode-read failure
   });
 });
 
