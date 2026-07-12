@@ -1,0 +1,153 @@
+// Shared multi-Day seed for the Phase 1.5 daily-cards e2e verification pass.
+// Builds on `seedEmulatorEvent` (which seeds the main ITEMS pool + the Event
+// doc) and layers on: (1) the two curated tutorial pools (embark/farewell) as
+// real item docs, and (2) a five-Day `days[]` schedule that makes EVERY Day
+// state reachable in one Event —
+//   0  embark   (tutorial, embark pool)   unlocked, snapshot-stamped
+//   1  main A   (welcome-aboard)          unlocked, snapshot-stamped
+//   2  main B   (get-sporty)              unlocked, snapshot-stamped  ← today (default)
+//   3  farewell (tutorial, farewell pool) unlocked, snapshot-stamped
+//   4  main C   (glamiators)              LOCKED (future, no snapshot)
+// The two unlocked MAIN Days (1, 2) both draw from the full 80-item main pool,
+// so their cards are disjoint (the no-repeats-across-the-cruise exclusion keeps
+// them from overlapping too). `now`-relative `unlockAt`s mirror d15-day-cards so
+// the fixture never rots against a wall-clock date.
+import { collection, doc, getDoc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
+import { expect, type Page } from '@playwright/test';
+import { seedEmulatorEvent } from './seed';
+import { EVENT_ID } from './env';
+// @ts-expect-error — plain-JS seed script, no type declarations (see support/seed.ts).
+import { ITEMS, EMBARK_ITEMS, FAREWELL_ITEMS, seedItemDocId } from '../../../scripts/seed.mjs';
+
+const HOUR = 3_600_000;
+
+export interface SeededDays {
+  testEnv: RulesTestEnvironment;
+  /** All main-pool item doc ids (the snapshot for Days 1, 2). */
+  mainSnapshotIds: string[];
+  embarkSnapshotIds: string[];
+  farewellSnapshotIds: string[];
+}
+
+type SeedItem = { text: string; spicy?: boolean };
+
+const idsOf = (items: SeedItem[]): string[] => items.map((it) => seedItemDocId(it.text));
+
+/**
+ * Seed the full five-Day event + all three pools into the running emulator,
+ * with the four reachable Day states stamped. Optionally freezes the standings
+ * (`frozenAt`) for the farewell-podium path.
+ */
+export async function seedDailyEvent(opts: { frozenAt?: number } = {}): Promise<SeededDays> {
+  const testEnv = await seedEmulatorEvent();
+  const now = Date.now();
+  const mainSnapshotIds = idsOf(ITEMS as SeedItem[]);
+  const embarkSnapshotIds = idsOf(EMBARK_ITEMS as SeedItem[]);
+  const farewellSnapshotIds = idsOf(FAREWELL_ITEMS as SeedItem[]);
+
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    // The two tutorial pools are NOT part of the main ITEMS seedEmulatorEvent
+    // wrote — deal-from-snapshot resolves each id to its item doc, so those docs
+    // must exist. pool is stamped for fidelity; dealDayCard reads only
+    // text/spicy/isFreeSpace (pool membership is the snapshot itself).
+    for (const { items, pool } of [
+      { items: EMBARK_ITEMS as SeedItem[], pool: 'embark' },
+      { items: FAREWELL_ITEMS as SeedItem[], pool: 'farewell' },
+    ]) {
+      for (const it of items) {
+        await setDoc(doc(db, 'events', EVENT_ID, 'items', seedItemDocId(it.text)), {
+          text: it.text,
+          createdBy: 'seed',
+          createdAt: now,
+          isFreeSpace: false,
+          status: 'active',
+          reportCount: 0,
+          spicy: it.spicy === true,
+          pool,
+        });
+      }
+    }
+
+    await updateDoc(doc(db, 'events', EVENT_ID), {
+      ...(opts.frozenAt != null ? { frozenAt: opts.frozenAt } : {}),
+      days: [
+        { index: 0, date: '2026-07-15', port: 'Trieste', portEmoji: '🚢', theme: 'welcome-aboard', pool: 'embark', tutorial: true, unlockAt: now - 100 * HOUR, snapshotItemIds: embarkSnapshotIds },
+        { index: 1, date: '2026-07-16', port: 'Split', portEmoji: '🇭🇷', theme: 'welcome-aboard', pool: 'main', tutorial: false, unlockAt: now - 50 * HOUR, snapshotItemIds: mainSnapshotIds },
+        { index: 2, date: '2026-07-17', port: 'Valletta', portEmoji: '🇲🇹', theme: 'get-sporty', pool: 'main', tutorial: false, unlockAt: now - 10 * HOUR, snapshotItemIds: mainSnapshotIds },
+        { index: 3, date: '2026-07-24', port: 'Venice', portEmoji: '🇮🇹', theme: 'so-long-farewell', pool: 'farewell', tutorial: true, unlockAt: now - 30 * HOUR, snapshotItemIds: farewellSnapshotIds },
+        { index: 4, date: '2026-07-25', port: 'Corfu', portEmoji: '🇬🇷', theme: 'glamiators', pool: 'main', tutorial: false, unlockAt: now + 24 * HOUR },
+      ],
+    });
+  });
+
+  return { testEnv, mainSnapshotIds, embarkSnapshotIds, farewellSnapshotIds };
+}
+
+/** The default viewed Day (today) for the seeded schedule above: index 2. */
+export const TODAY_INDEX = 2;
+export const MAIN_A_INDEX = 1;
+export const EMBARK_INDEX = 0;
+export const FAREWELL_INDEX = 3;
+export const LOCKED_INDEX = 4;
+
+export interface PlayerStats {
+  squaresMarked?: number;
+  bingoCount?: number;
+  firstBingoAt?: number | null;
+  dayStats?: Record<string, { bingoCount: number; squaresMarked: number; firstBingoAt: number | null }>;
+}
+
+/** Read a Player row straight from the emulator, rules disabled. */
+export async function readPlayer(testEnv: RulesTestEnvironment, uid: string): Promise<PlayerStats> {
+  let data: Record<string, unknown> = {};
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const snap = await getDoc(doc(ctx.firestore(), 'events', EVENT_ID, 'players', uid));
+    data = (snap.data() as Record<string, unknown>) ?? {};
+  });
+  return data as PlayerStats;
+}
+
+/**
+ * Wait until a FULLY-DEALT day grid is on screen (25 cells, >=20 non-free
+ * squares carrying text) whose content differs from `differsFrom` — so a read
+ * never lands on the stale previous-Day grid during the "Dealing…" transient
+ * after a Day switch. Returns the settled grid's cell texts. (Mirrors the
+ * helper d15-day-cards.spec.ts uses.)
+ */
+export async function readDealtDayGrid(page: Page, differsFrom?: string): Promise<string[]> {
+  await expect
+    .poll(
+      async () => {
+        const texts = await page.locator('.grid .cell').allTextContents();
+        if (texts.length !== 25) return false;
+        const dealt = texts.filter((t, i) => i !== 12 && t.trim().length > 0).length >= 20;
+        return dealt && (differsFrom === undefined || texts.join('|') !== differsFrom);
+      },
+      { timeout: 20_000 },
+    )
+    .toBe(true);
+  return page.locator('.grid .cell').allTextContents();
+}
+
+/**
+ * Dismiss the once-per-event first-open coach overlay (#214) if present — its
+ * scrim otherwise intercepts Day-switcher taps. Idempotent / best-effort.
+ */
+export async function dismissCoach(page: Page): Promise<void> {
+  const cta = page.getByRole('button', { name: /deal me in/i });
+  if (await cta.isVisible().catch(() => false)) await cta.click();
+}
+
+/** Read all Moment docs from the emulator (the Feed's server truth). */
+export async function readMoments(
+  testEnv: RulesTestEnvironment,
+): Promise<Array<{ id: string; kind: string; uid: string; displayName: string; dayIndex?: number }>> {
+  let out: Array<{ id: string; kind: string; uid: string; displayName: string; dayIndex?: number }> = [];
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const col = await getDocs(collection(ctx.firestore(), 'events', EVENT_ID, 'moments'));
+    out = col.docs.map((d) => ({ id: d.id, ...(d.data() as Record<string, unknown>) })) as never;
+  });
+  return out;
+}
