@@ -254,6 +254,41 @@ describe('dealDayCard — snapshot-gated lazy dealing', () => {
     for (const id of nonFree) expect(usedIds).not.toContain(id);
   });
 
+  it('excludes Prompts from a LATER Day Card already dealt (out-of-order mid-cruise open)', async () => {
+    // A mid-cruise joiner opens the latest unlocked Day (2) first, then opens an
+    // EARLIER Day (1). The Day-1 deal must still exclude the Prompts already on
+    // the Day-2 card — the no-repeat exclusion spans ALL of the Player's Day
+    // Cards, not just lower indexes. On the old lower-index-only read, dealing
+    // Day 1 only saw Day 0 and could repeat Day 2's Prompts.
+    const ids = seedPool(50);
+    const usedIds = ids.slice(0, 24);
+    const usedCells: Cell[] = usedIds.map((id, i) => ({
+      index: i,
+      itemId: id,
+      text: id,
+      free: false,
+      marked: false,
+      markedAt: null,
+    }));
+    // Only the LATER Day (2) has a card so far; Day 1 is being dealt now.
+    H.dayBoards.set(2, { uid: U.uid, cells: usedCells });
+    H.event = {
+      days: [
+        mkDay({ index: 0, unlockAt: PAST, snapshotItemIds: ids }),
+        mkDay({ index: 1, unlockAt: PAST, snapshotItemIds: ids }),
+        mkDay({ index: 2, unlockAt: PAST, snapshotItemIds: ids }),
+      ],
+      settings: { spicyRatio: 0.4 },
+    };
+
+    const dealt = await dealDayCard(U, 1);
+
+    expect(dealt).toBe(true);
+    const board = writtenBoard();
+    const nonFree = board!.data.cells.filter((c) => !c.free).map((c) => c.itemId as string);
+    for (const id of nonFree) expect(usedIds).not.toContain(id);
+  });
+
   it('deals an all-tame tutorial Day unstratified without spicy-ratio starvation', async () => {
     const ids = seedPool(30, 'embark');
     H.event = {

@@ -118,9 +118,15 @@ describe('dayDealState (d15-dealing deal gate)', () => {
     expect(dayDealState({ ...base, now: 500 })).toBe('locked');
   });
 
-  it('is waking when unlocked but the snapshot is not yet stamped', () => {
+  it('is waking only when the snapshot is ABSENT (mirrors isDueForSnapshot)', () => {
     expect(dayDealState({ ...base, snapshotItemIds: undefined })).toBe('waking');
-    expect(dayDealState({ ...base, snapshotItemIds: [] })).toBe('waking');
+  });
+
+  it('is ready (not waking) when a Day is stamped with an EMPTY pool — no forever-wait', () => {
+    // isDueForSnapshot treats [] as already-stamped, so [] must NOT class as
+    // waking or the client waits on a scheduler write that never comes; it falls
+    // through to the deal path's thin-pool failure instead.
+    expect(dayDealState({ ...base, snapshotItemIds: [] })).toBe('ready');
   });
 
   it('is ready when unlocked and the snapshot is present with no Board yet', () => {

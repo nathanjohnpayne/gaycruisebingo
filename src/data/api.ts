@@ -424,15 +424,21 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
     .filter(({ data }) => data.isFreeSpace !== true)
     .map(({ id, data }) => ({ id, text: String(data.text ?? ''), spicy: data.spicy === true }));
 
-  // No repeats across the cruise: exclude every Prompt already on this Player's
-  // EARLIER Day Cards (daily-cards-spec § "No repeats across the cruise"). Reading
-  // days 0..dayIndex-1 for this uid; `dealBoard`'s exclusion resets on its own
-  // once the pool is exhausted, so we always pass the full history.
-  const earlier = await Promise.all(
-    Array.from({ length: dayIndex }, (_, i) => getDoc(rawDayBoard(i, u.uid)).catch(() => null)),
+  // No repeats across the cruise: exclude every Prompt already on ANY OTHER Day
+  // Card this Player holds (daily-cards-spec § "No repeats across the cruise") —
+  // NOT just lower indexes. A mid-cruise joiner opens the LATEST unlocked Day
+  // first (the Board's default), so an earlier Day can be dealt AFTER a later
+  // one; reading only days 0..dayIndex-1 would let that later card's Prompts
+  // repeat. `dealBoard`'s exclusion resets on its own once the pool is exhausted,
+  // so we always pass the full cross-cruise history.
+  const otherCards = await Promise.all(
+    days
+      .map((_, i) => i)
+      .filter((i) => i !== dayIndex)
+      .map((i) => getDoc(rawDayBoard(i, u.uid)).catch(() => null)),
   );
   const excludeIds = new Set<string>();
-  for (const snap of earlier) {
+  for (const snap of otherCards) {
     if (!snap || !snap.exists()) continue;
     const cells = (snap.data() as { cells?: Cell[] }).cells ?? [];
     for (const c of cells) if (c.itemId) excludeIds.add(c.itemId);

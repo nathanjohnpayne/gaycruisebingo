@@ -271,9 +271,15 @@ export function sortPlayers<T extends Rankable>(players: T[]): T[] {
  *
  *   - `locked` — `now < unlockAt`: the Day is not open. Render the locked
  *     preview; never deal.
- *   - `waking` — unlocked, but `snapshotItemIds` is not yet stamped (scheduler
- *     lag). Show the "waking up" wait state; NEVER deal from a live pool.
- *   - `ready` — unlocked and the Day Snapshot is present, no Board yet: deal.
+ *   - `waking` — unlocked, but `snapshotItemIds` is still ABSENT (null/undefined
+ *     — scheduler lag). This mirrors the scheduler's own `isDueForSnapshot`
+ *     (`snapshotItemIds == null`) EXACTLY, so a Day the scheduler stamped with an
+ *     empty pool is never classed `waking` forever. Show the "waking up" wait
+ *     state; NEVER deal from a live pool.
+ *   - `ready` — unlocked and the Day Snapshot is stamped (present — possibly an
+ *     empty `[]` for a Day with no eligible Prompts), no Board yet: deal. An empty
+ *     stamped pool falls through to the deal path's thin-pool failure rather than
+ *     waiting on a scheduler write that will never come.
  *   - `dealt` — the Player already has a Board for this Day: a no-op (re-opening
  *     an already-dealt Day never re-deals).
  */
@@ -287,6 +293,6 @@ export function dayDealState(params: {
 }): DayDealState {
   if (params.hasBoard) return 'dealt';
   if (params.now < params.unlockAt) return 'locked';
-  if (!params.snapshotItemIds || params.snapshotItemIds.length === 0) return 'waking';
+  if (params.snapshotItemIds == null) return 'waking';
   return 'ready';
 }
