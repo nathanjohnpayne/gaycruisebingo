@@ -33,6 +33,7 @@ const FUTURE = () => NOW() + 3600_000;
 
 let testEnv: RulesTestEnvironment;
 const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
+const unauthDb = () => testEnv.unauthenticatedContext().firestore();
 const at = (p: string) => `events/${EVENT}/${p}`;
 
 const board = (uid: string, dayIndex: number) => ({
@@ -47,7 +48,12 @@ beforeAll(async () => {
   const host = process.env.FIRESTORE_EMULATOR_HOST ?? '127.0.0.1:8080';
   const [hostname, port] = host.split(':');
   testEnv = await initializeTestEnvironment({
-    projectId: 'demo-gaycruisebingo-rules',
+    // Unique per-file projectId (like every other w-suite) so this suite's
+    // `clearFirestore()` never wipes another concurrently-running file's seed —
+    // sharing `demo-gaycruisebingo-rules` with w0/harness raced their clears and
+    // surfaced as flaky "Null value error" denials (Codex P2). `fileParallelism:
+    // false` in vitest.rules.config.ts is the belt to this suspenders.
+    projectId: 'demo-gaycruisebingo-d15-rules',
     firestore: {
       host: hostname,
       port: Number(port),
@@ -101,6 +107,13 @@ beforeEach(async () => {
 describe('d15-firestore-rules — day-scoped boards + unlock gate', () => {
   it('DENIES a Board write before that Day unlockAt (locked Day 1)', async () => {
     // Deal (create) and mark (update) both denied while the Day is locked.
+    // Create (no prior doc):
+    await assertFails(setDoc(doc(db(ALICE), at(`days/1/boards/${ALICE}`)), board(ALICE, 1)));
+    // Update (owner's own EXISTING board) is denied too — seed it with rules
+    // disabled, then the owner's pre-unlock self-update is still gated (q8).
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), at(`days/1/boards/${ALICE}`)), board(ALICE, 1));
+    });
     await assertFails(setDoc(doc(db(ALICE), at(`days/1/boards/${ALICE}`)), board(ALICE, 1)));
   });
 
@@ -124,6 +137,35 @@ describe('d15-firestore-rules — day-scoped boards + unlock gate', () => {
     // …nor on the locked Day 1.
     await assertFails(setDoc(doc(db(BOB), at(`days/1/boards/${ALICE}`)), board(ALICE, 1)));
   });
+
+  it('read gate: owner + admin ALLOWED, non-owner + unauth DENIED', async () => {
+    // The Board is PRIVATE to its owner (ADR 0002); reads stay ungated by unlock
+    // so seed a locked-Day board and prove the read arm independent of the write
+    // gate (q6). Owner and admin may inspect; a peer and an anon caller may not.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), at(`days/1/boards/${ALICE}`)), board(ALICE, 1));
+    });
+    await assertSucceeds(getDoc(doc(db(ALICE), at(`days/1/boards/${ALICE}`))));
+    await assertSucceeds(getDoc(doc(db(ADMIN), at(`days/1/boards/${ALICE}`))));
+    await assertFails(getDoc(doc(db(BOB), at(`days/1/boards/${ALICE}`))));
+    await assertFails(getDoc(doc(unauthDb(), at(`days/1/boards/${ALICE}`))));
+  });
+
+  it('DENIES a Board write on an out-of-range or non-numeric dayIndex (safe-fail lookup)', async () => {
+    // The unlock lookup indexes `days[int(dayIndex)]`; an out-of-range index or a
+    // non-numeric segment makes the lookup error, which DENIES — the safe default
+    // (q6). Both target ALICE's own uid so only the index/lookup is under test.
+    await assertFails(setDoc(doc(db(ALICE), at(`days/9/boards/${ALICE}`)), board(ALICE, 9)));
+    await assertFails(setDoc(doc(db(ALICE), at(`days/x/boards/${ALICE}`)), board(ALICE, 0)));
+  });
+
+  it('DENIES a Board write on a non-canonical day alias (e.g. "00")', async () => {
+    // `int("00") == 0` reads Day 0's (unlocked) unlockAt, but `days/00/...` is a
+    // DISTINCT doc path — accepting it would mint a PARALLEL Day-0 board under an
+    // alias, duplicating the one-board-per-Day contract. The canonical-day guard
+    // rejects it even though the underlying Day is unlocked (Codex P2).
+    await assertFails(setDoc(doc(db(ALICE), at(`days/00/boards/${ALICE}`)), board(ALICE, 0)));
+  });
 });
 
 describe('d15-firestore-rules — pending/rejected item visibility', () => {
@@ -137,6 +179,14 @@ describe('d15-firestore-rules — pending/rejected item visibility', () => {
     await assertSucceeds(getDoc(doc(db(ADMIN), at('items/rejected1'))));
     await assertFails(getDoc(doc(db(ALICE), at('items/rejected1'))));
     await assertFails(getDoc(doc(db(BOB), at('items/rejected1'))));
+  });
+
+  it('unauthenticated reads of pending/rejected items are DENIED', async () => {
+    // The read gate requires `signedIn()`; an anon caller sees neither the
+    // pending queue nor rejected audit rows regardless of the submitter carve-out
+    // (q-). This pins the `signedIn()` floor beneath the status-based branches.
+    await assertFails(getDoc(doc(unauthDb(), at('items/pending1'))));
+    await assertFails(getDoc(doc(unauthDb(), at('items/rejected1'))));
   });
 });
 
@@ -169,6 +219,14 @@ describe('d15-firestore-rules — day-meta firstBingo write-once', () => {
     // A future day's canonical honor doc can't be squatted before it unlocks —
     // the create is gated on unlockAt exactly like the Board write.
     await assertFails(setDoc(doc(db(ALICE), at('days/1/meta/1')), honor(ALICE)));
+  });
+
+  it('DENIES a firstBingo create on a non-canonical day alias (e.g. "00")', async () => {
+    // `metaId == dayIndex` alone passes for `days/00/meta/00`, and `int("00") == 0`
+    // reads Day 0's (unlocked) unlockAt — but the canonical-day guard rejects the
+    // alias so a SECOND write-once honor slot can't be minted at `meta/00` beside
+    // the canonical `meta/0` (Codex P2).
+    await assertFails(setDoc(doc(db(ALICE), at('days/00/meta/00')), honor(ALICE)));
   });
 });
 
