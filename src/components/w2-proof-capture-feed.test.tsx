@@ -34,6 +34,7 @@ vi.mock('firebase/firestore', () => {
   return {
     doc: (...args: unknown[]) => makeRef('doc', args),
     collection: (...args: unknown[]) => makeRef('collection', args),
+    collectionGroup: (...args: unknown[]) => makeRef('collectionGroup', args),
     query: (...args: unknown[]) => ({ query: args }),
     where: (...args: unknown[]) => ({ where: args }),
     onSnapshot: H.onSnapshot,
@@ -57,14 +58,19 @@ type SnapCb = (snap: unknown) => void;
 // doc, so existing call sites — `sub.fire(colSnap([...]))` — keep working.
 const emptyDocSnap = { exists: () => false, data: () => undefined, metadata: { fromCache: false } };
 function captureOnNext(): { fire: (proofs: unknown, moments?: unknown, event?: unknown) => void } {
-  const captured: { proofs: SnapCb | null; moments: SnapCb | null; event: SnapCb | null } = {
+  const captured: { proofs: SnapCb | null; moments: SnapCb | null; event: SnapCb | null; tally: SnapCb | null } = {
     proofs: null,
     moments: null,
     event: null,
+    tally: null,
   };
   H.onSnapshot.mockImplementation((target: unknown, _options: unknown, onNext: SnapCb) => {
+    const kind = target && typeof target === 'object' ? (target as { kind?: string }).kind : undefined;
     if (target && typeof target === 'object' && 'query' in (target as object)) captured.proofs = onNext;
-    else if (target && typeof target === 'object' && (target as { kind?: string }).kind === 'doc') captured.event = onNext;
+    else if (kind === 'doc') captured.event = onNext;
+    // #216: useFeed's third stream (useTallyCards) is a `collectionGroup` sub over
+    // every Tally marker — route it separately so it never clobbers the moments slot.
+    else if (kind === 'collectionGroup') captured.tally = onNext;
     else captured.moments = onNext;
     return () => {};
   });
@@ -75,6 +81,9 @@ function captureOnNext(): { fire: (proofs: unknown, moments?: unknown, event?: u
         captured.proofs!(proofs);
         captured.moments!(moments);
         captured.event?.(event);
+        // Deliver an empty Tally-Card stream so useFeed's tally half stops loading;
+        // this suite exercises the proof side (Tally Cards have their own suite).
+        captured.tally?.(colSnap([]));
       });
     },
   };

@@ -33,6 +33,10 @@ vi.mock('firebase/firestore', () => {
   return {
     doc: (...args: unknown[]) => makeRef('doc', args),
     collection: (...args: unknown[]) => makeRef('collection', args),
+    // #216: useFeed now composes useTallyCards, which opens a collectionGroup
+    // subscription over every Tally marker. Stubbed so the merged-Feed hook
+    // renders; the tally stream is delivered empty via the existing `col` slot.
+    collectionGroup: (...args: unknown[]) => makeRef('collectionGroup', args),
     query: (...args: unknown[]) => ({ query: args }),
     where: (...args: unknown[]) => ({ where: args }),
     onSnapshot: H.onSnapshot,

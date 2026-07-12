@@ -7,6 +7,24 @@ body,
   margin: 0;
   min-height: 100%;
 }
+/* ---------- text size (specs/d15-text-size.md) ----------
+   `--text-scale` is the multiplier the S/M/L pick (More menu § "Text size")
+   resolves to; `useTextSize.ts` stamps `data-text-size` on `<html>` to pick
+   the override. Medium (the default) needs no override — the unscaled
+   values below already ARE the medium baseline. Only the Square's base
+   type (`.cell`, explicit clamp below) and generic body copy (`body`'s own
+   font-size, which relative/em-sized text inherits from) read this
+   variable — badges, chips, and chrome stay on their own fixed px sizes
+   and never scale (daily-cards-spec § "More menu" item 3). */
+:root {
+  --text-scale: 1;
+}
+:root[data-text-size='small'] {
+  --text-scale: 0.9;
+}
+:root[data-text-size='large'] {
+  --text-scale: 1.15;
+}
 body {
   background:
     radial-gradient(60% 40% at 10% -10%, color-mix(in srgb, var(--primary) 32%, transparent), transparent 60%),
@@ -14,6 +32,7 @@ body {
     var(--bg);
   color: var(--ink);
   font-family: 'Oswald', 'Helvetica Neue', Arial, sans-serif;
+  font-size: calc(100% * var(--text-scale, 1));
   -webkit-font-smoothing: antialiased;
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
     env(safe-area-inset-left);
@@ -136,8 +155,10 @@ a {
   /* >=44px tap target (Apple HIG one-handed-reachability guidance). */
   min-height: 44px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   text-align: center;
   padding: 10px 8px;
   border-radius: 12px;
@@ -152,6 +173,15 @@ a {
   color: var(--ink);
   border-color: var(--border);
   background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+/* Card/Feed/Ranks Lucide glyphs + the signed-out More fallback (daily-cards-
+   spec § "Iconography — Lucide"): sit above the label, sized to stay inside
+   the tab's 44px tap target. */
+.tab-icon,
+.tab-ellipsis {
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.8;
 }
 
 /* ---------- card ---------- */
@@ -203,7 +233,11 @@ a {
   justify-content: center;
   text-align: center;
   padding: 4px;
-  font-size: clamp(8px, 2.3vw, 12px);
+  /* The S/M/L ceiling (specs/d15-text-size.md) — `--text-scale` never grows
+     this past what the auto-fit guard in Board.tsx then measures against;
+     `.cell-text`'s own inline font-size (set by the guard) is what a Square
+     actually renders at, capped by (never exceeding) this computed value. */
+  font-size: calc(clamp(8px, 2.3vw, 12px) * var(--text-scale, 1));
   font-weight: 600;
   line-height: 1.05;
   word-break: break-word;
@@ -272,7 +306,13 @@ a {
 }
 .free-prompt {
   max-width: 100%;
-  font-size: clamp(7px, 1.9vw, 10px);
+  /* S/M/L pick (specs/d15-text-size.md, PR #237 Codex finding): the free
+     centre Square's prompt is the one Square that never goes through
+     `SquareText`'s auto-fit guard (its text is a fixed, day-scoped string,
+     not measured against the cell box), but it still needs to honor the
+     Player's text-size pick like every other Square's prompt does — same
+     `--text-scale` multiplier `.cell`'s own font-size ceiling reads. */
+  font-size: calc(clamp(7px, 1.9vw, 10px) * var(--text-scale, 1));
   font-weight: 700;
   line-height: 1.05;
 }
@@ -377,6 +417,12 @@ a {
   color: var(--ink);
   font-size: 13px;
   font-weight: 600;
+}
+.day-lock-icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+  vertical-align: -2px;
 }
 .day-lock-caption {
   text-align: center;
@@ -544,6 +590,45 @@ a {
   box-shadow: 0 0 10px var(--shadow);
 }
 
+/* ---------- per-Day First to BINGO honors strip (#212) ---------- */
+.lb-honors {
+  margin: 2px 0 12px;
+}
+.lb-honors-title {
+  color: var(--dim);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.lb-honors-strip {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lb-honor {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 40px;
+  padding: 5px 11px;
+  font-size: 12px;
+}
+.lb-honor-day {
+  color: var(--dim);
+  font-weight: 600;
+}
+.lb-honor-name {
+  color: var(--ink);
+  font-weight: 700;
+}
+
 /* ---------- lists (leaderboard + items) ---------- */
 .list {
   display: flex;
@@ -667,6 +752,27 @@ a {
   box-shadow: 0 0 12px var(--shadow);
 }
 
+/* ---------- text size switcher (specs/d15-text-size.md) ---------- */
+.text-size {
+  display: flex;
+  gap: 8px;
+  padding: 6px 2px 10px;
+}
+.text-size-chip {
+  flex: 1;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 40px;
+  padding: 8px 12px;
+  font-size: 12px;
+  text-align: center;
+}
+.text-size-chip.active {
+  border-color: var(--primary);
+  box-shadow: 0 0 12px var(--shadow);
+}
+
 /* ---------- celebration ---------- */
 .celebrate {
   position: fixed;
@@ -752,6 +858,43 @@ a {
   font-weight: 600;
   margin-bottom: 12px;
 }
+/* ProofSheet's title row + dismiss `x` (daily-cards-spec § "Iconography —
+   Lucide" › Claim sheet). Other sheets keep a bare `.sheet-title` — this
+   wrapper is opt-in, only where a `.sheet-dismiss` sits alongside it. */
+.sheet-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.sheet-header .sheet-title {
+  margin-bottom: 0;
+}
+.sheet-dismiss {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: -6px -6px 0 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.sheet-dismiss:hover,
+.sheet-dismiss:focus-visible {
+  color: var(--ink);
+}
+.sheet-dismiss svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.8;
+}
 /* The social heat line (#211): "🔥 Marked by N others" under the sheet title. */
 .heat-line {
   font-size: 12px;
@@ -770,6 +913,12 @@ a {
   min-width: 120px;
   text-align: center;
   cursor: pointer;
+}
+.photo-affordance-icon {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2;
+  vertical-align: -3px;
 }
 /* The file input is visually hidden but focusable (Codex P2, #211): tabbing lands
    on it, so surface the focus ring on the pill the user actually sees. */
@@ -828,6 +977,12 @@ a {
 .seg-btn.on {
   border-color: var(--primary);
   box-shadow: 0 0 10px var(--shadow);
+}
+.seg-btn-icon {
+  width: 15px;
+  height: 15px;
+  stroke-width: 2;
+  vertical-align: -3px;
 }
 .proof-body {
   min-height: 90px;
@@ -1171,11 +1326,14 @@ a {
   padding: 8px 14px;
   font-size: 11px;
 }
-/* Stack above .tabs (61px = its own height) — see specs/w1-pwa.md. The
-   inverted --toast-index offset above still applies on top of this base. */
+/* Stack above .tabs (75px = its own height) instead of hiding it — see specs/w1-pwa.md.
+   Was 61px before the Lucide icon row (#220) stacked a 20px icon + 2px gap above the
+   label: .tabs padding (8+8) + .tab padding (10+10) + icon (20) + gap (2) + label
+   line (~16) ≈ 75px. The inverted --toast-index offset above still applies on top of
+   this base so stacked toasts (#219) sit above one another. */
 body:has(.tabs) .install-prompt,
 body:has(.tabs) .update-prompt {
-  bottom: calc(61px + env(safe-area-inset-bottom) + ((var(--toast-max-index, 1) - var(--toast-index, 0)) * var(--toast-slot-height)));
+  bottom: calc(75px + env(safe-area-inset-bottom) + ((var(--toast-max-index, 1) - var(--toast-index, 0)) * var(--toast-slot-height)));
 }
 /* Reserve extra .app bottom clearance while a toast is up, ~64px/toast — see
    specs/w1-pwa.md for the (unverified, jsdom-has-no-layout) estimate rationale.
@@ -1656,6 +1814,28 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 }
 .more-row .avatar {
   flex: none;
+}
+/* Lucide row/section chrome (daily-cards-spec § "Iconography — Lucide"). */
+.more-row-icon {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  stroke-width: 1.8;
+  color: var(--dim);
+}
+.more-row-chevron {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
+  color: var(--dim);
+}
+.more-section-icon {
+  width: 16px;
+  height: 16px;
+  stroke-width: 1.8;
+  vertical-align: -3px;
+  margin-right: 2px;
 }
 .more-row-text {
   flex: 1;

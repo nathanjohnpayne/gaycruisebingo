@@ -346,7 +346,7 @@ describe('mergeFeed — Proofs + Moments into one newest-first stream (specs/w2-
 
   it('keeps the slice cap so the Feed stays light on ship wifi', () => {
     const many = Array.from({ length: 80 }, (_, i) => proof(`p${i}`, i));
-    const merged = mergeFeed(many, [], 60);
+    const merged = mergeFeed(many, [], [], 60);
     expect(merged).toHaveLength(60);
     expect(merged[0].createdAt).toBe(79); // the newest survives the cap
   });

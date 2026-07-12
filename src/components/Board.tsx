@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { Lock } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText } from '../hooks/useData';
 import { setMark, resolveDisplayName } from '../data/api';
@@ -22,6 +23,8 @@ import {
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge } from '../game/logic';
+import { fitTextSize } from '../game/fitText';
+import { useTextSize } from '../hooks/useTextSize';
 import { track } from '../analytics';
 import { setClaimSheetOpen } from '../hooks/useToastStack';
 import Celebration from './Celebration';
@@ -33,6 +36,88 @@ import TutorialBanner, { WarmUpTag } from './TutorialBanner';
 import CoachOverlay from './CoachOverlay';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
+
+/**
+ * A non-free Square's prompt text (#215, specs/d15-text-size.md): the S/M/L
+ * auto-fit guard that always wins over the chosen base size. `.cell`'s own
+ * `font-size` (index.css, `clamp(...) * var(--text-scale)`) is the CEILING
+ * this reads via `getComputedStyle` — the Player's S/M/L pick, already
+ * viewport-clamped by CSS — never the floor: this span's own inline
+ * `font-size` is what a Square actually renders text at, and it only ever
+ * shrinks that ceiling down, never grows past it ("Large is a ceiling,
+ * never an overflow"). Re-measures whenever the prompt text or the live
+ * `textSize` pick changes (a pick applies `data-text-size` to `<html>`
+ * SYNCHRONOUSLY inside `useTextSize`'s `setState`, ahead of the React
+ * notify, so the CSS custom property has already updated by the time this
+ * effect re-runs and re-reads the computed ceiling). A cell not yet laid
+ * out (`getBoundingClientRect` reporting 0x0 pre-first-paint) is left at
+ * the unshrunk ceiling — `fitTextSize` itself treats a zero-area box as
+ * "nothing to measure against yet" — so a Square never flashes at a
+ * shrunk size before its real box is known.
+ */
+function SquareText({ text }: { text: string }) {
+  // Not read directly below — its only job is to make this effect re-run
+  // when the Player's S/M/L pick changes, since the ceiling itself is read
+  // from the DOM (getComputedStyle), not from this hook's return value.
+  const [textSize] = useTextSize();
+  const ref = useRef<HTMLSpanElement>(null);
+  const [fontSize, setFontSize] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const cell = el?.parentElement;
+    if (!el || !cell) return;
+
+    // Applies the fitted size directly to the DOM every time this runs,
+    // independent of React state — `setFontSize` alone isn't enough: two
+    // different prompts can both bottom out at the same fitted number (PR
+    // #237 Codex finding), and React bails out of re-rendering (and thus
+    // re-applying the `style` prop) when a state update doesn't change the
+    // value. Writing `el.style.fontSize` imperatively here guarantees the
+    // shrink is always (re)applied, whether or not the number moved.
+    const measure = () => {
+      // Reset to the CSS-computed ceiling before measuring — a shrink
+      // applied for a PREVIOUS (longer) prompt or a PREVIOUS (larger) cell
+      // size must never cap this one's ceiling.
+      el.style.fontSize = '';
+      const baseSize = parseFloat(window.getComputedStyle(el).fontSize);
+      if (!Number.isFinite(baseSize) || baseSize <= 0) return;
+      const cellRect = cell.getBoundingClientRect();
+      // .cell's own 4px padding on every side (index.css) — the usable box
+      // the text actually has to fit inside is the cell minus that padding.
+      const CELL_PADDING = 8;
+      const box = {
+        width: Math.max(0, cellRect.width - CELL_PADDING),
+        height: Math.max(0, cellRect.height - CELL_PADDING),
+      };
+      const fitted = fitTextSize(text, box, { baseSize });
+      if (fitted != null) el.style.fontSize = `${fitted}px`;
+      setFontSize(fitted);
+    };
+
+    measure();
+
+    // Recompute on any cell-size change (phone rotation, split-screen,
+    // desktop resize, sidebar toggling the grid's column count, etc.) — PR
+    // #237 Codex finding: without this, an already-mounted Square keeps the
+    // font size fitted to its OLD box until `text` or the S/M/L pick next
+    // changes, so a prompt that fit at the old width can overflow or clip
+    // at a narrower one. ResizeObserver is unavailable in some older/jsdom
+    // test environments, so this is a best-effort enhancement, not a hard
+    // dependency of the guard (the effect above still fits on mount/change).
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => measure());
+    observer.observe(cell);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- textSize only retriggers the DOM re-read above; see the doc comment.
+  }, [text, textSize]);
+
+  return (
+    <span ref={ref} className="cell-text" style={fontSize != null ? { fontSize: `${fontSize}px` } : undefined}>
+      {text}
+    </span>
+  );
+}
 
 /**
  * The per-Prompt Tally count badge on a marked Square (ADR 0002). Subscribes to
@@ -405,7 +490,7 @@ function LockedDayPreview({ day, timezone }: { day: DayDef; timezone: string | u
         ))}
       </div>
       <div className="day-lock-badge">
-        <span aria-hidden="true">🔒</span> Unlocks {formatUnlockAt(day.unlockAt, timezone)}
+        <Lock className="day-lock-icon" aria-hidden="true" /> Unlocks {formatUnlockAt(day.unlockAt, timezone)}
       </div>
       <p className="day-lock-caption muted">24 fresh squares land at 8. Come back after coffee.</p>
     </div>
@@ -940,6 +1025,12 @@ export default function Board() {
         claimMode,
         currentFirstBingoAt: knownFirstBingoAt(player, playerLoading, playerConfirmed),
         displayName: identityKnown ? displayName : undefined,
+        // Stamp the viewed Day (#216) so the Mark's Tally marker groups into the
+        // right per-`(itemId, dayIndex)` Feed card — mirrors the `dayIndex` the
+        // proof/claim sheet already carries below. Board still deals `dayIndex: 0`,
+        // so this is the SELECTED `viewedIndex` when the schedule is live, else the
+        // dealt board's own dayIndex.
+        dayIndex: hasDays ? viewedIndex : board?.dayIndex,
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
@@ -1159,7 +1250,7 @@ export default function Board() {
                 <span className="free-prompt">{c.text}</span>
               </>
             ) : (
-              c.text
+              <SquareText text={c.text} />
             )}
             {c.marked && !c.free && (
               <button
