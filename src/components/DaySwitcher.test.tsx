@@ -112,4 +112,19 @@ describe('<DaySwitcher />', () => {
       expect(chips[i].textContent).not.toContain('Warm-up');
     }
   });
+
+  // The chip's own aria-label overrides its descendant text for assistive
+  // tech, so the "Warm-up" tag's visible label is otherwise unannounced —
+  // fold the tutorial state into the chip's accessible name too.
+  it('includes "Warm-up" in the accessible name of tutorial Day chips, and omits it on main Days', () => {
+    const days = makeDays();
+    const now = days[3].unlockAt + 1000;
+    render(<DaySwitcher days={days} viewedIndex={3} onSelect={vi.fn()} now={now} />);
+    const chips = screen.getAllByRole('tab');
+    expect(chips[0]).toHaveAccessibleName(/warm-up/i);
+    expect(chips[days.length - 1]).toHaveAccessibleName(/warm-up/i);
+    for (let i = 1; i < days.length - 1; i++) {
+      expect(chips[i]).not.toHaveAccessibleName(/warm-up/i);
+    }
+  });
 });

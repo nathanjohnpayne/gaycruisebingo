@@ -405,6 +405,7 @@ a {
   margin-bottom: 6px;
 }
 .tutorial-banner {
+  position: relative;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--cell);
@@ -412,11 +413,20 @@ a {
   margin-bottom: 10px;
   text-align: left;
 }
-.tutorial-banner-embark {
+.tutorial-banner-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  font-size: 18px;
+  line-height: 1;
   cursor: pointer;
+  padding: 4px;
 }
 .tutorial-banner-title {
-  margin: 0 0 6px;
+  margin: 0 24px 6px 0;
   font-weight: 700;
   color: var(--ink);
 }

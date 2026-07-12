@@ -50,10 +50,34 @@ describe('TutorialBanner — embark banner', () => {
     ).toBeInTheDocument();
   });
 
-  it('dismisses on tap', () => {
+  it('dismisses on tap of the dismiss button', () => {
     render(<TutorialBanner day={EMBARK_DAY} />);
-    const banner = screen.getByRole('button', { name: /how this works/i });
-    fireEvent.click(banner);
+    const dismissButton = screen.getByRole('button', { name: /dismiss how this works banner/i });
+    fireEvent.click(dismissButton);
+    expect(screen.queryByText(/mark what happens/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps the beats and caption as plain readable text, not folded into the dismiss button name', () => {
+    render(<TutorialBanner day={EMBARK_DAY} />);
+    const dismissButton = screen.getByRole('button', { name: /dismiss how this works banner/i });
+    expect(dismissButton).toHaveAccessibleName(/dismiss how this works banner/i);
+    expect(dismissButton).not.toHaveAccessibleName(/mark what happens/i);
+    // The title/beats/caption remain in the document as static text, not
+    // absorbed into the button's accessible name.
+    expect(screen.getByText('How this works')).toBeInTheDocument();
+  });
+
+  it('stays dismissed across a Day-switcher round trip within the same session', () => {
+    const { rerender } = render(<TutorialBanner day={EMBARK_DAY} />);
+    const dismissButton = screen.getByRole('button', { name: /dismiss how this works banner/i });
+    fireEvent.click(dismissButton);
+    expect(screen.queryByText(/mark what happens/i)).not.toBeInTheDocument();
+
+    // Viewing another Day, then coming back to the Welcome Aboard Day —
+    // TutorialBanner stays mounted at the same position (as it does under
+    // Board), so its dismissal state must survive EmbarkBanner unmounting.
+    rerender(<TutorialBanner day={MAIN_DAY} />);
+    rerender(<TutorialBanner day={EMBARK_DAY} />);
     expect(screen.queryByText(/mark what happens/i)).not.toBeInTheDocument();
   });
 

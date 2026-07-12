@@ -22,6 +22,12 @@ spec_test_map:
   d15-day-switcher:
     - src/components/DaySwitcher.test.tsx
     - src/components/Board.test.tsx
+  # d15-tutorial-banners's coverage is component-named, not spec-basename-
+  # named (the spec's own "Test coverage" list), so map all three explicitly.
+  d15-tutorial-banners:
+    - src/components/TutorialBanner.test.tsx
+    - src/components/DaySwitcher.test.tsx
+    - src/components/Board.test.tsx
 # Glob patterns that identify test files. Supplements the default
 # ("tests/**/*.test.*") which doesn't cover shell-based tests or the
 # Vite app's colocated unit tests under src/.

@@ -31,32 +31,31 @@ const FAREWELL_COPY = 'Last one. Mark your goodbyes—then go book next year.';
 
 /**
  * The Welcome Aboard Day's three-beat "How this works" banner. Dismissible
- * by tapping anywhere on it — collapses for the rest of THIS component's
- * mount (session-scoped per the spec: "dismissal here does not need to
- * persist beyond the session the way the coach overlay's does"), since it
- * is replayable later from More → How to play (#208). Plain component
- * state, not localStorage — switching the Day switcher away and back is a
- * fresh "view" of the banner, matching the AC's "views the Welcome Aboard
- * Day for the first time in a session".
+ * via a dedicated dismiss button — collapses for the rest of the session
+ * (session-scoped per the spec: "dismissal here does not need to persist
+ * beyond the session the way the coach overlay's does"), since it is
+ * replayable later from More → How to play (#208). Plain component state,
+ * not localStorage — a full page reload starts a fresh session. The
+ * dismissed flag lives in the parent `TutorialBanner` (not here) so it
+ * survives this component unmounting/remounting as the Day switcher moves
+ * away from and back to the Welcome Aboard Day within the same session.
+ *
+ * The content is static readable text, not folded into the dismiss
+ * control's accessible name — a `role="button"` wrapping the beats/caption
+ * would replace them with just the button's `aria-label` for assistive
+ * tech, hiding the very copy the banner exists to convey.
  */
-function EmbarkBanner() {
-  const [dismissed, setDismissed] = useState(false);
-  if (dismissed) return null;
-  const dismiss = () => setDismissed(true);
+function EmbarkBanner({ onDismiss }: { onDismiss: () => void }) {
   return (
-    <div
-      className="tutorial-banner tutorial-banner-embark"
-      role="button"
-      tabIndex={0}
-      aria-label="How this works — tap to dismiss"
-      onClick={dismiss}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          dismiss();
-        }
-      }}
-    >
+    <div className="tutorial-banner tutorial-banner-embark">
+      <button
+        type="button"
+        className="tutorial-banner-dismiss"
+        aria-label="Dismiss How this works banner"
+        onClick={onDismiss}
+      >
+        ×
+      </button>
       <p className="tutorial-banner-title">How this works</p>
       <ol className="tutorial-banner-beats">
         {EMBARK_BEATS.map((beat) => (
@@ -83,8 +82,17 @@ function FarewellBanner() {
 }
 
 export default function TutorialBanner({ day }: { day: DayDef }) {
+  // Owned here (not in EmbarkBanner) so the dismissal survives the Day
+  // switcher moving away from and back to the Welcome Aboard Day within
+  // the same session — Board mounts this component at a stable JSX
+  // position across Day switches, so its state persists even though
+  // EmbarkBanner itself unmounts whenever the viewed Day isn't 'embark'.
+  const [embarkDismissed, setEmbarkDismissed] = useState(false);
   if (!day.tutorial) return null;
-  if (day.pool === 'embark') return <EmbarkBanner />;
+  if (day.pool === 'embark') {
+    if (embarkDismissed) return null;
+    return <EmbarkBanner onDismiss={() => setEmbarkDismissed(true)} />;
+  }
   if (day.pool === 'farewell') return <FarewellBanner />;
   return null;
 }

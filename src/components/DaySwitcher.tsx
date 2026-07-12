@@ -88,7 +88,7 @@ export default function DaySwitcher({ days, viewedIndex, onSelect, now = Date.no
             type="button"
             role="tab"
             aria-selected={selected}
-            aria-label={`${weekday(d.date)} · ${d.port}${state === 'locked' ? ' · locked' : ''}`}
+            aria-label={`${weekday(d.date)} · ${d.port}${d.tutorial ? ' · Warm-up' : ''}${state === 'locked' ? ' · locked' : ''}`}
             className={`day-chip day-chip-${state}${selected ? ' selected' : ''}`}
             onClick={() => onSelect(i)}
           >
