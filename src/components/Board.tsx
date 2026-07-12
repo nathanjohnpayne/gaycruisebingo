@@ -26,8 +26,11 @@ import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
 import AcceptableUse from './AcceptableUse';
-import type { Cell, ClaimMode, PlayerDoc, ProofDoc, TallyEntry } from '../types';
+import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 import LoadingState from './LoadingState';
+import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
+import { THEMES } from '../theme/themes';
+import { FREE_TEXT } from '../data/seed';
 
 /**
  * The per-Prompt Tally count badge on a marked Square (ADR 0002). Subscribes to
@@ -319,6 +322,93 @@ export function knownFirstBingoAt(
   return player?.firstBingoAt ?? null;
 }
 
+/** Title-cases a hyphenated ThemeId ('welcome-aboard' -> 'Welcome Aboard') —
+ * the fallback label/description source for a Day whose Theme has no
+ * `ThemeMeta` entry yet (the two Phase 1.5 tutorial themes land theirs in
+ * #206, which this ticket does not depend on). */
+function titleCaseThemeId(themeId: string): string {
+  return themeId
+    .split('-')
+    .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(' ');
+}
+
+function themeLabel(themeId: string): string {
+  return THEMES.find((t) => t.id === themeId)?.label ?? titleCaseThemeId(themeId);
+}
+
+function themeDescription(themeId: string): string {
+  return THEMES.find((t) => t.id === themeId)?.description ?? '';
+}
+
+/** "Unlocks 8:00 AM · Wed Jul 22" — event-timezone formatted, falling back
+ * to UTC if the Event doc hasn't resolved yet. */
+function formatUnlockAt(unlockAt: number, timezone: string | undefined): string {
+  const tz = timezone || 'UTC';
+  const when = new Date(unlockAt);
+  const time = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: tz,
+  }).format(when);
+  const date = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    timeZone: tz,
+  }).format(when);
+  return `${time} · ${date}`;
+}
+
+/**
+ * The locked-Day preview (daily-cards-spec § "Locked Day preview"): full
+ * themed chrome for the viewed Day over a 5x5 grid of blank Squares — only
+ * the free space (index 12, the same center the live deal uses) is
+ * populated, with that Day's `freeText` override if it carries one. No
+ * click handler is wired to any Square here, so a tap is a structural
+ * no-op — there is nothing to call `setMark` with.
+ */
+function LockedDayPreview({ day, timezone }: { day: DayDef; timezone: string | undefined }) {
+  const description = themeDescription(day.theme);
+  const freeText = day.freeText ?? FREE_TEXT;
+  return (
+    <div className="board-area day-locked" data-theme={day.theme}>
+      <div className="day-locked-chrome">
+        <div className="day-locked-title">
+          <span aria-hidden="true">{day.portEmoji}</span> {day.port} · {themeLabel(day.theme)}
+        </div>
+        {description && <p className="day-locked-desc">{description}</p>}
+      </div>
+      <div className="bingo-head" aria-hidden="true">
+        {['B', 'I', 'N', 'G', 'O'].map((l) => (
+          <span key={l}>{l}</span>
+        ))}
+      </div>
+      <div className="grid locked-grid">
+        {Array.from({ length: 25 }, (_, index) => (
+          <div
+            key={index}
+            className={'cell locked-cell' + (index === 12 ? ' free marked' : '')}
+          >
+            {index === 12 && (
+              <>
+                <span className="free-label" aria-hidden="true">
+                  FREE
+                </span>
+                <span className="free-prompt">{freeText}</span>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+      <div className="day-lock-badge">
+        <span aria-hidden="true">🔒</span> Unlocks {formatUnlockAt(day.unlockAt, timezone)}
+      </div>
+      <p className="day-lock-caption muted">24 fresh squares land at 8. Come back after coffee.</p>
+    </div>
+  );
+}
+
 export default function Board() {
   const { user } = useAuth();
   const uid = user?.uid;
@@ -381,6 +471,39 @@ export default function Board() {
   // Tally subscription the TallyBadge uses — no new read — for the Square the
   // sheet is open on. useTally accepts a null id (no proofTarget → no sub).
   const { count: proofTargetTally } = useTally(proofTarget?.itemId ?? null);
+  // The Day switcher's viewed-Day index (daily-cards-spec § "Day switcher"),
+  // independent of the app-wide Theme (ThemeContext) and of the header's
+  // "today" line (Nav.tsx, #203) — this state ONLY drives the board area's
+  // own retint and which Day's chrome/preview renders here. Defaults to
+  // today's Day the first render `event.days` arrives non-empty (the
+  // adjust-during-render pattern already used elsewhere in this file, e.g.
+  // `edgeStateUid` below); `viewedIndexInitialized` guards it to ONE
+  // adoption so a later render never stomps the Player's own selection.
+  const [viewedIndex, setViewedIndex] = useState(0);
+  const viewedIndexInitialized = useRef(false);
+  // The locked/unlocked read below (`viewedLocked`) is only re-evaluated on a
+  // render — with no OTHER state change due while idling on a locked Day, a
+  // player who leaves the Card tab open across an `unlockAt` rollover (e.g.
+  // the 8:00 ship-time unlock) would stay stuck on `LockedDayPreview` until
+  // a reload or unrelated interaction (Codex P2, PR #230). `now` stands in
+  // for `Date.now()` everywhere a lock check reads the clock, and this timer
+  // bumps it exactly when the EARLIEST still-locked Day's `unlockAt` in the
+  // whole schedule passes — not just the viewed Day, so switching to an
+  // already-elapsed chip never needs its own reschedule. Depends on
+  // `event?.days` (not the `days` local below, which is a fresh `[]`
+  // literal on every render while unmigrated) so it doesn't re-schedule on
+  // every unrelated render.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const schedule = event?.days ?? [];
+    const nextUnlock = schedule
+      .map((d) => d.unlockAt)
+      .filter((t) => t > Date.now())
+      .sort((a, b) => a - b)[0];
+    if (nextUnlock == null) return;
+    const timer = setTimeout(() => setNow(Date.now()), nextUnlock - Date.now());
+    return () => clearTimeout(timer);
+  }, [event?.days, now]);
   // Edge refs for the COSMETIC Celebration UI only (issue #104). The public Moment
   // broadcast moved OFF this snapshot-diffing machinery and ONTO the action path —
   // doMark reads `setMark`'s synchronous win-transition verdict and enqueues into a
@@ -683,6 +806,54 @@ export default function Board() {
   }, [cells, cellsAttributable, boardConfirmed, uid, drainMoments]);
 
   if (!uid) return null;
+
+  // The Day schedule (daily-cards-spec § "Data model"), read-only off the
+  // Event doc — `[]` on a not-yet-migrated Event (eventConverter's default)
+  // or while it's still loading, which keeps every switcher/retint/locked-
+  // preview addition below completely inert and Board's pre-existing
+  // single-Board rendering exactly as it was (every test fixture that
+  // doesn't set `event.days` exercises that untouched path).
+  const days: DayDef[] = event?.days ?? [];
+  const hasDays = days.length > 0;
+  // Adopt today's Day as the viewed default the FIRST render `days` is
+  // non-empty; guarded to fire once so it can never override a Player's own
+  // later chip tap (adjust-during-render, mirroring `edgeStateUid` above).
+  if (!viewedIndexInitialized.current && hasDays) {
+    viewedIndexInitialized.current = true;
+    setViewedIndex(defaultViewedIndex(days, Date.now()));
+  }
+  const viewedDay = hasDays ? (days[viewedIndex] ?? days[0]) : undefined;
+  // `now`, not `Date.now()` — see the unlock timer above (Codex P2, PR #230):
+  // this read must be the SAME clock the timer bumps, so the rollover flips
+  // the lock via a state update instead of only on the next unrelated render.
+  const viewedLocked = viewedDay != null && viewedDay.unlockAt > now;
+  const daySwitcher = hasDays ? (
+    <DaySwitcher days={days} viewedIndex={viewedIndex} onSelect={setViewedIndex} />
+  ) : null;
+  const cardMeta = (
+    <div className="card-meta">
+      <span>
+        {event?.name ? eventTitle(event.name, event.sailStart, event.sailEnd) : 'This cruise'}
+      </span>
+    </div>
+  );
+
+  // A locked viewed Day never has a Board to deal or show — this branch is
+  // orthogonal to the `!board` guard below, which is about the ONE existing
+  // (today's) Board this Player already has. Per-Day Board fetching is
+  // #204's scope; this ticket only decides WHICH chrome to render for the
+  // viewed Day (daily-cards-spec § "Locked Day preview").
+  if (viewedDay && viewedLocked) {
+    return (
+      <>
+        {cardMeta}
+        {daySwitcher}
+        <LockedDayPreview day={viewedDay} timezone={event?.timezone} />
+        <AcceptableUse />
+      </>
+    );
+  }
+
   if (!board) {
     // A Board is dealt once at join from the active, non-free Prompt pool
     // (ADR 0003). dealBoard needs >= MIN_POOL prompts (ADR 0004); with fewer the
@@ -714,16 +885,24 @@ export default function Board() {
       activePool.length < MIN_POOL
     ) {
       return (
-        <div className="center muted" role="alert">
-          <p>Not enough prompts to deal a full card yet.</p>
-          <p>
-            A card needs {MIN_POOL} prompts; the pool has {activePool.length}. Add prompts from the
-            Prompts tab, then retry dealing from the Card tab.
-          </p>
-        </div>
+        <>
+          {daySwitcher}
+          <div className="center muted" role="alert">
+            <p>Not enough prompts to deal a full card yet.</p>
+            <p>
+              A card needs {MIN_POOL} prompts; the pool has {activePool.length}. Add prompts from the
+              Prompts tab, then retry dealing from the Card tab.
+            </p>
+          </div>
+        </>
       );
     }
-    return <LoadingState label="Dealing your card…" />;
+    return (
+      <>
+        {daySwitcher}
+        <LoadingState label="Dealing your card…" />
+      </>
+    );
   }
 
   const wins = winningCells(cells);
@@ -889,17 +1068,22 @@ export default function Board() {
           and force the title to wrap on mobile (#150). The mode still governs
           behavior via `claimMode` above (proof-required opens the proof sheet on
           tap); it just no longer competes with the title for the line. */}
-      <div className="card-meta">
-        <span>
-          {event?.name ? eventTitle(event.name, event.sailStart, event.sailEnd) : 'This cruise'}
-        </span>
-      </div>
-      <div className="bingo-head">
-        {['B', 'I', 'N', 'G', 'O'].map((l) => (
-          <span key={l}>{l}</span>
-        ))}
-      </div>
-      {/* `data-server-confirmed` mirrors useBoard's `hasServerData` latch — the
+      {cardMeta}
+      {daySwitcher}
+      {/* `board-area` is the retint scope (daily-cards-spec § "Day switcher"):
+          `data-theme` here — set ONLY when the Event carries a Day schedule —
+          follows the VIEWED Day and cascades the theme token set (themes.css)
+          to just this chrome, leaving `<html>`'s own `data-theme` (the
+          Player's own Theme choice, ThemeContext) untouched. Absent entirely
+          on a not-yet-migrated Event (`hasDays` false), so the pre-Phase-1.5
+          single-Board rendering is byte-identical to before. */}
+      <div className="board-area" data-theme={viewedDay?.theme}>
+        <div className="bingo-head">
+          {['B', 'I', 'N', 'G', 'O'].map((l) => (
+            <span key={l}>{l}</span>
+          ))}
+        </div>
+        {/* `data-server-confirmed` mirrors useBoard's `hasServerData` latch — the
           first SERVER-backed board snapshot (vs the latency-compensated cache
           echo that can arrive first). It carries no styling; it is the
           deterministic signal the e2e suite waits on before tapping a winning
@@ -907,7 +1091,7 @@ export default function Board() {
           the Celebration baseline above would swallow as an initial state, not
           an animated edge) cannot flake the BINGO! assertion (Codex P2 on
           PR #114 round 3). */}
-      <div className="grid" data-server-confirmed={boardConfirmed ? 'true' : 'false'}>
+        <div className="grid" data-server-confirmed={boardConfirmed ? 'true' : 'false'}>
         {cells.map((c) => (
           <div
             key={c.index}
@@ -989,6 +1173,7 @@ export default function Board() {
             )}
           </div>
         ))}
+        </div>
       </div>
       <div className="count">
         Marked <b>{countMarked(cells)}</b> · Bingos <b>{player?.bingoCount ?? 0}</b>

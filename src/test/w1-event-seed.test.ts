@@ -6,6 +6,9 @@ import { resolve } from 'node:path';
 // and importing it is side-effect-free because seeding only runs when the script is
 // the entry module. Asserts specs/w1-event-seed.md.
 import { EVENT_SEED, ITEMS, adminRoster, eventWritePayload, formatDriftReport, seedItemDocId, verifySeedPool } from '../../scripts/seed.mjs';
+// ALL_ITEMS is exported from the same plain-JS script (see the ts-expect-error above).
+// @ts-expect-error — no type declarations for this plain-JS script (see above)
+import { ALL_ITEMS } from '../../scripts/seed.mjs';
 
 type SeedItem = { text: string; spicy: boolean };
 type LiveDoc = {
@@ -147,13 +150,24 @@ describe('w1-event-seed: prompt pool density (ADR 0003)', () => {
 // failure (`node scripts/seed.mjs --verify`, post-deploy). These pin its verdicts.
 describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
   it('reports ok for a live pool that matches the canonical ITEMS exactly', () => {
-    const report = verifySeedPool(liveFromCanonical());
+    const report = verifySeedPool(liveFromCanonical(), ITEMS);
     expect(report.ok).toBe(true);
     expect(report.expected).toBe(80);
     expect(report.seedOwned).toBe(80);
     expect(report.missing).toEqual([]);
     expect(report.stale).toEqual([]);
     expect(report.mismatched).toEqual([]);
+  });
+
+  // Codex P2, PR #229: the default pool argument must cover every seeded pool
+  // (main + embark + farewell), not just ITEMS — otherwise a caller that omits
+  // the argument (an ad-hoc smoke check, a test) reports ok even when the
+  // embark/farewell docs are entirely missing from the live collection.
+  it('defaults to ALL_ITEMS, so a live pool missing every embark/farewell doc is flagged (not silently ok)', () => {
+    const report = verifySeedPool(liveFromCanonical());
+    expect(report.ok).toBe(false);
+    expect(report.expected).toBe(ALL_ITEMS.length);
+    expect(report.missing.length).toBe(ALL_ITEMS.length - ITEMS.length);
   });
 
   it('ignores player-submitted prompts — they are not canonical and never count as drift', () => {
@@ -170,7 +184,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
         pool: 'main',
       },
     ];
-    const report = verifySeedPool(live);
+    const report = verifySeedPool(live, ITEMS);
     expect(report.ok).toBe(true);
     expect(report.playerOwned).toBe(1);
     expect(report.stale).toEqual([]);
@@ -178,7 +192,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
 
   it('flags a canonical prompt that was never seeded as missing', () => {
     const live = liveFromCanonical().filter((d) => d.text !== 'Fivesome');
-    const report = verifySeedPool(live);
+    const report = verifySeedPool(live, ITEMS);
     expect(report.ok).toBe(false);
     expect(report.missing.map((m: { text: string }) => m.text)).toEqual(['Fivesome']);
     expect(report.stale).toEqual([]);
@@ -198,7 +212,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
         pool: 'main',
       },
     ];
-    const report = verifySeedPool(live);
+    const report = verifySeedPool(live, ITEMS);
     expect(report.ok).toBe(false);
     expect(report.stale.map((s: { text: string }) => s.text)).toEqual(['A retired prompt']);
     expect(report.missing).toEqual([]);
@@ -208,7 +222,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     const live = liveFromCanonical().map((d) =>
       d.text === 'Threesome' ? { ...d, spicy: false } : d,
     );
-    const report = verifySeedPool(live);
+    const report = verifySeedPool(live, ITEMS);
     expect(report.ok).toBe(false);
     expect(report.mismatched).toHaveLength(1);
     expect(report.mismatched[0]).toMatchObject({
@@ -224,7 +238,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     const live = liveFromCanonical().map((d) =>
       d.text === 'Threesome' ? { ...d, text: 'Tampered text' } : d,
     );
-    const report = verifySeedPool(live);
+    const report = verifySeedPool(live, ITEMS);
     expect(report.ok).toBe(false);
     expect(report.mismatched).toHaveLength(1);
     expect(report.mismatched[0]).toMatchObject({ text: 'Threesome', actualText: 'Tampered text' });
@@ -237,16 +251,16 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     const truthyString = liveFromCanonical().map((d) =>
       d.text === 'Threesome' ? { ...d, spicy: 'true' as unknown as boolean } : d,
     );
-    expect(verifySeedPool(truthyString).ok).toBe(false);
-    expect(verifySeedPool(truthyString).mismatched.map((m: { text: string }) => m.text)).toEqual([
+    expect(verifySeedPool(truthyString, ITEMS).ok).toBe(false);
+    expect(verifySeedPool(truthyString, ITEMS).mismatched.map((m: { text: string }) => m.text)).toEqual([
       'Threesome',
     ]);
 
     const missingFlag = liveFromCanonical().map((d) =>
       d.text === 'Eat carbs' ? { ...d, spicy: undefined as unknown as boolean } : d,
     );
-    expect(verifySeedPool(missingFlag).ok).toBe(false);
-    expect(verifySeedPool(missingFlag).mismatched.map((m: { text: string }) => m.text)).toEqual([
+    expect(verifySeedPool(missingFlag, ITEMS).ok).toBe(false);
+    expect(verifySeedPool(missingFlag, ITEMS).mismatched.map((m: { text: string }) => m.text)).toEqual([
       'Eat carbs',
     ]);
   });
@@ -259,7 +273,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     const live = liveFromCanonical().map((d) =>
       d.text === 'Threesome' ? { ...d, ...change } : d,
     );
-    const report = verifySeedPool(live);
+    const report = verifySeedPool(live, ITEMS);
     expect(report.ok).toBe(false);
     expect(report.mismatched).toHaveLength(1);
     expect(report.mismatched[0]).toMatchObject({ text: 'Threesome' });
@@ -274,7 +288,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     const live = liveFromCanonical().map((d) =>
       d.text === 'Threesome' ? { ...d, ...change } : d,
     );
-    const report = verifySeedPool(live);
+    const report = verifySeedPool(live, ITEMS);
     expect(report.ok).toBe(false);
     expect(report.mismatched).toHaveLength(1);
     expect(report.mismatched[0]).toMatchObject({
@@ -289,9 +303,9 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
       liveFromCanonical().map((d) =>
         d.text === 'Threesome' ? { ...d, reportCount } : d,
       );
-    expect(verifySeedPool(withReportCount(1)).ok).toBe(true);
-    expect(verifySeedPool(withReportCount(3)).ok).toBe(true);
-    expect(verifySeedPool(withReportCount(4)).ok).toBe(false);
+    expect(verifySeedPool(withReportCount(1), ITEMS).ok).toBe(true);
+    expect(verifySeedPool(withReportCount(3), ITEMS).ok).toBe(true);
+    expect(verifySeedPool(withReportCount(4), ITEMS).ok).toBe(false);
   });
 
   it('prints a roster-safe reconcile command for the same event and project', () => {
@@ -329,7 +343,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
       reportCount: 0,
       pool: 'main',
     }));
-    const report = verifySeedPool(oldLive);
+    const report = verifySeedPool(oldLive, ITEMS);
     expect(report.ok).toBe(false);
     expect(report.missing.length).toBe(79); // every new-pool entry except 'Threesome'
     expect(report.stale.map((s: { text: string }) => s.text).sort()).toEqual(

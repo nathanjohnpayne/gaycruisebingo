@@ -310,6 +310,80 @@ a {
     animation: none;
   }
 }
+/* ---------- Day switcher + locked-Day preview (daily-cards-spec §§ "Day
+   switcher" / "Locked Day preview") ---------- */
+.day-switcher {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px 2px 8px;
+  margin-bottom: 4px;
+}
+.day-chip {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--cell);
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.day-chip.selected {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+.day-chip-today {
+  background: color-mix(in srgb, var(--primary) 22%, var(--cell));
+  color: var(--ink);
+}
+.day-chip-glyph {
+  font-size: 10px;
+}
+/* The retint scope: `data-theme` set here (Board.tsx) cascades the
+   themes.css token set to just the board's own chrome, not `<html>`. No
+   properties of its own — the selector exists purely as the CSS variable
+   boundary. */
+.board-area {
+}
+.day-locked-chrome {
+  text-align: center;
+  margin-bottom: 8px;
+}
+.day-locked-title {
+  font-weight: 700;
+  color: var(--ink);
+}
+.day-locked-desc {
+  color: var(--dim);
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+.cell.locked-cell {
+  opacity: 0.55;
+}
+.cell.locked-cell.free {
+  opacity: 1;
+}
+.day-lock-badge {
+  text-align: center;
+  margin-top: 10px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.day-lock-caption {
+  text-align: center;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
 .count {
   text-align: center;
   color: var(--dim);
