@@ -60,6 +60,11 @@ vi.mock('../data/bugReports', () => ({
   blobToDataUrl: vi.fn(),
   buildBugReportInput: vi.fn((value: unknown) => value),
 }));
+// "How to play" reopens the REAL CoachOverlay (#214, merged in from main) —
+// left un-stubbed so the More-menu row-icon test below still exercises its
+// real DOM; it imports EVENT_ID from '../firebase', mocked here like every
+// other component suite stubs that module (see d15-more-menu.test.tsx).
+vi.mock('../firebase', () => ({ EVENT_ID: 'test-event' }));
 
 import TabBar from './TabBar';
 
@@ -165,9 +170,14 @@ describe('ProofSheet claim-sheet icons (specs/d15-icons-lucide.md)', () => {
 
 describe('BugReport icon (specs/d15-icons-lucide.md)', () => {
   it('renders the Lucide Bug glyph as .bug-report-icon in the row variant', async () => {
-    // The More-menu block above mocks './BugReport' to a plain stub — unmock
-    // it here so this test exercises the REAL component's icon.
+    // The More-menu block above renders `./More`, which imports `./BugReport`
+    // and caches the hoisted `vi.mock('./BugReport')` stub in the module
+    // registry. `vi.doUnmock()` only stops future resolutions from using the
+    // mock — it doesn't evict the already-cached mocked instance — so without
+    // `vi.resetModules()` the dynamic import below would silently re-import
+    // the cached stub instead of the real component.
     vi.doUnmock('./BugReport');
+    vi.resetModules();
     const { default: BugReport } = await import('./BugReport');
     render(<BugReport variant="row" />);
     const trigger = screen.getByRole('button', { name: 'Report a bug' });

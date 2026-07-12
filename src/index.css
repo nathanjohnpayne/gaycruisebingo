@@ -1237,10 +1237,13 @@ body.update-prompt-visible .install-prompt {
   padding: 8px 14px;
   font-size: 11px;
 }
-/* Stack above .tabs (61px = its own height) instead of hiding it — see specs/w1-pwa.md. */
+/* Stack above .tabs (75px = its own height) instead of hiding it — see specs/w1-pwa.md.
+   Was 61px before the Lucide icon row (#220) stacked a 20px icon + 2px gap above the
+   label: .tabs padding (8+8) + .tab padding (10+10) + icon (20) + gap (2) + label
+   line (~16) ≈ 75px. */
 body:has(.tabs) .install-prompt,
 body:has(.tabs) .update-prompt {
-  bottom: calc(61px + env(safe-area-inset-bottom));
+  bottom: calc(75px + env(safe-area-inset-bottom));
 }
 /* Reserve extra .app bottom clearance only while the banner is actually up (either
    variant — Chromium or the iOS hint), so the last scrollable row doesn't sit
