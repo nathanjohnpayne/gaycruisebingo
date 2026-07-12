@@ -1,23 +1,26 @@
 import { useAuth } from '../auth/AuthContext';
-import { useEventDoc } from '../hooks/useData';
 import ThemeSwitcher from './ThemeSwitcher';
-import ProfileEditor from './ProfileEditor';
 import TabBar from './TabBar';
 
 /**
- * App shell chrome: a top identity bar (brand + avatar + sign-out) and the
+ * App shell chrome: a top identity bar (brand + the day's identity) and the
  * bottom tab bar (`TabBar`). The tab bar is fixed to the viewport bottom via
  * `.tabs` in index.css for one-handed, thumb-reachable navigation — see
  * `./tabs` for the frozen route/tab contract this renders.
  *
- * The avatar IS the profile-edit affordance (#143): `ProfileEditor` renders the
- * player's photo as a button that opens the editor sheet — tap your photo to
- * edit — so there is no separate floating pencil to collide with anything.
+ * Phase 1.5 (#203, specs/d15-tab-contract.md): the avatar (profile-edit
+ * affordance) and sign-out button left this bar for the More menu, so the
+ * brand and the day's identity own the header. The More tab wears the Player's
+ * avatar as its icon — `Nav.tsx` resolves the photo URL from `useAuth()` and
+ * passes it to the presentational `TabBar`.
+ *
+ * The two stacked header lines (today's port + theme) are placeholder-only
+ * here: wiring them to live `EventDoc.days[]` data is #205's job, which depends
+ * on this ticket AND the schema ticket. `ThemeSwitcher` stays mounted where it
+ * is — its relocation into More is #208's change, not this thin revision's.
  */
 export default function Nav() {
-  const { user, signOutUser } = useAuth();
-  const { data: event } = useEventDoc();
-  const isAdmin = !!(user && event?.admins?.includes(user.uid));
+  const { user } = useAuth();
 
   return (
     <>
@@ -25,17 +28,16 @@ export default function Nav() {
         <div className="brand">
           GAY CRUISE <b>BINGO</b>
         </div>
-        <ProfileEditor />
-        <button className="iconbtn sign-out-trigger" type="button" title="Sign out" onClick={() => signOutUser()}>
-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-            <polyline points="16 17 21 12 16 7" />
-            <line x1="21" x2="9" y1="12" y2="12" />
-          </svg>
-        </button>
+        {/* Two-line "where are we" header slot. Placeholder until #205 wires
+            live EventDoc.days[] port/theme text; kept aria-hidden so the
+            placeholder dashes are not announced. */}
+        <div className="day-identity" aria-hidden="true">
+          <span className="day-identity-line">—</span>
+          <span className="day-identity-line">—</span>
+        </div>
       </div>
       <ThemeSwitcher />
-      <TabBar isAdmin={isAdmin} />
+      <TabBar morePhotoURL={user?.photoURL ?? null} />
     </>
   );
 }

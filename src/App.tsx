@@ -5,9 +5,8 @@ import SignIn, { DealError } from './components/SignIn';
 import Nav from './components/Nav';
 import Board from './components/Board';
 import Leaderboard from './components/Leaderboard';
-import ItemPool from './components/ItemPool';
 import ProofFeed from './components/ProofFeed';
-import Admin from './components/Admin';
+import More from './components/More';
 import { TABS, FALLBACK_PATH, type TabId } from './components/tabs';
 import LoadingState from './components/LoadingState';
 import BugReport from './components/BugReport';
@@ -28,9 +27,12 @@ export default function App() {
   // fail into a swallowed `.catch`, leaving a blank Board. A failure — most
   // often the ADR-0003/0004 pool-below-24 guard — now renders the retry surface
   // AS the Card tab's content, scoped there so the shell, Nav, and every other
-  // route stay mounted: recovery for the pool guard is adding Prompts on
-  // /items, which must stay reachable while the error is up (Codex P2).
-  // `AuthContext` owns the deal + error state.
+  // route stay mounted while the error is up (Codex P2). `AuthContext` owns the
+  // deal + error state.
+  //
+  // Phase 1.5 (#203): Prompts (ItemPool) and Admin are no longer routed,
+  // tab-driven pages — they mount inside the More tab's menu (#208), not the
+  // route table. The set is Card · Feed · Ranks · More.
   const pages: Record<TabId, ReactElement> = {
     card: dealError ? (
       <DealError message={dealError} onRetry={retryDeal} retrying={dealing} />
@@ -39,8 +41,7 @@ export default function App() {
     ),
     feed: <ProofFeed />,
     ranks: <Leaderboard />,
-    prompts: <ItemPool />,
-    admin: <Admin />,
+    more: <More />,
   };
 
   return (
