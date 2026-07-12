@@ -81,7 +81,7 @@ function dealt(): Cell[] {
 beforeEach(() => {
   vi.clearAllMocks();
   H.user = { uid: 'u1', displayName: 'Sailor', photoURL: null } as unknown as User;
-  H.board = { uid: 'u1', seed: 1, createdAt: 0, cells: dealt() };
+  H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
   H.player = null;
   H.playerLoading = false;
   H.playerConfirmed = true;

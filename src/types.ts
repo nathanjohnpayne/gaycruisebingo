@@ -19,7 +19,35 @@ export type ThemeId =
   | 'summer-white'
   | 'dog-tag'
   | 'revival-disco'
-  | 'seriously-pink';
+  | 'seriously-pink'
+  // Phase 1.5 tutorial-day themes (daily-cards-spec § "Theme reference"). The
+  // two ThemeMeta entries + themes.css token blocks that back these land in
+  // #206; reserved in the union here so this contract-ticket's downstream
+  // consumers (DayDef.theme, day chrome) can name them without waiting.
+  | 'welcome-aboard'
+  | 'so-long-farewell';
+
+// One Day of the cruise (daily-cards-spec § "Data model"). Ordered inside
+// `EventDoc.days` (length 10 for the July sailing, but the model assumes no
+// fixed length — a future cruise is a new EventDoc with its own days[]). Each
+// Day names a date, port, ThemeId, and item pool; the tutorial Days sit at the
+// ends but that placement is data, not a code assumption.
+export interface DayDef {
+  index: number;        // 0..9
+  date: string;         // ISO date, e.g. '2026-07-16'
+  port: string;         // 'Split'
+  portEmoji: string;    // '🇭🇷'
+  theme: ThemeId;       // drives card + chrome styling
+  pool: 'main' | 'embark' | 'farewell';
+  tutorial: boolean;    // true for the embark (Day 1) and farewell (Day 10) Days
+  unlockAt: number;     // ms epoch — 08:00 event-tz on `date`; embark Day = event open
+  freeText?: string;    // per-day free-space override (tutorial Days)
+  // The Day Snapshot: the frozen list of item ids stamped at `unlockAt` by the
+  // scheduler (#202). Optional on purpose — absent until that function runs, so
+  // the client falls back to the "waking up" locked state rather than dealing
+  // from an unfrozen pool.
+  snapshotItemIds?: string[];
+}
 
 export interface EventDoc {
   name: string;
@@ -29,6 +57,18 @@ export interface EventDoc {
   defaultTheme: ThemeId;
   claimMode: ClaimMode;
   admins: string[];
+  // IANA timezone the Day unlock schedule is computed in (e.g. 'Europe/Rome').
+  // Required in the contract so day-scheduling consumers never branch on
+  // undefined; `eventConverter` defaults a missing legacy field (Event docs
+  // seeded before Phase 1.5) to 'Europe/Rome'.
+  timezone: string;
+  // The ordered per-Day schedule (daily-cards-spec § "Data model"). Required in
+  // the contract; `eventConverter` defaults a missing legacy field to [] so a
+  // not-yet-migrated Event doc read in dev/tests never throws downstream.
+  days: DayDef[];
+  // Finale freeze stamp (ms epoch): set by the Day 10 08:00 scheduler run when
+  // the standings freeze and the podium Moment posts. Absent until the finale.
+  frozenAt?: number;
   // Presentational, event-scoped hide/mute of a Player's content (ADR 0004
   // Phase 0) — NOT hard access revocation. An admin-maintained roster of banned
   // uids kept on the (already admin-writable) event doc; a follow-up (#108) will
@@ -46,6 +86,14 @@ export interface EventDoc {
     // existed has no key to read, and `dealBoard`'s own default (0.4) applies
     // when it is absent.
     spicyRatio?: number;
+    // Phase 1.5 Proof & Claims admin panel (daily-cards-spec § "Data model").
+    // All three are optional here and read defensively at their runtime call
+    // sites — the event-level defaults (`camera_or_library` for source, `true`
+    // for the exif strip and vision gate) are applied by the consuming tickets
+    // (#211), not baked in as type-level defaults.
+    photoProofSource?: 'camera_or_library' | 'camera_only';
+    stripPhotoExif?: boolean; // geotags never leave the phone
+    visionGate?: boolean;     // existing moderation function, now toggleable
   };
 }
 
@@ -55,11 +103,23 @@ export interface ItemDoc {
   createdBy: string;
   createdAt: number; // ms epoch
   isFreeSpace: boolean;
-  status: 'active' | 'hidden';
+  // Phase 1.5 approval flow (daily-cards-spec § "Item pools and the approval
+  // flow"): main-pool submissions written after #210 ships start `pending`;
+  // an admin approve → `active`, reject → `rejected` (kept for audit, hidden
+  // from non-admins). Every existing `active` item stays `active` — this
+  // ticket only widens the union, it migrates no data.
+  status: 'active' | 'hidden' | 'pending' | 'rejected';
   reportCount: number;
   // Whether this Prompt is in the 🔞-tagged "spicy" category (vs. "tame") for
   // stratified Board composition (`dealBoard`'s spicyRatio sampling).
   spicy: boolean;
+  // Which of the three Phase 1.5 pools this Prompt belongs to (main game vs the
+  // embark/farewell tutorial cards), separated by field within the one `items`
+  // collection. Absent on legacy docs → `'main'` via `itemConverter` default;
+  // no data backfill (daily-cards-spec § "Migration").
+  pool: 'main' | 'embark' | 'farewell';
+  approvedBy?: string; // uid of the approving admin
+  approvedAt?: number; // ms epoch
 }
 
 export interface Cell {
@@ -75,6 +135,12 @@ export interface Cell {
 
 export interface BoardDoc {
   uid: string;
+  // Which Day this Board belongs to — one Board per Player per Day
+  // (daily-cards-spec § "Data model"). Path wiring for the day-scoped location
+  // `events/{eventId}/days/{dayIndex}/boards/{uid}` is added by #204; this
+  // field is what lets the dealer look up a Player's earlier Day Cards to
+  // exclude repeats across the cruise.
+  dayIndex: number;
   seed: number;
   createdAt: number;
   cells: Cell[]; // length 25
@@ -86,10 +152,19 @@ export interface PlayerDoc {
   photoURL: string | null;
   theme?: ThemeId;
   joinedAt: number;
+  // Cruise-wide totals, summed across every Day Card (daily-cards-spec §
+  // "Scoring and social surfaces").
   bingoCount: number;
   squaresMarked: number;
   firstBingoAt: number | null;
   blackout?: boolean;
+  // Per-Day breakdown of the same three stats, keyed by dayIndex. Optional —
+  // absent until a Player has played a Day; the aggregates above remain the
+  // cruise-long leaderboard source.
+  dayStats?: Record<
+    number,
+    { bingoCount: number; squaresMarked: number; firstBingoAt: number | null }
+  >;
 }
 
 export interface UserDoc {
@@ -126,6 +201,13 @@ export interface ProofDoc {
   // to 'active'. A rejected Claim leaves its Proof 'pending' rather than exposed.
   status: 'active' | 'pending' | 'hidden' | 'flagged';
   visionFlag?: string | null; // set by the moderation function for illegal/extreme content
+  // Whether the photo came from the live camera or the photo library — stamps
+  // the 🖼️ Feed badge on library picks (daily-cards-spec § "Square tap"; #190).
+  // Optional: absent on Proofs written before the two-affordance photo body.
+  source?: 'camera' | 'library';
+  // Which Day this Proof belongs to, so the Feed reads "Day 2 · Get Sporty".
+  // Optional until the day-scoped claim flow (#211) stamps it.
+  dayIndex?: number;
 }
 
 export interface ClaimDoc {
@@ -157,6 +239,14 @@ export interface TallyDoc {
   itemId: string; // the Prompt this Tally aggregates
   count: number; // number of Players who have marked the Prompt
   markers: TallyEntry[];
+  // ms epoch of the most recent Mark, so the Feed can re-sort a Tally Card
+  // toward the top as new Players get the Prompt. Optional until a day-scoped
+  // consumer stamps it.
+  lastMarkedAt?: number;
+  // Which Day this Tally aggregates — a Mark of "Lost passport" on Tuesday's
+  // card is a different Tally entry than Thursday's (daily-cards-spec § "Data
+  // model"). Optional until the day-scoped surfaces stamp it.
+  dayIndex?: number;
 }
 
 // One Player publicly asking another to back up a marked Prompt ("pics or it
@@ -174,9 +264,20 @@ export interface DoubtDoc {
   createdAt: number; // ms epoch
   satisfiedAt?: number | null; // set when a Proof answers the Doubt
   satisfiedProofId?: string | null;
+  // Which Day the doubted Mark is on, so day-scoped surfaces stay per-Day.
+  // Optional until the day-scoped Doubt flow stamps it.
+  dayIndex?: number;
 }
 
-export type MomentKind = 'bingo' | 'blackout' | 'first_bingo';
+// The finale adds two scheduler-posted beats (daily-cards-spec § "Scoring and
+// social surfaces"): `last_call` at 20:00 on Day 9 (going-into-the-final-night
+// standings) and `podium` at the 08:00 Day 10 freeze (champion + honors).
+export type MomentKind =
+  | 'bingo'
+  | 'blackout'
+  | 'first_bingo'
+  | 'last_call'
+  | 'podium';
 
 // A broadcast announcement of a big social beat, posted to the Feed for everyone
 // (ADR 0002). Unlike a Proof it carries no attached evidence — it marks *that*
@@ -188,4 +289,20 @@ export interface MomentDoc {
   displayName: string;
   photoURL: string | null;
   createdAt: number; // ms epoch
+  // Which Day this beat belongs to, so the Feed reads "BINGO — Day 4 ·
+  // Glamiators". Optional until the day-scoped Moment writers stamp it.
+  dayIndex?: number;
+}
+
+// Per-Day honor doc at events/{eventId}/days/{dayIndex}/meta/{dayIndex} — a
+// `meta` subcollection holding one document whose id IS the encoded dayIndex,
+// so the shape carries no id field (the path above is a valid document path:
+// events/days/meta are the three collection segments, each with its id). Holds
+// that Day's own First to BINGO, pinned on the Day's board view and the honors
+// strip (daily-cards-spec § "Data model" / "Scoring and social surfaces").
+// Every Day gets its own daily honor, tutorial Days included; the cruise-wide
+// First to BINGO's exclusion of tutorial Days is a query-time filter in #212,
+// not a distinction at this type level.
+export interface DayMetaDoc {
+  firstBingo?: { uid: string; displayName: string; at: number };
 }

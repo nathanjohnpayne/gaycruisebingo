@@ -124,6 +124,7 @@ const item = (id: string, reportCount: number, over: Partial<ItemDoc> = {}): Ite
     status: 'active',
     reportCount,
     spicy: false,
+    pool: 'main',
     ...over,
   }) as ItemDoc;
 
@@ -227,6 +228,23 @@ describe('useItems — the live Prompt pool excludes threshold-hidden Prompts', 
     );
 
     expect(result.current.items.map((i) => i.id).sort()).toEqual(['i3', 'i4']);
+  });
+
+  it('keeps only main-pool Prompts in the player-facing pool', () => {
+    const cap = capture();
+    const { result } = renderHook(() => useItems());
+
+    cap.fireDoc(eventSnap(undefined));
+    cap.fireQuery(
+      colSnap([
+        item('legacy-main', 0, { pool: undefined as unknown as ItemDoc['pool'] }),
+        item('explicit-main', 0, { pool: 'main' }),
+        item('embark', 0, { pool: 'embark' }),
+        item('farewell', 0, { pool: 'farewell' }),
+      ]),
+    );
+
+    expect(result.current.items.map((i) => i.id)).toEqual(['legacy-main', 'explicit-main']);
   });
 });
 

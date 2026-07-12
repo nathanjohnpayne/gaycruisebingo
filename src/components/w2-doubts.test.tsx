@@ -131,7 +131,7 @@ beforeEach(() => {
   // settle override this locally.
   H.raiseDoubt.mockImplementation(() => Promise.resolve());
   H.user = { uid: 'u1', displayName: 'Me', photoURL: null } as unknown as User;
-  H.board = { uid: 'u1', seed: 1, createdAt: 0, cells: dealt() };
+  H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
   H.player = { uid: 'u1', displayName: 'Me', photoURL: null } as unknown as PlayerDoc;
   H.playerLoading = false;
   H.markers = [];
@@ -419,6 +419,7 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
     // 5ac5a49 the sheet stayed open with its stale itemId/cellIndex.
     H.board = {
       uid: 'u1',
+      dayIndex: 0,
       seed: 1,
       createdAt: 0,
       cells: dealt().map((c) => (c.index === 0 ? { ...c, marked: false, markedAt: null } : c)),

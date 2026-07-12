@@ -16,10 +16,12 @@ type LiveDoc = {
   isFreeSpace: boolean;
   status: string;
   reportCount: number;
+  pool: string;
 };
 
 // Build the live `events/{id}/items` shape a correct, in-sync seed run leaves
 // behind: every canonical prompt as a seed-owned doc with the content-hash id.
+// Seed docs carry `pool: 'main'` (the stamp in `seedItemMutations`).
 function liveFromCanonical(pool: SeedItem[] = ITEMS as SeedItem[]): LiveDoc[] {
   return pool.map(({ text, spicy }) => ({
     id: seedItemDocId(text),
@@ -29,6 +31,7 @@ function liveFromCanonical(pool: SeedItem[] = ITEMS as SeedItem[]): LiveDoc[] {
     isFreeSpace: false,
     status: 'active',
     reportCount: 0,
+    pool: 'main',
   }));
 }
 
@@ -164,6 +167,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
         isFreeSpace: false,
         status: 'active',
         reportCount: 0,
+        pool: 'main',
       },
     ];
     const report = verifySeedPool(live);
@@ -191,6 +195,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
         isFreeSpace: false,
         status: 'active',
         reportCount: 0,
+        pool: 'main',
       },
     ];
     const report = verifySeedPool(live);
@@ -260,6 +265,25 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
     expect(report.mismatched[0]).toMatchObject({ text: 'Threesome' });
   });
 
+  it.each([
+    ['a missing pool (never stamped)', { pool: undefined as unknown as string }],
+    ['a drifted pool (seeded into a non-main pool)', { pool: 'embark' }],
+  ])('flags %s on a canonical seed doc as mismatched', (_case, change) => {
+    // The seed stamps `pool: 'main'`; a live seed doc missing `pool` or sitting
+    // in another pool is drift the verify path must surface (Codex follow-up).
+    const live = liveFromCanonical().map((d) =>
+      d.text === 'Threesome' ? { ...d, ...change } : d,
+    );
+    const report = verifySeedPool(live);
+    expect(report.ok).toBe(false);
+    expect(report.mismatched).toHaveLength(1);
+    expect(report.mismatched[0]).toMatchObject({
+      text: 'Threesome',
+      expectedPool: 'main',
+      actualPool: change.pool,
+    });
+  });
+
   it('accepts reports below the visibility threshold and rejects counts at the boundary', () => {
     const withReportCount = (reportCount: number) =>
       liveFromCanonical().map((d) =>
@@ -303,6 +327,7 @@ describe('w1-event-seed: verifySeedPool drift check (#129 reopened)', () => {
       isFreeSpace: false,
       status: 'active',
       reportCount: 0,
+      pool: 'main',
     }));
     const report = verifySeedPool(oldLive);
     expect(report.ok).toBe(false);

@@ -149,6 +149,7 @@ function mkItem(id: string, isFreeSpace = false): ItemDoc {
     status: 'active',
     reportCount: 0,
     spicy: false,
+    pool: 'main',
   };
 }
 
@@ -210,7 +211,7 @@ describe('ensureUserProfile', () => {
 describe('Board render', () => {
   it('renders 25 Squares with the Free Space centre marked and reading the seeded FREE_TEXT', () => {
     const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+    H.data.board = { uid: SIGNED_IN.uid, dayIndex: 0, seed: 20260707, createdAt: 0, cells };
 
     const { container } = render(<Board />);
 
@@ -228,7 +229,7 @@ describe('Board render', () => {
 
   it('acknowledges a Free Space click without unmarking the permanent centre', () => {
     const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+    H.data.board = { uid: SIGNED_IN.uid, dayIndex: 0, seed: 20260707, createdAt: 0, cells };
 
     render(<Board />);
 
@@ -243,7 +244,7 @@ describe('Board render', () => {
 
   it('exposes no re-deal / Square-swap affordance (ADR 0003)', () => {
     const cells = dealBoard(dealPool, FREE_TEXT, 11);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 11, createdAt: 0, cells };
+    H.data.board = { uid: SIGNED_IN.uid, dayIndex: 0, seed: 11, createdAt: 0, cells };
 
     render(<Board />);
 
@@ -360,7 +361,7 @@ describe('Board deal guard (ADR 0004)', () => {
     expect(screen.queryByRole('alert')).toBeNull();
 
     const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+    H.data.board = { uid: SIGNED_IN.uid, dayIndex: 0, seed: 20260707, createdAt: 0, cells };
     H.data.boardServer = true;
     rerender(<Board />);
 
@@ -386,7 +387,7 @@ describe('Board pool-listener gate (Codex P3)', () => {
 
   it('opens no pool listener once a Player has a frozen Board', () => {
     const cells = dealBoard(dealPool, FREE_TEXT, 20260707);
-    H.data.board = { uid: SIGNED_IN.uid, seed: 20260707, createdAt: 0, cells };
+    H.data.board = { uid: SIGNED_IN.uid, dayIndex: 0, seed: 20260707, createdAt: 0, cells };
 
     render(<Board />);
 
@@ -420,6 +421,23 @@ describe('joinAndDeal freeze-at-join', () => {
     const dealtIds = boardWrite.cells.filter((c) => !c.free).map((c) => c.itemId);
     expect(dealtIds).toHaveLength(24);
     expect(dealtIds).not.toContain('free'); // the Free Space item is never sampled
+  });
+
+  it('deals only from the main pool; embark/farewell tutorial prompts never land on the card', async () => {
+    const docs = [
+      ...activeItems(24),
+      { ...mkItem('embark-1'), pool: 'embark' as const },
+      { ...mkItem('farewell-1'), pool: 'farewell' as const },
+    ].map((it) => ({ data: () => it }));
+    H.getDocs.mockResolvedValueOnce({ docs });
+
+    await joinAndDeal(SIGNED_IN);
+
+    const boardWrite = H.batchSet.mock.calls[0][1] as BoardDoc;
+    const dealtIds = boardWrite.cells.filter((c) => !c.free).map((c) => c.itemId);
+    expect(dealtIds).toHaveLength(24);
+    expect(dealtIds).not.toContain('embark-1');
+    expect(dealtIds).not.toContain('farewell-1');
   });
 
   it('propagates the pool<MIN_POOL guard and never persists a blank Board', async () => {

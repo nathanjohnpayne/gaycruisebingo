@@ -15,6 +15,7 @@ import type {
   TallyEntry,
   MomentDoc,
   DoubtDoc,
+  DayMetaDoc,
 } from '../types';
 
 function passthrough<T>(): FirestoreDataConverter<T> {
@@ -37,6 +38,46 @@ export function migrateClaimMode(raw: unknown): ClaimMode {
   return 'honor';
 }
 
+// The July sailing's zone — the default a missing or invalid `timezone` field
+// resolves to so day-scheduling consumers always read a real IANA zone.
+const DEFAULT_TIMEZONE = 'Europe/Rome';
+
+/**
+ * Resolve a persisted `timezone` to a usable IANA zone. A legacy Event doc
+ * (seeded before Phase 1.5) carries no field; a malformed one can carry '',
+ * whitespace, a non-string, or a bogus id like 'Mars/Olympus'. The contract is
+ * a *real named IANA zone* — not an offset id ('+02:00', 'Etc/GMT+5') or a
+ * bare abbreviation ('EST'), which some runtimes' `Intl.DateTimeFormat` will
+ * happily accept even though day-scheduling consumers expect a canonical zone.
+ *
+ * Validate/canonicalize with `Intl.DateTimeFormat` after explicitly rejecting
+ * offset-style ids, GMT/UTC/Etc zones, and separator-less abbreviations.
+ * `supportedValuesOf('timeZone')` is not enough by itself because runtimes can
+ * accept still-valid IANA aliases (for example Europe/Kyiv) while listing only
+ * the runtime's canonical spelling. Anything that fails resolves to
+ * `Europe/Rome`.
+ */
+export function normalizeTimezone(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.trim() === '') return DEFAULT_TIMEZONE;
+  const tz = raw.trim();
+
+  if (
+    /^[+-]\d/.test(tz) ||
+    /GMT|UTC|Etc\//i.test(tz) ||
+    !tz.includes('/')
+  ) {
+    return DEFAULT_TIMEZONE;
+  }
+  try {
+    const canonical = new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone;
+    return canonical.includes('/') && !/GMT|UTC|Etc\//i.test(canonical)
+      ? canonical
+      : DEFAULT_TIMEZONE;
+  } catch {
+    return DEFAULT_TIMEZONE;
+  }
+}
+
 // Events read through the Claim Mode migration so a pre-rename persisted value
 // (seeded or in-flight docs) resolves to the current contract; every other field
 // passes through untouched.
@@ -52,20 +93,50 @@ export const eventConverter: FirestoreDataConverter<EventDoc> = {
       // presentational hide/mute roster (ADR 0004 Phase 0) as [] rather than
       // undefined. Writes only ever emit a real array.
       bannedUids: Array.isArray(data.bannedUids) ? data.bannedUids : [],
+      // Event docs seeded/written before Phase 1.5 carry no `days`/`timezone`.
+      // Default a missing (or malformed non-array) `days` to [] and resolve a
+      // missing/empty/invalid `timezone` to a real IANA zone ('Europe/Rome',
+      // the July sailing's zone) via `normalizeTimezone` so day-scheduling
+      // consumers read a real schedule/zone rather than undefined and a
+      // not-yet-migrated doc never throws downstream (daily-cards-spec §
+      // "Migration"). Writes only ever emit real values.
+      days: Array.isArray(data.days) ? data.days : [],
+      timezone: normalizeTimezone(data.timezone),
     };
   },
 };
-export const boardConverter = passthrough<BoardDoc>();
+// Boards read through a `dayIndex` default so a legacy/current Board (written
+// before the day-scoped path #204 exists, one Board per Player per Event) reads
+// as Day 0 rather than `undefined`, which day-aware consumers would branch on.
+// The write side stamps `dayIndex: 0` too; a real day-scoped write emits its own.
+export const boardConverter: FirestoreDataConverter<BoardDoc> = {
+  toFirestore: (data) => data as DocumentData,
+  fromFirestore: (snap: QueryDocumentSnapshot) => {
+    const data = snap.data() as BoardDoc;
+    return {
+      ...data,
+      dayIndex: typeof data.dayIndex === 'number' ? data.dayIndex : 0,
+    };
+  },
+};
 export const playerConverter = passthrough<PlayerDoc>();
 export const userConverter = passthrough<UserDoc>();
 
 // Items carry their doc id (used as the stable key when dealing boards).
 export const itemConverter: FirestoreDataConverter<ItemDoc> = {
   toFirestore: (data) => data as DocumentData,
-  fromFirestore: (snap: QueryDocumentSnapshot) => ({
-    ...(snap.data() as Omit<ItemDoc, 'id'>),
-    id: snap.id,
-  }),
+  fromFirestore: (snap: QueryDocumentSnapshot) => {
+    const data = snap.data() as Omit<ItemDoc, 'id'>;
+    return {
+      ...data,
+      id: snap.id,
+      // Items seeded/written before Phase 1.5 carry no `pool`; default a missing
+      // field to 'main' (mirrors the `bannedUids` default above) so existing
+      // Prompts read as main-pool without a data backfill (daily-cards-spec §
+      // "Migration"). Writes only ever emit a real pool.
+      pool: data.pool ?? 'main',
+    };
+  },
 };
 
 export const proofConverter: FirestoreDataConverter<ProofDoc> = {
@@ -122,3 +193,11 @@ export const doubtConverter: FirestoreDataConverter<DoubtDoc> = {
     id: snap.id,
   }),
 };
+
+// A per-Day honor doc (daily-cards-spec § "Data model"), read from
+// events/{EVENT_ID}/days/{dayIndex}/meta/{dayIndex} — a `meta` subcollection
+// whose single document id IS the encoded dayIndex (a valid document path).
+// Passthrough — no `id` to pin, because the doc id is that path-encoded
+// dayIndex (the reading ticket, #212, owns the path helper). Holds that Day's
+// own First to BINGO.
+export const dayMetaConverter = passthrough<DayMetaDoc>();

@@ -26,6 +26,8 @@ const baseEvent: Omit<EventDoc, 'claimMode'> = {
   defaultTheme: 'neon-playground',
   admins: [],
   bannedUids: [],
+  timezone: 'Europe/Rome',
+  days: [],
   settings: { reportHideThreshold: 4 },
 };
 

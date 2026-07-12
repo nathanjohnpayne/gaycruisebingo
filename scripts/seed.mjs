@@ -191,6 +191,9 @@ export function seedItemMutations(existingDocs, now = Date.now()) {
         status: 'active',
         reportCount: 0,
         spicy,
+        // Honor the now-required ItemDoc.pool: the seeded canonical prompts are
+        // the main game pool. Embark/farewell pools arrive with #207.
+        pool: 'main',
       },
     })),
   };
@@ -214,7 +217,10 @@ export function verifySeedPool(
   const expected = new Map(
     pool.map(({ text, spicy }) => [
       seedItemDocId(text),
-      { text, spicy, isFreeSpace: false, status: 'active' },
+      // `pool: 'main'` mirrors the stamp in `seedItemMutations` — the seeded
+      // canonical prompts are the main game pool, so a live seed doc missing
+      // `pool` or drifted to another pool is itself drift this check surfaces.
+      { text, spicy, isFreeSpace: false, status: 'active', pool: 'main' },
     ]),
   );
   const seedDocs = existingDocs.filter((doc) => doc.createdBy === 'seed');
@@ -244,6 +250,7 @@ export function verifySeedPool(
       live.spicy !== expectedDoc.spicy ||
       live.isFreeSpace !== expectedDoc.isFreeSpace ||
       live.status !== expectedDoc.status ||
+      live.pool !== expectedDoc.pool ||
       (typeof reportHideThreshold === 'number' &&
         reportHideThreshold > 0 &&
         live.reportCount >= reportHideThreshold)
@@ -259,6 +266,9 @@ export function verifySeedPool(
           : {}),
         ...(live.status !== expectedDoc.status
           ? { expectedStatus: expectedDoc.status, actualStatus: live.status }
+          : {}),
+        ...(live.pool !== expectedDoc.pool
+          ? { expectedPool: expectedDoc.pool, actualPool: live.pool }
           : {}),
         ...(typeof reportHideThreshold === 'number' &&
         reportHideThreshold > 0 &&
@@ -395,6 +405,7 @@ async function seed() {
       isFreeSpace: doc.data().isFreeSpace,
       status: doc.data().status,
       reportCount: doc.data().reportCount,
+      pool: doc.data().pool,
     })),
   );
   if (!report.ok) {
@@ -465,6 +476,7 @@ async function verify() {
       isFreeSpace: doc.data().isFreeSpace,
       status: doc.data().status,
       reportCount: doc.data().reportCount,
+      pool: doc.data().pool,
     })),
   );
   if (report.ok) {

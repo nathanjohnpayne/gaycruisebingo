@@ -139,7 +139,7 @@ function cellsWith(confirmed: number[], pending: number[] = [], proofs: Record<n
     };
   });
 }
-const boardDoc = (cells: Cell[], uid = 'u1'): BoardDoc => ({ uid, seed: 1, createdAt: 0, cells });
+const boardDoc = (cells: Cell[], uid = 'u1'): BoardDoc => ({ uid, dayIndex: 0, seed: 1, createdAt: 0, cells });
 const ROW0 = [0, 1, 2, 3, 4];
 const claim = (over: Partial<ClaimDoc> = {}): ClaimDoc => {
   const cellIndex = over.cellIndex ?? 4;

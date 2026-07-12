@@ -208,6 +208,10 @@ describe('Theme metadata (specs/w1-themes.md)', () => {
     for (const t of THEMES) {
       for (const pattern of bannedPatterns) {
         expect(t.label, `Theme "${t.id}" label leaks a mark: "${t.label}"`).not.toMatch(pattern);
+        expect(
+          t.description,
+          `Theme "${t.id}" description leaks a mark: "${t.description}"`,
+        ).not.toMatch(pattern);
       }
     }
   });

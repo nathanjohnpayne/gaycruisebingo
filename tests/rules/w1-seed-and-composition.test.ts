@@ -125,6 +125,7 @@ async function readPool(db: Firestore) {
     isFreeSpace: d.data().isFreeSpace,
     status: d.data().status,
     reportCount: d.data().reportCount,
+    pool: d.data().pool,
   }));
 }
 

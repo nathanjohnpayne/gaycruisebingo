@@ -321,6 +321,7 @@ export async function joinAndDeal(u: User): Promise<boolean> {
     .filter(
       (it) =>
         !it.isFreeSpace &&
+        (it.pool ?? 'main') === 'main' &&
         !isReportHidden(it.reportCount, threshold) &&
         !isBanned(it.createdBy, bannedUids),
     )
@@ -342,7 +343,9 @@ export async function joinAndDeal(u: User): Promise<boolean> {
   const now = Date.now();
 
   const batch = writeBatch(db);
-  batch.set(rawBoard(u.uid), { uid: u.uid, seed, createdAt: now, cells });
+  // dayIndex: 0 honors the now-required BoardDoc.dayIndex — today there is one
+  // Board per Player per Event, read as Day 0; the day-scoped board path is #204.
+  batch.set(rawBoard(u.uid), { uid: u.uid, dayIndex: 0, seed, createdAt: now, cells });
   batch.set(
     rawPlayer(u.uid),
     {
@@ -748,6 +751,9 @@ export async function addItem(uid: string, text: string, spicy = false): Promise
     status: 'active',
     reportCount: 0,
     spicy,
+    // Honor the now-required ItemDoc.pool: a player prompt-submission lands in
+    // the main game pool. Embark/farewell pools + the approval flow are #207/#210.
+    pool: 'main',
   });
 }
 
