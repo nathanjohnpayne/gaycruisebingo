@@ -1,8 +1,8 @@
-import { doc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { doc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout } from '../game/logic';
 import { isSystemAuthor } from './moderation';
-import type { Cell, ClaimMode, ThemeId, ClaimDoc } from '../types';
+import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc } from '../types';
 
 const evt = () => doc(db, 'events', EVENT_ID);
 const item = (id: string) => doc(db, 'events', EVENT_ID, 'items', id);
@@ -17,6 +17,49 @@ const marker = (itemId: string, uid: string) =>
 export const hideItem = (id: string) => updateDoc(item(id), { status: 'hidden' });
 export const restoreItem = (id: string) => updateDoc(item(id), { status: 'active' });
 export const deleteItem = (id: string) => deleteDoc(item(id));
+
+// Phase 1.5 approval flow (#210, daily-cards-spec § "Item pools and the approval
+// flow"): the Admin Approvals-queue write path. A main-pool submission lands
+// `pending` (src/data/api.ts addItem); only an admin's decision here can move it
+// out of that state. `approveItem` stamps `approvedBy`/`approvedAt` alongside the
+// `active` transition so the item is both playable AND carries who/when approved
+// it for audit — matching the ItemDoc contract (#200) this ticket is the first
+// consumer of. `rejectItem` moves the row to `rejected` and otherwise LEAVES it in
+// place (never deletes): rejected rows are "kept for audit, hidden from all
+// non-admins" (daily-cards-spec), so the Admin console remains the only surface
+// that can still see WHY a Prompt was turned down. Both writes are unconstrained
+// by `firestore.rules` under the `isAdmin(eventId)` arm — no client-side field
+// allowlist needed beyond what the rule already checks.
+export const approveItem = (id: string, adminUid: string) =>
+  updateDoc(item(id), { status: 'active', approvedBy: adminUid, approvedAt: Date.now() });
+export const rejectItem = (id: string, adminUid: string) =>
+  updateDoc(item(id), { status: 'rejected', approvedBy: adminUid, approvedAt: Date.now() });
+
+// Lets an admin correct a submitter's 🔞 tagging from the Approvals queue BEFORE
+// approving it into the live pool — once approved, `dealBoard`'s spicy-ratio
+// sampling treats `spicy` as authoritative, so getting it right pre-approve
+// matters more than it would post-approve.
+export const setItemSpicy = (id: string, spicy: boolean) => updateDoc(item(id), { spicy });
+
+/**
+ * Bulk-approve every row in `items` (the Approvals queue's full pending list) in
+ * ONE batched write — "Bulk approve works on the full pending list in one action"
+ * (#210 AC). A `writeBatch` (not N sequential `updateDoc` calls) so the queue
+ * clears atomically from the caller's perspective and the console does not fire
+ * an update per row. Each row is stamped with the SAME `approvedAt` instant, on
+ * the reasoning that a single bulk click is one approval EVENT even though it
+ * touches many rows — mirrors how a single admin action elsewhere (e.g. a batch
+ * resolve) reads as one moment in the audit trail, not many micro-timestamps.
+ */
+export function bulkApproveItems(items: Pick<ItemDoc, 'id'>[], adminUid: string): Promise<void> {
+  if (items.length === 0) return Promise.resolve();
+  const batch = writeBatch(db);
+  const approvedAt = Date.now();
+  for (const it of items) {
+    batch.update(item(it.id), { status: 'active', approvedBy: adminUid, approvedAt });
+  }
+  return batch.commit();
+}
 export const hideProof = (id: string) => updateDoc(proof(id), { status: 'hidden' });
 export const restoreProof = (id: string) => updateDoc(proof(id), { status: 'active' });
 

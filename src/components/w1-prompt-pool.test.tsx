@@ -31,7 +31,15 @@ vi.mock('../data/api', async (importOriginal) => {
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => authState.current }));
-vi.mock('../hooks/useData', () => ({ useItems: () => itemsState.current }));
+vi.mock('../hooks/useData', () => ({
+  useItems: () => itemsState.current,
+  // #210: ItemPool also reads the submitter's own pending items so a fresh
+  // `status: 'pending'` add doesn't silently vanish — pinned in its own
+  // suite (src/components/ItemPool.test.tsx). Empty here so it is a no-op
+  // for every assertion in THIS file, which only exercises the pre-existing
+  // active-pool + throttle behavior.
+  useMyPendingItems: () => ({ items: [], loading: false }),
+}));
 
 import ItemPool from './ItemPool';
 import { ITEM_RATE_LIMIT_MS } from '../data/api';

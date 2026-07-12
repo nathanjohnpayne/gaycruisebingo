@@ -25,10 +25,10 @@ import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdg
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
-import AcceptableUse from './AcceptableUse';
 import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 import LoadingState from './LoadingState';
 import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
+import TutorialBanner, { WarmUpTag } from './TutorialBanner';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
 
@@ -376,6 +376,7 @@ function LockedDayPreview({ day, timezone }: { day: DayDef; timezone: string | u
       <div className="day-locked-chrome">
         <div className="day-locked-title">
           <span aria-hidden="true">{day.portEmoji}</span> {day.port} · {themeLabel(day.theme)}
+          {day.tutorial && <WarmUpTag className="day-locked-warm-up" />}
         </div>
         {description && <p className="day-locked-desc">{description}</p>}
       </div>
@@ -467,6 +468,10 @@ export default function Board() {
   const [freePulse, setFreePulse] = useState(0);
   const [proofTarget, setProofTarget] = useState<Cell | null>(null);
   const [tallyTarget, setTallyTarget] = useState<Cell | null>(null);
+  // The open Claim sheet's social heat line (#211): reuse the SAME per-Prompt
+  // Tally subscription the TallyBadge uses — no new read — for the Square the
+  // sheet is open on. useTally accepts a null id (no proofTarget → no sub).
+  const { count: proofTargetTally } = useTally(proofTarget?.itemId ?? null);
   // The Day switcher's viewed-Day index (daily-cards-spec § "Day switcher"),
   // independent of the app-wide Theme (ThemeContext) and of the header's
   // "today" line (Nav.tsx, #203) — this state ONLY drives the board area's
@@ -838,14 +843,19 @@ export default function Board() {
   // orthogonal to the `!board` guard below, which is about the ONE existing
   // (today's) Board this Player already has. Per-Day Board fetching is
   // #204's scope; this ticket only decides WHICH chrome to render for the
-  // viewed Day (daily-cards-spec § "Locked Day preview").
+  // viewed Day (daily-cards-spec § "Locked Day preview"). No inline
+  // Guidelines mount here (#208 retired every Board-inline/pathname-gated
+  // AcceptableUse mount for the single More-menu row —
+  // w3-security-hardening.test.tsx "reachable from every signed-in route"):
+  // the tab bar (Nav, App.tsx) renders alongside Board regardless of lock
+  // state, so More — and Guidelines inside it — stays reachable on a locked
+  // Day exactly like any other route, with no per-branch mount needed.
   if (viewedDay && viewedLocked) {
     return (
       <>
         {cardMeta}
         {daySwitcher}
         <LockedDayPreview day={viewedDay} timezone={event?.timezone} />
-        <AcceptableUse />
       </>
     );
   }
@@ -1074,6 +1084,19 @@ export default function Board() {
           on a not-yet-migrated Event (`hasDays` false), so the pre-Phase-1.5
           single-Board rendering is byte-identical to before. */}
       <div className="board-area" data-theme={viewedDay?.theme}>
+        {/* The tutorial banner slot (daily-cards-spec §§ "Embark (tutorial)
+            view" / "Farewell view"): mounts above the grid, gated on the
+            viewed Day's `tutorial` flag — a structural no-op (renders
+            nothing) for any of the eight main Days. The board-header slot
+            carries the "Warm-up" tag in place of #212's daily-honor pin
+            (mutually exclusive on `tutorial`, so the two can never collide
+            on this DOM position independently of each other). */}
+        {viewedDay?.tutorial && (
+          <div className="board-header">
+            <WarmUpTag />
+          </div>
+        )}
+        {viewedDay && <TutorialBanner day={viewedDay} />}
         <div className="bingo-head">
           {['B', 'I', 'N', 'G', 'O'].map((l) => (
             <span key={l}>{l}</span>
@@ -1174,10 +1197,6 @@ export default function Board() {
       <div className="count">
         Marked <b>{countMarked(cells)}</b> · Bingos <b>{player?.bingoCount ?? 0}</b>
       </div>
-      {/* The fixed Guidelines affordance is mounted here on Card and from main.tsx
-          elsewhere. It sits bottom-left, opposite the bottom-right bug reporter,
-          and self-gates on the signed-in User (ADR 0005). */}
-      <AcceptableUse />
       {/* `cells` fixes the empty-card share race (Codex P2, PR #111 finding
           1): Celebration used to open its own useBoard(uid) listener and
           could render/share before that listener's own first snapshot
@@ -1218,6 +1237,20 @@ export default function Board() {
           cell={proofTarget}
           claimMode={claimMode}
           currentFirstBingoAt={player?.firstBingoAt ?? null}
+          // Event admin knobs, read defensively with the spec defaults (#211).
+          // `photoProofSource` is NEVER tied to claimMode — only this event-level
+          // override hides the 🖼️ Library pick.
+          photoProofSource={event?.settings?.photoProofSource ?? 'camera_or_library'}
+          stripExif={event?.settings?.stripPhotoExif ?? true}
+          // The viewed Day and the Square's live Tally count for the
+          // "🔥 Marked by N others" heat line. When a Day schedule is live the
+          // Day switcher can display any unlocked Day while the single legacy
+          // Board still reads `dayIndex: 0`, so stamp the SELECTED `viewedIndex`
+          // (what the Player is actually claiming from) — not the Board doc's
+          // index, which would badge every Day-2+ claim as Day 1 (Codex P2).
+          // Fall back to the Board doc index only when there is no schedule.
+          dayIndex={hasDays ? viewedIndex : board?.dayIndex}
+          tallyCount={proofTargetTally}
           // The proofed-mark completion verdict (PR #110 round 2 finding 1): a
           // successful attachProof reports the SAME win-transition shape setMark
           // returns, and it rides the SAME broadcast pipeline — a proof_required

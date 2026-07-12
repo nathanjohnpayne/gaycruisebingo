@@ -417,6 +417,47 @@ export function usePendingClaims() {
 }
 
 /**
+ * The Admin Approvals queue (#210, daily-cards-spec § "Item pools and the
+ * approval flow"): every main-pool Prompt awaiting an admin decision, oldest
+ * first (so the longest-waiting submission floats to the top — mirrors
+ * `usePendingClaims`'s shape, per the ticket's implementation note). Scoped
+ * `where('status','==','pending')` so every matched doc satisfies the ADMIN arm
+ * of the items read rule with a single-field equality — no composite index. This
+ * is its own subscription (not a client-side filter over `useAllItems`) so the
+ * Approvals tab does not re-filter the WHOLE items collection (every status,
+ * every pool) on every render just to find the handful of pending rows.
+ */
+export function usePendingItems() {
+  const { data, loading } = useColSub<ItemDoc>(
+    query(itemsCol(), where('status', '==', 'pending')),
+    'items-pending',
+  );
+  const items = [...data].sort((a, b) => a.createdAt - b.createdAt);
+  return { items, loading };
+}
+
+/**
+ * The signed-in Player's OWN pending main-pool Prompts (#210): "a submitter's own
+ * pending items should still render in their list, visibly marked pending, not
+ * silently vanish after Add." `useItems` only reads `status == 'active'`, so a
+ * fresh `pending` submission would otherwise disappear from ItemPool the instant
+ * it is added. Scoped `where('createdBy','==',uid)` + `where('status','==',
+ * 'pending')` — BOTH equality clauses (mirrors `useMyProofs`'s same two-equality
+ * shape), so this rides the existing single-field indexes and needs NO composite
+ * index, and every matched doc satisfies the read rule's submitter carve-out
+ * (`status == 'pending' && createdBy == request.auth.uid`) without touching the
+ * ADMIN arm. Pass `null`/`undefined` (signed-out) to open no subscription.
+ */
+export function useMyPendingItems(uid: string | null | undefined) {
+  const { data, loading } = useColSub<ItemDoc>(
+    uid ? query(itemsCol(), where('createdBy', '==', uid), where('status', '==', 'pending')) : null,
+    uid ? `items-pending-mine:${uid}` : 'items-pending-mine:none',
+  );
+  const items = [...data].sort((a, b) => a.createdAt - b.createdAt);
+  return { items, loading };
+}
+
+/**
  * The signed-in Player's OWN Claims (#41). Scoped `where('uid','==',uid)` so every
  * matched doc satisfies the claims read rule (`isOwner(resource.data.uid)`) — a
  * Player is NOT an admin, so an unconstrained collection read would be denied.
@@ -436,6 +477,27 @@ export function useMyClaims(uid: string | undefined) {
   // pending snapshot on a fresh reload must not make a confirm that landed while
   // the app was closed look like an in-session pending→confirmed flip.
   return { claims: data, loading, hasServerData, fromCache };
+}
+
+/**
+ * The count for the More menu's Admin row badge (#208, daily-cards-spec §
+ * "More menu" § Admin): Prompts awaiting approval (`ItemDoc.status ===
+ * 'pending'`, the #200 schema / #210 write-path approval flow). Deliberately
+ * its OWN small subscription rather than reusing `useAllItems` — an admin-
+ * only read (`firestore.rules`: "Pending/rejected items readable only by
+ * admins + submitter") that More mounts unconditionally alongside the rest of
+ * the menu, so it must stay cheap and must never open for a non-admin. Pass
+ * `enabled=false` (a non-admin viewer) to open NO subscription — mirrors
+ * `useItems`'s `enabled` gate. 0/hidden until #210 starts writing pending
+ * items is expected, not broken (the field itself shipped with #200, before
+ * anything writes it).
+ */
+export function usePendingItemCount(enabled = true) {
+  const { data, loading } = useColSub<ItemDoc>(
+    enabled ? query(itemsCol(), where('status', '==', 'pending')) : null,
+    enabled ? 'items-pending' : 'items-pending:disabled',
+  );
+  return { count: data.length, loading };
 }
 
 /**

@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  deleteField,
   doc,
   getDoc,
   getDocFromCache,
@@ -851,11 +852,17 @@ export async function addItem(uid: string, text: string, spicy = false): Promise
     createdBy: uid,
     createdAt: Date.now(),
     isFreeSpace: false,
-    status: 'active',
+    // Phase 1.5 approval flow (daily-cards-spec § "Item pools and the approval
+    // flow", #210): a main-pool player submission now lands `pending`, invisible
+    // everywhere except the Admin Approvals queue and (as "pending review") its
+    // own submitter, until an admin approves (→ 'active') or rejects it. Curated
+    // pools (embark/farewell) are seeded/edited by admins directly — this path is
+    // the main pool's ONLY writer, so it is the only one the gate applies to.
+    status: 'pending',
     reportCount: 0,
     spicy,
     // Honor the now-required ItemDoc.pool: a player prompt-submission lands in
-    // the main game pool. Embark/farewell pools + the approval flow are #207/#210.
+    // the main game pool. Embark/farewell pools are seeded directly (#207).
     pool: 'main',
   });
 }
@@ -872,4 +879,16 @@ export async function reportItem(id: string): Promise<void> {
 /** Let a player set a display theme preference on their player row. */
 export async function savePlayerTheme(uid: string, theme: string): Promise<void> {
   await setDoc(rawPlayer(uid), { theme }, { merge: true });
+}
+
+/**
+ * Clear a player's saved cross-device theme pick (More menu § "Theme" —
+ * picking Auto). Without this, `players/{uid}.theme` keeps the last concrete
+ * pick, so `ThemeProvider`'s cross-device-adopt effect re-applies it on the
+ * next load/device and Auto silently stops following the day (Codex P2 on
+ * #232). Deletes the field rather than writing a sentinel so a stale reader
+ * never mistakes "explicitly cleared" for a real ThemeId.
+ */
+export async function clearPlayerTheme(uid: string): Promise<void> {
+  await setDoc(rawPlayer(uid), { theme: deleteField() }, { merge: true });
 }

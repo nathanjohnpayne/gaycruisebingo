@@ -123,12 +123,19 @@ function Editor({ user }: { user: User }) {
     if (file) run(() => updateAvatar(user.uid, file), 'Upload failed—try again.');
   };
 
+  // The More menu's "Profile card" row (#208, daily-cards-spec § "More menu"
+  // § 1): avatar, name, @handle, all inside the SAME trigger button so tapping
+  // anywhere in the row opens the sheet — not just the avatar. `handle` is
+  // optional (UserDoc.handle, unset until a Player sets one) so its row is
+  // simply omitted rather than rendering an empty "@".
+  const handle = typeof profile?.handle === 'string' ? profile.handle.trim() : '';
+
   return (
     <>
       <button
         ref={triggerRef}
         type="button"
-        className="avatar-trigger"
+        className="avatar-trigger more-row"
         title="Edit profile"
         aria-label="Edit profile"
         aria-haspopup="dialog"
@@ -136,6 +143,10 @@ function Editor({ user }: { user: User }) {
         onClick={openEditor}
       >
         <Avatar name={currentName} src={user.photoURL ?? null} customPhoto={customSrc} />
+        <span className="more-row-text">
+          <span className="more-row-title">{currentName}</span>
+          {handle && <span className="more-row-sub">@{handle}</span>}
+        </span>
       </button>
       {open && (
         <div className="sheet-backdrop" onClick={() => setOpen(false)}>

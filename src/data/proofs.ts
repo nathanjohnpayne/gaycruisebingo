@@ -29,6 +29,14 @@ export interface AttachProofArgs {
   itemText: string;
   claimMode: ClaimMode;
   currentFirstBingoAt: number | null;
+  // Which affordance produced a photo — 📷 camera or 🖼️ library (#190). Stamped
+  // from the ProofSheet input, NOT inferred from EXIF; the Feed badges 🖼️.
+  source?: 'camera' | 'library';
+  // The Day this Proof belongs to, so the Feed reads "Day 2 · Get Sporty".
+  dayIndex?: number;
+  // Strip EXIF/GPS from a photo before upload (event `stripPhotoExif`, default
+  // true); threaded straight to uploadProofMedia — this layer never reads the blob.
+  stripExif?: boolean;
   proof: { type: ProofType; blob?: Blob; text?: string };
 }
 
@@ -96,7 +104,7 @@ export interface AttachProofResult {
  * drain has actually clobbered the projection.
  */
 export async function attachProof(args: AttachProofArgs): Promise<AttachProofResult> {
-  const { uid, displayName, photoURL, cells, cellIndex, itemId, itemText, claimMode, currentFirstBingoAt, proof } =
+  const { uid, displayName, photoURL, cells, cellIndex, itemId, itemText, claimMode, currentFirstBingoAt, source, dayIndex, stripExif, proof } =
     args;
   const now = Date.now();
   const pRef = doc(rawProofs());
@@ -105,7 +113,8 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
   let storagePath: string | null = null;
   let mediaURL: string | null = null;
   if ((proof.type === 'photo' || proof.type === 'audio') && proof.blob) {
-    const up = await uploadProofMedia(uid, proofId, proof.blob, proof.type);
+    // Only photos carry EXIF/GPS; the strip flag is inert for audio.
+    const up = await uploadProofMedia(uid, proofId, proof.blob, proof.type, { stripExif });
     storagePath = up.path;
     mediaURL = up.url;
   }
@@ -164,6 +173,11 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
       // confirms the claim; otherwise the proof is public immediately.
       status: pending ? 'pending' : 'active',
       visionFlag: null,
+      // #190: stamp which affordance produced a photo so the Feed badges a
+      // library pick 🖼️; null for audio/text and camera picks that pass none.
+      source: source ?? null,
+      // The Day this claim belongs to, so the Feed reads "Day 2 · Get Sporty".
+      dayIndex: typeof dayIndex === 'number' ? dayIndex : null,
     });
     tx.set(boardRef, { cells: next }, { merge: true });
     tx.set(playerRef, { squaresMarked: squares, bingoCount, firstBingoAt, blackout }, { merge: true });

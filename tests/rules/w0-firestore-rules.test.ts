@@ -207,6 +207,27 @@ describe('firestore.rules — honor-system invariants', () => {
     );
   });
 
+  it('#190/#211: proofs carry source + dayIndex; invalid shapes denied', async () => {
+    // attachProof ALWAYS writes both keys (null when absent), so the create must
+    // pass with them present and null, and with real values.
+    await assertSucceeds(
+      setDoc(doc(db(ALICE), at('proofs/s1')), photoProof('s1', { source: null, dayIndex: null })),
+    );
+    await assertSucceeds(
+      setDoc(doc(db(ALICE), at('proofs/s2')), photoProof('s2', { source: 'library', dayIndex: 2 })),
+    );
+    await assertSucceeds(
+      setDoc(doc(db(ALICE), at('proofs/s3')), photoProof('s3', { source: 'camera', dayIndex: 0 })),
+    );
+    // Shape is validated even though the values are flavour (ADR 0001).
+    await assertFails(
+      setDoc(doc(db(ALICE), at('proofs/s4')), photoProof('s4', { source: 'screenshot' })),
+    );
+    await assertFails(
+      setDoc(doc(db(ALICE), at('proofs/s5')), photoProof('s5', { dayIndex: 'day-2' })),
+    );
+  });
+
   it('ADR 0001: a User self-attests 18+ (attestedAdultAt); cross/invalid denied', async () => {
     const profile = (over = {}) => ({
       displayName: 'Alice',

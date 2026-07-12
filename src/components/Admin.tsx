@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import {
   useEventDoc,
   usePendingClaims,
+  usePendingItems,
   useReportedProofs,
   useAllItems,
   isReportHidden,
@@ -18,6 +20,10 @@ import {
   restoreItem,
   deleteItem,
   clearItemReports,
+  approveItem,
+  rejectItem,
+  bulkApproveItems,
+  setItemSpicy,
   setClaimMode,
   setEventTheme,
   banUser,
@@ -184,12 +190,88 @@ function ItemQueueRow({
   );
 }
 
+/**
+ * One row in the Approvals queue (#210, daily-cards-spec § "Item pools and the
+ * approval flow"): a pending main-pool Prompt with submitter attribution, a
+ * spicy toggle, and Approve/Reject. `spicy` is client-editable here (via a
+ * plain `updateDoc` through `data/admin`'s isAdmin-unconstrained write arm) so
+ * an admin can correct a submitter's 🔞 tagging BEFORE approving it into the
+ * live pool — after approval the spicy ratio sampling (`dealBoard`) already
+ * treats it as authoritative, so getting it right pre-approve matters.
+ */
+function ApprovalQueueRow({
+  item: it,
+  adminUid,
+  onToggleSpicy,
+}: {
+  item: ItemDoc;
+  adminUid: string;
+  onToggleSpicy: (id: string, spicy: boolean) => void;
+}) {
+  return (
+    <div className="row">
+      <div className="grow">
+        <div className="name" style={{ fontWeight: 500 }}>
+          {it.text}
+        </div>
+        <div className="sub">submitted by {it.createdBy}</div>
+      </div>
+      <label style={{ fontSize: 12 }}>
+        <input
+          type="checkbox"
+          checked={it.spicy}
+          onChange={(e) => onToggleSpicy(it.id, e.target.checked)}
+        />{' '}
+        🔞 Spicy
+      </label>
+      <button className="btn primary" onClick={() => approveItem(it.id, adminUid)}>
+        Approve
+      </button>
+      <button className="iconbtn" title="Reject" onClick={() => rejectItem(it.id, adminUid)}>
+        ✕
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The Approvals tab (#210): the pending main-pool queue, oldest-first
+ * (`usePendingItems`), with a bulk-approve control for taste. A separate
+ * subscription from the Moderation tab's `useAllItems` — see `usePendingItems`'s
+ * doc comment for why.
+ */
+function ApprovalsTab({ adminUid }: { adminUid: string }) {
+  const { items } = usePendingItems();
+
+  return (
+    <div className="admin-section">
+      <h3>Approvals{items.length ? ` (${items.length})` : ''}</h3>
+      {!items.length && (
+        <p className="muted" style={{ fontSize: 12 }}>
+          Nothing pending review.
+        </p>
+      )}
+      {!!items.length && (
+        <button className="btn" onClick={() => bulkApproveItems(items, adminUid)}>
+          Approve all
+        </button>
+      )}
+      <div className="list">
+        {items.map((it) => (
+          <ApprovalQueueRow key={it.id} item={it} adminUid={adminUid} onToggleSpicy={setItemSpicy} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Admin() {
   const { user } = useAuth();
   const { data: event } = useEventDoc();
   const { claims } = usePendingClaims();
   const { flagged } = useReportedProofs();
   const { items } = useAllItems();
+  const [tab, setTab] = useState<'moderation' | 'approvals'>('moderation');
 
   const isAdmin = !!(user && event?.admins?.includes(user.uid));
   if (!isAdmin) return <div className="center muted">Admins only.</div>;
@@ -208,6 +290,12 @@ export default function Admin() {
   // that overlaps admins is rejected by the rules, so BanControl suppresses the Ban
   // action for an admin-authored row (Codex P2, PR #122 round 2).
   const admins = event?.admins ?? [];
+  // Prompts awaiting approval (#200 schema, #210 write path) — the SAME count
+  // the More menu's Admin row badges (`usePendingItemCount`), derived here from
+  // the console's own already-subscribed `items` (no extra listener) so the
+  // console and the badge can never disagree. 0 until #210 starts writing
+  // `status: 'pending'` items — expected, not broken.
+  const pendingCount = items.filter((it) => it.status === 'pending').length;
   // Prompts needing moderation attention: reported at least once, or already
   // hard-hidden. Derived from useAllItems (already subscribed) so the queue opens
   // NO extra listener, and UNfiltered by the threshold so an auto-hidden Prompt
@@ -237,6 +325,28 @@ export default function Admin() {
 
   return (
     <div>
+      {/* Approvals tab (#210): a local sub-navigation inside the Admin console —
+          Moderation (the existing report queue + console below) vs Approvals
+          (the new pending-item queue). This does NOT touch the app-level bottom
+          tab bar (src/components/tabs.ts is the frozen Wave-1+ mount-point
+          contract) — Admin already mounts inside the More tab (#208); this is
+          purely a within-page toggle. */}
+      <div className="seg" style={{ marginBottom: 12 }}>
+        <button
+          className={'seg-btn' + (tab === 'moderation' ? ' on' : '')}
+          onClick={() => setTab('moderation')}
+        >
+          Moderation
+        </button>
+        <button
+          className={'seg-btn' + (tab === 'approvals' ? ' on' : '')}
+          onClick={() => setTab('approvals')}
+        >
+          Approvals
+        </button>
+      </div>
+      {tab === 'approvals' && user && <ApprovalsTab adminUid={user.uid} />}
+      {tab !== 'moderation' ? null : <>
       {/* Report queue — the moderation triage surface, surfaced FIRST and
           most-reported-first. ADR 0004 Phase 0: any row tagged "auto-hidden" has
           crossed reportHideThreshold and already self-hid on every Player's
@@ -347,7 +457,10 @@ export default function Admin() {
       </div>
 
       <div className="admin-section">
-        <h3>Prompts ({items.length})</h3>
+        <h3>
+          Prompts ({items.length})
+          {pendingCount > 0 && <span className="pill">{pendingCount} pending</span>}
+        </h3>
         <div className="list">
           {items.map((it) => (
             <div key={it.id} className="row">
@@ -379,6 +492,7 @@ export default function Admin() {
           ))}
         </div>
       </div>
+      </>}
     </div>
   );
 }

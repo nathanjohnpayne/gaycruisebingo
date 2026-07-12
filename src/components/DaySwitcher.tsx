@@ -1,5 +1,6 @@
 import type { DayDef } from '../types';
 import { THEMES } from '../theme/themes';
+import { WarmUpTag } from './TutorialBanner';
 
 /**
  * Day switcher strip (daily-cards-spec § "Day switcher"): a horizontally
@@ -87,7 +88,7 @@ export default function DaySwitcher({ days, viewedIndex, onSelect, now = Date.no
             type="button"
             role="tab"
             aria-selected={selected}
-            aria-label={`${weekday(d.date)} · ${d.port}${state === 'locked' ? ' · locked' : ''}`}
+            aria-label={`${weekday(d.date)} · ${d.port}${d.tutorial ? ' · Warm-up' : ''}${state === 'locked' ? ' · locked' : ''}`}
             className={`day-chip day-chip-${state}${selected ? ' selected' : ''}`}
             onClick={() => onSelect(i)}
           >
@@ -98,6 +99,10 @@ export default function DaySwitcher({ days, viewedIndex, onSelect, now = Date.no
             <span className="day-chip-theme" aria-hidden="true">
               {themeEmoji(d.theme)}
             </span>
+            {/* "Warm-up" in place of a daily-honor pin (daily-cards-spec §
+                "Embark (tutorial) view") — the two tutorial Days only;
+                #212 owns the honor pin the eight main Days show here. */}
+            {d.tutorial && <WarmUpTag className="day-chip-warm-up" />}
             {state !== 'today' && (
               <span className="day-chip-glyph" aria-hidden="true">
                 {GLYPH[state]}

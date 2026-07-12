@@ -1,10 +1,20 @@
-import { useFeed } from '../hooks/useData';
+import { useFeed, useEventDoc } from '../hooks/useData';
 import { useAuth } from '../auth/AuthContext';
 import { reportProof, deleteProof } from '../data/proofs';
 import { track } from '../analytics';
 import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
-import type { MomentDoc, MomentKind, ProofDoc } from '../types';
+import { THEMES } from '../theme/themes';
+import type { DayDef, MomentDoc, MomentKind, ProofDoc } from '../types';
+
+// The Feed Day chip label (#211): "Day 2 · Get Sporty" — a 1-based Day number
+// plus the Day's theme label from EventDoc.days[dayIndex] → THEMES, degrading to
+// a bare "Day N" when the Day or its theme can't be resolved.
+function dayChipLabel(dayIndex: number, days: DayDef[] | undefined): string {
+  const day = days?.[dayIndex];
+  const theme = day ? THEMES.find((t) => t.id === day.theme) : undefined;
+  return theme ? `Day ${dayIndex + 1} · ${theme.label}` : `Day ${dayIndex + 1}`;
+}
 
 function ago(ts: number): string {
   const s = Math.floor((Date.now() - ts) / 1000);
@@ -37,7 +47,7 @@ const MOMENT_COPY: Record<MomentKind, { icon: string; line: string }> = {
  * js/xss-through-dom #1): mediaURL is resolved from a Firestore doc, so a forged
  * non-media scheme (javascript:, …) is dropped rather than rendered.
  */
-function ProofCard({ proof, viewerUid }: { proof: ProofDoc; viewerUid: string | undefined }) {
+function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: string | undefined; days: DayDef[] | undefined }) {
   const media = safeMediaUrl(proof.mediaURL);
   return (
     <div className="proof">
@@ -47,8 +57,20 @@ function ProofCard({ proof, viewerUid }: { proof: ProofDoc; viewerUid: string | 
           <div className="name" style={{ fontSize: 14 }}>
             {proof.displayName}{' '}
             <span className="muted" style={{ fontWeight: 400 }}>marked “{proof.itemText}”</span>
+            {/* 🖼️ badge for a library pick (#190): stamped from ProofDoc.source,
+                next to nothing for a camera/audio/text Proof (source absent). */}
+            {proof.source === 'library' && (
+              <span className="proof-source-badge" title="From the photo library" aria-label="From the photo library">{' '}🖼️</span>
+            )}
           </div>
-          <div className="sub">{ago(proof.createdAt)}</div>
+          <div className="sub">
+            {ago(proof.createdAt)}
+            {/* Day chip (#211): "Day 2 · Get Sporty" from the Proof's dayIndex, so
+                the Feed reads as a cruise diary. Absent on pre-dayIndex Proofs. */}
+            {typeof proof.dayIndex === 'number' && (
+              <span className="proof-day-chip">{dayChipLabel(proof.dayIndex, days)}</span>
+            )}
+          </div>
         </div>
         <button className="iconbtn" title="Report" onClick={() => { reportProof(proof.id).catch(console.error); track('report_item'); }}>
           ⚑
@@ -99,6 +121,10 @@ function MomentCard({ moment }: { moment: MomentDoc }) {
 export default function ProofFeed() {
   const { entries, loading } = useFeed();
   const { user } = useAuth();
+  // The event's days[] resolves a Proof's dayIndex to its theme label for the
+  // Day chip (#211). Read-only; absent while loading or on a pre-days[] event,
+  // in which case dayChipLabel falls back to a bare "Day N".
+  const { data: event } = useEventDoc();
 
   if (loading) return <div className="center muted">Loading…</div>;
   if (!entries.length) return <div className="center muted">Nothing in the feed yet. Somebody do something.</div>;
@@ -109,7 +135,7 @@ export default function ProofFeed() {
         entry.feedKind === 'moment' ? (
           <MomentCard key={`moment-${entry.moment.id}`} moment={entry.moment} />
         ) : (
-          <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} />
+          <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} />
         ),
       )}
     </div>
