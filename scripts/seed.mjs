@@ -191,6 +191,9 @@ export function seedItemMutations(existingDocs, now = Date.now()) {
         status: 'active',
         reportCount: 0,
         spicy,
+        // Honor the now-required ItemDoc.pool: the seeded canonical prompts are
+        // the main game pool. Embark/farewell pools arrive with #207.
+        pool: 'main',
       },
     })),
   };

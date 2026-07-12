@@ -38,6 +38,28 @@ export function migrateClaimMode(raw: unknown): ClaimMode {
   return 'honor';
 }
 
+// The July sailing's zone — the default a missing or invalid `timezone` field
+// resolves to so day-scheduling consumers always read a real IANA zone.
+const DEFAULT_TIMEZONE = 'Europe/Rome';
+
+/**
+ * Resolve a persisted `timezone` to a usable IANA zone. A legacy Event doc
+ * (seeded before Phase 1.5) carries no field; a malformed one can carry '',
+ * whitespace, a non-string, or a bogus id like 'Mars/Olympus'. Any of those
+ * would make `Intl`/day-scheduling throw or silently misbehave downstream, so
+ * validate the string against `Intl.DateTimeFormat` (which throws a RangeError
+ * on an unknown zone) and fall back to `Europe/Rome` otherwise.
+ */
+export function normalizeTimezone(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.trim() === '') return DEFAULT_TIMEZONE;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: raw });
+    return raw;
+  } catch {
+    return DEFAULT_TIMEZONE;
+  }
+}
+
 // Events read through the Claim Mode migration so a pre-rename persisted value
 // (seeded or in-flight docs) resolves to the current contract; every other field
 // passes through untouched.
@@ -54,17 +76,31 @@ export const eventConverter: FirestoreDataConverter<EventDoc> = {
       // undefined. Writes only ever emit a real array.
       bannedUids: Array.isArray(data.bannedUids) ? data.bannedUids : [],
       // Event docs seeded/written before Phase 1.5 carry no `days`/`timezone`.
-      // Default a missing (or malformed non-array) `days` to [] and a missing
-      // `timezone` to 'Europe/Rome' (the July sailing's zone) so day-scheduling
+      // Default a missing (or malformed non-array) `days` to [] and resolve a
+      // missing/empty/invalid `timezone` to a real IANA zone ('Europe/Rome',
+      // the July sailing's zone) via `normalizeTimezone` so day-scheduling
       // consumers read a real schedule/zone rather than undefined and a
       // not-yet-migrated doc never throws downstream (daily-cards-spec §
       // "Migration"). Writes only ever emit real values.
       days: Array.isArray(data.days) ? data.days : [],
-      timezone: typeof data.timezone === 'string' ? data.timezone : 'Europe/Rome',
+      timezone: normalizeTimezone(data.timezone),
     };
   },
 };
-export const boardConverter = passthrough<BoardDoc>();
+// Boards read through a `dayIndex` default so a legacy/current Board (written
+// before the day-scoped path #204 exists, one Board per Player per Event) reads
+// as Day 0 rather than `undefined`, which day-aware consumers would branch on.
+// The write side stamps `dayIndex: 0` too; a real day-scoped write emits its own.
+export const boardConverter: FirestoreDataConverter<BoardDoc> = {
+  toFirestore: (data) => data as DocumentData,
+  fromFirestore: (snap: QueryDocumentSnapshot) => {
+    const data = snap.data() as BoardDoc;
+    return {
+      ...data,
+      dayIndex: typeof data.dayIndex === 'number' ? data.dayIndex : 0,
+    };
+  },
+};
 export const playerConverter = passthrough<PlayerDoc>();
 export const userConverter = passthrough<UserDoc>();
 
@@ -141,7 +177,9 @@ export const doubtConverter: FirestoreDataConverter<DoubtDoc> = {
 };
 
 // A per-Day honor doc (daily-cards-spec § "Data model"), read from
-// events/{EVENT_ID}/days/{dayIndex}/meta. Passthrough — no `id` to pin, because
-// the doc id IS the dayIndex, encoded in the path (the reading ticket, #212,
-// owns the path helper). Holds that Day's own First to BINGO.
+// events/{EVENT_ID}/days/{dayIndex}/meta/{dayIndex} — a `meta` subcollection
+// whose single document id IS the encoded dayIndex (a valid document path).
+// Passthrough — no `id` to pin, because the doc id is that path-encoded
+// dayIndex (the reading ticket, #212, owns the path helper). Holds that Day's
+// own First to BINGO.
 export const dayMetaConverter = passthrough<DayMetaDoc>();

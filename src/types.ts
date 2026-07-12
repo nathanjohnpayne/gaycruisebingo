@@ -294,8 +294,10 @@ export interface MomentDoc {
   dayIndex?: number;
 }
 
-// Per-Day honor doc at events/{eventId}/days/{dayIndex}/meta — the doc id IS
-// the dayIndex (encoded in the path), so the shape carries no id field. Holds
+// Per-Day honor doc at events/{eventId}/days/{dayIndex}/meta/{dayIndex} — a
+// `meta` subcollection holding one document whose id IS the encoded dayIndex,
+// so the shape carries no id field (the path above is a valid document path:
+// events/days/meta are the three collection segments, each with its id). Holds
 // that Day's own First to BINGO, pinned on the Day's board view and the honors
 // strip (daily-cards-spec § "Data model" / "Scoring and social surfaces").
 // Every Day gets its own daily honor, tutorial Days included; the cruise-wide

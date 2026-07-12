@@ -1,8 +1,28 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { QueryDocumentSnapshot } from 'firebase/firestore';
-import { eventConverter, itemConverter } from './converters';
-import type { EventDoc, ItemDoc } from '../types';
+import { boardConverter, eventConverter, itemConverter } from './converters';
+import type { BoardDoc, EventDoc, ItemDoc, MomentDoc } from '../types';
 import { THEMES } from '../theme/themes';
+import { hasCanonicalMomentId } from '../hooks/useData';
+
+// addItem writes through Firestore's addDoc; stub the write so we can assert the
+// document SHAPE it stamps (the required Phase 1.5 `pool` field) without a live
+// backend. Everything else in firebase/firestore stays real (converters and the
+// moment filter never call it at runtime).
+const { addDocMock } = vi.hoisted(() => ({
+  addDocMock: vi.fn(async () => ({ id: 'new-item' })),
+}));
+vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'd15-test-event' }));
+vi.mock('firebase/firestore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('firebase/firestore')>();
+  return {
+    ...actual,
+    // The stub db ({}) is not a real Firestore, so short-circuit the ref
+    // builders addItem calls before the write — we only assert the payload.
+    collection: () => ({ __ref: 'items' }),
+    addDoc: addDocMock,
+  };
+});
 
 // Covers specs/d15-schema-contract.md: the Phase 1.5 domain type contract's
 // read-side converter defaults (daily-cards-spec § "Data model" / "Migration")
@@ -83,6 +103,78 @@ describe('eventConverter (Phase 1.5 days/timezone defaults)', () => {
     );
     expect(present.days).toEqual([day]);
     expect(present.timezone).toBe('America/Los_Angeles');
+  });
+
+  it('coerces an empty/whitespace/invalid timezone to Europe/Rome, preserves a real zone', () => {
+    for (const bad of ['', '   ', 'Not/AZone', 'Mars/Olympus']) {
+      const event = eventConverter.fromFirestore(snapshotOf({ ...legacyEvent, timezone: bad }));
+      expect(event.timezone).toBe('Europe/Rome');
+    }
+    const good = eventConverter.fromFirestore(
+      snapshotOf({ ...legacyEvent, timezone: 'Europe/London' }),
+    );
+    expect(good.timezone).toBe('Europe/London');
+  });
+});
+
+describe('boardConverter (Phase 1.5 dayIndex default)', () => {
+  // A current-contract Board minus its `dayIndex` — the legacy/current shape a
+  // Board (one per Player per Event) persists before the day-scoped path (#204).
+  const legacyBoard: Omit<BoardDoc, 'dayIndex'> = {
+    uid: 'u1',
+    seed: 123,
+    createdAt: 0,
+    cells: [],
+  };
+
+  it('defaults a missing dayIndex (legacy/current Board) to 0', () => {
+    const board = boardConverter.fromFirestore(snapshotOf(legacyBoard));
+    expect(board.dayIndex).toBe(0);
+  });
+
+  it('preserves a present dayIndex rather than overriding it', () => {
+    const board = boardConverter.fromFirestore(snapshotOf({ ...legacyBoard, dayIndex: 3 }));
+    expect(board.dayIndex).toBe(3);
+  });
+});
+
+describe('hasCanonicalMomentId (Phase 1.5 finale beats render)', () => {
+  const moment = (kind: MomentDoc['kind'], id: string, uid = 'u1'): MomentDoc => ({
+    id,
+    kind,
+    uid,
+    displayName: 'Pat',
+    photoURL: null,
+    createdAt: 0,
+  });
+
+  it('passes the two finale kinds when their singleton id === kind', () => {
+    expect(hasCanonicalMomentId(moment('last_call', 'last_call'))).toBe(true);
+    expect(hasCanonicalMomentId(moment('podium', 'podium'))).toBe(true);
+  });
+
+  it('rejects a finale moment whose id is not the canonical singleton id', () => {
+    expect(hasCanonicalMomentId(moment('last_call', 'u1-last_call'))).toBe(false);
+    expect(hasCanonicalMomentId(moment('podium', 'nope'))).toBe(false);
+  });
+
+  it('still gates the Phase 1 kinds unchanged', () => {
+    expect(hasCanonicalMomentId(moment('first_bingo', 'first_bingo'))).toBe(true);
+    expect(hasCanonicalMomentId(moment('bingo', 'u1-bingo'))).toBe(true);
+    expect(hasCanonicalMomentId(moment('bingo', 'first_bingo'))).toBe(false);
+  });
+});
+
+describe('addItem (Phase 1.5 pool stamp)', () => {
+  it('stamps pool: main on the submitted prompt so the required field is honored', async () => {
+    const { addItem } = await import('./api');
+    addDocMock.mockClear();
+    await addItem('player-uid', 'Cabin karaoke incident', true);
+    expect(addDocMock).toHaveBeenCalledTimes(1);
+    expect(addDocMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ pool: 'main', status: 'active', spicy: true }),
+    );
   });
 });
 

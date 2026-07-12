@@ -310,7 +310,17 @@ export function useMoments(max = 60) {
  * render in the public Feed.
  */
 export function hasCanonicalMomentId(moment: MomentDoc): boolean {
-  if (moment.kind === 'first_bingo') return moment.id === 'first_bingo';
+  // Singleton, event-wide beats: one doc per Event, id === kind. `first_bingo`
+  // is the Phase 1 cruise honor; `last_call`/`podium` are the Phase 1.5 finale
+  // beats the scheduler (#202/#217) posts — without them here the finale
+  // Moments would be dropped before ProofFeed ever renders them.
+  if (
+    moment.kind === 'first_bingo' ||
+    moment.kind === 'last_call' ||
+    moment.kind === 'podium'
+  ) {
+    return moment.id === moment.kind;
+  }
   if (moment.kind === 'bingo' || moment.kind === 'blackout') {
     return moment.id === `${moment.uid}-${moment.kind}`;
   }

@@ -17,7 +17,7 @@ Owns the shared Phase 1.5 domain type contract in `src/types.ts` and its read-si
   - `BoardDoc` gains `dayIndex: number` — one Board per Player per Day; the field is what lets the dealer look up a Player's earlier Day Cards to exclude repeats.
   - `PlayerDoc` gains `dayStats?: Record<number, { bingoCount, squaresMarked, firstBingoAt }>`; the existing `bingoCount`/`squaresMarked`/`firstBingoAt` stay the cruise-wide totals.
   - `TallyDoc` gains `lastMarkedAt?`/`dayIndex?`; `ProofDoc` gains `source?: 'camera' | 'library'`/`dayIndex?`; `DoubtDoc` gains `dayIndex?`; `MomentDoc` gains `dayIndex?`; `MomentKind` gains `'last_call' | 'podium'` (the two finale beats). All the day-scoped fields are optional until their day-aware writers stamp them.
-  - `DayMetaDoc` (new) — `{ firstBingo?: { uid, displayName, at } }` for `events/{eventId}/days/{dayIndex}/meta`. No `id` field: the doc id IS the dayIndex, encoded in the path.
+  - `DayMetaDoc` (new) — `{ firstBingo?: { uid, displayName, at } }` for `events/{eventId}/days/{dayIndex}/meta/{dayIndex}` (a `meta` subcollection holding one document whose id IS the encoded dayIndex — a valid document path). No `id` field: the doc id IS the dayIndex, encoded in the path.
   - **Frozen, untouched:** the 5×5 `Cell` contract, `ClaimMode`, `UserDoc`, `ClaimDoc`.
 - `src/data/converters.ts` — read-side defaults for a not-yet-migrated doc (daily-cards-spec § "Migration"; the precedent is the existing `bannedUids` default):
   - `itemConverter.fromFirestore` defaults a missing `pool` to `'main'` while still pinning `id` to `snap.id`.
