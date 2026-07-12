@@ -1,0 +1,32 @@
+# Day switcher, locked-Day preview, per-day free space, viewed-Day retint (d15-day-switcher)
+
+Feature: the Card tab's revision from rendering exactly one Board for the whole Event to a per-Day view — a horizontally scrolling strip of Day chips above the grid, a viewed-Day retint of the board chrome, and a themed-but-blank locked-Day preview for any Day not yet unlocked. Implements `plans/daily-cards-spec.md` § "Day switcher", § "Locked Day preview", and the per-day override half of § "Free space per day" (the tutorial free-text values themselves are seeded by #207).
+
+## Contract
+
+- `src/components/DaySwitcher.tsx` (new) — a pure, presentational ten-chip horizontal strip. Exports:
+  - `dayStates(days, now)` — classifies every `DayDef` against `now` from its `unlockAt`: `'locked'` while `unlockAt > now`; among the unlocked Days, the one with the LATEST `unlockAt` still `<= now` is `'today'` (the most recently opened Day); every earlier unlocked Day is `'past'`. No Day is `'today'` before the Event has opened.
+  - `defaultViewedIndex(days, now)` — today's index, or `0` pre-Event-open.
+  - `<DaySwitcher days viewedIndex onSelect now? />` — renders one chip per Day (weekday + port emoji + theme emoji), `role="tab"`, `aria-selected` on the viewed chip, and a `day-chip-{past|today|locked}` class carrying the ✓ / (none) / 🔒 glyph. A tap — locked chips included — only calls `onSelect(index)`; the component holds no board data and issues no writes, so a locked tap cannot deal or mark anything by construction. A Theme id with no registered `ThemeMeta` (the two Phase 1.5 tutorial themes land theirs in #206, not a dependency of this ticket) falls back to a neutral emoji rather than throwing.
+- `src/components/Board.tsx` (modified) — reads `EventDoc.days[]` (read-only; #200 shape, no schema changes) and holds the viewed-Day index as local state, defaulted to today's Day the first render the schedule is non-empty (never re-adopted afterward, so a Player's own chip tap always wins). When `event.days` is empty (a not-yet-migrated Event, or before the Event doc loads), the switcher and every behavior below stay completely inert and Board renders exactly as it did before this ticket — the pre-Phase-1.5 single-Board path is unchanged. When non-empty:
+  - The switcher mounts above the board area.
+  - The board's own chrome (`.board-area`) carries `data-theme={viewedDay.theme}` — a retint SCOPED to that container via the existing `[data-theme]` CSS-variable mechanism (`src/theme/themes.css`), never on `<html>`. The Player's own app-wide Theme (`ThemeContext`, which sets `<html data-theme>`) is untouched by a chip tap.
+  - A viewed Day whose `unlockAt` is in the future renders the locked-Day preview instead of the live grid, regardless of whether the Player's own (today's) Board exists — a locked Day never has one.
+  - A viewed Day that IS unlocked renders the Player's existing single Board exactly as before (per-Day Board fetching/dealing — `events/{eventId}/days/{dayIndex}/boards/{uid}` — is #204's scope, out of scope here; every unlocked Day currently shows the same one Board this Player already has, a documented interim limitation until #204 lands).
+- Locked-Day preview: full themed chrome (port, Theme name, Theme's `description` as the dress-code tease) over a 5x5 grid of blank Squares (`.locked-grid .cell`) — only the free space (index 12, the same center the live deal uses) is populated, using the Day's `freeText` override when set, else the default `FREE_TEXT` (`src/data/seed.ts`). No Square carries a click handler, so a tap is a structural no-op. A centered "Unlocks `<time>` · `<date>`" badge (event-timezone formatted, no countdown) plus the fixed caption "24 fresh squares land at 8. Come back after coffee."
+
+## Acceptance criteria
+
+- Given the ten Days from `EventDoc.days[]`, when the Card tab mounts, then the switcher renders one chip per Day in order with the correct past/today/locked state.
+- Given a Player taps a past or today chip, when the board area updates, then the board container's `data-theme` becomes that Day's Theme and the grid renders the Player's Board; the app-wide Theme is unchanged.
+- Given a Player taps (or lands on, as the default) a locked chip, when the preview renders, then the grid shows only the free space populated, the Theme's description, and the unlock-time badge, and no Square tap does anything — the locked Day is never dealt.
+- Switching Days never changes the Player's own app-wide Theme choice (`gcb.theme` / `<html data-theme>`).
+
+## Out of scope (later tickets)
+
+Live per-Day Board fetching/dealing and the day-scoped Board subscription (`events/{eventId}/days/{dayIndex}/boards/{uid}`) are #204's scope — this ticket only decides which chrome to render for the viewed Day. The two new tutorial `ThemeMeta` entries (`welcome-aboard` / `so-long-farewell`) are #206's scope; until they land, a Day naming one falls back to a neutral emoji/label/blank description rather than the real ones. The header's "always today's port/Theme" two-line display (`Nav.tsx`) is frozen per this ticket's issue body (owned by #203) and is not touched here.
+
+## Test coverage
+
+- `src/components/DaySwitcher.test.tsx` (Vitest, RTL/jsdom) — `dayStates`/`defaultViewedIndex` classify past/today/locked correctly (including the pre-Event-open all-locked case); the rendered strip shows ten-in-order chips with the right state class and glyph; tapping any chip (locked included) calls `onSelect` with its index and nothing else.
+- `src/components/Board.test.tsx` (Vitest, RTL/jsdom) — selecting a Day chip moves `data-theme` on `.board-area` to that Day's Theme while `<html data-theme>` (mounted via `ThemeProvider`) stays on the Player's own app-wide Theme; a locked viewed Day renders a 25-cell blank grid with only the free space (carrying the Day's `freeText` override) populated, the Theme description, and an "Unlocks…" badge, and tapping any locked Square never calls `setMark`.
