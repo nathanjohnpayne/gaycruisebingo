@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText } from '../hooks/useData';
 import { setMark, resolveDisplayName } from '../data/api';
@@ -22,6 +22,8 @@ import {
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
 import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge } from '../game/logic';
+import { fitTextSize } from '../game/fitText';
+import { useTextSize } from '../hooks/useTextSize';
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
@@ -31,6 +33,60 @@ import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
 import TutorialBanner, { WarmUpTag } from './TutorialBanner';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
+
+/**
+ * A non-free Square's prompt text (#215, specs/d15-text-size.md): the S/M/L
+ * auto-fit guard that always wins over the chosen base size. `.cell`'s own
+ * `font-size` (index.css, `clamp(...) * var(--text-scale)`) is the CEILING
+ * this reads via `getComputedStyle` — the Player's S/M/L pick, already
+ * viewport-clamped by CSS — never the floor: this span's own inline
+ * `font-size` is what a Square actually renders text at, and it only ever
+ * shrinks that ceiling down, never grows past it ("Large is a ceiling,
+ * never an overflow"). Re-measures whenever the prompt text or the live
+ * `textSize` pick changes (a pick applies `data-text-size` to `<html>`
+ * SYNCHRONOUSLY inside `useTextSize`'s `setState`, ahead of the React
+ * notify, so the CSS custom property has already updated by the time this
+ * effect re-runs and re-reads the computed ceiling). A cell not yet laid
+ * out (`getBoundingClientRect` reporting 0x0 pre-first-paint) is left at
+ * the unshrunk ceiling — `fitTextSize` itself treats a zero-area box as
+ * "nothing to measure against yet" — so a Square never flashes at a
+ * shrunk size before its real box is known.
+ */
+function SquareText({ text }: { text: string }) {
+  // Not read directly below — its only job is to make this effect re-run
+  // when the Player's S/M/L pick changes, since the ceiling itself is read
+  // from the DOM (getComputedStyle), not from this hook's return value.
+  const [textSize] = useTextSize();
+  const ref = useRef<HTMLSpanElement>(null);
+  const [fontSize, setFontSize] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const cell = el?.parentElement;
+    if (!el || !cell) return;
+    // Reset to the CSS-computed ceiling before measuring — a shrink applied
+    // for a PREVIOUS (longer) prompt must never cap this one's ceiling.
+    el.style.fontSize = '';
+    const baseSize = parseFloat(window.getComputedStyle(el).fontSize);
+    if (!Number.isFinite(baseSize) || baseSize <= 0) return;
+    const cellRect = cell.getBoundingClientRect();
+    // .cell's own 4px padding on every side (index.css) — the usable box
+    // the text actually has to fit inside is the cell minus that padding.
+    const CELL_PADDING = 8;
+    const box = {
+      width: Math.max(0, cellRect.width - CELL_PADDING),
+      height: Math.max(0, cellRect.height - CELL_PADDING),
+    };
+    setFontSize(fitTextSize(text, box, { baseSize }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- textSize only retriggers the DOM re-read above; see the doc comment.
+  }, [text, textSize]);
+
+  return (
+    <span ref={ref} className="cell-text" style={fontSize != null ? { fontSize: `${fontSize}px` } : undefined}>
+      {text}
+    </span>
+  );
+}
 
 /**
  * The per-Prompt Tally count badge on a marked Square (ADR 0002). Subscribes to
@@ -1145,7 +1201,7 @@ export default function Board() {
                 <span className="free-prompt">{c.text}</span>
               </>
             ) : (
-              c.text
+              <SquareText text={c.text} />
             )}
             {c.marked && !c.free && (
               <button

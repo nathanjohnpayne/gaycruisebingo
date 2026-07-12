@@ -28,6 +28,13 @@ spec_test_map:
     - src/components/TutorialBanner.test.tsx
     - src/components/DaySwitcher.test.tsx
     - src/components/Board.test.tsx
+  # d15-text-size's coverage is feature-named per the ticket's own "Tests to
+  # add" list (#215), not spec-basename-named, so map all four explicitly.
+  d15-text-size:
+    - src/game/fitText.test.ts
+    - src/hooks/useTextSize.test.ts
+    - src/components/Board.test.tsx
+    - src/w2-ga4-events.test.tsx
 # Glob patterns that identify test files. Supplements the default
 # ("tests/**/*.test.*") which doesn't cover shell-based tests or the
 # Vite app's colocated unit tests under src/.

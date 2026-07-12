@@ -223,3 +223,84 @@ describe('Tutorial banner + board header', () => {
     expect(document.querySelector('.board-header')).toBeNull();
   });
 });
+
+// specs/d15-text-size.md (#215): the per-Square auto-fit guard always wins
+// over the S/M/L base — a long prompt shrinks below the CSS-resolved
+// ceiling rather than overflowing or clipping; a short one is left at the
+// ceiling. jsdom reports 0x0 for every element and resolves no real
+// stylesheet cascade, so both the cell's live box (`getBoundingClientRect`)
+// and its CSS-resolved ceiling (`getComputedStyle(...).fontSize`, which
+// would otherwise need index.css's `clamp()` + `--text-scale` actually
+// applied) are stubbed to realistic values for these tests only.
+describe('Text size auto-fit guard (specs/d15-text-size.md)', () => {
+  const REALISTIC_CELL_SIZE = 70; // px — a typical on-screen phone Square (5-col grid, ~360px viewport)
+  const CEILING_PX = 12; // px — the Large base's CSS-resolved ceiling
+
+  function stubMeasurement() {
+    const realGetComputedStyle = window.getComputedStyle;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: REALISTIC_CELL_SIZE,
+      height: REALISTIC_CELL_SIZE,
+      top: 0,
+      left: 0,
+      right: REALISTIC_CELL_SIZE,
+      bottom: REALISTIC_CELL_SIZE,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(window, 'getComputedStyle').mockImplementation((el: Element, pseudo?: string | null) => {
+      if (el instanceof HTMLElement && el.classList.contains('cell-text')) {
+        return { fontSize: `${CEILING_PX}px` } as CSSStyleDeclaration;
+      }
+      return realGetComputedStyle.call(window, el, pseudo ?? undefined);
+    });
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('shrinks a maximally long seeded prompt below the Large ceiling rather than overflowing its Square', () => {
+    stubMeasurement();
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS })],
+    } as unknown as EventDoc;
+    const cells = dealt();
+    const longPrompt =
+      'Convinced an entire pool deck of strangers to sing a full sea shanty together during the sail-away party while the DJ egged everyone on';
+    cells[0] = { ...cells[0], text: longPrompt };
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells };
+
+    render(<Board />);
+
+    const target = document.querySelector('.cell-text');
+    expect(target).not.toBeNull();
+    expect(target!.textContent).toBe(longPrompt);
+    const shrunkSize = parseFloat((target as HTMLElement).style.fontSize);
+    expect(shrunkSize).toBeGreaterThan(0);
+    expect(shrunkSize).toBeLessThan(CEILING_PX);
+  });
+
+  it('leaves a short prompt at the ceiling, unshrunk', () => {
+    stubMeasurement();
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS })],
+    } as unknown as EventDoc;
+    const cells = dealt();
+    cells[0] = { ...cells[0], text: 'Kissed a stranger' };
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells };
+
+    render(<Board />);
+
+    const target = document.querySelector('.cell-text') as HTMLElement;
+    expect(target.textContent).toBe('Kissed a stranger');
+    expect(parseFloat(target.style.fontSize)).toBe(CEILING_PX);
+  });
+});

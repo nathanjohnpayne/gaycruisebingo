@@ -37,6 +37,12 @@ vi.mock('../hooks/useData', () => ({
 vi.mock('../hooks/useInstallPrompt', () => ({
   useInstallPrompt: () => ({ standalone: true, deferred: null, showIOSHint: false, install: vi.fn() }),
 }));
+// More.tsx now imports `track` directly for the Text size row's
+// `text_size_change` event (#215) — mock it the same way every other
+// analytics-touching component's suite does (e.g. ThemeSwitcher.test.tsx),
+// since `../analytics` -> `./firebase` throws `auth/invalid-api-key` without
+// real Firebase env vars, which this unit suite deliberately never needs.
+vi.mock('../analytics', () => ({ track: vi.fn() }));
 // The four relocated components keep their OWN focused suites (see file
 // banner) — stubbed here to plain, order-preserving rows so this suite reads
 // the menu's SHAPE without pulling in their Firebase-backed internals.

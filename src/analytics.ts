@@ -11,7 +11,8 @@ import { phCapture } from './posthog';
  * `add_item` + `report_item` (components/ItemPool.tsx, ProofFeed.tsx),
  * `mark_square` + `bingo` + `blackout` (components/Board.tsx),
  * `attach_proof` (components/ProofSheet.tsx), `theme_change`
- * (components/ThemeSwitcher.tsx), `share_click` (components/Celebration.tsx).
+ * (components/ThemeSwitcher.tsx), `text_size_change` (components/More.tsx,
+ * #215), `share_click` (components/Celebration.tsx).
  * `demand_proof` (Doubt flow, #33) and `install_pwa` (install-prompt flow,
  * #30) are catalogued and type-checked here so each ticket can add its one
  * call site as a one-line `track(...)` addition; this ticket (#38) does not
@@ -29,6 +30,7 @@ export const GA4_EVENTS = [
   'bingo',
   'blackout',
   'theme_change',
+  'text_size_change',
   'share_click',
   'install_pwa',
 ] as const;
