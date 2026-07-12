@@ -477,6 +477,29 @@ export default function Board() {
   // adoption so a later render never stomps the Player's own selection.
   const [viewedIndex, setViewedIndex] = useState(0);
   const viewedIndexInitialized = useRef(false);
+  // The locked/unlocked read below (`viewedLocked`) is only re-evaluated on a
+  // render — with no OTHER state change due while idling on a locked Day, a
+  // player who leaves the Card tab open across an `unlockAt` rollover (e.g.
+  // the 8:00 ship-time unlock) would stay stuck on `LockedDayPreview` until
+  // a reload or unrelated interaction (Codex P2, PR #230). `now` stands in
+  // for `Date.now()` everywhere a lock check reads the clock, and this timer
+  // bumps it exactly when the EARLIEST still-locked Day's `unlockAt` in the
+  // whole schedule passes — not just the viewed Day, so switching to an
+  // already-elapsed chip never needs its own reschedule. Depends on
+  // `event?.days` (not the `days` local below, which is a fresh `[]`
+  // literal on every render while unmigrated) so it doesn't re-schedule on
+  // every unrelated render.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const schedule = event?.days ?? [];
+    const nextUnlock = schedule
+      .map((d) => d.unlockAt)
+      .filter((t) => t > Date.now())
+      .sort((a, b) => a - b)[0];
+    if (nextUnlock == null) return;
+    const timer = setTimeout(() => setNow(Date.now()), nextUnlock - Date.now());
+    return () => clearTimeout(timer);
+  }, [event?.days, now]);
   // Edge refs for the COSMETIC Celebration UI only (issue #104). The public Moment
   // broadcast moved OFF this snapshot-diffing machinery and ONTO the action path —
   // doMark reads `setMark`'s synchronous win-transition verdict and enqueues into a
@@ -796,7 +819,10 @@ export default function Board() {
     setViewedIndex(defaultViewedIndex(days, Date.now()));
   }
   const viewedDay = hasDays ? (days[viewedIndex] ?? days[0]) : undefined;
-  const viewedLocked = viewedDay != null && viewedDay.unlockAt > Date.now();
+  // `now`, not `Date.now()` — see the unlock timer above (Codex P2, PR #230):
+  // this read must be the SAME clock the timer bumps, so the rollover flips
+  // the lock via a state update instead of only on the next unrelated render.
+  const viewedLocked = viewedDay != null && viewedDay.unlockAt > now;
   const daySwitcher = hasDays ? (
     <DaySwitcher days={days} viewedIndex={viewedIndex} onSelect={setViewedIndex} />
   ) : null;
