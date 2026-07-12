@@ -686,6 +686,16 @@ a {
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
+/* Leaderboard row's latest-proof media chip(s) (#218) — tap target to the Feed. */
+.lb-proof-chips {
+  flex: none;
+  background: none;
+  border: none;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px;
+  cursor: pointer;
+}
 
 /* ---------- add item ---------- */
 .addbar {

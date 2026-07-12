@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import type { DayDef, EventDoc, PlayerDoc } from '../types';
 
 // specs/d15-scoring-aggregates.md, RTL/jsdom layer. Leaderboard is presentational
@@ -77,6 +78,9 @@ vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../hooks/useData', () => ({
   useLeaderboard: () => ({ players: H.players, loading: false }),
   useEventDoc: () => ({ data: H.event, loading: false }),
+  // #218: no Proofs fixtured in this scoring-aggregates suite — an empty map
+  // keeps every row chip-less, which is exactly what these tests assert on.
+  useLatestProofByUid: () => ({ latestByUid: {}, loading: false }),
   isBanned: (uid: string | null | undefined, bannedUids: readonly string[] | undefined) =>
     !!uid && Array.isArray(bannedUids) && bannedUids.includes(uid),
 }));
@@ -87,7 +91,11 @@ describe('Leaderboard cruise-wide honors (#212)', () => {
   it("renders a per-Day honors strip pinning each Day's first-bingo Player", () => {
     H.players = [embarker, champ];
     H.event = event;
-    render(<Leaderboard />);
+    render(
+      <MemoryRouter>
+        <Leaderboard />
+      </MemoryRouter>,
+    );
 
     const strip = screen.getByLabelText('Daily First to BINGO');
     // Each Day's own honoree — tutorial Day 0 included (its exclusion is only from
@@ -101,7 +109,11 @@ describe('Leaderboard cruise-wide honors (#212)', () => {
   it('never lands the cruise "1st BINGO" pin on an embark/farewell-only first bingo', () => {
     H.players = [embarker, champ];
     H.event = event;
-    const { container } = render(<Leaderboard />);
+    const { container } = render(
+      <MemoryRouter>
+        <Leaderboard />
+      </MemoryRouter>,
+    );
     const list = container.querySelector('.list') as HTMLElement;
 
     // The pin is on the main-game Player (Champ), NOT the embark-only Player who

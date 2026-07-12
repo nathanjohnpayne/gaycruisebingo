@@ -769,3 +769,30 @@ export function useProofsForItemText(itemText: string | null | undefined) {
   );
   return { proofs, loading, hasServerData };
 }
+
+/**
+ * Each Player's single most-recent active Proof (#218, daily-cards-spec §
+ * "Asking for proof — Doubts"): the Leaderboard's per-row media chip reads
+ * this — one Proof per uid (max `createdAt`), never a history. Reduces the
+ * SAME `status == 'active'` stream `useProofFeed` reads. Presentational
+ * only — Leaderboard.tsx applies it strictly AFTER `sortPlayers`, so it
+ * never feeds ranking/filter logic. Applies the same two PUBLIC-facing
+ * filters `useProofsForItemText` does (community auto-hide + Admin ban,
+ * #108) since every OTHER viewer's row renders this.
+ */
+export function useLatestProofByUid() {
+  const { threshold, bannedUids } = useEventModeration();
+  const { data, loading } = useColSub<ProofDoc>(
+    query(proofsCol(), where('status', '==', 'active')),
+    'proofs:latest-by-uid',
+  );
+  const latestByUid: Record<string, ProofDoc> = {};
+  for (const p of data) {
+    if (isReportHidden(p.reportCount, threshold) || isBanned(p.uid, bannedUids)) continue;
+    const existing = latestByUid[p.uid];
+    if (!existing || p.createdAt > existing.createdAt) {
+      latestByUid[p.uid] = p;
+    }
+  }
+  return { latestByUid, loading };
+}
