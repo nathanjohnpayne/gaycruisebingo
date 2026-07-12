@@ -186,3 +186,40 @@ describe('Locked-Day preview', () => {
     expect(H.setMark).not.toHaveBeenCalled();
   });
 });
+
+// specs/d15-tutorial-banners.md: Board mounts the tutorial banner + the
+// "Warm-up" board-header tag above the grid, gated on the VIEWED Day's
+// `tutorial` flag — an unlocked, dealt tutorial Day gets both; an unlocked
+// main Day gets neither.
+describe('Tutorial banner + board header', () => {
+  it('mounts the embark banner and the "Warm-up" board-header tag on an unlocked Welcome Aboard Day', () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'welcome-aboard', unlockAt: now - DAY_MS, tutorial: true, pool: 'embark' })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+
+    render(<Board />);
+
+    expect(screen.getByText(/mark what happens/i)).toBeInTheDocument();
+    expect(document.querySelector('.board-header')).not.toBeNull();
+    expect(document.querySelector('.board-header')?.textContent).toContain('Warm-up');
+  });
+
+  it('renders neither the tutorial banner nor the board-header tag on an unlocked main Day', () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 2, theme: 'glamiators', unlockAt: now - DAY_MS })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 2, seed: 1, createdAt: 0, cells: dealt() };
+
+    render(<Board />);
+
+    expect(screen.queryByText(/mark what happens/i)).not.toBeInTheDocument();
+    expect(document.querySelector('.board-header')).toBeNull();
+  });
+});

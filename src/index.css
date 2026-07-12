@@ -384,6 +384,75 @@ a {
   margin-top: 4px;
 }
 
+/* ---------- Tutorial banners + "Warm-up" tag (daily-cards-spec §§ "Embark
+   (tutorial) view" / "Farewell view", specs/d15-tutorial-banners.md) ---------- */
+.warm-up-tag {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 7px;
+  border-radius: 20px;
+  background: color-mix(in srgb, var(--primary) 28%, var(--cell));
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  vertical-align: middle;
+}
+.board-header {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 6px;
+}
+.tutorial-banner {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--cell);
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  text-align: left;
+}
+.tutorial-banner-dismiss {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+}
+.tutorial-banner-title {
+  margin: 0 24px 6px 0;
+  font-weight: 700;
+  color: var(--ink);
+}
+.tutorial-banner-beats {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.tutorial-banner-beats li + li {
+  margin-top: 4px;
+}
+.tutorial-banner-caption {
+  margin: 8px 0 0;
+  color: var(--dim);
+  font-size: 12px;
+  font-style: italic;
+}
+.tutorial-banner-copy {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 600;
+  text-align: center;
+}
+
 .count {
   text-align: center;
   color: var(--dim);

@@ -28,6 +28,7 @@ import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 import LoadingState from './LoadingState';
 import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
+import TutorialBanner, { WarmUpTag } from './TutorialBanner';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
 
@@ -375,6 +376,7 @@ function LockedDayPreview({ day, timezone }: { day: DayDef; timezone: string | u
       <div className="day-locked-chrome">
         <div className="day-locked-title">
           <span aria-hidden="true">{day.portEmoji}</span> {day.port} · {themeLabel(day.theme)}
+          {day.tutorial && <WarmUpTag className="day-locked-warm-up" />}
         </div>
         {description && <p className="day-locked-desc">{description}</p>}
       </div>
@@ -1082,6 +1084,19 @@ export default function Board() {
           on a not-yet-migrated Event (`hasDays` false), so the pre-Phase-1.5
           single-Board rendering is byte-identical to before. */}
       <div className="board-area" data-theme={viewedDay?.theme}>
+        {/* The tutorial banner slot (daily-cards-spec §§ "Embark (tutorial)
+            view" / "Farewell view"): mounts above the grid, gated on the
+            viewed Day's `tutorial` flag — a structural no-op (renders
+            nothing) for any of the eight main Days. The board-header slot
+            carries the "Warm-up" tag in place of #212's daily-honor pin
+            (mutually exclusive on `tutorial`, so the two can never collide
+            on this DOM position independently of each other). */}
+        {viewedDay?.tutorial && (
+          <div className="board-header">
+            <WarmUpTag />
+          </div>
+        )}
+        {viewedDay && <TutorialBanner day={viewedDay} />}
         <div className="bingo-head">
           {['B', 'I', 'N', 'G', 'O'].map((l) => (
             <span key={l}>{l}</span>

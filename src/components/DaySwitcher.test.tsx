@@ -95,4 +95,36 @@ describe('<DaySwitcher />', () => {
     fireEvent.click(screen.getAllByRole('tab')[1]);
     expect(onSelect).toHaveBeenCalledWith(1);
   });
+
+  // specs/d15-tutorial-banners.md: the "Warm-up" tag renders on exactly the
+  // two tutorial Day chips (index 0 and the last index — `makeDays` seeds
+  // `tutorial` there) and never on the eight main Days.
+  it('renders the "Warm-up" tag on exactly the two tutorial Day chips, never on the eight main Days', () => {
+    const days = makeDays();
+    const now = days[3].unlockAt + 1000;
+    render(<DaySwitcher days={days} viewedIndex={3} onSelect={vi.fn()} now={now} />);
+    const chips = screen.getAllByRole('tab');
+    const warmUpCount = screen.getAllByText('Warm-up').length;
+    expect(warmUpCount).toBe(2);
+    expect(chips[0].textContent).toContain('Warm-up');
+    expect(chips[days.length - 1].textContent).toContain('Warm-up');
+    for (let i = 1; i < days.length - 1; i++) {
+      expect(chips[i].textContent).not.toContain('Warm-up');
+    }
+  });
+
+  // The chip's own aria-label overrides its descendant text for assistive
+  // tech, so the "Warm-up" tag's visible label is otherwise unannounced —
+  // fold the tutorial state into the chip's accessible name too.
+  it('includes "Warm-up" in the accessible name of tutorial Day chips, and omits it on main Days', () => {
+    const days = makeDays();
+    const now = days[3].unlockAt + 1000;
+    render(<DaySwitcher days={days} viewedIndex={3} onSelect={vi.fn()} now={now} />);
+    const chips = screen.getAllByRole('tab');
+    expect(chips[0]).toHaveAccessibleName(/warm-up/i);
+    expect(chips[days.length - 1]).toHaveAccessibleName(/warm-up/i);
+    for (let i = 1; i < days.length - 1; i++) {
+      expect(chips[i]).not.toHaveAccessibleName(/warm-up/i);
+    }
+  });
 });
