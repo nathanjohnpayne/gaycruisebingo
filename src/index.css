@@ -561,6 +561,45 @@ a {
   box-shadow: 0 0 10px var(--shadow);
 }
 
+/* ---------- per-Day First to BINGO honors strip (#212) ---------- */
+.lb-honors {
+  margin: 2px 0 12px;
+}
+.lb-honors-title {
+  color: var(--dim);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 11px;
+  margin-bottom: 6px;
+}
+.lb-honors-strip {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.lb-honor {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 40px;
+  padding: 5px 11px;
+  font-size: 12px;
+}
+.lb-honor-day {
+  color: var(--dim);
+  font-weight: 600;
+}
+.lb-honor-name {
+  color: var(--ink);
+  font-weight: 700;
+}
+
 /* ---------- lists (leaderboard + items) ---------- */
 .list {
   display: flex;

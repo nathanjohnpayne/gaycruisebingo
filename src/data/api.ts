@@ -28,6 +28,8 @@ import {
   completedLines,
   countMarked,
   isBlackout,
+  foldDayStat,
+  type DayStats,
   type DealItem,
 } from '../game/logic';
 import type { Cell, ClaimMode, DayDef, EventDoc, ItemDoc, UserDoc } from '../types';
@@ -638,11 +640,19 @@ export async function setMark(params: {
   // so direct callers (the offline durability harness) can omit it and fall back
   // to the cached player row's already-denormalized name — see `markerDisplayName`.
   displayName?: string;
-  // The viewed Day the Mark belongs to (#216), stamped onto the Tally marker so
-  // the Feed can group markers into a per-`(itemId, dayIndex)` Tally Card. Optional
-  // — a caller with no Day context (the offline harness) omits it and the marker
-  // stays a legacy per-Prompt entry (Square-badge only, no day-scoped Feed card).
+  // The viewed Day the Mark belongs to (#216, #212), stamped onto the Tally
+  // marker so the Feed can group markers into a per-`(itemId, dayIndex)` Tally
+  // Card, and used to credit the fold to `dayStats[dayIndex]` (daily-cards-spec
+  // § "Scoring and social surfaces"). Optional: when omitted, the cached
+  // Board's own `dayIndex` is used for the fold, falling back to Day 0 — the
+  // single-Board legacy shape — and the Tally marker stays a legacy per-Prompt
+  // entry (Square-badge only, no day-scoped Feed card).
   dayIndex?: number;
+  // The Event's tutorial (embark/farewell) Day indexes, so the persisted
+  // cruise-wide `firstBingoAt` can exclude them (spec § "Resolved decisions" #2).
+  // Optional: absent (legacy / no schedule) excludes nothing — the Leaderboard
+  // and day-meta surfaces apply the exclusion at render time regardless.
+  tutorialDayIndexes?: number[];
   database?: Firestore;
 }): Promise<{
   cells: Cell[];
@@ -680,6 +690,7 @@ async function runSetMark(
     currentFirstBingoAt: number | null | undefined;
     displayName?: string;
     dayIndex?: number;
+    tutorialDayIndexes?: number[];
   },
   database: Firestore,
 ): Promise<{
@@ -698,6 +709,12 @@ async function runSetMark(
   // The already-denormalized public name on the player row is the fallback
   // attribution for the Tally marker when the caller omits `displayName`.
   let cachedPlayerName: unknown;
+  // The Day this Mark credits (daily-cards-spec § "Scoring and social surfaces"):
+  // the caller's explicit `dayIndex`, else the cached Board's own `dayIndex`, else
+  // Day 0 (the single-Board legacy shape). And the Player's existing per-Day
+  // breakdown, folded onto below so the cruise-wide root aggregate re-derives.
+  let dayIndex = params.dayIndex ?? 0;
+  let priorDayStats: DayStats | undefined;
   const [cachedBoard, cachedPlayer] = await Promise.allSettled([
     getDocFromCache(boardRef),
     getDocFromCache(playerRef),
@@ -706,7 +723,13 @@ async function runSetMark(
   // (e.g. the very first local knowledge of it, or a test double with no
   // cache) — that is the pre-fix behavior, unchanged.
   if (cachedBoard.status === 'fulfilled' && cachedBoard.value.exists()) {
-    baseCells = (cachedBoard.value.data() as { cells: Cell[] }).cells;
+    const boardData = cachedBoard.value.data() as { cells: Cell[]; dayIndex?: number };
+    baseCells = boardData.cells;
+    // The Board's own dayIndex is authoritative for which bucket this Mark
+    // credits; the explicit param only seeds the fallback when nothing is cached.
+    if (typeof boardData.dayIndex === 'number' && params.dayIndex === undefined) {
+      dayIndex = boardData.dayIndex;
+    }
   }
   if (cachedPlayer.status === 'fulfilled' && cachedPlayer.value.exists()) {
     // A cached Player row is KNOWN state: the cached value always wins over the
@@ -718,9 +741,11 @@ async function runSetMark(
     const cachedData = cachedPlayer.value.data() as {
       firstBingoAt?: number | null;
       displayName?: unknown;
+      dayStats?: DayStats;
     };
     baseFirstBingoAt = cachedData.firstBingoAt ?? null;
     cachedPlayerName = cachedData.displayName;
+    priorDayStats = cachedData.dayStats;
   }
 
   const now = Date.now();
@@ -731,9 +756,25 @@ async function runSetMark(
     now,
   });
 
+  // Fold this Mark's per-Board result into the Player's per-Day `dayStats` and
+  // re-derive the cruise-wide root totals (bingos/squares summed over every Day
+  // Card, First to BINGO restricted to main-game Days). `foldDayStat` carries the
+  // #75 unknown-state omit through unchanged, so the merge still preserves a
+  // server stamp when local state is unknown. For a single Day-0 Board (no other
+  // buckets) the aggregate equals that Board's totals — the legacy shape.
+  const playerWrite = foldDayStat({
+    priorDayStats,
+    dayIndex,
+    bucket: player,
+    blackout: player.blackout,
+    isTutorialDay: params.tutorialDayIndexes
+      ? (i: number) => params.tutorialDayIndexes!.includes(i)
+      : undefined,
+  });
+
   const batch = writeBatch(database);
   batch.set(boardRef, { cells }, { merge: true });
-  batch.set(playerRef, player, { merge: true });
+  batch.set(playerRef, playerWrite, { merge: true });
 
   // Per-Prompt Tally (ADR 0002, the embarkation-critical differentiator): every
   // Mark — proofed or not — self-publishes an ATTRIBUTED entry to its Prompt's
