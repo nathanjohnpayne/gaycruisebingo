@@ -933,6 +933,12 @@ export default function Board() {
         claimMode,
         currentFirstBingoAt: knownFirstBingoAt(player, playerLoading, playerConfirmed),
         displayName: identityKnown ? displayName : undefined,
+        // Stamp the viewed Day (#216) so the Mark's Tally marker groups into the
+        // right per-`(itemId, dayIndex)` Feed card — mirrors the `dayIndex` the
+        // proof/claim sheet already carries below. Board still deals `dayIndex: 0`,
+        // so this is the SELECTED `viewedIndex` when the schedule is live, else the
+        // dealt board's own dayIndex.
+        dayIndex: hasDays ? viewedIndex : board?.dayIndex,
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');

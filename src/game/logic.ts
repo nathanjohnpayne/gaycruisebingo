@@ -297,6 +297,43 @@ export function dayDealState(params: {
   return 'ready';
 }
 
+// A Tally Card's Feed POSITION moves to the top at most once per this window,
+// even as its COUNT keeps updating live (#216, daily-cards-spec § "Tally
+// Cards"). Ten minutes: long enough that a hot square during a party hour can't
+// churn the stream and bury photo proofs, short enough that genuine fresh
+// activity still surfaces.
+export const BUMP_DEBOUNCE_MS = 10 * 60 * 1000;
+
+/**
+ * The debounced Feed-position time for a Tally Card (#216). Pure and clock-free —
+ * it compares the group's newest Mark against the position the card is ALREADY
+ * displayed at, never `Date.now()`, so the interleave stays deterministic and
+ * unit-testable. The displayed COUNT is derived separately and is unaffected by
+ * this — only the sort key is debounced.
+ *
+ *  - No prior displayed bump (the card is appearing for the first time) → adopt
+ *    `latestMarkedAt`: a brand-new card takes its natural place immediately.
+ *  - `latestMarkedAt <= prevDisplayed` → hold `prevDisplayed`: no activity newer
+ *    than what's shown (also monotonic-guards a backwards/again-same Mark clock).
+ *  - A newer Mark WITHIN `windowMs` of the displayed bump → hold `prevDisplayed`:
+ *    the count updates live but the card does NOT jump (the debounce).
+ *  - A newer Mark `windowMs` or more after the displayed bump → adopt it: the
+ *    card bumps toward the top.
+ *
+ * The result is monotonic non-decreasing across calls, so a card never slides
+ * DOWN the Feed on a fresh Mark.
+ */
+export function nextDisplayBumpTime(
+  prevDisplayed: number | undefined,
+  latestMarkedAt: number,
+  windowMs: number = BUMP_DEBOUNCE_MS,
+): number {
+  if (prevDisplayed === undefined) return latestMarkedAt;
+  if (latestMarkedAt <= prevDisplayed) return prevDisplayed;
+  if (latestMarkedAt - prevDisplayed < windowMs) return prevDisplayed;
+  return latestMarkedAt;
+}
+
 // --- Cruise-wide scoring aggregation (daily-cards-spec § "Scoring and social
 // surfaces", #212) -----------------------------------------------------------
 //

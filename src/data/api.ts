@@ -640,11 +640,13 @@ export async function setMark(params: {
   // so direct callers (the offline durability harness) can omit it and fall back
   // to the cached player row's already-denormalized name — see `markerDisplayName`.
   displayName?: string;
-  // Which Day Card this Mark lands on, so the fold credits `dayStats[dayIndex]`
-  // (daily-cards-spec § "Scoring and social surfaces", #212). Optional: when
-  // omitted, the cached Board's own `dayIndex` is used, falling back to Day 0 —
-  // the single-Board legacy shape, whose one bucket makes the cruise-wide root
-  // aggregate equal to that Board's totals (no behavior change).
+  // The viewed Day the Mark belongs to (#216, #212), stamped onto the Tally
+  // marker so the Feed can group markers into a per-`(itemId, dayIndex)` Tally
+  // Card, and used to credit the fold to `dayStats[dayIndex]` (daily-cards-spec
+  // § "Scoring and social surfaces"). Optional: when omitted, the cached
+  // Board's own `dayIndex` is used for the fold, falling back to Day 0 — the
+  // single-Board legacy shape — and the Tally marker stays a legacy per-Prompt
+  // entry (Square-badge only, no day-scoped Feed card).
   dayIndex?: number;
   // The Event's tutorial (embark/farewell) Day indexes, so the persisted
   // cruise-wide `firstBingoAt` can exclude them (spec § "Resolved decisions" #2).
@@ -790,10 +792,23 @@ async function runSetMark(
   if (tallyItemId) {
     const markerRef = doc(database, 'events', EVENT_ID, 'tally', tallyItemId, 'markers', uid);
     if (params.nextMarked) {
+      // Day-scoped Tally Cards (#216): stamp the viewed `dayIndex` and the Prompt
+      // TEXT onto the marker so the Feed can group markers of the SAME
+      // `(itemId, dayIndex)` into one live card and label it without a pool read.
+      // Both are ADDITIVE fields the marker create rule already permits (it
+      // validates uid/displayName/markedAt, not the full key set), so no
+      // firestore.rules change — and the marker path stays the per-Prompt
+      // `tally/{itemId}/markers/{uid}`, so the Square badge (`useTally`) and the
+      // Doubt `exists()` gate are untouched. The Feed re-sort time is DERIVED
+      // (`max(marker.markedAt)`), never a client write to the admin-only parent
+      // tally doc. `dayIndex` is omitted (not `undefined`, which Firestore
+      // rejects) when the caller has no Day context.
       batch.set(markerRef, {
         uid,
         displayName: markerDisplayName(params.displayName, cachedPlayerName),
         markedAt: now,
+        itemText: toggled!.text,
+        ...(typeof params.dayIndex === 'number' ? { dayIndex: params.dayIndex } : {}),
       });
     } else {
       batch.delete(markerRef);

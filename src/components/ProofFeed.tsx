@@ -5,7 +5,7 @@ import { track } from '../analytics';
 import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
 import { THEMES } from '../theme/themes';
-import type { DayDef, MomentDoc, MomentKind, ProofDoc } from '../types';
+import type { BoardDoc, DayDef, MomentDoc, MomentKind, ProofDoc, TallyCard as TallyCardData } from '../types';
 
 // The Feed Day chip label (#211): "Day 2 · Get Sporty" — a 1-based Day number
 // plus the Day's theme label from EventDoc.days[dayIndex] → THEMES, degrading to
@@ -113,17 +113,127 @@ function MomentCard({ moment }: { moment: MomentDoc }) {
   );
 }
 
+// The names line for a Tally Card (#216): the first two markers by name, then
+// "+N" for the rest — "Nathan Payne, Sterling Tadlock +12". Markers arrive
+// chronological (earliest first) from `deriveTallyCards`.
+function tallyNames(markers: { displayName: string }[]): string {
+  const shown = markers.slice(0, 2).map((m) => m.displayName);
+  const extra = markers.length - shown.length;
+  return extra > 0 ? `${shown.join(', ')} +${extra}` : shown.join(', ');
+}
+
 /**
- * The Feed (ADR 0002): Proofs and Moments merged newest-first into one stream —
- * the honor-system source of truth the group watches together. A bare Mark posts
- * nothing here; only a Proof or a Moment appears.
+ * Which per-viewer button a Tally Card shows (#216) — PURE so the gating is
+ * unit-testable. Never a generic affordance:
+ *   - `＋ Proof` when the viewer has MARKED that Prompt (they can add evidence).
+ *   - `🙋 Got it too` when the Prompt sits UNMARKED on one of the viewer's own
+ *     dealt (unlocked) cards — Boards are per-Player samples, so the button only
+ *     appears when the Prompt is actually on the viewer's card.
+ *   - otherwise `null`: the card is purely informational.
+ * `＋ Proof` wins if both could apply (a marked Prompt is never also unmarked).
+ */
+export function tallyCardAction(
+  itemId: string,
+  markedItemIds: Set<string>,
+  dealtUnmarkedItemIds: Set<string>,
+): 'proof' | 'gotit' | null {
+  if (markedItemIds.has(itemId)) return 'proof';
+  if (dealtUnmarkedItemIds.has(itemId)) return 'gotit';
+  return null;
+}
+
+// The viewer's own board split into marked vs dealt-unmarked itemId sets, for the
+// per-card button gating (`tallyCardAction`). Single-board today (Boards deal
+// `dayIndex: 0`); when multi-day Boards land this widens to the union across the
+// viewer's unlocked Day Cards without changing the pure gate. Exported for the
+// Feed→Board wiring that consumes it (see the spec's follow-up note).
+export function boardItemSets(board: BoardDoc | null): { marked: Set<string>; unmarked: Set<string> } {
+  const marked = new Set<string>();
+  const unmarked = new Set<string>();
+  for (const c of board?.cells ?? []) {
+    if (c.free || !c.itemId) continue;
+    (c.marked ? marked : unmarked).add(c.itemId);
+  }
+  return { marked, unmarked };
+}
+
+/**
+ * A Tally Card (#216, daily-cards-spec § "Tally Cards") — the Feed's live, lighter-
+ * weight rendering of bare Marks: first two names + "+N", an avatar stack of the
+ * first three markers, the day chip, and a relative bump time. One line, an accent
+ * left border, no media — deliberately less prominent than a `ProofCard`. Tapping
+ * the card opens the same who-list sheet Doubts use (`onOpenWhoList`). The button is
+ * per-viewer (`tallyCardAction`).
+ */
+export function TallyCard({
+  card,
+  action,
+  days,
+  onOpenWhoList,
+  onAddProof,
+  onGotItToo,
+}: {
+  card: TallyCardData;
+  action: 'proof' | 'gotit' | null;
+  days: DayDef[] | undefined;
+  onOpenWhoList?: (card: TallyCardData) => void;
+  onAddProof?: (itemId: string) => void;
+  onGotItToo?: (itemId: string) => void;
+}) {
+  const stack = card.markers.slice(0, 3);
+  return (
+    <div
+      className="tally-card"
+      style={{ borderLeft: '3px solid var(--accent, #d6409f)', paddingLeft: 8 }}
+    >
+      <div className="row" style={{ border: 'none', background: 'none', padding: 0 }}>
+        <button
+          className="tally-card-body grow"
+          onClick={() => onOpenWhoList?.(card)}
+          style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer' }}
+          title="See who marked this"
+        >
+          <span className="tally-avatars" style={{ display: 'inline-flex' }} aria-hidden="true">
+            {stack.map((m) => (
+              <Avatar key={m.uid} name={m.displayName} src={null} size={22} />
+            ))}
+          </span>
+          <span className="name" style={{ fontSize: 14 }}>
+            {tallyNames(card.markers)}{' '}
+            <span className="muted" style={{ fontWeight: 400 }}>got “{card.itemText}”</span>
+            {' '}
+            <span className="tally-day-chip proof-day-chip">{dayChipLabel(card.dayIndex, days)}</span>
+            {' '}
+            <span className="sub" style={{ fontWeight: 400 }}>{ago(card.displayBump)}</span>
+          </span>
+        </button>
+        {action === 'proof' && (
+          <button className="iconbtn" title="Add a proof" onClick={() => onAddProof?.(card.itemId)}>
+            ＋ Proof
+          </button>
+        )}
+        {action === 'gotit' && (
+          <button className="iconbtn" title="Mark it — you’ve got this one too" onClick={() => onGotItToo?.(card.itemId)}>
+            🙋 Got it too
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The Feed (ADR 0002 / #216): Proofs, Moments, and Tally Cards merged newest-first
+ * into one stream — the honor-system source of truth the group watches together. A
+ * bare Mark now reaches the Feed as a live Tally Card (its position debounced), so
+ * play is no longer invisible; Proofs and Moments keep their existing rendering.
  */
 export default function ProofFeed() {
   const { entries, loading } = useFeed();
   const { user } = useAuth();
-  // The event's days[] resolves a Proof's dayIndex to its theme label for the
-  // Day chip (#211). Read-only; absent while loading or on a pre-days[] event,
-  // in which case dayChipLabel falls back to a bare "Day N".
+  // The event's days[] resolves a dayIndex to its theme label for the Day chip
+  // (#211/#216). Read-only; absent while loading or on a pre-days[] event, in
+  // which case dayChipLabel falls back to a bare "Day N".
   const { data: event } = useEventDoc();
 
   if (loading) return <div className="center muted">Loading…</div>;
@@ -131,13 +241,27 @@ export default function ProofFeed() {
 
   return (
     <div className="list">
-      {entries.map((entry) =>
-        entry.feedKind === 'moment' ? (
-          <MomentCard key={`moment-${entry.moment.id}`} moment={entry.moment} />
-        ) : (
-          <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} />
-        ),
-      )}
+      {entries.map((entry) => {
+        if (entry.feedKind === 'moment') {
+          return <MomentCard key={`moment-${entry.moment.id}`} moment={entry.moment} />;
+        }
+        if (entry.feedKind === 'tallyCard') {
+          const card = entry.card;
+          // Per-viewer button gating (`tallyCardAction`) is wired from the viewer's
+          // own Board; connecting that (and the ＋ Proof / 🙋 Got it too click →
+          // Board sheet navigation) from the Feed tab is the spec's follow-up, so
+          // the live Feed renders the informational card today.
+          return (
+            <TallyCard
+              key={`tally-${card.itemId}-${card.dayIndex}`}
+              card={card}
+              action={null}
+              days={event?.days}
+            />
+          );
+        }
+        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} />;
+      })}
     </div>
   );
 }

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
-import { onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
+import { useEffect, useRef, useState } from 'react';
+import { collectionGroup, onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
+import { db } from '../firebase';
 import { eventRef, itemsCol, boardRef, dayBoardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol } from '../data/paths';
 import { isReportHidden, isBanned, isSystemAuthor } from '../data/moderation';
-import { sortPlayers, dayDealState, type DayDealState } from '../game/logic';
-import type { EventDoc, ItemDoc, BoardDoc, DayDef, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, MomentDoc, DoubtDoc } from '../types';
+import { sortPlayers, dayDealState, type DayDealState, nextDisplayBumpTime, BUMP_DEBOUNCE_MS } from '../game/logic';
+import type { EventDoc, ItemDoc, BoardDoc, DayDef, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, TallyCard, MomentDoc, DoubtDoc } from '../types';
 
 // Both subs subscribe with includeMetadataChanges so the cache→server
 // transition is always observable: with the ADR 0006 persistent cache, a cold
@@ -373,41 +374,153 @@ export function hasCanonicalMomentId(moment: MomentDoc): boolean {
 }
 
 /**
- * One Feed entry — a Proof or a Moment — tagged so the renderer (ProofFeed) can
- * branch, with `createdAt` hoisted so the merge sorts one flat stream. A Proof
- * keeps its report/delete affordances; a Moment renders as a celebratory line
- * with no media (ADR 0002).
+ * One Feed entry — a Proof, a Moment, or a Tally Card (#216) — tagged so the
+ * renderer (ProofFeed) can branch, with `createdAt` hoisted so the merge sorts one
+ * flat stream. A Proof keeps its report/delete affordances; a Moment renders as a
+ * celebratory line; a Tally Card renders as a lighter-weight one-line aggregation
+ * of bare Marks (ADR 0002 / daily-cards-spec § "Tally Cards").
  */
 export type FeedEntry =
   | { feedKind: 'proof'; createdAt: number; proof: ProofDoc }
-  | { feedKind: 'moment'; createdAt: number; moment: MomentDoc };
+  | { feedKind: 'moment'; createdAt: number; moment: MomentDoc }
+  | { feedKind: 'tallyCard'; createdAt: number; card: TallyCard };
 
 /**
- * Merge Proofs and Moments into ONE newest-first stream (ADR 0002), capped to
- * `max` — the honest Feed. Pure (no Firestore, no clock) so the interleave/cap is
- * unit-testable and shared as the single source of Feed order. Each input is
- * already its kind's newest-`max`, so the merged newest-`max` is exact. A bare
- * Mark writes neither a Proof nor a Moment, so it contributes nothing here.
+ * Merge Proofs, Moments, and Tally Cards into ONE newest-first stream (ADR 0002 /
+ * #216), capped to `max` — the honest Feed. Pure (no Firestore, no clock) so the
+ * interleave/cap is unit-testable and shared as the single source of Feed order. A
+ * Proof/Moment sorts by its `createdAt`; a Tally Card sorts by its DEBOUNCED
+ * `displayBump` (not raw `lastMarkedAt`), so a hot square can't churn the stream and
+ * bury photo proofs. A zero-count Tally Card is excluded — an emptied Tally drops
+ * out of the Feed entirely (belt-and-braces with `deriveTallyCards`, which never
+ * emits one).
  */
-export function mergeFeed(proofs: ProofDoc[], moments: MomentDoc[], max = 60): FeedEntry[] {
+export function mergeFeed(
+  proofs: ProofDoc[],
+  moments: MomentDoc[],
+  tallyCards: TallyCard[] = [],
+  max = 60,
+): FeedEntry[] {
   const entries: FeedEntry[] = [
     ...proofs.map((proof) => ({ feedKind: 'proof' as const, createdAt: proof.createdAt, proof })),
     ...moments.map((moment) => ({ feedKind: 'moment' as const, createdAt: moment.createdAt, moment })),
+    ...tallyCards
+      .filter((card) => card.count > 0)
+      .map((card) => ({ feedKind: 'tallyCard' as const, createdAt: card.displayBump, card })),
   ];
   return entries.sort((a, b) => b.createdAt - a.createdAt).slice(0, max);
 }
 
+/** One Tally marker row for the Feed derivation: the marker doc plus the `itemId`
+ * lifted from its parent path (marker docs don't store it). */
+export interface TallyMarkerRow extends TallyEntry {
+  itemId: string;
+}
+
 /**
- * The combined Feed (ADR 0002): Proofs + Moments merged newest-first, capped.
- * Composes `useProofFeed` + `useMoments` (each with its own latched subscription)
- * and folds them through `mergeFeed`; it does not open a subscription of its own.
- * `loading` stays true until BOTH streams have delivered a first snapshot so the
- * empty state never flashes before one half arrives.
+ * Fold a flat list of Tally markers into per-`(itemId, dayIndex)` Tally Cards
+ * (#216) — the pure heart of the Feed's third stream. Only markers carrying BOTH a
+ * `dayIndex` and an `itemText` form a card (legacy per-Prompt markers written
+ * before #216 have neither, so they stay Square-badge-only). Each group's `count`
+ * is its live marker count, `lastMarkedAt` the max marker time, and `displayBump`
+ * the debounced sort key computed from the group's PREVIOUS displayed bump
+ * (`prevDisplayed[key]`) via `nextDisplayBumpTime` — so the count updates live but
+ * the Feed position holds for `windowMs`. Empty groups never exist here, so an
+ * emptied Tally simply produces no card (it drops out). Returns the cards plus the
+ * NEXT displayed-bump map for the caller to carry forward.
+ */
+export function deriveTallyCards(
+  rows: TallyMarkerRow[],
+  prevDisplayed: Record<string, number> = {},
+  windowMs: number = BUMP_DEBOUNCE_MS,
+): { cards: TallyCard[]; displayed: Record<string, number> } {
+  const groups = new Map<string, TallyMarkerRow[]>();
+  for (const r of rows) {
+    if (typeof r.dayIndex !== 'number' || !r.itemText) continue;
+    const key = `${r.itemId}::${r.dayIndex}`;
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(r);
+    else groups.set(key, [r]);
+  }
+  const displayed: Record<string, number> = {};
+  const cards: TallyCard[] = [];
+  for (const [key, members] of groups) {
+    const markers = [...members].sort((a, b) => a.markedAt - b.markedAt);
+    const lastMarkedAt = markers.reduce((m, x) => Math.max(m, x.markedAt), 0);
+    const displayBump = nextDisplayBumpTime(prevDisplayed[key], lastMarkedAt, windowMs);
+    displayed[key] = displayBump;
+    cards.push({
+      itemId: markers[0].itemId,
+      dayIndex: markers[0].dayIndex as number,
+      itemText: markers[0].itemText as string,
+      count: markers.length,
+      markers,
+      lastMarkedAt,
+      displayBump,
+    });
+  }
+  return { cards, displayed };
+}
+
+/**
+ * The Feed's live Tally Cards (#216): one per `(itemId, dayIndex)` that anyone has
+ * marked, derived from a `collectionGroup` scan of every Tally marker in the Event
+ * (the same "count is the marker set" model the Square badge uses — no admin-
+ * maintained aggregate doc). The banned-marker filter mirrors `useTally`: a banned
+ * Player's Mark drops from the public card AND its count. The debounced display
+ * bump is carried across snapshots in a ref so a card's Feed position holds for
+ * `BUMP_DEBOUNCE_MS` even as its count updates live.
+ */
+export function useTallyCards() {
+  const { bannedUids } = useEventModeration();
+  const displayedRef = useRef<Record<string, number>>({});
+  const [cards, setCards] = useState<TallyCard[]>([]);
+  const [loading, setLoading] = useState(true);
+  // Re-derive whenever the ban roster changes so a newly-banned marker drops.
+  const bannedKey = bannedUids.join(',');
+  useEffect(() => {
+    const unsub = onSnapshot(
+      collectionGroup(db, 'markers'),
+      { includeMetadataChanges: true },
+      (snap) => {
+        const rows: TallyMarkerRow[] = [];
+        for (const d of snap.docs) {
+          // Guard the collection group to the Tally's markers only:
+          // events/{eventId}/tally/{itemId}/markers/{uid}.
+          const tallyDoc = d.ref.parent.parent;
+          if (!tallyDoc || tallyDoc.parent.id !== 'tally') continue;
+          const data = d.data() as TallyEntry;
+          if (isBanned(data.uid, bannedUids)) continue;
+          rows.push({ ...data, itemId: tallyDoc.id });
+        }
+        const { cards: next, displayed } = deriveTallyCards(rows, displayedRef.current);
+        displayedRef.current = displayed;
+        setCards(next);
+        setLoading(false);
+      },
+      () => setLoading(false),
+    );
+    return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bannedKey]);
+  return { cards, loading };
+}
+
+/**
+ * The combined Feed (ADR 0002 / #216): Proofs + Moments + Tally Cards merged
+ * newest-first, capped. Composes `useProofFeed` + `useMoments` + `useTallyCards`
+ * (each with its own subscription) and folds them through `mergeFeed`; it does not
+ * open a subscription of its own. `loading` stays true until ALL three streams have
+ * delivered a first snapshot so the empty state never flashes before one arrives.
  */
 export function useFeed(max = 60) {
   const { proofs, loading: proofsLoading } = useProofFeed(max);
   const { moments, loading: momentsLoading } = useMoments(max);
-  return { entries: mergeFeed(proofs, moments, max), loading: proofsLoading || momentsLoading };
+  const { cards, loading: tallyLoading } = useTallyCards();
+  return {
+    entries: mergeFeed(proofs, moments, cards, max),
+    loading: proofsLoading || momentsLoading || tallyLoading,
+  };
 }
 
 export function usePendingClaims() {
