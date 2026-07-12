@@ -3,8 +3,10 @@ import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogO
 import { useAuth } from '../auth/AuthContext';
 import { useEventDoc, usePendingItemCount } from '../hooks/useData';
 import { useInstallPrompt } from '../hooks/useInstallPrompt';
+import { useTextSize, type TextSize } from '../hooks/useTextSize';
 import { THEMES } from '../theme/themes';
 import { eventTitle } from '../format';
+import { track } from '../analytics';
 import ProfileEditor from './ProfileEditor';
 import ThemeSwitcher from './ThemeSwitcher';
 import ItemPool from './ItemPool';
@@ -14,18 +16,19 @@ import AcceptableUse from './AcceptableUse';
 import CoachOverlay from './CoachOverlay';
 
 /**
- * The More tab (#208, daily-cards-spec § "More menu"): profile, theme, Play
- * (schedule / suggest / how-to-play / install), Support (bug / 18+), an
- * admin-only Admin row, sign out, and a version footer — in that fixed order.
- * Replaces `d15-tab-contract`'s interim placeholder (#203, specs/d15-tab-
- * contract.md) wholesale. `ItemPool` and `Admin` mount here as sub-panels
- * instead of top-level routes (their own internals are untouched); `BugReport`
- * and `AcceptableUse` relocate here too (`variant="row"`), replacing their
- * former fixed-position floating mounts in `App.tsx` / `Board.tsx` / `main.tsx`
- * — see specs/d15-more-menu.md § Contract for the full mount-point rationale.
+ * The More tab (#208, daily-cards-spec § "More menu"): profile, theme, text
+ * size, Play (schedule / suggest / how-to-play / install), Support (bug /
+ * 18+), an admin-only Admin row, sign out, and a version footer — in that
+ * fixed order. Replaces `d15-tab-contract`'s interim placeholder (#203,
+ * specs/d15-tab-contract.md) wholesale. `ItemPool` and `Admin` mount here as
+ * sub-panels instead of top-level routes (their own internals are
+ * untouched); `BugReport` and `AcceptableUse` relocate here too
+ * (`variant="row"`), replacing their former fixed-position floating mounts
+ * in `App.tsx` / `Board.tsx` / `main.tsx` — see specs/d15-more-menu.md §
+ * Contract for the full mount-point rationale.
  *
- * Text size (its own row, #215) deliberately does NOT live here yet — the
- * issue reserves its slot in the Theme/Play section rather than stubbing it.
+ * Text size (#215, specs/d15-text-size.md) lands in the slot #208 reserved
+ * for it inside the Theme/Play section.
  */
 export default function More() {
   const { user, signOutUser } = useAuth();
@@ -50,6 +53,13 @@ export default function More() {
           <Palette className="more-section-icon" aria-hidden="true" /> Theme
         </h3>
         <ThemeSwitcher />
+      </div>
+
+      {/* 2.5. Text size (#215) — Small / Medium / Large; the Square auto-fit
+          guard in Board.tsx always has the last word over this pick. */}
+      <div className="more-section">
+        <h3>Text size</h3>
+        <TextSizeSwitcher />
       </div>
 
       {/* 3. Play — schedule, suggest a square, how to play, install. */}
@@ -152,6 +162,42 @@ export default function More() {
           <Admin />
         </MorePanel>
       )}
+    </div>
+  );
+}
+
+const TEXT_SIZE_OPTIONS: readonly { id: TextSize; label: string }[] = [
+  { id: 'small', label: 'Small' },
+  { id: 'medium', label: 'Medium' },
+  { id: 'large', label: 'Large' },
+];
+
+/**
+ * The Text size row's control (#215, specs/d15-text-size.md): a Small /
+ * Medium / Large segmented control, mirroring `ThemeSwitcher`'s chip
+ * pattern. Persists per device only (`gcb.textSize`) — never a Firestore
+ * write, unlike the theme pick's cross-device sync — via the shared
+ * `useTextSize` store, so Board's per-Square auto-fit guard picks up a
+ * change here immediately.
+ */
+function TextSizeSwitcher() {
+  const [textSize, setTextSize] = useTextSize();
+  return (
+    <div className="text-size" role="group" aria-label="Text size">
+      {TEXT_SIZE_OPTIONS.map((opt) => (
+        <button
+          key={opt.id}
+          type="button"
+          className={'text-size-chip' + (textSize === opt.id ? ' active' : '')}
+          aria-pressed={textSize === opt.id}
+          onClick={() => {
+            setTextSize(opt.id);
+            track('text_size_change', { textSize: opt.id });
+          }}
+        >
+          {opt.label}
+        </button>
+      ))}
     </div>
   );
 }
