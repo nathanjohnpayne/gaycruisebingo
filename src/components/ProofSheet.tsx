@@ -148,16 +148,23 @@ export default function ProofSheet(props: Props) {
   // is a belt-and-braces guard on the flagged sink; the Feed reuses the same guard.
   const safePhotoSrc = safeMediaUrl(photoUrl);
   const safeAudioSrc = safeMediaUrl(audioUrl);
+  // "Marked by N others" must not count the viewer themselves (Codex P3, #211). On
+  // a proof-add open (the ＋ on a Square the viewer ALREADY marked, `cell.marked`),
+  // the subscribed Tally count includes the viewer's own marker
+  // (tally/{itemId}/markers/{uid}), so subtract it — the remainder is genuinely
+  // "others". On a fresh CLAIM open the viewer has no marker yet, so the raw count
+  // is already all others. Clamp at 0 for the degenerate lone-self case.
+  const heatOthers = Math.max(0, (tallyCount ?? 0) - (cell.marked ? 1 : 0));
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>
         <div className="sheet-title">Proof for “{cell.text}”</div>
-        {typeof tallyCount === 'number' && tallyCount > 0 && (
+        {typeof tallyCount === 'number' && heatOthers > 0 && (
           // The social heat line (ADR 0002): reuses the Prompt's already-subscribed
           // Tally count — no new read, no new doc — so a Player sees the pack has
           // this Square before they claim it. "so far" keeps it a running count.
-          <div className="heat-line">🔥 Marked by {tallyCount} {tallyCount === 1 ? 'other' : 'others'} so far</div>
+          <div className="heat-line">🔥 Marked by {heatOthers} {heatOthers === 1 ? 'other' : 'others'} so far</div>
         )}
         {onPledge && (
           // The one-tap honor pledge (issue #181): its own full-width row —
@@ -195,14 +202,20 @@ export default function ProofSheet(props: Props) {
                 picker (the ProfileEditor pattern) — the gap #190 reported. Both
                 render in EVERY Claim Mode; only `camera_only` hides Library. */}
             <div className="photo-affordances">
+              {/* Keyboard/AT access (Codex P2, #211): the file input is VISUALLY
+                  hidden but stays in the tab order + a11y tree (`.visually-hidden`,
+                  not the `hidden` attribute which drops both), so a keyboard user
+                  tabs onto it, the wrapping label supplies its accessible name, and
+                  Enter/Space opens the picker. `.photo-affordance:focus-within`
+                  moves the visible focus ring onto the pill. */}
               <label className="btn photo-affordance">
                 📷 Take photo
-                <input type="file" accept="image/*" capture="environment" hidden onChange={onPhoto('camera')} />
+                <input type="file" accept="image/*" capture="environment" className="visually-hidden" onChange={onPhoto('camera')} />
               </label>
               {photoProofSource !== 'camera_only' && (
                 <label className="btn photo-affordance">
                   🖼️ Library
-                  <input type="file" accept="image/*" hidden onChange={onPhoto('library')} />
+                  <input type="file" accept="image/*" className="visually-hidden" onChange={onPhoto('library')} />
                 </label>
               )}
             </div>

@@ -106,6 +106,29 @@ describe('ProofSheet photo body — two affordances (#190)', () => {
     rerender(<ProofSheet {...baseProps()} tallyCount={0} />);
     expect(screen.queryByText(/Marked by/)).toBeNull();
   });
+
+  it('excludes the viewer from the heat count on an already-marked Square (Codex P3)', () => {
+    // A proof-add open (＋ on a Square the viewer already marked): tallyCount
+    // includes the viewer's own marker, so "others" is one fewer.
+    const marked = { ...cell(), marked: true, markedAt: 1 };
+    const { rerender } = render(<ProofSheet {...baseProps()} cell={marked} tallyCount={3} />);
+    expect(screen.getByText(/🔥 Marked by 2 others so far/)).toBeInTheDocument();
+    // Viewer is the sole marker → no "others" to boast about.
+    rerender(<ProofSheet {...baseProps()} cell={marked} tallyCount={1} />);
+    expect(screen.queryByText(/Marked by/)).toBeNull();
+  });
+
+  it('keeps the photo affordance inputs focusable for keyboard/AT users (Codex P2)', async () => {
+    // The `hidden` attribute would drop the input from the tab order AND the a11y
+    // tree; the visually-hidden class keeps it operable by keyboard/screen reader.
+    const user = userEvent.setup();
+    const { container } = render(<ProofSheet {...baseProps()} />);
+    await user.click(screen.getByRole('button', { name: /photo/i }));
+    for (const input of fileInputs(container)) {
+      expect(input.hidden).toBe(false);
+      expect(input).toHaveClass('visually-hidden');
+    }
+  });
 });
 
 describe('uploadProofMedia — EXIF/GPS strip (#211)', () => {
