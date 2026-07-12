@@ -1283,15 +1283,26 @@ a {
   font-size: 11px;
 }
 
-/* ---------- install + update prompts ---------- */
-/* Shared bottom-banner shell: .install-prompt (specs/w1-pwa.md) and .update-prompt
-   (specs/app-update-reload-prompt.md) read the same theme tokens so both follow the
-   active theme. Fixed to the bottom like .tabs; env(safe-area-inset-bottom) clears
-   the iOS home indicator. */
+/* ---------- install + update toasts ---------- */
+/* Shared bottom-toast shell: .install-prompt (specs/w1-pwa.md) and .update-prompt
+   (specs/app-update-reload-prompt.md, restyled by specs/d15-pwa-toasts.md).
+   `--toast-index` (0 = topmost) and `--toast-count` (how many toasts are
+   ACTUALLY visible right now, 1 or 2) are set inline by each component from
+   `useToastSlot` (src/hooks/useToastStack.ts, #219) — urgent (update) outranks
+   invitational (install) — shifting a toast up one slot per rank so both can
+   stack above the tab bar instead of one hiding the other. `--toast-count - 1`
+   inverts the offset so stackIndex 0 lands at the LARGEST bottom offset — the
+   physically topmost slot, matching "0 = topmost" — instead of the smallest
+   one (Codex review, PR #238): a lower stackIndex (urgent) must render above a
+   higher one (invitational), never the reverse. Using the real `--toast-count`
+   instead of a fixed MAX_VISIBLE_TOASTS-1 keeps a LONE toast in the bottom
+   slot (index 0 of 1) rather than floating one slot above an empty one
+   (Codex review, PR #238). */
 .install-prompt,
 .update-prompt {
+  --toast-slot-height: 54px;
   position: fixed;
-  bottom: 0;
+  bottom: calc((var(--toast-count, 1) - 1 - var(--toast-index, 0)) * var(--toast-slot-height));
   left: 0;
   right: 0;
   z-index: 55;
@@ -1302,15 +1313,6 @@ a {
   background: color-mix(in srgb, var(--bg) 92%, transparent);
   backdrop-filter: blur(6px);
   border-top: 1px solid var(--border);
-}
-/* If both banners are ever up at once, the pending update takes precedence:
-   the install banner is fully suppressed (display: none removes it from the
-   tab order and accessibility tree, not just from view — a z-index overlay
-   would leave keyboard/screen-reader users hitting invisible Install controls
-   underneath) rather than stacking a third fixed bar. A reload re-fires
-   beforeinstallprompt, so the install offer isn't lost. */
-body.update-prompt-visible .install-prompt {
-  display: none;
 }
 .install-prompt p,
 .update-prompt p {
@@ -1329,26 +1331,23 @@ body.update-prompt-visible .install-prompt {
 /* Stack above .tabs (75px = its own height) instead of hiding it — see specs/w1-pwa.md.
    Was 61px before the Lucide icon row (#220) stacked a 20px icon + 2px gap above the
    label: .tabs padding (8+8) + .tab padding (10+10) + icon (20) + gap (2) + label
-   line (~16) ≈ 75px. */
+   line (~16) ≈ 75px. The inverted --toast-index offset above still applies on top of
+   this base so stacked toasts (#219) sit above one another. */
 body:has(.tabs) .install-prompt,
 body:has(.tabs) .update-prompt {
-  bottom: calc(75px + env(safe-area-inset-bottom));
+  bottom: calc(75px + env(safe-area-inset-bottom) + ((var(--toast-count, 1) - 1 - var(--toast-index, 0)) * var(--toast-slot-height)));
 }
-/* Reserve extra .app bottom clearance only while the banner is actually up (either
-   variant — Chromium or the iOS hint), so the last scrollable row doesn't sit
-   underneath it; growing .app's base 112px unconditionally would waste that space
-   the rest of the time. `install-prompt-visible` is toggled on <body> by
-   InstallPrompt (src/components/InstallPrompt.tsx) — see specs/w1-pwa.md — and
-   `update-prompt-visible` by UpdatePrompt (src/components/UpdatePrompt.tsx) — see
-   specs/app-update-reload-prompt.md. ~64px is
-   reasoned from the banner's own padding/border plus up to two wrapped lines of its
-   copy on narrow phones, not confirmed against a live rendered measurement — treat
-   it as a generous, unverified estimate (see specs/w1-pwa.md) pending a real-device
-   check; jsdom has no layout engine so it can't be verified by an automated test
-   either. */
+/* Reserve extra .app bottom clearance while a toast is up, ~64px/toast — see
+   specs/w1-pwa.md for the (unverified, jsdom-has-no-layout) estimate rationale.
+   Both classes present at once (#219: both toasts can now be visible
+   simultaneously, stacked via --toast-index, instead of update fully
+   suppressing install) reserves clearance for two. */
 body.install-prompt-visible .app,
 body.update-prompt-visible .app {
-  padding-bottom: 200px; /* 136px .app base + ~64px banner */
+  padding-bottom: 200px; /* 136px .app base + ~64px toast */
+}
+body.install-prompt-visible.update-prompt-visible .app {
+  padding-bottom: 264px; /* 136px .app base + ~64px per toast, two stacked */
 }
 
 /* ---------- bug reporting ---------- */
@@ -1396,6 +1395,12 @@ body.update-prompt-visible .app {
 body.install-prompt-visible .bug-report-trigger,
 body.update-prompt-visible .bug-report-trigger {
   bottom: calc(140px + env(safe-area-inset-bottom));
+}
+/* Two toasts stacked (#219) reserve one more slot's worth of clearance.
+   (54px literal, not var(--toast-slot-height) — that custom property is scoped
+   to .install-prompt/.update-prompt, not visible here.) */
+body.install-prompt-visible.update-prompt-visible .bug-report-trigger {
+  bottom: calc(140px + env(safe-area-inset-bottom) + 54px);
 }
 body:has(.celebrate) .bug-report-trigger,
 body:has(.sheet-backdrop) .bug-report-trigger {
@@ -1502,6 +1507,11 @@ body:has(.sheet-backdrop) .bug-report-trigger {
 body.install-prompt-visible .guidelines-trigger,
 body.update-prompt-visible .guidelines-trigger {
   bottom: calc(140px + env(safe-area-inset-bottom));
+}
+/* Two toasts stacked (#219) reserve one more slot's worth of clearance —
+   mirrors .bug-report-trigger's own rule above. */
+body.install-prompt-visible.update-prompt-visible .guidelines-trigger {
+  bottom: calc(140px + env(safe-area-inset-bottom) + 54px);
 }
 body:has(.celebrate) .guidelines-trigger,
 body:has(.sheet-backdrop) .guidelines-trigger {

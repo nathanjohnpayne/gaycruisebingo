@@ -1,6 +1,7 @@
 import { logEvent } from 'firebase/analytics';
 import { analytics } from './firebase';
 import { phCapture } from './posthog';
+import { markSquareOccurred } from './hooks/useToastStack';
 
 /**
  * GA4 event catalog — the single source of truth for every analytics event
@@ -55,4 +56,12 @@ export function track(name: GA4EventName, params?: Record<string, unknown>): voi
   }
   // PostHog, alongside GA4 — same event, same params (internally guarded).
   phCapture(name, params);
+  // Install nudge trigger (#219, daily-cards-spec § "Install nudge and
+  // update banner"): reuses this existing `mark_square` call site as the
+  // signal instead of a new one in Board.tsx — see useToastStack's module doc.
+  // Gated on `marked === true` (Codex review, PR #238): Board.doMark fires
+  // this same event for unmarking too, and an unmark shouldn't count as
+  // "the Player marked a Square on this device" (e.g. marks synced from
+  // another device, then undone here first).
+  if (name === 'mark_square' && params?.marked === true) markSquareOccurred();
 }

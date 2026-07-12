@@ -3,6 +3,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import InstallPrompt from './InstallPrompt';
 import { __resetInstallPromptStateForTests, useInstallPrompt } from '../hooks/useInstallPrompt';
+import { __resetToastStackForTests, __resetHasMarkedForTests, markSquareOccurred } from '../hooks/useToastStack';
 
 // Covers specs/w1-pwa.md: the beforeinstallprompt-driven install banner, the iOS
 // "Add to Home Screen" hint, install_pwa firing on prompt acceptance or a bare
@@ -61,6 +62,12 @@ describe('InstallPrompt', () => {
     // points, Codex P2 on #232) — reset it between tests so each `it` starts
     // from a clean, un-captured, un-installed state.
     __resetInstallPromptStateForTests();
+    __resetToastStackForTests();
+    __resetHasMarkedForTests();
+    // The toast's trigger moved to after the first Mark (#219) — these
+    // mechanics tests are about what happens once eligible, so pre-mark a
+    // Square here. The trigger itself is covered by d15-pwa-toasts.test.tsx.
+    markSquareOccurred();
   });
 
   afterEach(() => {
@@ -76,12 +83,21 @@ describe('InstallPrompt', () => {
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
 
-  it('captures beforeinstallprompt (suppressing the mini-infobar), shows Install, and fires install_pwa on acceptance', async () => {
+  it('does not appear before the Player has marked a Square (#219 trigger)', () => {
+    storage.clear(); // beforeEach's markSquareOccurred() persisted — clear it for this test
+    __resetHasMarkedForTests();
+    render(<InstallPrompt />);
+    fireOnWindow(makeBeforeInstallPromptEvent('accepted'));
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
+  });
+
+  it('captures beforeinstallprompt (suppressing the mini-infobar), shows Install with the new copy, and fires install_pwa on acceptance', async () => {
     const user = userEvent.setup();
     render(<InstallPrompt />);
     const event = makeBeforeInstallPromptEvent('accepted');
     fireOnWindow(event);
     expect(event.defaultPrevented).toBe(true);
+    expect(screen.getByRole('note')).toHaveTextContent(/full screen, works offline at sea/i);
     await user.click(screen.getByRole('button', { name: /install/i }));
     await waitFor(() => expect(track).toHaveBeenCalledWith('install_pwa'));
   });

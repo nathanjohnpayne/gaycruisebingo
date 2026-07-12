@@ -3,6 +3,7 @@ import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import UpdatePrompt from './UpdatePrompt';
+import { __resetToastStackForTests, __resetClaimSheetOpenForTests, setClaimSheetOpen } from '../hooks/useToastStack';
 
 // Covers specs/app-update-reload-prompt.md: the needRefresh-driven reload banner
 // (Reload activates the waiting service worker via updateServiceWorker(true),
@@ -54,6 +55,9 @@ describe('UpdatePrompt', () => {
     swState.initialNeedRefresh = false;
     swState.updateServiceWorker = vi.fn().mockResolvedValue(undefined);
     swState.capturedOptions = undefined;
+    // Shared module singletons (#219) — reset between tests.
+    __resetToastStackForTests();
+    __resetClaimSheetOpenForTests();
   });
 
   afterEach(() => {
@@ -74,9 +78,18 @@ describe('UpdatePrompt', () => {
     swState.initialNeedRefresh = true;
     const user = userEvent.setup();
     render(<UpdatePrompt />);
-    expect(screen.getByRole('status')).toHaveTextContent(/new version of gay cruise bingo/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/fresh build just docked/i);
     await user.click(screen.getByRole('button', { name: /reload/i }));
     expect(swState.updateServiceWorker).toHaveBeenCalledWith(true);
+  });
+
+  it('defers while a claim sheet is open, and shows once it closes (#219)', () => {
+    swState.initialNeedRefresh = true;
+    act(() => setClaimSheetOpen(true));
+    render(<UpdatePrompt />);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    act(() => setClaimSheetOpen(false));
+    expect(screen.getByRole('status')).toHaveTextContent(/fresh build just docked/i);
   });
 
   it('"Not now" dismisses the banner for the session without touching the waiting worker', async () => {
