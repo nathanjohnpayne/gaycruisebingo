@@ -25,7 +25,6 @@ import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdg
 import { track } from '../analytics';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
-import AcceptableUse from './AcceptableUse';
 import type { Cell, ClaimMode, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 import LoadingState from './LoadingState';
 
@@ -989,10 +988,6 @@ export default function Board() {
       <div className="count">
         Marked <b>{countMarked(cells)}</b> · Bingos <b>{player?.bingoCount ?? 0}</b>
       </div>
-      {/* The fixed Guidelines affordance is mounted here on Card and from main.tsx
-          elsewhere. It sits bottom-left, opposite the bottom-right bug reporter,
-          and self-gates on the signed-in User (ADR 0005). */}
-      <AcceptableUse />
       {/* `cells` fixes the empty-card share race (Codex P2, PR #111 finding
           1): Celebration used to open its own useBoard(uid) listener and
           could render/share before that listener's own first snapshot

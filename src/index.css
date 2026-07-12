@@ -1358,3 +1358,110 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   text-transform: uppercase;
   margin-top: 16px;
 }
+
+/* ---------- More menu (#208, daily-cards-spec § "More menu") ---------- */
+/* The full menu: Profile card, Theme, Play, Support, an admin-only Admin row,
+   Sign out, and a version footer — `.more-row` is the one shared row shape
+   every section (and `ProfileEditor`'s trigger, and `BugReport`/
+   `AcceptableUse`'s `variant="row"` trigger) renders as, so the menu reads as
+   one coherent list even though its rows come from several components. */
+.more {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 24px;
+}
+.more-section {
+  margin: 6px 0;
+}
+.more-section h3 {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin: 10px 2px 6px;
+}
+.more-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.more-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.more-row:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.more-row:hover,
+.more-row:focus-visible {
+  border-color: var(--primary);
+}
+.more-row .avatar {
+  flex: none;
+}
+.more-row-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* Guards against ProfileEditor's `.avatar-trigger` (its own class on the
+     SAME button as `.more-row` — see ProfileEditor.tsx) setting
+     `line-height: 0` for its bare circular-avatar presentation: that value
+     inherits into children by default and would collapse this text's line
+     boxes. Harmless to set unconditionally on every `.more-row-text`. */
+  line-height: 1.3;
+}
+.more-row-title {
+  font-weight: 600;
+}
+.more-row-sub {
+  color: var(--dim);
+  font-size: 12px;
+}
+.more-badge {
+  flex: none;
+}
+/* Sign out (spec: "last, visually quiet — dashed/dim"). */
+.more-row-quiet {
+  border-style: dashed;
+  color: var(--dim);
+  background: transparent;
+  box-shadow: none;
+}
+.more-version {
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  margin-top: 4px;
+}
+.more-panel {
+  max-height: min(90dvh, 760px);
+  overflow-y: auto;
+}
+.more-howtoplay {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-left: 20px;
+  margin: 4px 0 0;
+}
+.more-howtoplay li {
+  line-height: 1.4;
+}

@@ -22,7 +22,15 @@ function errorMessage(error: unknown): string {
   return 'Could not submit the report. Check your connection and try again.';
 }
 
-export default function BugReport() {
+/**
+ * `variant`: `'floating'` (default) is the original fixed bottom-right chip
+ * (w4-bug-report-inbox.md) — kept intact for that spec's own coverage.
+ * `'row'` is a plain full-width menu row with the same trigger+sheet, used
+ * ONLY by `More.tsx` (#208, daily-cards-spec § "More menu" § Support): the
+ * live app mounts `variant="row"` exclusively now, so only one "Report a
+ * bug" affordance is ever on screen at a time.
+ */
+export default function BugReport({ variant = 'floating' }: { variant?: 'floating' | 'row' }) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const captureAttemptRef = useRef(0);
@@ -127,7 +135,13 @@ export default function BugReport() {
 
   return (
     <div className="bug-report-ui" data-bug-report-ui>
-      <button ref={triggerRef} className="bug-report-trigger" type="button" aria-label="Report a bug" onClick={openReport}>
+      <button
+        ref={triggerRef}
+        className={variant === 'row' ? 'more-row' : 'bug-report-trigger'}
+        type="button"
+        aria-label="Report a bug"
+        onClick={openReport}
+      >
         <BugIcon />
         <span>Report a bug</span>
       </button>

@@ -8,10 +8,18 @@ const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:
  * Acceptable Use / Community Guidelines — the 18+ posture, community
  * expectations, and how to report a Prompt or Proof, shown in an in-app modal.
  * Behind auth BY DESIGN (ADR 0005 — no public unauthenticated pages): it
- * self-gates on the signed-in User and renders NOTHING signed out, and is
- * mounted from the app chrome in `main.tsx`, not the frozen tab route table.
+ * self-gates on the signed-in User and renders NOTHING signed out, and is not
+ * added to the frozen tab route table.
+ *
+ * `variant`: `'floating'` (default) is the original fixed bottom-left chip
+ * (w3-security-hardening.md) — kept intact for that spec's own coverage.
+ * `'row'` is a plain full-width menu row with the same trigger+sheet, used
+ * ONLY by `More.tsx` (#208, daily-cards-spec § "More menu" § Support): the
+ * live app mounts `variant="row"` exclusively now (from More, itself
+ * reachable on every signed-in route as a frozen tab), so only one
+ * Guidelines affordance is ever on screen at a time.
  */
-export default function AcceptableUse() {
+export default function AcceptableUse({ variant = 'floating' }: { variant?: 'floating' | 'row' }) {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -66,7 +74,7 @@ export default function AcceptableUse() {
       <button
         ref={triggerRef}
         type="button"
-        className="btn guidelines-trigger"
+        className={variant === 'row' ? 'more-row' : 'btn guidelines-trigger'}
         aria-haspopup="dialog"
         onClick={() => setOpen(true)}
       >

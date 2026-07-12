@@ -49,16 +49,21 @@ describe('AcceptableUse page (behind auth — ADR 0005)', () => {
     expect(container).toBeEmptyDOMElement(); // null → no page/trigger reachable
   });
 
-  it('keeps AcceptableUse reachable on Card and every other signed-in route', () => {
-    // Rendered inline under the Board tally line (#143), centered, rather than
-    // as a floating fixed element in the composition root.
+  it('keeps AcceptableUse reachable from the More menu on every signed-in route', () => {
+    // Phase 1.5 (#208, daily-cards-spec § "More menu"): the former Board-
+    // inline and main.tsx pathname-gated floating mounts retired in favor of
+    // ONE row inside the More tab. That's reachable from Card (tap More) and
+    // every other route alike, since More itself is a frozen tab-bar stop
+    // (src/components/tabs.ts) rather than a route-conditional composition-
+    // root mount — no per-route wiring needed here anymore.
     const board = readRepoFile('./components/Board.tsx');
-    expect(board).toMatch(/<AcceptableUse\s*\/>/);
+    expect(board).not.toMatch(/<AcceptableUse/);
 
-    // The composition root supplies the same affordance on non-Card routes;
-    // the pathname guard prevents a duplicate trigger on Card.
     const main = readRepoFile('./main.tsx');
-    expect(main).toMatch(/location\.pathname\s*!==\s*['"]\/['"]\s*&&\s*<AcceptableUse\s*\/>/);
+    expect(main).not.toMatch(/<AcceptableUse/);
+
+    const more = readRepoFile('./components/More.tsx');
+    expect(more).toMatch(/<AcceptableUse\s+variant="row"\s*\/>/);
   });
 
   it('does not promise automatic report-threshold hiding', async () => {

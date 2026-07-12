@@ -4,15 +4,35 @@ import { useAuth } from '../auth/AuthContext';
 import { savePlayerTheme } from '../data/api';
 import { track } from '../analytics';
 
+/**
+ * The Theme row's control (More menu § "Theme", daily-cards-spec § "More
+ * menu"). Relocated from `Nav.tsx` into `More.tsx` by this ticket (#208).
+ * Leads with the new **Auto — match the day** chip (the default, resolved by
+ * `ThemeContext`'s `autoThemeId`), followed by every `THEMES` entry in its
+ * fixed order — new party themes still auto-pick up here for free, same as
+ * before Auto existed (w1-themes.md's "auto-pickup" contract). A concrete
+ * pick both saves locally (`ThemeContext.setTheme`) and cross-device
+ * (`savePlayerTheme`); picking Auto saves neither — see `ThemeContext` for
+ * why.
+ */
 export default function ThemeSwitcher() {
-  const { theme, setTheme } = useTheme();
+  const { preference, setTheme } = useTheme();
   const { user } = useAuth();
   return (
     <div className="themes" aria-label="Theme">
+      <button
+        className={'chip' + (preference === 'auto' ? ' active' : '')}
+        onClick={() => {
+          setTheme('auto');
+          track('theme_change', { theme: 'auto' });
+        }}
+      >
+        🧭 Auto — match the day
+      </button>
       {THEMES.map((t) => (
         <button
           key={t.id}
-          className={'chip' + (theme === t.id ? ' active' : '')}
+          className={'chip' + (preference === t.id ? ' active' : '')}
           onClick={() => {
             setTheme(t.id);
             track('theme_change', { theme: t.id });

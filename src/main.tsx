@@ -1,8 +1,9 @@
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, useLocation } from 'react-router-dom';
+import { BrowserRouter } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth/AuthContext';
 import { ThemeProvider } from './theme/ThemeContext';
+import { todaysDayTheme } from './theme/autoTheme';
 import { useEventDoc, useMyPlayer } from './hooks/useData';
 import { initPostHog, phIdentify, phReset, isLocalDevHost } from './posthog';
 import { isSyntheticProbe } from './synthetic-probe';
@@ -11,7 +12,6 @@ import App from './App';
 import ConsentNotice from './components/ConsentNotice';
 import InstallPrompt from './components/InstallPrompt';
 import UpdatePrompt from './components/UpdatePrompt';
-import AcceptableUse from './components/AcceptableUse';
 import './theme/themes.css';
 import './index.css';
 
@@ -36,7 +36,10 @@ function ThemedApp() {
   const { data: event } = useEventDoc(!!user);
   const { data: player } = useMyPlayer(user?.uid);
   const defaultTheme: ThemeId = player?.theme ?? event?.defaultTheme ?? 'neon-playground';
-  const location = useLocation();
+  // Today's Day's theme (daily-cards-spec § "More menu" — Auto), resolved here
+  // (Firestore-backed `event`) and handed down precomputed so ThemeContext
+  // itself stays Firestore-free, mirroring `defaultTheme` above.
+  const autoThemeId = todaysDayTheme(event);
   // Tie PostHog events to the signed-in User by uid; clear on sign-out. (#96)
   // Kept here (not in AuthContext) so the analytics wiring stays out of the
   // protected src/auth/** path. Wait for auth to resolve (`!loading`) before
@@ -51,13 +54,8 @@ function ThemedApp() {
   // SPA pageviews are autocaptured by posthog-js (`capture_pageview:
   // 'history_change'`, see posthog.ts), so no manual pageview call is needed here.
   return (
-    <ThemeProvider defaultTheme={defaultTheme}>
+    <ThemeProvider defaultTheme={defaultTheme} autoThemeId={autoThemeId}>
       <App />
-      {/* The Card route renders Guidelines from Board. Keep the same
-          policy affordance reachable on every other signed-in route without
-          duplicating it on Card: the fixed bottom-left control sits opposite
-          the bug reporter on the right. */}
-      {location.pathname !== '/' && <AcceptableUse />}
     </ThemeProvider>
   );
 }

@@ -198,6 +198,113 @@ describe('ThemeContext — persistence and defaults (specs/w1-themes.md)', () =>
   });
 });
 
+// ---------------------------------------------------------------------------
+// ThemeContext — the "Auto: match the day" preference (specs/d15-more-menu.md
+// § Theme). Extends the persistence/default suite above in place (this is
+// where ThemeContext's tests already live) rather than forking a separate
+// ThemeContext.test.tsx.
+// ---------------------------------------------------------------------------
+
+function ThemePreferenceProbe() {
+  const { theme, preference, setTheme } = useTheme();
+  return (
+    <div>
+      <span data-testid="theme">{theme}</span>
+      <span data-testid="preference">{preference}</span>
+      <button type="button" onClick={() => setTheme('auto')}>
+        pick auto
+      </button>
+      <button type="button" onClick={() => setTheme('seriously-pink')}>
+        pick seriously-pink
+      </button>
+    </div>
+  );
+}
+
+describe('ThemeContext — Auto: match the day (specs/d15-more-menu.md § Theme)', () => {
+  afterEach(() => {
+    window.localStorage.clear();
+    delete document.documentElement.dataset.theme;
+  });
+
+  it('defaults to auto and resolves to the supplied autoThemeId, never persisting it', () => {
+    render(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty">
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('preference')).toHaveTextContent('auto');
+    expect(screen.getByTestId('theme')).toHaveTextContent('get-sporty');
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('falls back to defaultTheme when auto has no autoThemeId (pre-cruise / no Days)', () => {
+    render(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId={null}>
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('preference')).toHaveTextContent('auto');
+    expect(screen.getByTestId('theme')).toHaveTextContent('neon-playground');
+  });
+
+  it('re-resolves auto live as autoThemeId arrives/changes from Firestore', () => {
+    const { rerender } = render(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId={null}>
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('theme')).toHaveTextContent('neon-playground');
+
+    rerender(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="seriously-pink">
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('theme')).toHaveTextContent('seriously-pink');
+  });
+
+  it('an explicit pick still saves and overrides auto', async () => {
+    const user = userEvent.setup();
+    render(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty">
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: 'pick seriously-pink' }));
+    expect(screen.getByTestId('preference')).toHaveTextContent('seriously-pink');
+    expect(screen.getByTestId('theme')).toHaveTextContent('seriously-pink');
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe('seriously-pink');
+  });
+
+  it('picking auto after an explicit pick clears the saved value', async () => {
+    const user = userEvent.setup();
+    render(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty">
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: 'pick seriously-pink' }));
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBe('seriously-pink');
+
+    await user.click(screen.getByRole('button', { name: 'pick auto' }));
+    expect(screen.getByTestId('preference')).toHaveTextContent('auto');
+    expect(screen.getByTestId('theme')).toHaveTextContent('get-sporty');
+    expect(window.localStorage.getItem(STORAGE_KEY)).toBeNull();
+  });
+
+  it('an explicit saved pick wins over autoThemeId on initial mount (no auto default)', () => {
+    window.localStorage.setItem(STORAGE_KEY, 'seriously-pink');
+    render(
+      <ThemeProvider defaultTheme="neon-playground" autoThemeId="get-sporty">
+        <ThemePreferenceProbe />
+      </ThemeProvider>,
+    );
+    expect(screen.getByTestId('preference')).toHaveTextContent('seriously-pink');
+    expect(screen.getByTestId('theme')).toHaveTextContent('seriously-pink');
+  });
+});
+
 describe('Theme metadata (specs/w1-themes.md)', () => {
   it('keeps Neon Playground as the first/default Theme', () => {
     expect(THEMES[0]?.id).toBe('neon-playground');
