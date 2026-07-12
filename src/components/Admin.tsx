@@ -27,12 +27,16 @@ import {
   setClaimMode,
   setEventTheme,
   setDayTheme,
+  setPhotoProofSource,
+  setStripPhotoExif,
+  setVisionGate,
+  setReportHideThreshold,
   banUser,
   unbanUser,
 } from '../data/admin';
 import { deleteProof } from '../data/proofs';
 import { THEMES } from '../theme/themes';
-import type { ClaimMode, DayDef, ItemDoc, ProofDoc, ThemeId } from '../types';
+import type { ClaimMode, DayDef, EventDoc, ItemDoc, ProofDoc, ThemeId } from '../types';
 
 // One report-queue row, tagged so the render can branch to the per-kind
 // affordances (Proof vs Prompt writes) while a single list sorts across both
@@ -360,6 +364,117 @@ function ScheduleTab({ days }: { days: DayDef[] }) {
   );
 }
 
+// A −/+ stepper for `settings.reportHideThreshold` (#222), floored at 1 —
+// `isReportHidden` treats a non-positive threshold as "no filtering" (Codex
+// P2, PR #107 finding 2), so an unfloored stepper could silently disable
+// auto-hide instead of hiding after zero reports.
+function ReportThresholdStepper({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <button
+        className="iconbtn"
+        aria-label="Decrease auto-hide threshold"
+        disabled={value <= 1}
+        onClick={() => onChange(Math.max(1, value - 1))}
+      >
+        −
+      </button>
+      <span style={{ minWidth: 20, textAlign: 'center' }}>{value}</span>
+      <button className="iconbtn" aria-label="Increase auto-hide threshold" onClick={() => onChange(value + 1)}>
+        +
+      </button>
+    </div>
+  );
+}
+
+// The "Proof & Claims" panel (#222, daily-cards-spec § "Admin console"): six
+// rows over knobs that mostly already exist with no UI — no new backend
+// behavior. Claim mode is RELOCATED here (recaptioned, ADR 0001 verbatim).
+// Pending claims is NOT rebuilt — its confirm/reject queue stays in its own
+// section below; this panel only links to it. AI image screen is captioned
+// presentational-only: `functions/src/visionGate.ts` still gates
+// `moderateProof` on its own deploy-time env flag, not this EventDoc field.
+function ProofClaimsPanel({
+  event,
+  pendingClaimCount,
+}: {
+  event: EventDoc | null | undefined;
+  pendingClaimCount: number;
+}) {
+  const modes: ClaimMode[] = ['honor', 'proof_required', 'admin_confirmed'];
+  const modeLabel: Record<ClaimMode, string> = { honor: 'Honor', proof_required: 'Proof req.', admin_confirmed: 'Admin-confirmed' };
+  const photoSource = event?.settings?.photoProofSource ?? 'camera_or_library';
+  const stripExif = event?.settings?.stripPhotoExif ?? true;
+  const visionGate = event?.settings?.visionGate ?? true;
+  const threshold = event?.settings?.reportHideThreshold ?? 4;
+
+  return (
+    <div className="admin-section">
+      <h3>Proof & Claims</h3>
+      <div className="row">
+        <div className="grow">
+          <div className="name">Claim mode</div>
+          <div className="sub">A friction knob, not a trust level.</div>
+        </div>
+        <div className="seg">
+          {modes.map((m) => (
+            <button key={m} className={'seg-btn' + (event?.claimMode === m ? ' on' : '')} onClick={() => setClaimMode(m)}>
+              {modeLabel[m]}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="row">
+        <div className="grow">
+          <div className="name">Photo proof source</div>
+          <div className="sub">Camera only is today's live-proof-ceremony override; Camera or library is the recommended default.</div>
+        </div>
+        <div className="seg">
+          <button className={'seg-btn' + (photoSource === 'camera_or_library' ? ' on' : '')} onClick={() => setPhotoProofSource('camera_or_library')}>
+            Camera or library
+          </button>
+          <button className={'seg-btn' + (photoSource === 'camera_only' ? ' on' : '')} onClick={() => setPhotoProofSource('camera_only')}>
+            Camera only
+          </button>
+        </div>
+      </div>
+      <div className="row">
+        <div className="grow">
+          <div className="name">Strip location data</div>
+          <div className="sub">Worth having regardless of the photo-source choice — library photos are far more likely to carry geotags than live captures.</div>
+        </div>
+        <label style={{ fontSize: 12 }}>
+          <input type="checkbox" checked={stripExif} onChange={(e) => setStripPhotoExif(e.target.checked)} /> On
+        </label>
+      </div>
+      <div className="row">
+        <div className="grow">
+          <div className="name">AI image screen</div>
+          <div className="sub">Flags proofs for review via the existing moderation function. Presentational for now — the deployed function still gates on its own deploy-time flag, not this setting.</div>
+        </div>
+        <label style={{ fontSize: 12 }}>
+          <input type="checkbox" checked={visionGate} onChange={(e) => setVisionGate(e.target.checked)} /> On
+        </label>
+      </div>
+      <div className="row">
+        <div className="grow">
+          <div className="name">Auto-hide after reports</div>
+          <div className="sub">Reports needed before a Prompt or Proof self-hides from players.</div>
+        </div>
+        <ReportThresholdStepper value={threshold} onChange={setReportHideThreshold} />
+      </div>
+      <div className="row">
+        <div className="grow">
+          <div className="name">Pending claims</div>
+          <div className="sub">Admin-confirmed claims awaiting a decision.</div>
+        </div>
+        <span className="pill">{pendingClaimCount}</span>
+        <a className="btn" href="#admin-pending-claims">Jump to queue</a>
+      </div>
+    </div>
+  );
+}
+
 export default function Admin() {
   const { user } = useAuth();
   const { data: event } = useEventDoc();
@@ -410,13 +525,6 @@ export default function Admin() {
       (it): QueueRow => ({ kind: 'item', sortCount: it.reportCount, sortAt: it.createdAt, item: it }),
     ),
   ].sort((a, b) => b.sortCount - a.sortCount || a.sortAt - b.sortAt);
-
-  const modes: ClaimMode[] = ['honor', 'proof_required', 'admin_confirmed'];
-  const modeLabel: Record<ClaimMode, string> = {
-    honor: 'Honor',
-    proof_required: 'Proof req.',
-    admin_confirmed: 'Admin-confirmed',
-  };
 
   return (
     <div>
@@ -507,20 +615,7 @@ export default function Admin() {
         )}
       </div>
 
-      <div className="admin-section">
-        <h3>Claim mode</h3>
-        <div className="seg">
-          {modes.map((m) => (
-            <button
-              key={m}
-              className={'seg-btn' + (event?.claimMode === m ? ' on' : '')}
-              onClick={() => setClaimMode(m)}
-            >
-              {modeLabel[m]}
-            </button>
-          ))}
-        </div>
-      </div>
+      <ProofClaimsPanel event={event} pendingClaimCount={claims.length} />
 
       <div className="admin-section">
         <h3>Default theme</h3>
@@ -537,7 +632,7 @@ export default function Admin() {
         </div>
       </div>
 
-      <div className="admin-section">
+      <div className="admin-section" id="admin-pending-claims">
         <h3>Pending claims{claims.length ? ` (${claims.length})` : ''}</h3>
         {!claims.length && <p className="muted" style={{ fontSize: 12 }}>Nothing to confirm.</p>}
         <div className="list">

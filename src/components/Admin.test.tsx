@@ -42,6 +42,10 @@ const H = vi.hoisted(() => ({
   setClaimMode: vi.fn(),
   setEventTheme: vi.fn(),
   setDayTheme: vi.fn(),
+  setPhotoProofSource: vi.fn(),
+  setStripPhotoExif: vi.fn(),
+  setVisionGate: vi.fn(),
+  setReportHideThreshold: vi.fn(),
   banUser: vi.fn(),
   unbanUser: vi.fn(),
 }));
@@ -90,6 +94,10 @@ vi.mock('../data/admin', () => ({
   setClaimMode: (...a: unknown[]) => H.setClaimMode(...a),
   setEventTheme: (...a: unknown[]) => H.setEventTheme(...a),
   setDayTheme: (...a: unknown[]) => H.setDayTheme(...a),
+  setPhotoProofSource: (...a: unknown[]) => H.setPhotoProofSource(...a),
+  setStripPhotoExif: (...a: unknown[]) => H.setStripPhotoExif(...a),
+  setVisionGate: (...a: unknown[]) => H.setVisionGate(...a),
+  setReportHideThreshold: (...a: unknown[]) => H.setReportHideThreshold(...a),
   banUser: (...a: unknown[]) => H.banUser(...a),
   unbanUser: (...a: unknown[]) => H.unbanUser(...a),
 }));
@@ -244,5 +252,88 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
 
     const select = screen.getByLabelText('Day 1 theme') as HTMLSelectElement;
     expect(select.disabled).toBe(true);
+  });
+});
+
+describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
+  // Scope every query to the panel's own `.admin-section` — the page also has
+  // an unrelated "Pending claims" section sharing this row's label text.
+  const panel = () => screen.getByText('Proof & Claims').closest('.admin-section') as HTMLElement;
+  const row = (label: string) => within(panel()).getByText(label).closest('.row') as HTMLElement;
+
+  it('renders all six rows reflecting current EventDoc values, with the ADR 0001 caption and no "verified" language', () => {
+    H.event = {
+      ...H.event,
+      claimMode: 'proof_required',
+      settings: { reportHideThreshold: 6, photoProofSource: 'camera_only', stripPhotoExif: false, visionGate: false },
+    } as unknown as EventDoc;
+    H.claims = [{ id: 'c1', displayName: 'Alice', itemText: 'Do a thing' } as never];
+    render(<Admin />);
+
+    expect(within(row('Claim mode')).getByRole('button', { name: 'Proof req.' })).toHaveClass('on');
+    expect(within(row('Claim mode')).getByText('A friction knob, not a trust level.')).toBeInTheDocument();
+    expect(within(row('Photo proof source')).getByRole('button', { name: 'Camera only' })).toHaveClass('on');
+    expect((within(row('Strip location data')).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+    const visionCheckbox = within(row('AI image screen')).getByRole('checkbox') as HTMLInputElement;
+    expect(visionCheckbox.checked).toBe(false);
+    expect(row('AI image screen').textContent).toMatch(/presentational/i);
+    expect(within(row('Auto-hide after reports')).getByText('6')).toBeInTheDocument();
+    expect(within(row('Pending claims')).getByText('1')).toBeInTheDocument();
+    expect(panel().textContent).not.toMatch(/verified/i);
+  });
+
+  it('each control writes via its data/admin.ts function on change, exercising the settings defaults when unset', () => {
+    render(<Admin />); // H.event.settings has no photoProofSource/stripPhotoExif/visionGate — exercises defaults
+    expect(within(row('Photo proof source')).getByRole('button', { name: 'Camera or library' })).toHaveClass('on');
+    expect((within(row('Strip location data')).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+    expect((within(row('AI image screen')).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(within(row('Claim mode')).getByRole('button', { name: 'Admin-confirmed' }));
+    expect(H.setClaimMode).toHaveBeenCalledWith('admin_confirmed');
+
+    fireEvent.click(within(row('Photo proof source')).getByRole('button', { name: 'Camera only' }));
+    expect(H.setPhotoProofSource).toHaveBeenCalledWith('camera_only');
+
+    fireEvent.click(within(row('Strip location data')).getByRole('checkbox'));
+    expect(H.setStripPhotoExif).toHaveBeenCalledWith(false);
+
+    fireEvent.click(within(row('AI image screen')).getByRole('checkbox'));
+    expect(H.setVisionGate).toHaveBeenCalledWith(false);
+  });
+
+  it('the report-threshold stepper reads the current value, +/- invoke setReportHideThreshold, and floors at 1', () => {
+    H.event = { ...H.event, settings: { reportHideThreshold: 4 } } as unknown as EventDoc;
+    const { unmount } = render(<Admin />);
+    const stepperRow = row('Auto-hide after reports');
+    expect(within(stepperRow).getByText('4')).toBeInTheDocument();
+
+    fireEvent.click(within(stepperRow).getByRole('button', { name: 'Increase auto-hide threshold' }));
+    expect(H.setReportHideThreshold).toHaveBeenCalledWith(5);
+    fireEvent.click(within(stepperRow).getByRole('button', { name: 'Decrease auto-hide threshold' }));
+    expect(H.setReportHideThreshold).toHaveBeenCalledWith(3);
+    unmount();
+
+    H.event = { ...H.event, settings: { reportHideThreshold: 1 } } as unknown as EventDoc;
+    render(<Admin />);
+    const decrement = within(row('Auto-hide after reports')).getByRole('button', {
+      name: 'Decrease auto-hide threshold',
+    }) as HTMLButtonElement;
+    expect(decrement.disabled).toBe(true);
+    fireEvent.click(decrement);
+    expect(H.setReportHideThreshold).not.toHaveBeenCalledWith(0);
+  });
+
+  it("the Pending claims row's count matches usePendingClaims() and its jump link targets #admin-pending-claims", () => {
+    H.claims = [
+      { id: 'c1', displayName: 'Alice', itemText: 'Do a thing' } as never,
+      { id: 'c2', displayName: 'Bob', itemText: 'Do another thing' } as never,
+    ];
+    render(<Admin />);
+    const pendingRow = row('Pending claims');
+    expect(within(pendingRow).getByText('2')).toBeInTheDocument();
+    expect(within(pendingRow).getByRole('link', { name: /jump to queue/i })).toHaveAttribute(
+      'href',
+      '#admin-pending-claims',
+    );
   });
 });

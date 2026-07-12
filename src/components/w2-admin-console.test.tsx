@@ -82,6 +82,12 @@ vi.mock('../data/admin', () => ({
   clearItemReports: (...a: unknown[]) => H.clearItemReports(...a),
   setClaimMode: (...a: unknown[]) => H.setClaimMode(...a),
   setEventTheme: (...a: unknown[]) => H.setEventTheme(...a),
+  setDayTheme: vi.fn(),
+  // #222 Proof & Claims panel no-op stubs (coverage: Admin.test.tsx).
+  setPhotoProofSource: vi.fn(),
+  setStripPhotoExif: vi.fn(),
+  setVisionGate: vi.fn(),
+  setReportHideThreshold: vi.fn(),
   banUser: (...a: unknown[]) => H.banUser(...a),
   unbanUser: (...a: unknown[]) => H.unbanUser(...a),
 }));
