@@ -242,8 +242,23 @@ service cloud.firestore {
           && request.resource.data.keys().hasOnly([
                'uid', 'displayName', 'photoURL', 'type', 'cellIndex', 'itemText',
                'storagePath', 'mediaURL', 'thumbURL', 'text', 'createdAt',
-               'reportCount', 'status', 'visionFlag'
+               'reportCount', 'status', 'visionFlag', 'source', 'dayIndex'
              ])
+          // #190/#211: `source` stamps which affordance produced a photo (📷 camera
+          // vs 🖼️ library) so the Feed badges a pick; `dayIndex` threads the viewed
+          // Day so the Feed reads "Day 2 · Get Sporty". attachProof ALWAYS writes
+          // both keys (null when absent), so the create is denied without them in
+          // the hasOnly list above. Presence-guarded (like settings/bannedUids) so a
+          // legacy write that omits them stays valid: when present, `source` is null
+          // or one of the two affordance tags, and `dayIndex` is null or a number.
+          // Both are flavour, never enforcement (ADR 0001) — a lie about the source
+          // is accepted — so the only constraint is type/shape, not trust.
+          && (!('source' in request.resource.data)
+              || request.resource.data.source == null
+              || request.resource.data.source in ['camera', 'library'])
+          && (!('dayIndex' in request.resource.data)
+              || request.resource.data.dayIndex == null
+              || request.resource.data.dayIndex is number)
           && request.resource.data.type in ['photo', 'audio', 'text']
           && request.resource.data.itemText is string
           && request.resource.data.itemText.size() <= 200

@@ -127,8 +127,10 @@ describe('attachProof — posts an active Proof to the Feed and marks the cell (
       proof: { type: 'photo', blob: new Blob(['x'], { type: 'image/jpeg' }) },
     });
 
-    // Media uploaded under the owner's folder, keyed by the proof's own id.
-    expect(uploadSpy).toHaveBeenCalledWith('u1', expect.any(String), expect.any(Blob), 'photo');
+    // Media uploaded under the owner's folder, keyed by the proof's own id. The
+    // 5th arg is the #211 EXIF-strip options bag (undefined stripExif here — the
+    // strip default lives in uploadProofMedia; see src/data/d15-claim-sheet-photo.test.ts).
+    expect(uploadSpy).toHaveBeenCalledWith('u1', expect.any(String), expect.any(Blob), 'photo', { stripExif: undefined });
 
     const proof = setPayload('/proofs/')!;
     // Feed-visible immediately, and it carries the name + prompt the Feed renders.
@@ -203,7 +205,8 @@ describe('attachProof — posts an active Proof to the Feed and marks the cell (
       proof: { type: 'audio', blob: new Blob(['x'], { type: 'audio/webm' }) },
     });
 
-    expect(uploadSpy).toHaveBeenCalledWith('u1', expect.any(String), expect.any(Blob), 'audio');
+    // 5th arg = the #211 strip options bag; inert for audio (no EXIF).
+    expect(uploadSpy).toHaveBeenCalledWith('u1', expect.any(String), expect.any(Blob), 'audio', { stripExif: undefined });
     const proof = setPayload('/proofs/')!;
     expect(proof.type).toBe('audio');
     expect(proof.storagePath).toBe(`proofs/${EVENT_ID}/u1/UPLOADED.webm`);
@@ -252,6 +255,40 @@ describe('attachProof — posts an active Proof to the Feed and marks the cell (
     expect(board.cells[3].marked).toBe(true); // survived, from the live read
     expect(board.cells[7].marked).toBe(true); // this proof's mark
     expect(setPayload('/players/')).toMatchObject({ squaresMarked: 2 });
+  });
+});
+
+// #211 (specs/d15-claim-sheet-photo.md): attachProof stamps the photo affordance
+// (`source`) and the viewed Day (`dayIndex`) onto the Proof doc, and threads the
+// event's `stripPhotoExif` down to uploadProofMedia. The strip mechanism itself
+// is unit-tested against a re-encoded blob in src/data/d15-claim-sheet-photo.test.tsx.
+describe('attachProof — #211: source / dayIndex stamp + EXIF-strip flag pass-through', () => {
+  it('stamps source and dayIndex on the Proof doc from a 🖼️ library pick, and passes stripExif through', async () => {
+    await attachProof({
+      ...baseArgs,
+      claimMode: 'proof_required',
+      source: 'library',
+      dayIndex: 2,
+      stripExif: true,
+      proof: { type: 'photo', blob: new Blob(['x'], { type: 'image/jpeg' }) },
+    });
+    const proof = setPayload('/proofs/')!;
+    expect(proof.source).toBe('library');
+    expect(proof.dayIndex).toBe(2);
+    expect(uploadSpy).toHaveBeenCalledWith('u1', expect.any(String), expect.any(Blob), 'photo', { stripExif: true });
+  });
+
+  it('leaves source/dayIndex null when omitted and threads stripExif:false to leave the existing re-encode', async () => {
+    await attachProof({
+      ...baseArgs,
+      claimMode: 'proof_required',
+      stripExif: false,
+      proof: { type: 'photo', blob: new Blob(['x'], { type: 'image/jpeg' }) },
+    });
+    const proof = setPayload('/proofs/')!;
+    expect(proof.source).toBeNull();
+    expect(proof.dayIndex).toBeNull();
+    expect(uploadSpy).toHaveBeenCalledWith('u1', expect.any(String), expect.any(Blob), 'photo', { stripExif: false });
   });
 });
 

@@ -41,6 +41,9 @@ vi.mock('../hooks/useData', () => ({
     entries: H.proofs.map((proof) => ({ feedKind: 'proof' as const, createdAt: proof.createdAt, proof })),
     loading: false,
   }),
+  // ProofFeed also reads the event for the #211 Day chip; this XSS suite exercises
+  // only the media sinks, so an empty event (no days[]) suffices.
+  useEventDoc: () => ({ data: null, loading: false }),
 }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
 

@@ -467,6 +467,10 @@ export default function Board() {
   const [freePulse, setFreePulse] = useState(0);
   const [proofTarget, setProofTarget] = useState<Cell | null>(null);
   const [tallyTarget, setTallyTarget] = useState<Cell | null>(null);
+  // The open Claim sheet's social heat line (#211): reuse the SAME per-Prompt
+  // Tally subscription the TallyBadge uses — no new read — for the Square the
+  // sheet is open on. useTally accepts a null id (no proofTarget → no sub).
+  const { count: proofTargetTally } = useTally(proofTarget?.itemId ?? null);
   // The Day switcher's viewed-Day index (daily-cards-spec § "Day switcher"),
   // independent of the app-wide Theme (ThemeContext) and of the header's
   // "today" line (Nav.tsx, #203) — this state ONLY drives the board area's
@@ -1218,6 +1222,20 @@ export default function Board() {
           cell={proofTarget}
           claimMode={claimMode}
           currentFirstBingoAt={player?.firstBingoAt ?? null}
+          // Event admin knobs, read defensively with the spec defaults (#211).
+          // `photoProofSource` is NEVER tied to claimMode — only this event-level
+          // override hides the 🖼️ Library pick.
+          photoProofSource={event?.settings?.photoProofSource ?? 'camera_or_library'}
+          stripExif={event?.settings?.stripPhotoExif ?? true}
+          // The viewed Day and the Square's live Tally count for the
+          // "🔥 Marked by N others" heat line. When a Day schedule is live the
+          // Day switcher can display any unlocked Day while the single legacy
+          // Board still reads `dayIndex: 0`, so stamp the SELECTED `viewedIndex`
+          // (what the Player is actually claiming from) — not the Board doc's
+          // index, which would badge every Day-2+ claim as Day 1 (Codex P2).
+          // Fall back to the Board doc index only when there is no schedule.
+          dayIndex={hasDays ? viewedIndex : board?.dayIndex}
+          tallyCount={proofTargetTally}
           // The proofed-mark completion verdict (PR #110 round 2 finding 1): a
           // successful attachProof reports the SAME win-transition shape setMark
           // returns, and it rides the SAME broadcast pipeline — a proof_required

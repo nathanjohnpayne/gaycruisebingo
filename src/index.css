@@ -657,6 +657,47 @@ a {
   font-weight: 600;
   margin-bottom: 12px;
 }
+/* The social heat line (#211): "🔥 Marked by N others" under the sheet title. */
+.heat-line {
+  font-size: 12px;
+  color: var(--muted);
+  margin: -6px 0 12px;
+}
+/* The two photo affordances (#190): 📷 Take photo + 🖼️ Library, each a .btn
+   <label> wrapping a hidden file input so the whole pill is the tap target. */
+.photo-affordances {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.photo-affordance {
+  flex: 1;
+  min-width: 120px;
+  text-align: center;
+  cursor: pointer;
+}
+/* The file input is visually hidden but focusable (Codex P2, #211): tabbing lands
+   on it, so surface the focus ring on the pill the user actually sees. */
+.photo-affordance:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--shadow);
+}
+/* Off-screen but focusable + in the a11y tree — unlike the `hidden` attribute or
+   display:none, which remove an element from the tab order AND accessibility tree.
+   Used for the photo-affordance file inputs so keyboard/screen-reader users can
+   still operate the 📷/🖼️ pickers. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 /* The 🎖️ Cross My Heart pledge (issue #181): its own full-width row above the
    proof-type segments — never a fourth segment — so the label stays on one
    line at 320px. Enabled (glowing like a selected segment) only in honor
@@ -840,6 +881,24 @@ a {
   border-left: 3px solid var(--primary);
   color: var(--ink);
   font-style: italic;
+}
+/* The Feed Day chip (#211): "Day 2 · Get Sporty" beside the timestamp. Its own
+   class (NOT the DaySwitcher's `.day-chip`, defined earlier): reusing that class
+   let this later block override the switcher's navigation-chip padding/radius/
+   color/margins whenever a Day schedule was live (Codex P2). */
+.proof-day-chip {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--cell);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* The 🖼️ library-source badge (#190) rides inline in the Proof's name line. */
+.proof-source-badge {
+  font-size: 13px;
 }
 
 /* ---------- feed moments ---------- */

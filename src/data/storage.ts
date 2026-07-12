@@ -28,8 +28,23 @@ export async function uploadProofMedia(
   proofId: string,
   blob: Blob,
   kind: 'photo' | 'audio',
+  // #211: strip EXIF/GPS from photo proofs so a library pick's geotags never
+  // leave the phone. Default true (event `stripPhotoExif`); inert for audio.
+  opts: { stripExif?: boolean } = {},
 ): Promise<{ path: string; url: string }> {
-  const payload = kind === 'photo' ? await downscaleImage(blob) : blob;
+  const stripExif = opts.stripExif ?? true;
+  let payload: Blob = blob;
+  if (kind === 'photo') {
+    // downscaleImage's canvas repaint drops ALL embedded metadata (EXIF, GPS,
+    // orientation) — that repaint IS the strip. It returns the SAME object only
+    // on its decode-failure fallback, where EXIF is still intact.
+    payload = await downscaleImage(blob);
+    if (stripExif && payload === blob) {
+      // Fail closed rather than leak a geotag: refuse a photo we couldn't
+      // re-encode. attachProof surfaces it as a retryable upload failure.
+      throw new Error('uploadProofMedia: could not re-encode photo to strip EXIF/GPS');
+    }
+  }
   const ext = kind === 'photo' ? 'jpg' : 'webm';
   const contentType = kind === 'photo' ? 'image/jpeg' : 'audio/webm';
   const path = `proofs/${EVENT_ID}/${uid}/${proofId}.${ext}`;
