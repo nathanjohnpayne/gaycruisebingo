@@ -21,6 +21,57 @@ service cloud.firestore {
       return dayIndex == string(int(dayIndex));
     }
 
+    // #221 (d15-admin-schedule) — the Schedule editor's write-time lock:
+    // "changing a locked-future Day's theme is safe, changing an
+    // already-unlocked Day is disallowed" (daily-cards-spec § "Itinerary and
+    // schedule"). `theme` is the ONLY DayDef field this ticket's write path
+    // (`setDayTheme`, src/data/admin.ts) ever changes — this check only cares
+    // whether a Day's `theme` moved between the existing doc and the incoming
+    // one; it is silent on every other DayDef field the same way the parent
+    // events/{eventId} rule is silent on config fields it doesn't validate.
+    // `oldDay.unlockAt` (the EXISTING/pre-write value, never the incoming one)
+    // is the lock's source of truth — an admin write can never change
+    // unlockAt through this same path anyway (the client only ever sends
+    // `{ days }` with one theme swapped), so reading it from either side would
+    // agree in practice, but reading old is the one that can't be spoofed by
+    // a hand-built payload smuggling a future unlockAt alongside a changed
+    // theme on an already-unlocked Day.
+    // Guarded with 'in' checks (same idiom as the settings/bannedUids guards
+    // above) BEFORE any field access: some existing rules-test fixtures (e.g.
+    // w0-firestore-rules.test.ts) seed a minimal `days` entry with no `theme`
+    // key at all — a bare `newDay.theme` on such an object errors out (denies
+    // EVERY write, including ones that never touch `days`), so a missing
+    // `theme` on either side short-circuits to "nothing to lock" rather than
+    // erroring.
+    function dayThemeChangeOk(newDay, oldDay) {
+      return !('theme' in newDay)
+        || !('theme' in oldDay)
+        || newDay.theme == oldDay.theme
+        || (('unlockAt' in oldDay) && request.time.toMillis() < oldDay.unlockAt);
+    }
+
+    // Applies dayThemeChangeOk across the whole `days` array. Firestore rules
+    // has no general loop/iteration construct, so this unrolls explicit
+    // indices — capped at 10, the fixed length of the seeded July sailing
+    // (DayDef[] "length 10... but the model assumes no fixed length",
+    // src/types.ts). A future cruise with more than 10 Days needs this cap
+    // raised alongside its own EventDoc. A size mismatch between the incoming
+    // and existing arrays is rejected outright (`days[]` length is fixed at
+    // seed — this ticket builds no row add/remove editor).
+    function daysThemeLockOk(newDays, oldDays) {
+      return newDays.size() == oldDays.size()
+        && (newDays.size() < 1  || dayThemeChangeOk(newDays[0], oldDays[0]))
+        && (newDays.size() < 2  || dayThemeChangeOk(newDays[1], oldDays[1]))
+        && (newDays.size() < 3  || dayThemeChangeOk(newDays[2], oldDays[2]))
+        && (newDays.size() < 4  || dayThemeChangeOk(newDays[3], oldDays[3]))
+        && (newDays.size() < 5  || dayThemeChangeOk(newDays[4], oldDays[4]))
+        && (newDays.size() < 6  || dayThemeChangeOk(newDays[5], oldDays[5]))
+        && (newDays.size() < 7  || dayThemeChangeOk(newDays[6], oldDays[6]))
+        && (newDays.size() < 8  || dayThemeChangeOk(newDays[7], oldDays[7]))
+        && (newDays.size() < 9  || dayThemeChangeOk(newDays[8], oldDays[8]))
+        && (newDays.size() < 10 || dayThemeChangeOk(newDays[9], oldDays[9]));
+    }
+
     // Server-owned intake queue. Players submit through the callable Function,
     // which validates/rate-limits with the Admin SDK; direct reads and writes
     // would expose screenshots and allow report metadata to be forged.
@@ -85,7 +136,17 @@ service cloud.firestore {
         && (!('bannedUids' in request.resource.data)
             || (request.resource.data.bannedUids is list
                 && request.resource.data.bannedUids.size() <= 1000
-                && !request.resource.data.bannedUids.hasAny(request.resource.data.admins)));
+                && !request.resource.data.bannedUids.hasAny(request.resource.data.admins)))
+        // #221 Schedule editor write-time lock: when the write carries `days`
+        // AND a prior doc with its own `days` exists to compare against (a
+        // `create`, or a legacy doc with no `days` yet, has nothing to lock
+        // against — the "resulting state, not diff" reasoning the Board/meta
+        // gates above already use), every entry's theme change must be on a
+        // still-future Day. See `daysThemeLockOk` above.
+        && (!('days' in request.resource.data)
+            || resource == null
+            || !('days' in resource.data)
+            || daysThemeLockOk(request.resource.data.days, resource.data.days));
       allow delete: if isAdmin(eventId);
 
       // Community-editable prompt pool.

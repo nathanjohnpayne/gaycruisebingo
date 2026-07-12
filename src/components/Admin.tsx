@@ -26,12 +26,13 @@ import {
   setItemSpicy,
   setClaimMode,
   setEventTheme,
+  setDayTheme,
   banUser,
   unbanUser,
 } from '../data/admin';
 import { deleteProof } from '../data/proofs';
 import { THEMES } from '../theme/themes';
-import type { ClaimMode, ItemDoc, ProofDoc } from '../types';
+import type { ClaimMode, DayDef, ItemDoc, ProofDoc, ThemeId } from '../types';
 
 // One report-queue row, tagged so the render can branch to the per-kind
 // affordances (Proof vs Prompt writes) while a single list sorts across both
@@ -265,13 +266,91 @@ function ApprovalsTab({ adminUid }: { adminUid: string }) {
   );
 }
 
+/**
+ * One row in the Schedule editor (#221, daily-cards-spec § "Admin console" / §
+ * "Itinerary and schedule"): a single Day's date + port (read-only display)
+ * and a theme `<select>`. Date/port are shown for context only — this ticket
+ * scopes the write surface to `theme`, matching the spec ("the schedule stays
+ * admin-editable... changing a locked-future Day's theme is safe, changing an
+ * already-unlocked Day is disallowed"); `days[]` length is fixed at seed, so
+ * there is no row add/remove here. The lock is CLIENT-SIDE convenience only —
+ * `firestore.rules` (`daysThemeLockOk`) is what actually denies a locked
+ * Day's write; a direct-SDK caller bypassing this disabled control still gets
+ * rejected server-side.
+ */
+function ScheduleRow({
+  day,
+  now,
+  onChangeTheme,
+}: {
+  day: DayDef;
+  now: number;
+  onChangeTheme: (dayIndex: number, theme: ThemeId) => void;
+}) {
+  const locked = day.unlockAt <= now;
+  return (
+    <div className="row">
+      <div className="grow">
+        <div className="name">
+          Day {day.index + 1} · {day.date} · {day.portEmoji} {day.port}
+        </div>
+        <div className="sub">{locked ? 'locked — already unlocked or past' : 'editable until unlock'}</div>
+      </div>
+      <select
+        aria-label={`Day ${day.index + 1} theme`}
+        value={day.theme}
+        disabled={locked}
+        onChange={(e) => onChangeTheme(day.index, e.target.value as ThemeId)}
+      >
+        {THEMES.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.emoji} {t.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/**
+ * The Schedule tab (#221): the ten seeded Days as rows, in order, each with a
+ * theme dropdown disabled once its Day has unlocked. `days` comes straight
+ * from the already-subscribed `useEventDoc()` Event doc — no separate
+ * listener — and `setDayTheme` is handed the FULL current array so it can
+ * write back a targeted single-element replacement (see `data/admin`'s doc
+ * comment for why `days` can't be updated by dot-path).
+ */
+function ScheduleTab({ days }: { days: DayDef[] }) {
+  const now = Date.now();
+  return (
+    <div className="admin-section">
+      <h3>Schedule{days.length ? ` (${days.length})` : ''}</h3>
+      {!days.length && (
+        <p className="muted" style={{ fontSize: 12 }}>
+          No Days seeded yet.
+        </p>
+      )}
+      <div className="list">
+        {days.map((d) => (
+          <ScheduleRow
+            key={d.index}
+            day={d}
+            now={now}
+            onChangeTheme={(dayIndex, theme) => setDayTheme(days, dayIndex, theme)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Admin() {
   const { user } = useAuth();
   const { data: event } = useEventDoc();
   const { claims } = usePendingClaims();
   const { flagged } = useReportedProofs();
   const { items } = useAllItems();
-  const [tab, setTab] = useState<'moderation' | 'approvals'>('moderation');
+  const [tab, setTab] = useState<'moderation' | 'approvals' | 'schedule'>('moderation');
 
   const isAdmin = !!(user && event?.admins?.includes(user.uid));
   if (!isAdmin) return <div className="center muted">Admins only.</div>;
@@ -344,8 +423,15 @@ export default function Admin() {
         >
           Approvals
         </button>
+        <button
+          className={'seg-btn' + (tab === 'schedule' ? ' on' : '')}
+          onClick={() => setTab('schedule')}
+        >
+          Schedule
+        </button>
       </div>
       {tab === 'approvals' && user && <ApprovalsTab adminUid={user.uid} />}
+      {tab === 'schedule' && <ScheduleTab days={event?.days ?? []} />}
       {tab !== 'moderation' ? null : <>
       {/* Report queue — the moderation triage surface, surfaced FIRST and
           most-reported-first. ADR 0004 Phase 0: any row tagged "auto-hidden" has

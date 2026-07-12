@@ -2,7 +2,7 @@ import { doc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, wri
 import { db, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout } from '../game/logic';
 import { isSystemAuthor } from './moderation';
-import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc } from '../types';
+import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef } from '../types';
 
 const evt = () => doc(db, 'events', EVENT_ID);
 const item = (id: string) => doc(db, 'events', EVENT_ID, 'items', id);
@@ -78,6 +78,28 @@ export const clearItemReports = (id: string) => updateDoc(item(id), { reportCoun
 export const clearProofReports = (id: string) => updateDoc(proof(id), { reportCount: 0 });
 export const setClaimMode = (mode: ClaimMode) => updateDoc(evt(), { claimMode: mode });
 export const setEventTheme = (theme: ThemeId) => updateDoc(evt(), { defaultTheme: theme });
+
+// The Admin Schedule editor (#221, daily-cards-spec § "Admin console" / §
+// "Itinerary and schedule"): "changing a locked-future Day's theme is safe,
+// changing an already-unlocked Day is disallowed." `days` is a Firestore ARRAY
+// field, and the SDK cannot address one element by dot-path (`days.0.theme`
+// would target a map key, not an array index) — so this is a targeted
+// array-ELEMENT update expressed as a whole-ARRAY write: it reads the caller's
+// already-subscribed `days` (the Admin console already holds it via
+// `useEventDoc`), replaces only the one entry at `dayIndex` with its `theme`
+// changed, and writes back `{ days }` alone. Every other event field
+// (claimMode, defaultTheme, admins, settings, bannedUids) and every other
+// Day's entry are untouched by this write — it never rewrites the whole
+// EventDoc. The write-time lock itself lives in firestore.rules
+// (`daysThemeLockOk`), which denies the write outright when the targeted
+// Day's `unlockAt` has already passed; this function does not duplicate that
+// check client-side (the UI's disabled dropdown is the courtesy, the rule is
+// the guarantee) — it trusts the caller to have already excluded
+// past/unlocked Days from the set of dayIndex values it invokes with.
+export const setDayTheme = (days: DayDef[], dayIndex: number, theme: ThemeId): Promise<void> =>
+  updateDoc(evt(), {
+    days: days.map((d) => (d.index === dayIndex ? { ...d, theme } : d)),
+  });
 
 // The Admin ban (#108): add/remove a uid on the event doc's `bannedUids` roster —
 // the ADR 0004 Phase 0 presentational, event-scoped hide/mute the #113 rules + type
