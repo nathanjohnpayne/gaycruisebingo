@@ -43,6 +43,10 @@ export interface EventLike {
   days?: DayLike[];
   frozenAt?: number | null;
   admins?: string[];
+  /** ADR 0004 Phase 0 community auto-hide threshold (mirrors the live deal pool). */
+  settings?: { reportHideThreshold?: number };
+  /** ADR 0004 Phase 0 event-scoped ban roster (#108; mirrors the live deal pool). */
+  bannedUids?: string[];
 }
 
 /** The finale Moment kinds this ticket posts. */
@@ -67,14 +71,81 @@ export function daysDueForSnapshot(days: DayLike[], now: number): DayLike[] {
 }
 
 /**
- * The ids that make up a Day's snapshot: every `status: 'active'` item in that
- * Day's pool. Items are pre-filtered to `active` by the query; this applies the
- * pool split, defaulting a missing `pool` to `'main'` so legacy (pre-Phase-1.5)
- * active items — which carry no `pool` field and are read as `'main'` by
- * `itemConverter` — are correctly included in a main-pool snapshot.
+ * The shape of an active item doc the snapshot reads. Mirrors the fields the live
+ * deal pool (`src/data/api.ts` joinAndDeal) inspects, so a frozen Day Card draws
+ * from the SAME pool a Player sees live.
  */
-export function activeSnapshotIds(items: Array<{ id: string; pool?: string }>, pool: string): string[] {
-  return items.filter((it) => (it.pool ?? 'main') === pool).map((it) => it.id);
+export interface SnapshotItem {
+  id: string;
+  pool?: string;
+  isFreeSpace?: boolean;
+  reportCount?: number;
+  createdBy?: string;
+  createdAt?: number;
+  approvedAt?: number;
+}
+
+/** The pool + moderation + cutoff context a snapshot is filtered against. */
+export interface SnapshotFilter {
+  pool: string;
+  /**
+   * The Day's canonical unlock moment (`day.unlockAt`), NOT the run clock: an item
+   * that only entered the pool AFTER unlock must not slip into a delayed/manual run's
+   * snapshot and retroactively change an already-open Day's pool.
+   */
+  cutoff: number;
+  reportHideThreshold?: number;
+  bannedUids?: readonly string[];
+}
+
+/**
+ * ADR 0004 Phase 0 community auto-hide — local mirror of `src/data/moderation.ts`'s
+ * `isReportHidden` (this module stays decoupled from the app package, like
+ * `autohide.ts`). True iff `reportCount` has REACHED a POSITIVE threshold; fails
+ * OPEN for a missing/non-positive threshold.
+ */
+function isReportHidden(reportCount: number, threshold: number | undefined): boolean {
+  return typeof threshold === 'number' && threshold > 0 && reportCount >= threshold;
+}
+
+/**
+ * ADR 0004 Phase 0 event-scoped ban — local mirror of `src/data/moderation.ts`'s
+ * `isBanned`. True iff `uid` is on the roster; fails OPEN for a missing/malformed
+ * roster.
+ */
+function isBanned(uid: string | undefined, bannedUids: readonly string[] | undefined): boolean {
+  return !!uid && Array.isArray(bannedUids) && bannedUids.includes(uid);
+}
+
+/**
+ * The ids that make up a Day's snapshot: the `status: 'active'` items in that Day's
+ * pool that the LIVE deal pool would also deal. Items are pre-filtered to `active`
+ * by the query; this applies the SAME predicates `src/data/api.ts` applies before
+ * `dealBoard`, so a frozen card can never surface content the live pool hides:
+ *
+ *   - pool split, defaulting a missing `pool` to `'main'` so legacy (pre-Phase-1.5)
+ *     active items — read as `'main'` by `itemConverter` — land in a main snapshot;
+ *   - drop `isFreeSpace` sentinels (the free center is dealt separately; the create
+ *     rule does not constrain the flag, so a raw client write could carry it);
+ *   - drop community-hidden (`isReportHidden`) and banned-author (`isBanned`) items;
+ *   - drop items that entered the pool AFTER the Day's `unlockAt` cutoff — a snapshot
+ *     is the active pool AS OF the unlock moment, even when the run is delayed. An
+ *     item's pool-entry time is `approvedAt` (Phase 1.5 approval flow) falling back to
+ *     `createdAt` (legacy items created directly `active`); a doc missing both is kept
+ *     (fail open), matching the moderation predicates' open-failure posture.
+ */
+export function activeSnapshotIds(items: SnapshotItem[], filter: SnapshotFilter): string[] {
+  const { pool, cutoff, reportHideThreshold, bannedUids } = filter;
+  return items
+    .filter((it) => (it.pool ?? 'main') === pool)
+    .filter((it) => !it.isFreeSpace)
+    .filter((it) => !isReportHidden(it.reportCount ?? 0, reportHideThreshold))
+    .filter((it) => !isBanned(it.createdBy, bannedUids))
+    .filter((it) => {
+      const enteredAt = it.approvedAt ?? it.createdAt;
+      return enteredAt == null || enteredAt <= cutoff;
+    })
+    .map((it) => it.id);
 }
 
 /** 20:00 Day 9 sits 12h after Day 9's 08:00 `unlockAt`; 08:00 Day 10 → freeze. */
@@ -114,29 +185,35 @@ export function finaleTimes(days: DayLike[]): FinaleTimes | null {
 
 export interface FinaleDecision {
   postLastCall: boolean;
-  freezeAndPodium: boolean;
+  freeze: boolean;
+  postPodium: boolean;
 }
 
 /**
- * Given the finale boundaries, `now`, and the current state (`frozenAt`, whether
- * a `last_call` Moment already exists), decide which beats fire:
+ * Given the finale boundaries, `now`, and the current state (`frozenAt`, whether the
+ * `last_call` / `podium` Moments already exist), decide which beats fire:
  *
- *   - `postLastCall`: `now` is in `[lastCallAt, farewellUnlockAt)` and no
- *     last-call Moment exists yet. The upper bound means once the freeze time
- *     arrives the podium supersedes it (never both in one run); the
- *     already-posted guard makes a same-window retry a no-op.
- *   - `freezeAndPodium`: `now` has reached the farewell unlock and the event is
- *     not yet frozen. The actual freeze is a transactional flip of `frozenAt`, so
- *     exactly the run that wins the flip posts the single podium Moment.
+ *   - `postLastCall`: `now` is in `[lastCallAt, farewellUnlockAt)` and no last-call
+ *     Moment exists yet. The upper bound means once the freeze time arrives the
+ *     podium supersedes it; the already-posted guard makes a same-window retry a no-op.
+ *   - `freeze`: `now` has reached the farewell unlock and the event is not yet frozen
+ *     (the actual flip is transactional and exactly-once).
+ *   - `postPodium`: `now` has reached the farewell unlock and no podium Moment exists
+ *     yet. DECOUPLED from the freeze flip on purpose (Codex #228): if an earlier run
+ *     froze but its podium write failed transiently, the freeze guard now blocks
+ *     re-freezing, but the podium retry stays open until the Moment actually lands.
+ *     Concurrent double-posts collapse onto the one deterministic-id doc.
  */
 export function finaleActions(
   times: FinaleTimes,
   now: number,
-  state: { frozenAt?: number | null; lastCallPosted: boolean },
+  state: { frozenAt?: number | null; lastCallPosted: boolean; podiumPosted: boolean },
 ): FinaleDecision {
+  const atFreeze = now >= times.farewellUnlockAt;
   return {
     postLastCall: now >= times.lastCallAt && now < times.farewellUnlockAt && !state.lastCallPosted,
-    freezeAndPodium: now >= times.farewellUnlockAt && state.frozenAt == null,
+    freeze: atFreeze && state.frozenAt == null,
+    postPodium: atFreeze && !state.podiumPosted,
   };
 }
 
@@ -184,9 +261,20 @@ export interface UnlockDeps {
   now?: () => number;
 }
 
-async function queryActiveItems(db: AdminFirestore, eventId: string): Promise<Array<{ id: string; pool?: string }>> {
+async function queryActiveItems(db: AdminFirestore, eventId: string): Promise<SnapshotItem[]> {
   const snap = await db.collection(`events/${eventId}/items`).where('status', '==', 'active').get();
-  return snap.docs.map((d) => ({ id: d.id, pool: d.data()?.pool as string | undefined }));
+  return snap.docs.map((d) => {
+    const data = d.data() ?? {};
+    return {
+      id: d.id,
+      pool: data.pool as string | undefined,
+      isFreeSpace: data.isFreeSpace as boolean | undefined,
+      reportCount: data.reportCount as number | undefined,
+      createdBy: data.createdBy as string | undefined,
+      createdAt: data.createdAt as number | undefined,
+      approvedAt: data.approvedAt as number | undefined,
+    };
+  });
 }
 
 async function hasMoment(db: AdminFirestore, eventId: string, kind: FinaleMomentKind): Promise<boolean> {
@@ -204,7 +292,13 @@ async function postFinaleMoment(
   // Minimal, scheduler-posted payload: the standings / podium CONTENT is #212 /
   // #217, which read this beat by `kind` + `dayIndex`. No human author — a
   // `system` uid keeps the MomentDoc shape intact without impersonating a Player.
-  await db.collection(`events/${eventId}/moments`).doc().set({
+  //
+  // Write at the DETERMINISTIC `kind` id, not an auto-id: the public Feed read
+  // (`hasCanonicalMomentId`, src/hooks/useData.ts) only renders these singleton
+  // finale beats when `moment.id === moment.kind`, so an auto-id moment would exist
+  // in Firestore but never surface (Codex #228 P1). The deterministic id also makes
+  // a retry overwrite the one doc rather than fan out duplicates.
+  await db.collection(`events/${eventId}/moments`).doc(kind).set({
     kind,
     uid: 'system',
     displayName: '',
@@ -242,7 +336,15 @@ export async function stampDaySnapshot(
   if (day.snapshotItemIds != null) return 'already-stamped';
 
   const items = await queryActiveItems(db, eventId);
-  const snapshotItemIds = activeSnapshotIds(items, day.pool);
+  // Filter the frozen pool by the SAME predicates the live deal path applies, AS OF
+  // this Day's unlock moment — so a delayed/manual run can never freeze in content
+  // the live pool hides, nor items approved after the Day opened (Codex #228).
+  const snapshotItemIds = activeSnapshotIds(items, {
+    pool: day.pool,
+    cutoff: day.unlockAt,
+    reportHideThreshold: pre.settings?.reportHideThreshold,
+    bannedUids: pre.bannedUids,
+  });
 
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(eventRef);
@@ -260,16 +362,18 @@ export async function stampDaySnapshot(
 }
 
 /**
- * Transactionally set `frozenAt` iff it is not already set. Exactly-once: only
- * the run that flips it from unset returns `true` (and therefore posts the single
- * podium Moment), so a retry or a racing run no-ops.
+ * Transactionally set `frozenAt` to the scheduled cutoff iff it is not already set.
+ * Exactly-once: only the run that flips it from unset returns `true`, so a retry or
+ * a racing run no-ops. The stamped value is the farewell Day's `unlockAt` (the 08:00
+ * freeze cutoff), NOT the run clock (Codex #228): a delayed or manual recovery run
+ * must not push the freeze boundary later and let post-08:00 marks into the standings.
  */
-async function freezeStandings(db: AdminFirestore, eventId: string, now: number): Promise<boolean> {
+async function freezeStandings(db: AdminFirestore, eventId: string, frozenAt: number): Promise<boolean> {
   const eventRef = db.doc(`events/${eventId}`);
   return db.runTransaction(async (tx) => {
     const ev = (await tx.get(eventRef)).data() as EventLike | undefined;
     if (!ev || ev.frozenAt != null) return false;
-    tx.update(eventRef, { frozenAt: now });
+    tx.update(eventRef, { frozenAt });
     return true;
   });
 }
@@ -289,10 +393,14 @@ export async function runFinaleBeats(db: AdminFirestore, eventId: string, deps: 
   const times = finaleTimes(Array.isArray(event.days) ? event.days : []);
   if (!times) return;
 
-  const lastCallPosted = await hasMoment(db, eventId, 'last_call');
-  const { postLastCall, freezeAndPodium } = finaleActions(times, now, {
+  const [lastCallPosted, podiumPosted] = await Promise.all([
+    hasMoment(db, eventId, 'last_call'),
+    hasMoment(db, eventId, 'podium'),
+  ]);
+  const { postLastCall, freeze, postPodium } = finaleActions(times, now, {
     frozenAt: event.frozenAt,
     lastCallPosted,
+    podiumPosted,
   });
 
   if (postLastCall) {
@@ -302,15 +410,23 @@ export async function runFinaleBeats(db: AdminFirestore, eventId: string, deps: 
       console.error('runFinaleBeats: last_call post failed', eventId, err);
     }
   }
-  if (freezeAndPodium) {
+  // Freeze and podium are INDEPENDENT best-effort beats (Codex #228): freezing stamps
+  // the scheduled 08:00 cutoff exactly-once, while the podium retries on its own guard
+  // until the Moment lands — so a run that froze but failed to post the podium does not
+  // strand the finale. Both are idempotent (the frozenAt flip; the deterministic-id
+  // podium doc), so a re-run or a race is safe.
+  if (freeze) {
     try {
-      // Freeze first; only the run that wins the frozenAt flip posts the podium,
-      // so the podium Moment is exactly-once even if freeze + podium race.
-      if (await freezeStandings(db, eventId, now)) {
-        await postFinaleMoment(db, eventId, 'podium', times.podiumDayIndex, now);
-      }
+      await freezeStandings(db, eventId, times.farewellUnlockAt);
     } catch (err) {
-      console.error('runFinaleBeats: freeze/podium failed', eventId, err);
+      console.error('runFinaleBeats: freeze failed', eventId, err);
+    }
+  }
+  if (postPodium) {
+    try {
+      await postFinaleMoment(db, eventId, 'podium', times.podiumDayIndex, now);
+    } catch (err) {
+      console.error('runFinaleBeats: podium post failed', eventId, err);
     }
   }
 }

@@ -29,6 +29,11 @@ interface StoredItem {
   id: string;
   status: string;
   pool?: string;
+  isFreeSpace?: boolean;
+  reportCount?: number;
+  createdBy?: string;
+  createdAt?: number;
+  approvedAt?: number;
 }
 interface StoredMoment {
   id: string;
@@ -83,7 +88,11 @@ function makeDb(seed: {
           return {
             get: async () => ({ exists: false, id: mid, data: () => undefined }),
             set: async (data: Record<string, unknown>) => {
-              moments.push({ id: mid, ...data });
+              // Upsert by id, mirroring Firestore's `doc(id).set` overwrite so a
+              // deterministic-id (`kind`) re-post replaces rather than duplicates.
+              const at = moments.findIndex((m) => m.id === mid);
+              if (at >= 0) moments[at] = { id: mid, ...data };
+              else moments.push({ id: mid, ...data });
               return undefined;
             },
           };
@@ -146,7 +155,9 @@ describe('isDueForSnapshot / daysDueForSnapshot — the due-and-unstamped gate',
   });
 });
 
-describe('activeSnapshotIds — active items in a pool (legacy pool defaults to main)', () => {
+describe('activeSnapshotIds — the frozen pool mirrors the live deal pool', () => {
+  const OPEN = { cutoff: Number.MAX_SAFE_INTEGER }; // no cutoff exclusion
+
   it('keeps only the requested pool and defaults a missing pool to main', () => {
     const items = [
       { id: 'a', pool: 'main' },
@@ -154,9 +165,53 @@ describe('activeSnapshotIds — active items in a pool (legacy pool defaults to 
       { id: 'c' }, // legacy, no pool → main
       { id: 'd', pool: 'farewell' },
     ];
-    expect(activeSnapshotIds(items, 'main')).toEqual(['a', 'c']);
-    expect(activeSnapshotIds(items, 'embark')).toEqual(['b']);
-    expect(activeSnapshotIds(items, 'farewell')).toEqual(['d']);
+    expect(activeSnapshotIds(items, { pool: 'main', ...OPEN })).toEqual(['a', 'c']);
+    expect(activeSnapshotIds(items, { pool: 'embark', ...OPEN })).toEqual(['b']);
+    expect(activeSnapshotIds(items, { pool: 'farewell', ...OPEN })).toEqual(['d']);
+  });
+
+  it('drops isFreeSpace sentinels — the free center is dealt separately (#228)', () => {
+    const items = [
+      { id: 'a', pool: 'main' },
+      { id: 'free', pool: 'main', isFreeSpace: true },
+    ];
+    expect(activeSnapshotIds(items, { pool: 'main', ...OPEN })).toEqual(['a']);
+  });
+
+  it('drops community-hidden and banned-author items, like the live pool (#228)', () => {
+    const items = [
+      { id: 'ok', pool: 'main', reportCount: 1, createdBy: 'u1' },
+      { id: 'reported', pool: 'main', reportCount: 5, createdBy: 'u2' },
+      { id: 'banned', pool: 'main', reportCount: 0, createdBy: 'villain' },
+    ];
+    const ids = activeSnapshotIds(items, {
+      pool: 'main',
+      ...OPEN,
+      reportHideThreshold: 5,
+      bannedUids: ['villain'],
+    });
+    expect(ids).toEqual(['ok']);
+  });
+
+  it('fails OPEN on a non-positive threshold or empty ban roster (no over-filtering)', () => {
+    const items = [{ id: 'a', pool: 'main', reportCount: 99, createdBy: 'u1' }];
+    expect(activeSnapshotIds(items, { pool: 'main', ...OPEN, reportHideThreshold: 0 })).toEqual(['a']);
+    expect(activeSnapshotIds(items, { pool: 'main', ...OPEN, bannedUids: [] })).toEqual(['a']);
+  });
+
+  it('excludes items that entered the pool AFTER the Day cutoff (approvedAt ?? createdAt)', () => {
+    const items = [
+      { id: 'legacy', pool: 'main' }, // no timestamps → fail open, kept
+      { id: 'created-before', pool: 'main', createdAt: 100 },
+      { id: 'created-after', pool: 'main', createdAt: 300 },
+      { id: 'approved-before', pool: 'main', createdAt: 50, approvedAt: 150 },
+      { id: 'approved-after', pool: 'main', createdAt: 50, approvedAt: 250 },
+    ];
+    expect(activeSnapshotIds(items, { pool: 'main', cutoff: 200 })).toEqual([
+      'legacy',
+      'created-before',
+      'approved-before',
+    ]);
   });
 });
 
@@ -177,6 +232,29 @@ describe('stampDaySnapshot — the snapshot at unlock (AC 1)', () => {
     expect(result).toBe('stamped');
     const day = db.readEvent().days!.find((d) => d.index === 8)!;
     expect(day.snapshotItemIds).toEqual(['a', 'b', 'legacy']);
+  });
+
+  it('freezes only what the live pool would deal: no free-space, hidden, banned, or late items (#228)', async () => {
+    const db = makeDb({
+      eventId: 'e1',
+      event: {
+        days: mainDays(),
+        settings: { reportHideThreshold: 5 },
+        bannedUids: ['villain'],
+      },
+      items: [
+        { id: 'keep', status: 'active', pool: 'main', createdBy: 'u1', createdAt: D9_UNLOCK - 1000 },
+        { id: 'free', status: 'active', pool: 'main', isFreeSpace: true },
+        { id: 'reported', status: 'active', pool: 'main', reportCount: 5, createdBy: 'u2' },
+        { id: 'banned', status: 'active', pool: 'main', createdBy: 'villain' },
+        { id: 'late', status: 'active', pool: 'main', createdBy: 'u3', createdAt: D9_UNLOCK + 10_000 },
+      ],
+    });
+    // Run late (10s after unlock): the `late` item, created after the 08:00 cutoff,
+    // must still be excluded because the snapshot freezes the pool AS OF unlockAt.
+    const result = await stampDaySnapshot(db, 'e1', 8, { now: () => D9_UNLOCK + 20_000 });
+    expect(result).toBe('stamped');
+    expect(db.readEvent().days!.find((d) => d.index === 8)!.snapshotItemIds).toEqual(['keep']);
   });
 
   it('leaves a Day whose unlockAt is still in the future untouched (AC: future Day)', async () => {
@@ -222,17 +300,39 @@ describe('finaleTimes / finaleActions — the two-beat finish (AC 3)', () => {
 
   it('posts last-call in [20:00 Day9, 08:00 Day10) and only when not already posted', () => {
     const t = finaleTimes(mainDays())!;
-    expect(finaleActions(t, t.lastCallAt, { lastCallPosted: false }).postLastCall).toBe(true);
-    expect(finaleActions(t, t.lastCallAt - 1, { lastCallPosted: false }).postLastCall).toBe(false); // before 20:00
-    expect(finaleActions(t, t.farewellUnlockAt, { lastCallPosted: false }).postLastCall).toBe(false); // freeze supersedes
-    expect(finaleActions(t, t.lastCallAt, { lastCallPosted: true }).postLastCall).toBe(false); // dedup
+    const base = { lastCallPosted: false, podiumPosted: false };
+    expect(finaleActions(t, t.lastCallAt, base).postLastCall).toBe(true);
+    expect(finaleActions(t, t.lastCallAt - 1, base).postLastCall).toBe(false); // before 20:00
+    expect(finaleActions(t, t.farewellUnlockAt, base).postLastCall).toBe(false); // freeze supersedes
+    expect(finaleActions(t, t.lastCallAt, { ...base, lastCallPosted: true }).postLastCall).toBe(false); // dedup
   });
 
-  it('freezes + podiums at/after the farewell unlock only while not yet frozen', () => {
+  it('freezes at/after the farewell unlock only while not yet frozen', () => {
     const t = finaleTimes(mainDays())!;
-    expect(finaleActions(t, t.farewellUnlockAt, { lastCallPosted: false }).freezeAndPodium).toBe(true);
-    expect(finaleActions(t, t.farewellUnlockAt - 1, { lastCallPosted: false }).freezeAndPodium).toBe(false);
-    expect(finaleActions(t, t.farewellUnlockAt, { frozenAt: 123, lastCallPosted: false }).freezeAndPodium).toBe(false);
+    const base = { lastCallPosted: false, podiumPosted: false };
+    expect(finaleActions(t, t.farewellUnlockAt, base).freeze).toBe(true);
+    expect(finaleActions(t, t.farewellUnlockAt - 1, base).freeze).toBe(false);
+    expect(finaleActions(t, t.farewellUnlockAt, { ...base, frozenAt: 123 }).freeze).toBe(false);
+  });
+
+  it('posts the podium at/after the farewell unlock only while not already posted', () => {
+    const t = finaleTimes(mainDays())!;
+    const base = { lastCallPosted: false, podiumPosted: false };
+    expect(finaleActions(t, t.farewellUnlockAt, base).postPodium).toBe(true);
+    expect(finaleActions(t, t.farewellUnlockAt - 1, base).postPodium).toBe(false);
+    expect(finaleActions(t, t.farewellUnlockAt, { ...base, podiumPosted: true }).postPodium).toBe(false);
+  });
+
+  it('keeps the podium retry open after a run that froze but failed to post it (#228)', () => {
+    const t = finaleTimes(mainDays())!;
+    // An earlier run flipped frozenAt but its podium write failed transiently.
+    const d = finaleActions(t, t.farewellUnlockAt + 60_000, {
+      frozenAt: t.farewellUnlockAt,
+      lastCallPosted: true,
+      podiumPosted: false,
+    });
+    expect(d.freeze).toBe(false); // already frozen — never re-freeze
+    expect(d.postPodium).toBe(true); // but the podium beat is still owed
   });
 });
 
@@ -246,6 +346,7 @@ describe('runScheduledUnlock — the finale beats through the write path (AC 3)'
     const lastCalls = db.moments().filter((m) => m.kind === 'last_call');
     expect(lastCalls).toHaveLength(1);
     expect(lastCalls[0].dayIndex).toBe(8);
+    expect(lastCalls[0].id).toBe('last_call'); // deterministic id → renders in the Feed (#228)
     expect(db.moments().filter((m) => m.kind === 'podium')).toHaveLength(0);
     expect(db.readEvent().frozenAt).toBeUndefined();
   });
@@ -259,8 +360,17 @@ describe('runScheduledUnlock — the finale beats through the write path (AC 3)'
     const podiums = db.moments().filter((m) => m.kind === 'podium');
     expect(podiums).toHaveLength(1);
     expect(podiums[0].dayIndex).toBe(9);
+    expect(podiums[0].id).toBe('podium'); // deterministic id → renders in the Feed (#228)
     // The farewell Day's own snapshot is stamped by the same 08:00 run.
     expect(db.readEvent().days!.find((d) => d.index === 9)!.snapshotItemIds).toEqual([]);
+  });
+
+  it('stamps frozenAt with the scheduled 08:00 cutoff even when the run is late (#228)', async () => {
+    const db = makeDb({ eventId: 'e1', event: { days: mainDays() } });
+    // A recovery run fires two hours late; frozenAt must still be the 08:00 cutoff,
+    // not the run clock, so post-08:00 marks never slip into the frozen standings.
+    await runScheduledUnlock(db, 'e1', { now: () => D10_UNLOCK + 2 * 60 * 60 * 1000 });
+    expect(db.readEvent().frozenAt).toBe(D10_UNLOCK);
   });
 });
 

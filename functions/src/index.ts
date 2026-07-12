@@ -25,7 +25,10 @@ setGlobalOptions({ region: 'us-central1', maxInstances: 10 });
 
 const db = getFirestore();
 const visionClient = new vision.ImageAnnotatorClient();
-const BUG_REPORT_RUNTIME_SERVICE_ACCOUNT = 'firebase-adminsdk-fbsvc@gaycruisebingo.iam.gserviceaccount.com';
+// The Firestore/Storage-authorized runtime identity. The project's default Gen2
+// compute account deliberately has NO Firestore or Storage data-plane access, so
+// every Admin-SDK function that reads/writes those planes must pin this account.
+const ADMIN_SDK_SERVICE_ACCOUNT = 'firebase-adminsdk-fbsvc@gaycruisebingo.iam.gserviceaccount.com';
 
 /**
  * Private, authenticated bug intake; App Check enforcement follows #44's
@@ -33,7 +36,7 @@ const BUG_REPORT_RUNTIME_SERVICE_ACCOUNT = 'firebase-adminsdk-fbsvc@gaycruisebin
  * deliberately has no Firestore or Storage data-plane access.
  */
 export const submitBugReport = onCall(
-  { maxInstances: 10, timeoutSeconds: 30, serviceAccount: BUG_REPORT_RUNTIME_SERVICE_ACCOUNT },
+  { maxInstances: 10, timeoutSeconds: 30, serviceAccount: ADMIN_SDK_SERVICE_ACCOUNT },
   (request) => handleSubmitBugReport(request, BUG_REPORT_APP_CHECK.value()),
 );
 
@@ -225,8 +228,10 @@ export const backfillHideOnThresholdDecrease = onDocumentWritten(
  * Phase 1.5 daily scheduler (issue #202, daily-cards-spec § "Unlock mechanics" /
  * "Scoring and social surfaces"). The decision logic + idempotent writes live in
  * `unlockDay.ts` so they are unit-testable without a Functions runtime; these are
- * the thin trigger seams. The default Functions identity touches Firestore, so no
- * pinned service account is needed (unlike the sandboxed bug-report intake).
+ * the thin trigger seams. Like the bug-report intake, these read `events` and write
+ * snapshots / finale state through the Admin SDK, so they MUST pin
+ * `ADMIN_SDK_SERVICE_ACCOUNT`: the project's default Gen2 compute identity has no
+ * Firestore data-plane access, so an unpinned run would fail its first 08:00 read.
  *
  * Design choice (the issue leaves it to the implementer): TWO daily runs in
  * Europe/Rome rather than a single one. Both call the same idempotent core
@@ -250,12 +255,12 @@ async function runScheduledUnlockForActiveEvents(): Promise<void> {
 }
 
 export const unlockDay = onSchedule(
-  { schedule: '0 8 * * *', timeZone: 'Europe/Rome' },
+  { schedule: '0 8 * * *', timeZone: 'Europe/Rome', serviceAccount: ADMIN_SDK_SERVICE_ACCOUNT },
   () => runScheduledUnlockForActiveEvents(),
 );
 
 export const unlockDayFinaleLastCall = onSchedule(
-  { schedule: '0 20 * * *', timeZone: 'Europe/Rome' },
+  { schedule: '0 20 * * *', timeZone: 'Europe/Rome', serviceAccount: ADMIN_SDK_SERVICE_ACCOUNT },
   () => runScheduledUnlockForActiveEvents(),
 );
 
@@ -264,10 +269,13 @@ export const unlockDayFinaleLastCall = onSchedule(
  * idempotent snapshot for one Day on demand. Admin-gated in `manualUnlockNow`
  * (caller uid must be on the event's `admins` roster); a non-admin caller trips
  * `UnlockPermissionError`, mapped here to a `permission-denied` HttpsError.
- * Follows the `submitBugReport` callable shape, but with the default Functions
- * identity (it only touches Firestore).
+ * Follows the `submitBugReport` callable shape, and like it pins
+ * `ADMIN_SDK_SERVICE_ACCOUNT` — it reads/writes Firestore through the Admin SDK,
+ * which the default Gen2 compute identity cannot reach.
  */
-export const unlockDayNow = onCall({ maxInstances: 10, timeoutSeconds: 30 }, async (request) => {
+export const unlockDayNow = onCall(
+  { maxInstances: 10, timeoutSeconds: 30, serviceAccount: ADMIN_SDK_SERVICE_ACCOUNT },
+  async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', 'Sign in before unlocking a Day.');
   const data = (request.data ?? {}) as { eventId?: unknown; dayIndex?: unknown };
