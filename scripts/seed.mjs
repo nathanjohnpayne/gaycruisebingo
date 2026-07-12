@@ -50,6 +50,118 @@ export const EVENT_SEED = {
   // removed the event's other Phase-0 flag as dead config (type-side removal:
   // w0-type-contract), so no other key is seeded here.
   settings: { reportHideThreshold: 4, spicyRatio: 0.4 },
+  // Single event timezone (daily-cards-spec § "Itinerary and schedule") — every
+  // port on the July sailing is CEST, so no ship-clock drift handling is needed.
+  timezone: 'Europe/Rome',
+  // The ten-Day mapping that drives the whole feature's unlock/theme/pool
+  // machinery (daily-cards-spec § "Itinerary and schedule" + "Free space per
+  // day"), the SAME content as `DAYS` in `src/data/seed.ts`; kept as a separate
+  // literal here for the same no-cross-module-import reason as ITEMS below.
+  // `src/data/seed-and-composition.test.ts` asserts the two stay in sync.
+  days: [
+    {
+      index: 0,
+      date: '2026-07-15',
+      port: 'Trieste',
+      portEmoji: '🇮🇹',
+      theme: 'welcome-aboard',
+      pool: 'embark',
+      tutorial: true,
+      unlockAt: 0,
+      freeText: 'You made it aboard',
+    },
+    {
+      index: 1,
+      date: '2026-07-16',
+      port: 'Split',
+      portEmoji: '🇭🇷',
+      theme: 'get-sporty',
+      pool: 'main',
+      tutorial: false,
+      unlockAt: Date.parse('2026-07-16T08:00:00+02:00'),
+    },
+    {
+      index: 2,
+      date: '2026-07-17',
+      port: 'Valletta',
+      portEmoji: '🇲🇹',
+      theme: 'duty-free',
+      pool: 'main',
+      tutorial: false,
+      unlockAt: Date.parse('2026-07-17T08:00:00+02:00'),
+    },
+    {
+      index: 3,
+      date: '2026-07-18',
+      port: 'Palermo',
+      portEmoji: '🇮🇹',
+      theme: 'glamiators',
+      pool: 'main',
+      tutorial: false,
+      unlockAt: Date.parse('2026-07-18T08:00:00+02:00'),
+    },
+    {
+      index: 4,
+      date: '2026-07-19',
+      port: 'Sorrento',
+      portEmoji: '🇮🇹',
+      theme: 'neon-playground',
+      pool: 'main',
+      tutorial: false,
+      unlockAt: Date.parse('2026-07-19T08:00:00+02:00'),
+    },
+    {
+      index: 5,
+      date: '2026-07-20',
+      port: 'Rome (Civitavecchia)',
+      portEmoji: '🇮🇹',
+      theme: 'summer-white',
+      pool: 'main',
+      tutorial: false,
+      unlockAt: Date.parse('2026-07-20T08:00:00+02:00'),
+    },
+    {
+      index: 6,
+      date: '2026-07-21',
+      port: 'Nice',
+      portEmoji: '🇫🇷',
+      theme: 'dog-tag',
+      pool: 'main',
+      tutorial: false,
+      unlockAt: Date.parse('2026-07-21T08:00:00+02:00'),
+    },
+    {
+      index: 7,
+      date: '2026-07-22',
+      port: 'Marseille',
+      portEmoji: '🇫🇷',
+      theme: 'revival-disco',
+      pool: 'main',
+      tutorial: false,
+      unlockAt: Date.parse('2026-07-22T08:00:00+02:00'),
+    },
+    {
+      index: 8,
+      date: '2026-07-23',
+      port: 'Sea Day',
+      portEmoji: '🌊',
+      theme: 'seriously-pink',
+      pool: 'main',
+      tutorial: false,
+      unlockAt: Date.parse('2026-07-23T08:00:00+02:00'),
+    },
+    {
+      index: 9,
+      date: '2026-07-24',
+      port: 'Barcelona',
+      portEmoji: '🇪🇸',
+      theme: 'so-long-farewell',
+      pool: 'farewell',
+      tutorial: true,
+      unlockAt: Date.parse('2026-07-24T08:00:00+02:00'),
+      freeText: 'We had the best damn time',
+    },
+  ],
 };
 
 // Parse the ADMIN_UID env var (comma-separated uids) into the events/{id}.admins roster.
@@ -171,6 +283,72 @@ export const ITEMS = [
   { text: `Fuck a drag queen IN drag`, spicy: true },
 ];
 
+// The two curated tutorial pools (daily-cards-spec § "Tutorial item lists"), the
+// SAME content as `EMBARK_ITEMS`/`FAREWELL_ITEMS` in `src/data/seed.ts`; kept as
+// separate literals here for the same no-cross-module-import reason as ITEMS
+// above. `src/data/seed-and-composition.test.ts` asserts they stay in sync.
+export const EMBARK_ITEMS = [
+  { text: `Get your favorite dessert`, spicy: false, pool: 'embark' },
+  { text: `Find your muster station`, spicy: false, pool: 'embark' },
+  { text: `Get lost finding your cabin`, spicy: false, pool: 'embark' },
+  { text: `Ride an elevator the wrong way`, spicy: false, pool: 'embark' },
+  { text: `Locate the late-night pizza`, spicy: false, pool: 'embark' },
+  { text: `First soft-serve of the cruise`, spicy: false, pool: 'embark' },
+  { text: `Toast at the sailaway party`, spicy: false, pool: 'embark' },
+  { text: `Wave goodbye to land`, spicy: false, pool: 'embark' },
+  { text: `Hear the ship's horn`, spicy: false, pool: 'embark' },
+  { text: `Meet someone from another country`, spicy: false, pool: 'embark' },
+  { text: `Learn a crew member's name`, spicy: false, pool: 'embark' },
+  { text: `Befriend a bartender`, spicy: false, pool: 'embark' },
+  { text: `Compliment a stranger's outfit`, spicy: false, pool: 'embark' },
+  { text: `Ask "where are you from?" three times`, spicy: false, pool: 'embark' },
+  { text: `Exchange Instagrams with a new friend`, spicy: false, pool: 'embark' },
+  { text: `Spot matching Speedos`, spicy: false, pool: 'embark' },
+  { text: `Unpack a truly unhinged outfit`, spicy: false, pool: 'embark' },
+  { text: `Plan tomorrow's party look`, spicy: false, pool: 'embark' },
+  { text: `Test the bed (nap counts)`, spicy: false, pool: 'embark' },
+  { text: `Stateroom mirror selfie`, spicy: false, pool: 'embark' },
+  { text: `Balcony or porthole photo`, spicy: false, pool: 'embark' },
+  { text: `Order a frozen drink with zero shame`, spicy: false, pool: 'embark' },
+  { text: `Sunscreen a stranger's back (or volunteer yours)`, spicy: false, pool: 'embark' },
+  { text: `Scope out the gym you'll never use`, spicy: false, pool: 'embark' },
+  { text: `Find the theater`, spicy: false, pool: 'embark' },
+  { text: `Locate the Dick Deck (reconnaissance only)`, spicy: false, pool: 'embark' },
+  { text: `Sign up for something you'll never attend`, spicy: false, pool: 'embark' },
+  { text: `Overhear someone already complaining`, spicy: false, pool: 'embark' },
+];
+
+export const FAREWELL_ITEMS = [
+  { text: `One last sunrise or sunset photo`, spicy: false, pool: 'farewell' },
+  { text: `Say goodbye to your cruise boyfriend`, spicy: false, pool: 'farewell' },
+  { text: `Exchange numbers with your new best friend`, spicy: false, pool: 'farewell' },
+  { text: `Promise to visit someone in their city`, spicy: false, pool: 'farewell' },
+  { text: `Say "see you next year"—and mean it`, spicy: false, pool: 'farewell' },
+  { text: `Book next year's cruise (or swear you will)`, spicy: false, pool: 'farewell' },
+  { text: `Final soft-serve`, spicy: false, pool: 'farewell' },
+  { text: `Thank your cabin steward by name`, spicy: false, pool: 'farewell' },
+  { text: `Thank the bartender who carried you`, spicy: false, pool: 'farewell' },
+  { text: `One last lap around the ship`, spicy: false, pool: 'farewell' },
+  { text: `Last dance to one more song`, spicy: false, pool: 'farewell' },
+  { text: `Group photo with your chosen family`, spicy: false, pool: 'farewell' },
+  { text: `Cry (or valiantly almost cry)`, spicy: false, pool: 'farewell' },
+  { text: `Find glitter somewhere impossible`, spicy: false, pool: 'farewell' },
+  { text: `Suitcase no longer closes`, spicy: false, pool: 'farewell' },
+  { text: `Wear your softest airport look`, spicy: false, pool: 'farewell' },
+  { text: `Breakfast in sunglasses, one last time`, spicy: false, pool: 'farewell' },
+  { text: `Swap favorite memories of the week`, spicy: false, pool: 'farewell' },
+  { text: `"I'm never drinking again" (sincere)`, spicy: false, pool: 'farewell' },
+  { text: `Post the photo dump`, spicy: false, pool: 'farewell' },
+  { text: `Screenshot the group chat's new name`, spicy: false, pool: 'farewell' },
+  { text: `Set a reunion date`, spicy: false, pool: 'farewell' },
+  { text: `Give away your leftover sunscreen`, spicy: false, pool: 'farewell' },
+  { text: `Realize you never used the gym`, spicy: false, pool: 'farewell' },
+  { text: `Hum the song of the week`, spicy: false, pool: 'farewell' },
+  { text: `Take home a (legal) souvenir`, spicy: false, pool: 'farewell' },
+  { text: `Five-star shoutout for your favorite crew member`, spicy: false, pool: 'farewell' },
+  { text: `Stand at the back of the ship and feel things`, spicy: false, pool: 'farewell' },
+];
+
 // Deterministic doc id (content hash of the text only) so re-running the seed
 // upserts the same prompt docs instead of creating duplicates (boards sample
 // distinct ids, so dupes would surface the same prompt on multiple squares).
@@ -178,10 +356,17 @@ export function seedItemDocId(text) {
   return `seed-${createHash('sha1').update(text).digest('hex').slice(0, 20)}`;
 }
 
-export function seedItemMutations(existingDocs, now = Date.now()) {
+// All three seeded pools combined — the main 80-entry pool (untagged, so it
+// defaults to 'main' below) plus the two curated tutorial pools (already
+// tagged). Curated pools are seeded `status: 'active'` directly (no
+// pending-approval gate — that gate is `main`-only, per daily-cards-spec §
+// "Item pools and the approval flow").
+export const ALL_ITEMS = [...ITEMS, ...EMBARK_ITEMS, ...FAREWELL_ITEMS];
+
+export function seedItemMutations(existingDocs, now = Date.now(), pool = ALL_ITEMS) {
   return {
     deleteIds: existingDocs.filter((doc) => doc.createdBy === 'seed').map((doc) => doc.id),
-    writes: ITEMS.map(({ text, spicy }) => ({
+    writes: pool.map(({ text, spicy, pool: itemPool }) => ({
       id: seedItemDocId(text),
       data: {
         text,
@@ -191,9 +376,10 @@ export function seedItemMutations(existingDocs, now = Date.now()) {
         status: 'active',
         reportCount: 0,
         spicy,
-        // Honor the now-required ItemDoc.pool: the seeded canonical prompts are
-        // the main game pool. Embark/farewell pools arrive with #207.
-        pool: 'main',
+        // Honor the now-required ItemDoc.pool: main-pool entries in ITEMS carry
+        // no `pool` tag of their own (so default to 'main'); embark/farewell
+        // entries already carry their own tag.
+        pool: itemPool ?? 'main',
       },
     })),
   };
@@ -215,12 +401,13 @@ export function verifySeedPool(
   reportHideThreshold = EVENT_SEED.settings.reportHideThreshold,
 ) {
   const expected = new Map(
-    pool.map(({ text, spicy }) => [
+    pool.map(({ text, spicy, pool: itemPool }) => [
       seedItemDocId(text),
-      // `pool: 'main'` mirrors the stamp in `seedItemMutations` — the seeded
-      // canonical prompts are the main game pool, so a live seed doc missing
-      // `pool` or drifted to another pool is itself drift this check surfaces.
-      { text, spicy, isFreeSpace: false, status: 'active', pool: 'main' },
+      // An untagged entry (the main 80-entry pool in ITEMS) defaults to 'main',
+      // mirroring the stamp in `seedItemMutations`; a tagged entry (embark/
+      // farewell) keeps its own tag — a live seed doc missing `pool` or
+      // drifted to another pool is itself drift this check surfaces.
+      { text, spicy, isFreeSpace: false, status: 'active', pool: itemPool ?? 'main' },
     ]),
   );
   const seedDocs = existingDocs.filter((doc) => doc.createdBy === 'seed');
@@ -393,9 +580,10 @@ async function seed() {
   await batch.commit();
 
   // Self-check: read the collection back and confirm the live seed pool now
-  // matches the canonical ITEMS. A green seed run that leaves drift (partial
-  // batch, wrong project, stale doc a scoped delete missed) should fail loudly
-  // right here, not weeks later when a player notices the old prompts.
+  // matches the canonical ALL_ITEMS (main + embark + farewell). A green seed
+  // run that leaves drift (partial batch, wrong project, stale doc a scoped
+  // delete missed) should fail loudly right here, not weeks later when a
+  // player notices the old prompts.
   const report = verifySeedPool(
     (await col.get()).docs.map((doc) => ({
       id: doc.id,
@@ -407,13 +595,14 @@ async function seed() {
       reportCount: doc.data().reportCount,
       pool: doc.data().pool,
     })),
+    ALL_ITEMS,
   );
   if (!report.ok) {
     console.error(formatDriftReport(report, EVENT_ID));
     process.exit(1);
   }
 
-  console.log(`Seeded ${ITEMS.length} prompts into events/${EVENT_ID}.`);
+  console.log(`Seeded ${ALL_ITEMS.length} prompts into events/${EVENT_ID}.`);
   // Redacted on purpose (CodeQL js/clear-text-logging, alert #2): report that the
   // roster was set — and how many uids parsed — without echoing the env-sourced uids.
   console.log(
@@ -463,7 +652,8 @@ export function formatDriftReport(report, eventId) {
 
 // Read-only drift check (`node scripts/seed.mjs --verify`). Never writes — safe
 // to run as a post-deploy smoke test. Exits 0 when the live seed pool matches
-// the canonical ITEMS, 1 (with an actionable report) when it drifts.
+// the canonical ALL_ITEMS (main + embark + farewell), 1 (with an actionable
+// report) when it drifts.
 async function verify() {
   const { db, EVENT_ID } = await initFirestore();
   const snap = await db.collection(`events/${EVENT_ID}/items`).get();
@@ -478,6 +668,7 @@ async function verify() {
       reportCount: doc.data().reportCount,
       pool: doc.data().pool,
     })),
+    ALL_ITEMS,
   );
   if (report.ok) {
     console.log(
