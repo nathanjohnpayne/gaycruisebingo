@@ -569,8 +569,15 @@ export default function Board() {
     hasServerData: dayBoardConfirmed,
   } = useDayBoard(uid, hasDays ? viewedIndex : undefined);
   // The ACTIVE Board the whole component renders/marks against: the viewed Day's
-  // Board in daily mode, the single legacy Board otherwise.
-  const board = hasDays ? dayBoard : legacyBoard;
+  // Board in daily mode, the single legacy Board otherwise. In daily mode the
+  // day-scoped subscription clears its previous doc only in a passive effect AFTER
+  // its key changes (useDocSub), so for a render or two right after a Day switch
+  // `dayBoard` can still be the PRIOR Day's board. Accepting it would briefly
+  // render — and accept Mark taps against — the wrong Day's card. Gate on
+  // `dayBoard.dayIndex === viewedIndex` so a stale board reads as "not yet dealt"
+  // (the "Dealing…" transient) until the correct Day's board loads (Codex #247 P2).
+  const dayBoardForView = hasDays && dayBoard?.dayIndex === viewedIndex ? dayBoard : null;
+  const board = hasDays ? dayBoardForView : legacyBoard;
   const boardLoading = hasDays ? dayBoardLoading : legacyBoardLoading;
   const boardConfirmed = hasDays ? dayBoardConfirmed : legacyBoardConfirmed;
   // The known-players roster — the SAME data the Leaderboard's First-to-BINGO pin
@@ -649,10 +656,21 @@ export default function Board() {
   // keeps a cache-miss (board unknown) from dealing a second card over an existing
   // one. Fire-and-forget: the day-scoped subscription renders the card once written.
   const dealingDaysRef = useRef<Set<string>>(new Set());
+  // The Day index whose lazy deal has FAILED (thin/malformed snapshot, or a
+  // repeatedly-denied write), so the render can surface a retry instead of sitting
+  // on "Dealing…" forever (Codex #247 P2). `dealNonce` bumps on a manual retry so
+  // the deal effect re-fires even though nothing else in its deps changed.
+  const [dayDealError, setDayDealError] = useState<number | null>(null);
+  const [dealNonce, setDealNonce] = useState(0);
   useEffect(() => {
     if (!hasDays || !user) return;
     const day = days[viewedIndex] ?? days[0];
-    if (!day || board || !dayBoardConfirmed) return;
+    // A dealt board for the viewed Day clears any prior deal error for it.
+    if (board) {
+      if (dayDealError !== null) setDayDealError(null);
+      return;
+    }
+    if (!day || !dayBoardConfirmed) return;
     const state = dayDealState({
       unlockAt: day.unlockAt,
       snapshotItemIds: day.snapshotItemIds,
@@ -663,14 +681,17 @@ export default function Board() {
     const key = `${user.uid}:${day.index}`;
     if (dealingDaysRef.current.has(key)) return;
     dealingDaysRef.current.add(key);
-    void dealDayCard(user, day.index)
+    const dealIndex = day.index;
+    void dealDayCard(user, dealIndex)
       .catch(() => {
-        /* A failed/denied deal self-corrects: the subscription stays board-less and
-           this effect re-attempts on the next render once the key clears. */
+        // A denied/failed deal leaves the board null; surface a retry for the
+        // viewed Day rather than an indefinite "Dealing…" spinner. Scoped to the
+        // acted Day so switching away/among Days never shows a stale error.
+        setDayDealError(dealIndex);
       })
       .finally(() => dealingDaysRef.current.delete(key));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `days`/`day` derive from event?.days; deps track the fields the deal actually reads.
-  }, [hasDays, user, event?.days, viewedIndex, board, dayBoardConfirmed, now]);
+  }, [hasDays, user, event?.days, viewedIndex, board, dayBoardConfirmed, now, dealNonce]);
   // Edge refs for the COSMETIC Celebration UI only (issue #104). The public Moment
   // broadcast moved OFF this snapshot-diffing machinery and ONTO the action path —
   // doMark reads `setMark`'s synchronous win-transition verdict and enqueues into a
@@ -1046,6 +1067,32 @@ export default function Board() {
   }
 
   if (!board) {
+    // A lazy per-Day deal that FAILED for the viewed Day (thin/malformed snapshot
+    // or a repeatedly-denied write) surfaces a retry instead of an indefinite
+    // "Dealing…" spinner (Codex #247 P2). Retry clears the in-flight guard + error
+    // and bumps the deal nonce so the effect re-attempts.
+    if (hasDays && dayDealError === viewedIndex) {
+      return (
+        <>
+          {cardMeta}
+          {daySwitcher}
+          <div className="center muted" role="alert">
+            <p>We couldn’t deal this day’s card.</p>
+            <p>Check your connection, then retry.</p>
+            <button
+              className="btn"
+              onClick={() => {
+                if (uid) dealingDaysRef.current.delete(`${uid}:${viewedIndex}`);
+                setDayDealError(null);
+                setDealNonce((n) => n + 1);
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        </>
+      );
+    }
     // A Board is dealt once at join from the active, non-free Prompt pool
     // (ADR 0003). dealBoard needs >= MIN_POOL prompts (ADR 0004); with fewer the
     // deal throws and no Board is ever written, so a bare `!board` check would
@@ -1116,13 +1163,26 @@ export default function Board() {
     // enqueue; the next attributable render accepts taps normally.
     if (!cellsAttributable) return;
     try {
+      // The first-bingo stamp `computeMark` preserves is per-BOARD, and in daily
+      // mode each Day has its OWN board — so the "current first bingo" for a Mark is
+      // the VIEWED Day's bucket, never the cruise-wide root (which would restamp an
+      // earlier main-day bingo into this Day's honor — Codex #247 P2). The
+      // knownFirstBingoAt tri-state still gates: `undefined` (row unknown) is
+      // preserved so setMark omits the field rather than clobbering the server value.
+      const rootFirstBingoKnown = knownFirstBingoAt(player, playerLoading, playerConfirmed);
+      const currentFirstBingoAt =
+        rootFirstBingoKnown === undefined
+          ? undefined
+          : hasDays
+            ? (player?.dayStats?.[viewedIndex]?.firstBingoAt ?? null)
+            : rootFirstBingoKnown;
       const res = await setMark({
         uid,
         cells,
         index: c.index,
         nextMarked,
         claimMode,
-        currentFirstBingoAt: knownFirstBingoAt(player, playerLoading, playerConfirmed),
+        currentFirstBingoAt,
         displayName: identityKnown ? displayName : undefined,
         // Stamp the viewed Day (#216, #246) so the Mark writes the right day-scoped
         // Board and its Tally marker groups into the right per-`(itemId, dayIndex)`

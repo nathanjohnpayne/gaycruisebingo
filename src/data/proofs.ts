@@ -282,6 +282,11 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
         status: 'pending',
         createdAt: now,
         resolvedBy: null,
+        // In daily mode the pending mark lives on the DAY-SCOPED board, so the
+        // Claim carries its `dayIndex` — `confirmClaim`/`rejectClaim` resolve
+        // against that board + fold `dayStats[dayIndex]` (#246, Codex #247 P2).
+        // Omitted (not `undefined`, which Firestore rejects) in legacy mode.
+        ...(daily === true ? { dayIndex: dayIndex ?? 0 } : {}),
       });
     }
     // The verdict (see AttachProofResult): standing state from the fold, rising

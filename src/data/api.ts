@@ -276,34 +276,40 @@ export async function joinAndDeal(u: User): Promise<boolean> {
   const daily = Array.isArray(joinEventData?.days) && joinEventData.days.length > 0;
 
   if (daily) {
-    // Daily mode: no legacy board to read/deal. Ensure the Player row exists,
-    // idempotently — an already-joined Player (row present) is a no-op (`false`),
-    // mirroring the legacy board-exists early return so a reconnect never
-    // re-records a join. The identity is resolved the SAME validated way as the
-    // legacy branch below (saved profile → auth fallback), best-effort.
+    // Daily mode: no legacy board to read/deal. Ensure the Player row carries its
+    // identity + zeroed cruise aggregates. The identity is resolved the SAME
+    // validated way as the legacy branch below (saved profile → auth fallback).
+    //
+    // This must NOT early-return merely because a row EXISTS: `App` renders `Board`
+    // while `runDeal()` is still in flight, so the lazy Day-Card effect can call
+    // `dealDayCard()` concurrently — and that write creates `players/{uid}` with
+    // ONLY a `dayStats` bucket. If that write wins the race, an `exists()`-only
+    // guard would return early and the row would be stranded WITHOUT
+    // uid/displayName/photoURL/joinedAt (a nameless leaderboard entry — Codex #247
+    // P2). So the identity fields are ALWAYS merged, and the zeroed aggregates are
+    // seeded only for fields the row doesn't already carry — so a concurrent
+    // `dayStats` write (or real earlier progress) is never reset to 0. The return
+    // value reports whether this was a genuine first join (no identity yet), so the
+    // `join_event` analytic still fires exactly once.
     const existingPlayer = await getDoc(rawPlayer(u.uid));
-    if (existingPlayer.exists()) return false;
+    const existing = existingPlayer.exists() ? (existingPlayer.data() as Partial<UserDoc & { joinedAt: number; bingoCount: number; squaresMarked: number; firstBingoAt: number | null; blackout: boolean }>) : null;
+    const alreadyJoined = existing != null && typeof existing.joinedAt === 'number';
     const profileSnap = await getDoc(rawUser(u.uid)).catch(() => null);
     const profile = profileSnap?.exists() ? (profileSnap.data() as Partial<UserDoc>) : null;
     const savedPhoto = profile && isHttpsUrl(profile.photoURL) ? profile.photoURL : null;
     const displayName = resolveDisplayName(profile, u.displayName);
     const photoURL =
       profile?.customPhoto === true ? (savedPhoto ?? u.photoURL ?? null) : (u.photoURL ?? null);
-    await setDoc(
-      rawPlayer(u.uid),
-      {
-        uid: u.uid,
-        displayName,
-        photoURL,
-        joinedAt: Date.now(),
-        bingoCount: 0,
-        squaresMarked: 0,
-        firstBingoAt: null,
-        blackout: false,
-      },
-      { merge: true },
-    );
-    return true; // newly joined — an actual join
+    // Identity always merged; aggregates only for fields not already present, so a
+    // racing `dealDayCard` dayStats write is never clobbered back to zero.
+    const seed: Record<string, unknown> = { uid: u.uid, displayName, photoURL };
+    if (existing?.joinedAt == null) seed.joinedAt = Date.now();
+    if (typeof existing?.bingoCount !== 'number') seed.bingoCount = 0;
+    if (typeof existing?.squaresMarked !== 'number') seed.squaresMarked = 0;
+    if (existing?.firstBingoAt === undefined) seed.firstBingoAt = null;
+    if (typeof existing?.blackout !== 'boolean') seed.blackout = false;
+    await setDoc(rawPlayer(u.uid), seed, { merge: true });
+    return !alreadyJoined; // a genuine first join (no prior identity) is the analytic-worthy event
   }
 
   const existing = await getDoc(rawBoard(u.uid));
