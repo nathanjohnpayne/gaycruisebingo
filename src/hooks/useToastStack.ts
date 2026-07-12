@@ -57,7 +57,12 @@ export function useToastSlot(id: string, priority: ToastPriority, wantsToShow: b
   }, [id, priority, wantsToShow]);
 
   const rankIndex = rank(useSyncExternalStore(subscribe, getSnapshot, getSnapshot)).findIndex((r) => r.id === id);
-  const visible = rankIndex !== -1 && rankIndex < MAX_VISIBLE_TOASTS;
+  // Gate on the CURRENT render's `wantsToShow`, not just the (possibly stale)
+  // registered request: the registration effect above only reconciles
+  // `requests` after commit, so a caller whose `wantsToShow` just flipped
+  // false would otherwise still read `visible: true` for one extra render off
+  // its now-stale request (Codex review, PR #238).
+  const visible = wantsToShow && rankIndex !== -1 && rankIndex < MAX_VISIBLE_TOASTS;
   return { visible, stackIndex: visible ? rankIndex : -1 };
 }
 

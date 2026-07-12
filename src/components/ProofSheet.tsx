@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { attachProof, type AttachProofResult } from '../data/proofs';
 import { track } from '../analytics';
+import { markSquareOccurred } from '../hooks/useToastStack';
 import { safeMediaUrl } from './safeMediaUrl';
 import type { Cell, ClaimMode, ProofType } from '../types';
 
@@ -130,6 +131,14 @@ export default function ProofSheet(props: Props) {
         proof,
       });
       track('attach_proof', { type, ...(type === 'photo' && photoSource ? { source: photoSource } : {}) });
+      // Install-nudge first-Mark trigger (#219, Codex review PR #238): proof-
+      // required/admin-confirmed flows (and an honor-mode Player who attaches
+      // proof instead of tapping the pledge) mark an unmarked square through
+      // THIS path, not `Board.doMark`'s `mark_square` track() call — so that
+      // call site alone misses them. `cell` is the sheet's opening snapshot
+      // (unmutated by this submit), so `!cell.marked` is exactly "this attach
+      // just marked a previously-unmarked square."
+      if (!cell.marked) markSquareOccurred();
       // Report the win verdict AFTER the transaction committed and BEFORE closing,
       // so Board enqueues the Moment for a proofed win (PR #110 round 2 finding 1).
       // Truthiness-guarded: suites stub attachProof to resolve undefined.
