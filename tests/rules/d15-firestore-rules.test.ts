@@ -157,6 +157,19 @@ describe('d15-firestore-rules — day-meta firstBingo write-once', () => {
   it('DENIES a forged-attribution firstBingo create (uid != caller)', async () => {
     await assertFails(setDoc(doc(db(ALICE), at('days/0/meta/0')), honor(BOB)));
   });
+
+  it('DENIES a firstBingo create whose doc id != dayIndex', async () => {
+    // The honor doc is bound to its Day (metaId == dayIndex): a self-attributed
+    // payload written to any other id under days/0 is denied, so parallel honor
+    // docs can't be minted at arbitrary ids to duplicate the once-per-day slot.
+    await assertFails(setDoc(doc(db(ALICE), at('days/0/meta/notzero')), honor(ALICE)));
+  });
+
+  it('DENIES a firstBingo create before that Day unlockAt (locked Day 1)', async () => {
+    // A future day's canonical honor doc can't be squatted before it unlocks —
+    // the create is gated on unlockAt exactly like the Board write.
+    await assertFails(setDoc(doc(db(ALICE), at('days/1/meta/1')), honor(ALICE)));
+  });
 });
 
 describe('d15-firestore-rules — ADR-0001 posture unchanged under day scoping', () => {
