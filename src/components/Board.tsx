@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { Lock } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText } from '../hooks/useData';
+import { useBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, isBanned } from '../hooks/useData';
 import { setMark, resolveDisplayName } from '../data/api';
 import { eventTitle } from '../format';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
@@ -1212,9 +1212,16 @@ export default function Board() {
             set), ABOVE the goodbye banner below — this ticket owns the
             podium and its stacking order; the goodbye copy is
             TutorialBanner's. `buildPodium` freezes out the farewell Day's
-            own marks, so a post-freeze goodbye tap never moves the podium. */}
+            own marks, so a post-freeze goodbye tap never moves the podium.
+            The roster is ban-filtered first (Leaderboard.tsx parity): the
+            podium is a public leaderboard-like surface, so a banned Player
+            must never surface as champion, First to BINGO, or a daily
+            honor (Codex #244). */}
         {viewedDay?.pool === 'farewell' && event?.frozenAt != null && (
-          <FarewellPodium players={players} days={days} />
+          <FarewellPodium
+            players={players.filter((p) => !isBanned(p.uid, event?.bannedUids ?? []))}
+            days={days}
+          />
         )}
         {viewedDay && <TutorialBanner day={viewedDay} />}
         <div className="bingo-head">
