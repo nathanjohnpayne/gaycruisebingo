@@ -29,6 +29,7 @@ import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '.
 import LoadingState from './LoadingState';
 import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
 import TutorialBanner, { WarmUpTag } from './TutorialBanner';
+import CoachOverlay from './CoachOverlay';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
 
@@ -1076,6 +1077,11 @@ export default function Board() {
           tap); it just no longer competes with the title for the line. */}
       {cardMeta}
       {daySwitcher}
+      {/* First-open coach overlay (specs/d15-coach-overlay.md, #214): mounted
+          whenever Board has cells — whichever Board is the Player's first
+          dealt card, not hardcoded to the embark Day. Self-gates on a
+          per-Event localStorage flag, so this fires unconditionally. */}
+      {cells.length > 0 && <CoachOverlay />}
       {/* `board-area` is the retint scope (daily-cards-spec § "Day switcher"):
           `data-theme` here — set ONLY when the Event carries a Day schedule —
           follows the VIEWED Day and cascades the theme token set (themes.css)
