@@ -178,6 +178,12 @@ describe('Locked-Day preview', () => {
     expect(screen.getByText(/locker-room fantasy/i)).toBeInTheDocument();
     expect(screen.getByText('A per-day free space override')).toBeInTheDocument();
 
+    // specs/d15-icons-lucide.md: the unlock badge shows a Lucide `Lock`
+    // icon, not the `🔒` emoji.
+    const lockBadge = document.querySelector('.day-lock-badge');
+    expect(lockBadge?.querySelector('svg.day-lock-icon')).toBeTruthy();
+    expect(lockBadge?.textContent).not.toContain('🔒');
+
     const lockedCells = document.querySelectorAll('.locked-grid .cell');
     expect(lockedCells).toHaveLength(25);
     // Only the center (free space) square carries text; the rest are blank.
