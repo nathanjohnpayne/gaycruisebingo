@@ -95,6 +95,12 @@ vi.mock('../data/admin', () => ({
   deleteItem: vi.fn(),
   clearItemReports: vi.fn(),
   setEventTheme: vi.fn(),
+  setDayTheme: vi.fn(),
+  // #222 Proof & Claims panel no-op stubs (coverage: Admin.test.tsx).
+  setPhotoProofSource: vi.fn(),
+  setStripPhotoExif: vi.fn(),
+  setVisionGate: vi.fn(),
+  setReportHideThreshold: vi.fn(),
   // Admin.tsx imports banUser/unbanUser (#108/#122); provide them so this
   // whole-module mock does not leave the names undefined at import.
   banUser: vi.fn(),

@@ -79,6 +79,23 @@ export const clearProofReports = (id: string) => updateDoc(proof(id), { reportCo
 export const setClaimMode = (mode: ClaimMode) => updateDoc(evt(), { claimMode: mode });
 export const setEventTheme = (theme: ThemeId) => updateDoc(evt(), { defaultTheme: theme });
 
+// The Admin "Proof & Claims" panel (#222): four single-field `settings.*`
+// writes mirroring setClaimMode/setEventTheme. Each is a DOT-PATH `updateDoc`
+// (`{ 'settings.photoProofSource': source }`), so it merges into the existing
+// `settings` map and never clobbers a sibling key or any other event field —
+// firestore.rules only requires the RESULTING `settings.reportHideThreshold`
+// to stay a number, which a partial dot-path update preserves. `visionGate`
+// is presentational-only for now: `functions/src/visionGate.ts` still gates
+// `moderateProof` on its own deploy-time env flag, not this field.
+export const setPhotoProofSource = (source: 'camera_or_library' | 'camera_only'): Promise<void> =>
+  updateDoc(evt(), { 'settings.photoProofSource': source });
+export const setStripPhotoExif = (on: boolean): Promise<void> =>
+  updateDoc(evt(), { 'settings.stripPhotoExif': on });
+export const setVisionGate = (on: boolean): Promise<void> =>
+  updateDoc(evt(), { 'settings.visionGate': on });
+export const setReportHideThreshold = (n: number): Promise<void> =>
+  updateDoc(evt(), { 'settings.reportHideThreshold': n });
+
 // The Admin Schedule editor (#221, daily-cards-spec § "Admin console" / §
 // "Itinerary and schedule"): "changing a locked-future Day's theme is safe,
 // changing an already-unlocked Day is disallowed." `days` is a Firestore ARRAY

@@ -1,0 +1,82 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
+import {
+  assertFails,
+  assertSucceeds,
+  initializeTestEnvironment,
+  type RulesTestEnvironment,
+} from '@firebase/rules-unit-testing';
+import { doc, setDoc, updateDoc } from 'firebase/firestore';
+
+// specs/d15-finale.md, rules layer: `EventDoc.frozenAt` (the finale freeze stamp,
+// set by the 08:00-Day-10 scheduler run via the Admin SDK) is admin/Function-
+// writable only — a non-admin Player can never set it directly. The whole event
+// doc sits behind the `isAdmin` update gate, so this proves the freeze stamp
+// inherits that protection with no client write path of its own.
+//
+// The PERMISSION_DENIED lines the SDK logs to stderr are the expected assertFails
+// denials, not test failures.
+
+const RULES_PATH = fileURLToPath(new URL('../../firestore.rules', import.meta.url));
+const EVENT = 'cruise';
+const [ADMIN, MALLORY] = ['admin-uid', 'mallory'];
+const NOW = () => Date.now();
+const PAST = () => NOW() - 3600_000;
+
+let testEnv: RulesTestEnvironment;
+const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
+const unauthDb = () => testEnv.unauthenticatedContext().firestore();
+
+beforeAll(async () => {
+  const host = process.env.FIRESTORE_EMULATOR_HOST ?? '127.0.0.1:8080';
+  const [hostname, port] = host.split(':');
+  testEnv = await initializeTestEnvironment({
+    // Unique per-file projectId so this suite's clearFirestore never races
+    // another file's seed (same convention as the other d15 rules suites).
+    projectId: 'demo-gaycruisebingo-d15-finale-rules',
+    firestore: {
+      host: hostname,
+      port: Number(port),
+      rules: readFileSync(RULES_PATH, 'utf8'),
+    },
+  });
+});
+
+afterAll(async () => {
+  await testEnv?.cleanup();
+});
+
+// A canonical, valid Event doc (admins/settings/bannedUids/timezone/days all
+// shaped so the admin update gate's own field checks pass) with no freeze stamp yet.
+beforeEach(async () => {
+  await testEnv.clearFirestore();
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), `events/${EVENT}`), {
+      name: 'Cruise',
+      status: 'active',
+      admins: [ADMIN],
+      bannedUids: [],
+      settings: { reportHideThreshold: 3 },
+      timezone: 'Europe/Rome',
+      days: [
+        { index: 0, unlockAt: PAST(), theme: 'neon-playground' },
+        { index: 1, unlockAt: PAST(), theme: 'get-sporty' },
+      ],
+    });
+  });
+});
+
+describe('d15-finale — frozenAt is admin/Function-writable only', () => {
+  it('ALLOWS an admin to set frozenAt', async () => {
+    await assertSucceeds(updateDoc(doc(db(ADMIN), `events/${EVENT}`), { frozenAt: NOW() }));
+  });
+
+  it('DENIES a non-admin Player setting frozenAt', async () => {
+    await assertFails(updateDoc(doc(db(MALLORY), `events/${EVENT}`), { frozenAt: NOW() }));
+  });
+
+  it('DENIES an unauthenticated write of frozenAt', async () => {
+    await assertFails(updateDoc(doc(unauthDb(), `events/${EVENT}`), { frozenAt: NOW() }));
+  });
+});
