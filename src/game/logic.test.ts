@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   LINES,
   dealBoard,
+  dayDealState,
   hasBingo,
   isBlackout,
   countMarked,
@@ -56,6 +57,88 @@ describe('dealBoard', () => {
     const tooFew = pool.slice(0, 23);
     expect(tooFew).toHaveLength(23);
     expect(() => dealBoard(tooFew, 'FREE', 1)).toThrow(/at least 24 prompts/);
+  });
+});
+
+describe('dealBoard — per-Day sampling (d15-dealing)', () => {
+  // A 60-item mixed pool so exclusion has room to work: 24 spicy + 36 tame.
+  const mixed: DealItem[] = Array.from({ length: 60 }, (_, i) => ({
+    id: `m${i}`,
+    text: `prompt ${i}`,
+    spicy: i < 24,
+  }));
+
+  it('draws no id already in excludeIds when the pool has room after exclusion', () => {
+    // Exclude the first 20 ids: 40 remain (>= MIN_POOL), so the exclusion holds
+    // and none of the 20 can land on the card (no-repeat-across-the-cruise).
+    const excludeIds = new Set(mixed.slice(0, 20).map((p) => p.id));
+    const ids = dealBoard(mixed, 'FREE', 11, 0.4, { excludeIds })
+      .filter((c) => !c.free)
+      .map((c) => c.itemId);
+    expect(ids).toHaveLength(24);
+    for (const id of ids) expect(excludeIds.has(id as string)).toBe(false);
+  });
+
+  it('resets the exclusion when honoring it would fall under MIN_POOL', () => {
+    // Exclude 40 of 60 → only 20 remain, under MIN_POOL (24). The exclusion must
+    // reset to the full pool (pool-exhaustion reset) rather than throwing, so the
+    // deal still yields a full 24 — and now excluded ids MAY reappear.
+    const excludeIds = new Set(mixed.slice(0, 40).map((p) => p.id));
+    const ids = dealBoard(mixed, 'FREE', 12, 0.4, { excludeIds })
+      .filter((c) => !c.free)
+      .map((c) => c.itemId);
+    expect(ids).toHaveLength(24);
+    expect(new Set(ids).size).toBe(24);
+    // With only 20 non-excluded ids, a full 24-card is impossible without reusing
+    // excluded ones — proof the exclusion actually reset.
+    const reused = ids.filter((id) => excludeIds.has(id as string));
+    expect(reused.length).toBeGreaterThan(0);
+  });
+
+  it('deals 24 unstratified from an all-tame tutorial pool without starvation', () => {
+    // Embark/farewell snapshots are all-tame; stratify:false must not force a
+    // spicy target against them. A 30-item all-tame pool deals a full 24.
+    const allTame: DealItem[] = Array.from({ length: 30 }, (_, i) => ({
+      id: `t${i}`,
+      text: `tame ${i}`,
+      spicy: false,
+    }));
+    const ids = dealBoard(allTame, 'FREE', 13, 0.4, { stratify: false })
+      .filter((c) => !c.free)
+      .map((c) => c.itemId);
+    expect(ids).toHaveLength(24);
+    expect(new Set(ids).size).toBe(24);
+  });
+});
+
+describe('dayDealState (d15-dealing deal gate)', () => {
+  const base = { unlockAt: 1000, snapshotItemIds: ['a', 'b'], now: 2000, hasBoard: false };
+
+  it('is locked before unlockAt', () => {
+    expect(dayDealState({ ...base, now: 500 })).toBe('locked');
+  });
+
+  it('is waking only when the snapshot is ABSENT (mirrors isDueForSnapshot)', () => {
+    expect(dayDealState({ ...base, snapshotItemIds: undefined })).toBe('waking');
+  });
+
+  it('is ready (not waking) when a Day is stamped with an EMPTY pool — no forever-wait', () => {
+    // isDueForSnapshot treats [] as already-stamped, so [] must NOT class as
+    // waking or the client waits on a scheduler write that never comes; it falls
+    // through to the deal path's thin-pool failure instead.
+    expect(dayDealState({ ...base, snapshotItemIds: [] })).toBe('ready');
+  });
+
+  it('is ready when unlocked and the snapshot is present with no Board yet', () => {
+    expect(dayDealState(base)).toBe('ready');
+  });
+
+  it('is dealt (a no-op) whenever a Board already exists, regardless of clock', () => {
+    expect(dayDealState({ ...base, hasBoard: true })).toBe('dealt');
+    // Even a locked, snapshot-less Day reads dealt once a Board exists.
+    expect(dayDealState({ ...base, now: 0, snapshotItemIds: undefined, hasBoard: true })).toBe(
+      'dealt',
+    );
   });
 });
 

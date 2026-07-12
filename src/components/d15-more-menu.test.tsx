@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { EventDoc } from '../types';
 
@@ -54,6 +54,10 @@ vi.mock('./AcceptableUse', () => ({
     <button type="button">{`18+ guidelines (${variant})`}</button>
   ),
 }));
+// "How to play" reopens the REAL CoachOverlay (#214) — left un-stubbed so
+// the tests below exercise it; it imports EVENT_ID from '../firebase',
+// mocked like every other component suite stubs that module.
+vi.mock('../firebase', () => ({ EVENT_ID: 'test-event' }));
 
 import More from './More';
 
@@ -132,5 +136,32 @@ describe('More menu (specs/d15-more-menu.md)', () => {
     render(<More />);
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
     expect(H.signOutUser).toHaveBeenCalled();
+  });
+});
+
+// Covers specs/d15-coach-overlay.md's "How to play" replay path (#214).
+describe('More menu — "How to play" replays the coach overlay (#214)', () => {
+  it('reopens even when dismissed, then a replay dismissal closes it without clearing the flag', async () => {
+    const DISMISS_KEY = 'gcb.coachOverlay.test-event.dismissedAt';
+    const store = new Map<string, string>([[DISMISS_KEY, '1720000000000']]);
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+    } as unknown as Storage);
+    H.event = { ...H.event, admins: [] };
+
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const user = userEvent.setup();
+    render(<More />);
+    await user.click(screen.getByRole('button', { name: /How to play/ }));
+    expect(screen.getByRole('dialog', { name: 'How to read your card' })).toBeInTheDocument();
+    expect(screen.getByText(/Tally count/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Got it—deal me in\./ }));
+    expect(screen.queryByRole('dialog', { name: 'How to read your card' })).not.toBeInTheDocument();
+    // Still set — a replay dismissal is allowed to refresh the timestamp
+    // (the spec's own resolved default) — never cleared.
+    expect(store.get(DISMISS_KEY)).not.toBeUndefined();
+    vi.unstubAllGlobals();
   });
 });
