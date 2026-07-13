@@ -46,12 +46,12 @@
     "@vitejs/plugin-react": "^4.7.0",
     "fake-indexeddb": "^6.2.5",
     "firebase-admin": "^12.7.0",
-    "firebase-tools": "^15.22.4",
+    "firebase-tools": "^15.23.0",
     "jsdom": "^25.0.1",
     "typescript": "^5.6.2",
     "vite": "^6.4.3",
     "vite-plugin-pwa": "^0.21.2",
-    "vitest": "^3.2.6"
+    "vitest": "^3.2.7"
   },
   "overrides": {
     "gaxios": {
