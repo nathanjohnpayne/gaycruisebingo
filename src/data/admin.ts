@@ -208,7 +208,10 @@ async function resolve(
   const boardRef = daily ? dayBoard(c.dayIndex as number, c.uid) : board(c.uid);
   let isTutorialDay: ((i: number) => boolean) | undefined;
   let isCeremonialDay: ((i: number) => boolean) | undefined;
-  let statsFrozen = false;
+  // The freeze gate is a GETTER re-evaluated inside the transaction callback
+  // (Codex P2 on #278 round 4): a resolve started seconds before 08:00 must
+  // fold with the post-boundary truth on retry/commit, not a pre-read capture.
+  let isStatsFrozen: () => boolean = () => false;
   if (daily) {
     const evSnap = await getDoc(evt()).catch(() => null);
     const days = (evSnap?.data()?.days as DayDef[] | undefined) ?? [];
@@ -220,7 +223,8 @@ async function resolve(
     // setMark/attachProof — and the farewell bucket never enters the root sums.
     const ceremonial = ceremonialDayIndexSet(days);
     isCeremonialDay = (i: number) => ceremonial.has(i);
-    statsFrozen = standingsFrozen({ frozenAt: evSnap?.data()?.frozenAt as number | undefined, days });
+    const frozenAt = evSnap?.data()?.frozenAt as number | undefined;
+    isStatsFrozen = () => standingsFrozen({ frozenAt, days });
   }
   await runTransaction(db, async (tx) => {
     // Read board + player inside the txn so a concurrent mark/proof from the same
@@ -253,7 +257,7 @@ async function resolve(
         isTutorialDay,
         isCeremonialDay,
       });
-      if (statsFrozen) {
+      if (isStatsFrozen()) {
         // Ceremonial-day-only post-freeze bucket, mirroring setMark (Codex P2
         // on #278 round 2): any other Day's bucket would drift settled honors.
         if (isCeremonialDay?.(c.dayIndex as number)) {

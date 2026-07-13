@@ -100,7 +100,9 @@ function ProofCard({ proof, viewerUid, days, isStandingsFrozen }: { proof: Proof
                 // left open across the freeze boundary must not act on a
                 // render-time false.
                 ceremonialDayIndexes: days ? [...ceremonialDayIndexSet(days)] : undefined,
-                statsFrozen: isStandingsFrozen(),
+                // The GETTER itself (Codex P2 round 4): deleteProof re-checks
+                // inside its transaction, after any await.
+                statsFrozen: isStandingsFrozen,
               }).catch(console.error)
             }
           >
