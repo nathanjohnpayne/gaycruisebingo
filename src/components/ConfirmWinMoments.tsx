@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useLeaderboard, useMyClaims } from '../hooks/useData';
+import { useBoard, useEventDoc, useMyDayBoards, useMyPlayer, useLeaderboard, useMyClaims } from '../hooks/useData';
 import { resolveDisplayName } from '../data/api';
 import {
   broadcastBingo,
@@ -11,8 +11,9 @@ import {
   getConfirmState,
   type MomentActor,
 } from '../data/moments';
+import { pinDayFirstBingo } from '../data/dayMeta';
 import { hasBingo } from '../game/logic';
-import type { Cell, PlayerDoc } from '../types';
+import type { BoardDoc, Cell, PlayerDoc } from '../types';
 
 /** A confirm awaiting its board write: the Claim's cell AND the proof it resolves on. */
 interface AwaitingConfirm {
@@ -22,6 +23,9 @@ interface AwaitingConfirm {
   // THIS proofId — the claim-specific match below. `null` = a legacy Claim with no
   // proofId, which resolves by index (the historical fallback).
   proofId: string | null;
+  // The Claim's Day (#274): a daily Claim adjudicates against ITS day-scoped
+  // board and its Moments name that Day. `null` = a legacy single-board Claim.
+  dayIndex: number | null;
 }
 
 /**
@@ -95,6 +99,14 @@ export default function ConfirmWinMoments() {
   const { user } = useAuth();
   const uid = user?.uid;
   const { data: board } = useBoard(uid);
+  // Daily-cards mode (#274): a confirmed Claim's board write lands on the
+  // DAY-SCOPED board for the Claim's own dayIndex — subscribe the viewer's
+  // dealt Day Cards (bounded by the schedule length) so the drain can
+  // adjudicate each Claim against ITS board. Legacy events keep the single
+  // `useBoard` above; the two paths never mix (a Claim either carries a
+  // dayIndex or it does not).
+  const { data: event } = useEventDoc(!!uid);
+  const dayBoards = useMyDayBoards(uid, event?.days?.length ?? 0);
   const { data: player, loading: playerLoading, hasServerData: playerConfirmed } = useMyPlayer(uid);
   const { players, hasServerData: rosterConfirmed } = useLeaderboard();
   const { claims, fromCache: claimsFromCache } = useMyClaims(uid);
@@ -116,6 +128,7 @@ export default function ConfirmWinMoments() {
     identityKnown: boolean;
     cells: Cell[];
     boardOwned: boolean;
+    dayBoards: ReadonlyMap<number, BoardDoc>;
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -125,6 +138,7 @@ export default function ConfirmWinMoments() {
     identityKnown: false,
     cells: [],
     boardOwned: false,
+    dayBoards: new Map(),
   });
   ctx.current = {
     uid,
@@ -135,7 +149,23 @@ export default function ConfirmWinMoments() {
     identityKnown,
     cells: board?.cells ?? [],
     boardOwned: board != null && board.uid === uid,
+    dayBoards,
   };
+
+  // The cells a Day's confirms adjudicate against (#274): that Day's own board
+  // in daily mode (owned by construction — useMyDayBoards subscribes only the
+  // viewer's docs, and a foreign uid is re-checked), the attributable legacy
+  // board when the Claim carried no Day. `null` = that board isn't available
+  // yet (hold; a later snapshot retries).
+  const cellsForDay = (c: typeof ctx.current, dayIndex: number | null): Cell[] | null => {
+    if (dayIndex != null) {
+      const dayBoard = c.dayBoards.get(dayIndex);
+      return dayBoard && dayBoard.uid === c.uid && dayBoard.cells.length > 0 ? dayBoard.cells : null;
+    }
+    return c.boardOwned && c.cells.length > 0 ? c.cells : null;
+  };
+  const cellsForDayRef = useRef(cellsForDay);
+  cellsForDayRef.current = cellsForDay;
 
   // Self-reference so the async settle continuation can loop the drain until the
   // queue is empty (finding 2) without capturing a stale callback.
@@ -146,14 +176,19 @@ export default function ConfirmWinMoments() {
   // the confirmed cells crossed, broadcasts, and parks a still-unconfirmed ceremony.
   const drain = useCallback(() => {
     const c = ctx.current;
-    if (!c.uid || !c.identityKnown || !c.boardOwned || c.cells.length === 0) return;
+    if (!c.uid || !c.identityKnown) return;
     const st = getConfirmState(c.uid);
     if (st.inFlight || st.awaiting.size === 0) return;
     // A confirm is "reflected" only once the resolve() board write has LANDED for its
     // OWN cell — marked + status 'confirmed' + matching proofId (cellReflectsConfirm,
-    // Codex #116 R3 finding 3 + R4 finding 2). Only spend a witness read if at least
-    // one awaiting confirm is reflected.
-    if (![...st.awaiting.values()].some((e) => cellReflectsConfirm(c.cells, e))) return;
+    // Codex #116 R3 finding 3 + R4 finding 2) — on the board the CLAIM belongs
+    // to (#274: the day-scoped board in daily mode). Only spend a witness read
+    // if at least one awaiting confirm is reflected on its own board.
+    const anyReflected = [...st.awaiting.values()].some((e) => {
+      const cells = cellsForDayRef.current(c, e.dayIndex);
+      return cells != null && cellReflectsConfirm(cells, e);
+    });
+    if (!anyReflected) return;
     const actedUid = c.uid;
     st.inFlight = true;
     void hasPriorBingoWitness(actedUid)
@@ -163,8 +198,10 @@ export default function ConfirmWinMoments() {
         const cc = ctx.current;
         // Account switched away mid-read (finding 4): leave the awaiting entries in
         // the uid-keyed state so a switch-BACK resumes them; never emit with the
-        // wrong actor or against another account's board.
-        if (cc.uid === actedUid && cc.boardOwned && cc.cells.length > 0) {
+        // wrong actor or against another account's board. The board-availability
+        // check is per-entry now (#274) — cellsFor holds an entry whose board
+        // isn't attributable/present.
+        if (cc.uid === actedUid) {
           // Recompute reflected from the CURRENT post-await state, NOT a pre-await
           // snapshot (Codex #116 R4 finding 1): a sibling confirm that landed while the
           // witness read was in flight is now in `st2.awaiting` and its cell is on
@@ -176,36 +213,52 @@ export default function ConfirmWinMoments() {
           // already-standing win. Concurrent multi-confirm is then deterministic: the
           // batch emits exactly the kinds it crossed, once each (deterministic-id
           // dedup besides), and the winner-attributed Moment is never lost or doubled.
-          const nowReflected = [...st2.awaiting.entries()].filter(([, e]) =>
-            cellReflectsConfirm(cc.cells, e),
-          );
-          if (nowReflected.length > 0) {
-            const actor: MomentActor = { uid: actedUid, displayName: cc.displayName, photoURL: cc.photoURL };
+          // #274: adjudicate PER BOARD — group the reflected confirms by the
+          // Day they belong to (null = the legacy single board). Each group's
+          // transition is measured against ITS OWN board with its own siblings
+          // forced back to pending, exactly as before; groups on different
+          // boards are independent wins by construction (one card each).
+          const groups = new Map<number | null, Array<[string, AwaitingConfirm]>>();
+          for (const [id, e] of st2.awaiting.entries()) {
+            const cells = cellsForDayRef.current(cc, e.dayIndex);
+            if (cells != null && cellReflectsConfirm(cells, e)) {
+              const key = e.dayIndex;
+              const list = groups.get(key) ?? [];
+              list.push([id, e]);
+              groups.set(key, list);
+            }
+          }
+          const actor: MomentActor = { uid: actedUid, displayName: cc.displayName, photoURL: cc.photoURL };
+          for (const [dayKey, entries] of groups) {
+            const cells = cellsForDayRef.current(cc, dayKey);
+            if (cells == null) continue;
             const plan = planConfirmBroadcasts({
-              cells: cc.cells,
-              confirmedIndexes: nowReflected.map(([, e]) => e.cellIndex),
+              cells,
+              confirmedIndexes: entries.map(([, e]) => e.cellIndex),
               uid: actedUid,
               roster: cc.players,
               rosterConfirmed: cc.rosterConfirmed,
               hasPriorBingo: witnessed,
             });
-            if (plan.bingo) broadcastBingo(actor);
-            // No dayIndex here (Codex finding 3, fix/d15-blackout-day-naming):
-            // `board` above is `useBoard(uid)`, the LEGACY single-Board hook —
-            // `dealDayCard` never writes that path in daily-cards mode (api.ts),
-            // so `boardOwned` (and therefore this whole drain) can only be true
-            // on a legacy, non-daily Event, where a blackout Moment stays
-            // day-less (mirrors Board.tsx's live-mark path, Codex finding 1).
-            // The confirmed Claim DOES carry its own `dayIndex` in daily-cards
-            // mode, but this component has no day-scoped board/claim wiring to
-            // safely attribute a batch confirm's blackout to ONE Claim's Day —
-            // making the confirm path daily-aware is a separate, out-of-scope
-            // ticket (this component's `admin_confirmed`-mode Moments are
-            // already inert for daily Events today via the `boardOwned` gate).
-            if (plan.blackout) broadcastBlackout(actor);
-            if (plan.firstBingo) broadcastFirstBingo(actor);
-            else if (plan.firstBingoHeld) st2.heldCeremony = actor;
-            nowReflected.forEach(([id]) => st2.awaiting.delete(id));
+            // The Day rides every broadcast (#274): the per-card blackout id
+            // (#267), and the bingo/first_bingo payload chips (#262). A legacy
+            // (null-day) group keeps the day-less calls.
+            const day = dayKey ?? undefined;
+            if (plan.bingo) broadcastBingo(actor, day);
+            // The per-Day First to BINGO honor pin (#264) fires on the SAME
+            // bingo transition the live path pins on (Board's broadcastWinVerdict)
+            // — without it an off-route confirm wins the Moment but never the
+            // day-meta honor. `plan.bingo` IS the transition (not witness-gated),
+            // identity is known (the drain gates on it), and the write-once
+            // create rule swallows a re-cross of an already-pinned Day.
+            if (plan.bingo && dayKey != null) void pinDayFirstBingo(dayKey, actor);
+            if (plan.blackout) broadcastBlackout(actor, day);
+            if (plan.firstBingo) broadcastFirstBingo(actor, day);
+            else if (plan.firstBingoHeld) {
+              st2.heldCeremony = actor;
+              st2.heldCeremonyDay = dayKey;
+            }
+            entries.forEach(([id]) => st2.awaiting.delete(id));
           }
           // Drain-until-empty: any confirm still awaiting (its board write not yet
           // landed) is retried on the next board snapshot; re-run in case one became
@@ -239,19 +292,25 @@ export default function ConfirmWinMoments() {
     const st = getConfirmState(c.uid);
     const actor = st.heldCeremony;
     if (!actor || actor.uid !== c.uid) return;
+    // Fall-clear against the board the held win STOOD on (#274): its own Day
+    // Card when the win carried a Day, the legacy board otherwise.
+    const heldDay = st.heldCeremonyDay ?? null;
+    const cells = cellsForDayRef.current(c, heldDay);
     // A missing / non-attributable board is NOT an observed fall — hold.
-    if (!c.boardOwned || c.cells.length === 0) return;
+    if (cells == null) return;
     // Attributable board with no standing bingo → the held win fell: drop it, even
     // while the roster is still unconfirmed.
-    if (!hasBingo(c.cells)) {
+    if (!hasBingo(cells)) {
       st.heldCeremony = null;
+      st.heldCeremonyDay = null;
       return;
     }
     // The win still stands — publish only once the identity + roster gates open.
     if (!c.identityKnown || !c.rosterConfirmed) return; // still held
     const othersBingoed = c.players.some((p) => p.uid !== c.uid && p.firstBingoAt != null);
-    if (!othersBingoed) broadcastFirstBingo(actor);
+    if (!othersBingoed) broadcastFirstBingo(actor, heldDay ?? undefined);
     st.heldCeremony = null;
+    st.heldCeremonyDay = null;
   }, []);
 
   // Detect fresh confirms. A Claim seen PENDING is remembered; a Claim seen
@@ -290,7 +349,12 @@ export default function ConfirmWinMoments() {
         st.handled.add(c.id);
         // Carry the proofId so reflection is claim-SPECIFIC (R4 finding 2): a
         // different claim's confirm at the same square must not count as this one's.
-        st.awaiting.set(c.id, { cellIndex: c.cellIndex, proofId: c.proofId ?? null });
+        // And the Claim's Day (#274) so the drain adjudicates against ITS board.
+        st.awaiting.set(c.id, {
+          cellIndex: c.cellIndex,
+          proofId: c.proofId ?? null,
+          dayIndex: typeof c.dayIndex === 'number' ? c.dayIndex : null,
+        });
         added = true;
       }
     }
@@ -302,7 +366,7 @@ export default function ConfirmWinMoments() {
   useEffect(() => {
     drain();
     resolveHeldCeremony();
-  }, [board, identityKnown, rosterConfirmed, drain, resolveHeldCeremony]);
+  }, [board, dayBoards, identityKnown, rosterConfirmed, drain, resolveHeldCeremony]);
 
   return null;
 }
