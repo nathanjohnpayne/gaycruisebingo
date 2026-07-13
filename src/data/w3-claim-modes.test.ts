@@ -48,6 +48,24 @@ vi.mock('firebase/firestore', async (importOriginal) => {
       path: rest.join('/'),
     }),
     runTransaction: (_db: unknown, fn: (tx: unknown) => unknown) => runTx(_db, fn),
+    getDoc: vi.fn(() =>
+      Promise.resolve({
+        data: () => ({
+          days: [
+            {
+              index: 0,
+              date: '2026-07-16',
+              port: 'Split',
+              portEmoji: '🇭🇷',
+              theme: 'get-sporty',
+              pool: 'main',
+              tutorial: false,
+              unlockAt: 0,
+            },
+          ],
+        }),
+      }),
+    ),
     getDocFromCache: vi.fn(() => Promise.reject(new Error('no cache in this test double'))),
     writeBatch: () => ({ set: vi.fn(), commit: () => Promise.resolve() }),
     increment: (n: number) => ({ __inc: n }),
@@ -60,6 +78,7 @@ vi.mock('firebase/firestore', async (importOriginal) => {
 import { computeMark } from './api';
 import { confirmClaim, rejectClaim } from './admin';
 import { planConfirmBroadcasts } from './moments';
+import { getDoc } from 'firebase/firestore';
 
 // A dealt board: every non-free Square unmarked, the free center (12) "on".
 function dealt(): Cell[] {
@@ -119,6 +138,7 @@ describe('Claim Mode at the mark fold — Honor instant, admin_confirmed pending
 // --- confirmClaim / rejectClaim resolve (src/data/admin.ts) ------------------
 let boardState: { cells: Cell[] } | undefined;
 let playerState: Record<string, unknown> | undefined;
+const getDocMock = vi.mocked(getDoc);
 
 function setPayload(frag: string): Record<string, unknown> | undefined {
   const call = txSet.mock.calls.find((c) => (c[0] as Ref).path.includes(frag));
@@ -141,6 +161,22 @@ const pendingClaim = (over: Partial<ClaimDoc> = {}): ClaimDoc => ({
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(Date, 'now').mockReturnValue(1000);
+  getDocMock.mockResolvedValue({
+    data: () => ({
+      days: [
+        {
+          index: 0,
+          date: '2026-07-16',
+          port: 'Split',
+          portEmoji: '🇭🇷',
+          theme: 'get-sporty',
+          pool: 'main',
+          tutorial: false,
+          unlockAt: 0,
+        },
+      ],
+    }),
+  } as Awaited<ReturnType<typeof getDoc>>);
   boardState = undefined;
   playerState = { firstBingoAt: null };
   runTx.mockImplementation((_db: unknown, fn: (tx: unknown) => unknown) =>
@@ -186,6 +222,28 @@ describe('confirmClaim — the pending win materializes: credit + publish the Pr
     expect(player.bingoCount).toBe(1);
     expect(player.squaresMarked).toBe(5);
     expect(typeof player.firstBingoAt).toBe('number'); // a bingo now stands
+  });
+
+  it('a daily confirm that COMPLETES a non-tutorial Day line pins the day-meta honor', async () => {
+    const cells = boardWith([0, 1, 2, 3]);
+    cells[4] = { ...cells[4], marked: true, markedAt: 9, proofId: 'P', status: 'pending' };
+    boardState = { cells };
+
+    await confirmClaim(pendingClaim({ dayIndex: 0 }), 'admin-1');
+
+    expect(setPayload('/days/0/meta/0')).toEqual({
+      firstBingo: { uid: 'u1', displayName: 'Deck Daddy', at: 1000 },
+    });
+  });
+
+  it('surfaces event-doc read failures before resolving a daily claim', async () => {
+    const err = new Error('event doc unavailable');
+    getDocMock.mockRejectedValueOnce(err);
+
+    await expect(confirmClaim(pendingClaim({ dayIndex: 0 }), 'admin-1')).rejects.toThrow(err);
+
+    expect(runTx).not.toHaveBeenCalled();
+    expect(txSet).not.toHaveBeenCalled();
   });
 
   it('rejectClaim unmarks the claim cell and does NOT credit it', async () => {

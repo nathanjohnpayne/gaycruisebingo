@@ -1,5 +1,5 @@
 // Pure, framework-free game logic. No Firebase, no React — fully unit-testable.
-import type { Cell, DayDef, PlayerDoc } from '../types';
+import type { Cell, DayDef, EventDoc, PlayerDoc } from '../types';
 
 export const GRID = 5;
 export const CENTER = 12;
@@ -374,16 +374,55 @@ export function tutorialDayIndexSet(days: readonly DayDef[] | undefined): Set<nu
   return s;
 }
 
+/** The CEREMONIAL Day indexes — the farewell pool only (#265, spec § "Scoring"):
+ *  "the farewell card is ceremonial—it unlocks at the freeze, so its marks never
+ *  move the standings." Distinct from `tutorialDayIndexSet` because the embark
+ *  card COUNTS (pre-freeze real play, just easy); only farewell is standings-
+ *  inert. Its daily honor still stands — the exclusion applies to the summed
+ *  root totals, never the per-Day bucket. */
+export function ceremonialDayIndexSet(days: readonly DayDef[] | undefined): Set<number> {
+  const s = new Set<number>();
+  for (const d of days ?? []) if (d.pool === 'farewell') s.add(d.index);
+  return s;
+}
+
+/**
+ * Whether the standings are FROZEN (#265; Codex P2 on #278): the scheduler's
+ * `frozenAt` stamp when present, OR — the stale-cache belt — the farewell
+ * Day's scheduled `unlockAt` having passed. The freeze moment IS the farewell
+ * unlock (daily-cards-spec § "Scoring": the two-beat finish), and the schedule
+ * is cached with the event doc, so a client whose persistent cache predates
+ * the scheduler's stamp (or is offline at sea) still fails CLOSED at 08:00 on
+ * Day 10 by its own clock. Legacy events (no schedule) never freeze.
+ */
+export function standingsFrozen(
+  event: Pick<EventDoc, 'frozenAt' | 'days'> | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (!event) return false;
+  if (event.frozenAt != null) return true;
+  for (const d of event.days ?? []) {
+    if (d.pool === 'farewell' && now >= d.unlockAt) return true;
+  }
+  return false;
+}
+
 /** Sum `bingoCount` + `squaresMarked` across EVERY Day Card, tutorial Days
  *  included — the embark card is real pre-freeze play (spec § "Implementation
- *  notes": cruise-wide totals). */
-export function sumDayStats(dayStats: DayStats | undefined): {
+ *  notes": cruise-wide totals). `excludeDay` (#265) drops a Day's bucket from
+ *  the SUM — the ceremonial farewell Day, whose marks never move the standings —
+ *  while the bucket itself stays recorded (its daily honor still renders). */
+export function sumDayStats(
+  dayStats: DayStats | undefined,
+  excludeDay?: (dayIndex: number) => boolean,
+): {
   bingoCount: number;
   squaresMarked: number;
 } {
   let bingoCount = 0;
   let squaresMarked = 0;
-  for (const stat of Object.values(dayStats ?? {})) {
+  for (const [key, stat] of Object.entries(dayStats ?? {})) {
+    if (excludeDay?.(Number(key))) continue;
     bingoCount += stat.bingoCount;
     squaresMarked += stat.squaresMarked;
   }
@@ -414,9 +453,10 @@ export function cruiseFirstBingoAt(
 export function aggregatePlayerStats(
   dayStats: DayStats | undefined,
   isTutorialDay: (dayIndex: number) => boolean,
+  isCeremonialDay?: (dayIndex: number) => boolean,
 ): DayStat {
   return {
-    ...sumDayStats(dayStats),
+    ...sumDayStats(dayStats, isCeremonialDay),
     firstBingoAt: cruiseFirstBingoAt(dayStats, isTutorialDay),
   };
 }
@@ -479,6 +519,9 @@ export function foldDayStat(params: {
   bucket: StatWrite;
   blackout: boolean;
   isTutorialDay?: (dayIndex: number) => boolean;
+  // #265: ceremonial (farewell) Days are excluded from the summed root totals —
+  // their bucket still writes (daily honors), but never moves the standings.
+  isCeremonialDay?: (dayIndex: number) => boolean;
 }): {
   dayStats: Record<number, StatWrite>;
   bingoCount: number;
@@ -505,7 +548,7 @@ export function foldDayStat(params: {
     ...prior,
     [dayIndex]: { bingoCount: bucket.bingoCount, squaresMarked: bucket.squaresMarked, firstBingoAt: dayFirst },
   };
-  const { bingoCount, squaresMarked } = sumDayStats(merged);
+  const { bingoCount, squaresMarked } = sumDayStats(merged, params.isCeremonialDay);
 
   const out: {
     dayStats: Record<number, StatWrite>;

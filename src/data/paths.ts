@@ -11,6 +11,7 @@ import {
   tallyMarkerConverter,
   momentConverter,
   doubtConverter,
+  dayMetaConverter,
 } from './converters';
 
 // Typed, converter-attached references for reads.
@@ -28,6 +29,12 @@ export const boardRef = (uid: string) =>
 export const dayBoardRef = (dayIndex: number, uid: string) =>
   doc(db, 'events', EVENT_ID, 'days', String(dayIndex), 'boards', uid).withConverter(
     boardConverter,
+  );
+// One meta doc per Day (doc id IS the dayIndex): the write-once per-Day First
+// to BINGO honor (#212/#264). Same canonical-decimal segment rule as boards.
+export const dayMetaRef = (dayIndex: number) =>
+  doc(db, 'events', EVENT_ID, 'days', String(dayIndex), 'meta', String(dayIndex)).withConverter(
+    dayMetaConverter,
   );
 export const playersCol = () =>
   collection(db, 'events', EVENT_ID, 'players').withConverter(playerConverter);

@@ -1,7 +1,8 @@
 import { addDoc, collection, doc, getDoc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, EVENT_ID } from '../firebase';
-import { completedLines, countMarked, isBlackout, foldDayStat, tutorialDayIndexSet, type DayStats } from '../game/logic';
+import { completedLines, countMarked, isBlackout, foldDayStat, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats } from '../game/logic';
+import { markerDisplayName } from './attribution';
 import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef } from '../types';
 
@@ -14,6 +15,8 @@ const board = (uid: string) => doc(db, 'events', EVENT_ID, 'boards', uid);
 // The day-scoped board a daily-mode claim resolves against (#246).
 const dayBoard = (dayIndex: number, uid: string) =>
   doc(db, 'events', EVENT_ID, 'days', String(dayIndex), 'boards', uid);
+const dayMeta = (dayIndex: number) =>
+  doc(db, 'events', EVENT_ID, 'days', String(dayIndex), 'meta', String(dayIndex));
 const player = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
 // A per-Prompt Tally marker (ADR 0002): the same path setMark/attachProof write.
 const marker = (itemId: string, uid: string) =>
@@ -250,11 +253,24 @@ async function resolve(
   const daily = typeof c.dayIndex === 'number';
   const boardRef = daily ? dayBoard(c.dayIndex as number, c.uid) : board(c.uid);
   let isTutorialDay: ((i: number) => boolean) | undefined;
+  let isCeremonialDay: ((i: number) => boolean) | undefined;
+  // The freeze gate is a GETTER re-evaluated inside the transaction callback
+  // (Codex P2 on #278 round 4): a resolve started seconds before 08:00 must
+  // fold with the post-boundary truth on retry/commit, not a pre-read capture.
+  let isStatsFrozen: () => boolean = () => false;
   if (daily) {
-    const evSnap = await getDoc(evt()).catch(() => null);
+    const evSnap = await getDoc(evt());
     const days = (evSnap?.data()?.days as DayDef[] | undefined) ?? [];
     const set = tutorialDayIndexSet(days);
     isTutorialDay = (i: number) => set.has(i);
+    // The freeze + ceremonial gates apply to the ADMIN resolve fold too (#265,
+    // Codex P1 on #278): a post-freeze claim approval must not move the frozen
+    // standings — it narrows to the bucket-only write below, exactly like
+    // setMark/attachProof — and the farewell bucket never enters the root sums.
+    const ceremonial = ceremonialDayIndexSet(days);
+    isCeremonialDay = (i: number) => ceremonial.has(i);
+    const frozenAt = evSnap?.data()?.frozenAt as number | undefined;
+    isStatsFrozen = () => standingsFrozen({ frozenAt, days });
   }
   await runTransaction(db, async (tx) => {
     // Read board + player inside the txn so a concurrent mark/proof from the same
@@ -265,6 +281,7 @@ async function resolve(
     const cells = (bSnap.data().cells as Cell[]) ?? [];
     const next = transform(cells);
     const bingoCount = completedLines(next).length;
+    const bingoTransition = completedLines(cells).length === 0 && bingoCount > 0;
     const squares = countMarked(next);
     const blackout = isBlackout(next);
     // The prior first-bingo stamp is per-BOARD: in daily mode read the VIEWED Day's
@@ -276,6 +293,13 @@ async function resolve(
     // Clear the first-bingo stamp when the resolved board has no bingo (rejecting
     // a claim can remove the last line); keep the earliest stamp otherwise.
     const firstBingoAt = bingoCount > 0 ? (existingFirst ?? Date.now()) : null;
+    const shouldPinDayHonor =
+      daily &&
+      status === 'confirmed' &&
+      bingoTransition &&
+      typeof firstBingoAt === 'number';
+    const metaRef = shouldPinDayHonor ? dayMeta(c.dayIndex as number) : null;
+    const metaSnap = metaRef ? await tx.get(metaRef) : null;
 
     tx.set(boardRef, { cells: next }, { merge: true });
     if (daily) {
@@ -285,8 +309,29 @@ async function resolve(
         bucket: { bingoCount, squaresMarked: squares, firstBingoAt },
         blackout,
         isTutorialDay,
+        isCeremonialDay,
       });
-      tx.set(player(c.uid), playerWrite, { merge: true });
+      const canWriteStats = !isStatsFrozen() || !!isCeremonialDay?.(c.dayIndex as number);
+      if (isStatsFrozen()) {
+        // Ceremonial-day-only post-freeze bucket, mirroring setMark (Codex P2
+        // on #278 round 2): any other Day's bucket would drift settled honors.
+        if (isCeremonialDay?.(c.dayIndex as number)) {
+          tx.set(player(c.uid), { dayStats: playerWrite.dayStats }, { merge: true });
+        }
+      } else {
+        tx.set(player(c.uid), playerWrite, { merge: true });
+      }
+      if (canWriteStats && shouldPinDayHonor) {
+        if (metaRef && !metaSnap?.exists()) {
+          tx.set(metaRef, {
+            firstBingo: {
+              uid: c.uid,
+              displayName: markerDisplayName(c.displayName, pSnap.exists() ? pSnap.data().displayName : undefined),
+              at: firstBingoAt,
+            },
+          });
+        }
+      }
     } else {
       tx.set(player(c.uid), { squaresMarked: squares, bingoCount, blackout, firstBingoAt }, { merge: true });
     }

@@ -38,7 +38,7 @@ import {
   unlockDayNow,
 } from '../data/admin';
 import { deleteProof } from '../data/proofs';
-import { tutorialDayIndexSet, dayDueForManualUnlock } from '../game/logic';
+import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, dayDueForManualUnlock } from '../game/logic';
 import { THEMES } from '../theme/themes';
 import type { ClaimMode, DayDef, EventDoc, ItemDoc, ProofDoc, ThemeId } from '../types';
 
@@ -111,6 +111,7 @@ function ProofQueueRow({
   bannedUids,
   admins,
   days,
+  frozenAt,
 }: {
   proof: ProofDoc;
   threshold: number | undefined;
@@ -119,6 +120,9 @@ function ProofQueueRow({
   // The Event's Day schedule (#246): present ⇒ daily-cards mode, so a proof
   // deletion unmarks the DAY-SCOPED board for the Proof's own `dayIndex`.
   days: DayDef[] | undefined;
+  // The scheduler's freeze stamp (#265) — folded with the schedule through
+  // standingsFrozen at delete time.
+  frozenAt?: number;
 }) {
   const autoHidden = isReportHidden(p.reportCount, threshold);
   return (
@@ -156,6 +160,11 @@ function ProofQueueRow({
           deleteProof(p.id, p.storagePath, {
             daily: !!days?.length,
             tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
+            // #265 (Codex P2 on #278 round 3): the admin moderation delete
+            // observes the same freeze/ceremonial gates as the player's own —
+            // evaluated inside the transaction via the getter.
+            ceremonialDayIndexes: days ? [...ceremonialDayIndexSet(days)] : undefined,
+            statsFrozen: () => standingsFrozen({ frozenAt, days: days ?? [] }),
           })
         }
       >
@@ -816,6 +825,7 @@ export default function Admin() {
                 bannedUids={bannedUids}
                 admins={admins}
                 days={event?.days}
+                frozenAt={event?.frozenAt}
               />
             ) : (
               <ItemQueueRow

@@ -285,12 +285,13 @@ service cloud.firestore {
         // encoded dayIndex). WRITE-ONCE, mirroring the moments/{momentId}
         // immutability pattern: `create` is allowed once (no prior doc) by the
         // achieving Player (firstBingo.uid == auth.uid — own-attributed, "written
-        // via the same client path that posts first-bingo Moments today"), and
-        // there is NO `update` path at all. A second write to the SAME day-meta doc
-        // is therefore a doc-exists update, denied for EVERYONE including admins —
-        // the per-day honor cannot be reassigned once claimed, exactly like the
-        // deny-all update on a Moment. Public read (the honor is pinned on that
-        // day's view); delete stays admin-only for moderation.
+        // via the same client path that posts first-bingo Moments today") OR by an
+        // admin resolving an admin_confirmed claim for that Player. There is NO
+        // `update` path at all. A second write to the SAME day-meta doc is therefore
+        // a doc-exists update, denied for EVERYONE including admins — the per-day
+        // honor cannot be reassigned once claimed, exactly like the deny-all update
+        // on a Moment. Public read (the honor is pinned on that day's view); delete
+        // stays admin-only for moderation.
         //
         // The honor doc id is BOUND to its Day: `metaId == dayIndex` (Codex P2).
         // The type contract (src/types.ts) fixes the single canonical doc at
@@ -312,7 +313,7 @@ service cloud.firestore {
             && metaId == dayIndex
             && isCanonicalDay(dayIndex)
             && request.time.toMillis() >= get(/databases/$(database)/documents/events/$(eventId)).data.days[int(dayIndex)].unlockAt
-            && request.resource.data.firstBingo.uid == request.auth.uid
+            && (request.resource.data.firstBingo.uid == request.auth.uid || isAdmin(eventId))
             && request.resource.data.firstBingo.displayName is string
             && request.resource.data.firstBingo.displayName.size() > 0
             && request.resource.data.firstBingo.displayName.size() <= 100

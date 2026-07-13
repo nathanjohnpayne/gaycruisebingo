@@ -60,17 +60,17 @@ test('Doubt raised on another Player\'s Mark → badge appears; a Proof satisfie
     // against A's row (never their own — Board renders no self-doubt affordance).
     const cellB = pageB.locator('.grid .cell').filter({ hasText: prompt });
     await cellB.locator('.tally-badge').click();
-    await expect(pageB.getByText('Who marked', { exact: false })).toBeVisible();
+    await expect(pageB.getByText('Who got', { exact: false })).toBeVisible();
     const rows = pageB.locator('.sheet .list .row');
     await expect(rows).toHaveCount(2, { timeout: 10_000 });
     // A's row is the one carrying the Doubt affordance (B's own row renders
-    // none) — the button's VISIBLE text is "Doubt" (its accessible name), with
-    // "pics or it didn't happen" only as its `title` tooltip.
+    // none) — the button's VISIBLE text is the wireframe's full phrase (#263).
     const doubtBtn = pageB.locator('.doubt-btn');
     await expect(doubtBtn).toBeVisible();
-    await expect(doubtBtn).toHaveText('Doubt');
+    await expect(doubtBtn).toHaveText(/Pics or it didn\u2019t happen/);
     await doubtBtn.click();
-    await expect(doubtBtn).toHaveText('Doubted', { timeout: 10_000 });
+    // #263: once the Doubt echoes, the row swaps to its right-aligned state.
+    await expect(pageB.locator('.doubt-open')).toHaveText(/Doubted \u00b7 waiting/, { timeout: 10_000 });
     await pageB.screenshot({ path: `${SHOTS}/doubt-raised-who-list.png`, fullPage: true });
     await pageB.getByRole('button', { name: 'Close' }).click();
 
@@ -89,7 +89,7 @@ test('Doubt raised on another Player\'s Mark → badge appears; a Proof satisfie
     const cellA = pageA.locator('.grid .cell').filter({ hasText: prompt });
     const badgeA = cellA.locator('.doubt-badge');
     await expect(badgeA).toBeVisible({ timeout: 15_000 });
-    await expect(badgeA).toHaveText('1');
+    await expect(badgeA).toHaveText(/1/);
     await pageA.screenshot({ path: `${SHOTS}/doubt-badge-on-target-board.png`, fullPage: true });
 
     // A attaches a Proof to the SAME Square (the "＋ Proof" affordance on an
@@ -119,10 +119,10 @@ test('Doubt raised on another Player\'s Mark → badge appears; a Proof satisfie
     await expect(badgeA).toHaveCount(0, { timeout: 15_000 });
     await pageA.screenshot({ path: `${SHOTS}/doubt-satisfied-badge-gone.png`, fullPage: true });
 
-    // B's who-list row for A now reads "Proof shown ✓" instead of "Doubted".
+    // B's who-list row for A now reads "✓ Answered" instead of the open state.
     await cellB.locator('.tally-badge').click();
-    await expect(pageB.getByText('Who marked', { exact: false })).toBeVisible();
-    await expect(pageB.getByText('Proof shown ✓')).toBeVisible({ timeout: 15_000 });
+    await expect(pageB.getByText('Who got', { exact: false })).toBeVisible();
+    await expect(pageB.getByText('✓ Answered')).toBeVisible({ timeout: 15_000 });
     await pageB.screenshot({ path: `${SHOTS}/doubt-satisfied-who-list.png`, fullPage: true });
   } finally {
     await pageA?.context().close();

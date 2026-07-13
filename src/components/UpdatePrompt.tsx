@@ -67,7 +67,13 @@ export default function UpdatePrompt() {
       role="status"
       style={{ '--toast-index': stackIndex, '--toast-count': visibleCount } as CSSProperties}
     >
-      <p>A fresh build just docked&mdash;your marks are safe.</p>
+      {/* Wrapped so the shared row-flex toast shell stacks the two lines
+          vertically instead of splitting them into columns (Codex P2 on
+          #281) — same body-wrapper pattern as the install toast. */}
+      <div className="install-prompt-body">
+        <p className="toast-title">A fresh build just docked</p>
+        <p>Your marks are safe&mdash;reload takes two seconds.</p>
+      </div>
       <button className="btn primary" onClick={() => void updateServiceWorker(true)}>
         Reload
       </button>

@@ -7,7 +7,7 @@ import { reportProof, deleteProof } from '../data/proofs';
 import { track } from '../analytics';
 import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
-import { tutorialDayIndexSet } from '../game/logic';
+import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
 import { THEMES } from '../theme/themes';
 import type { BoardDoc, DayDef, MomentDoc, MomentKind, ProofDoc, TallyCard as TallyCardData } from '../types';
 
@@ -55,7 +55,7 @@ const MOMENT_COPY: Record<MomentKind, { icon: string; line: string }> = {
  * js/xss-through-dom #1): mediaURL is resolved from a Firestore doc, so a forged
  * non-media scheme (javascript:, …) is dropped rather than rendered.
  */
-function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: string | undefined; days: DayDef[] | undefined }) {
+function ProofCard({ proof, viewerUid, days, isStandingsFrozen }: { proof: ProofDoc; viewerUid: string | undefined; days: DayDef[] | undefined; isStandingsFrozen: () => boolean }) {
   const media = safeMediaUrl(proof.mediaURL);
   return (
     <div className="proof">
@@ -94,6 +94,15 @@ function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: str
               deleteProof(proof.id, proof.storagePath, {
                 daily: !!days?.length,
                 tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
+                // #265: symmetric with the mark path — the farewell bucket never
+                // sums, and a post-freeze deletion never unfolds frozen stats.
+                // Evaluated at CLICK time (Codex P2 on #278 round 2): a Feed
+                // left open across the freeze boundary must not act on a
+                // render-time false.
+                ceremonialDayIndexes: days ? [...ceremonialDayIndexSet(days)] : undefined,
+                // The GETTER itself (Codex P2 round 4): deleteProof re-checks
+                // inside its transaction, after any await.
+                statsFrozen: isStandingsFrozen,
               }).catch(console.error)
             }
           >
@@ -302,7 +311,7 @@ export function TallyCard({
  * (spec: "the Feed who-list can be view-only to stay scoped").
  *
  * Keyboard-operable dialog (CodeRabbit finding, PR #251): `role="dialog"` +
- * `aria-modal` + `aria-labelledby` the "Who marked" title, focus moved into
+ * `aria-modal` + `aria-labelledby` the "Who got" title, focus moved into
  * the sheet on open (the title itself, `tabIndex={-1}`, since a read-only
  * sheet has no natural first control), Tab/Shift+Tab trapped inside via a
  * document `keydown` listener, and focus restored to whatever was focused
@@ -357,8 +366,15 @@ function FeedWhoListSheet({ card, onClose }: { card: TallyCardData; onClose: () 
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sheet-title" id="feed-wholist-title" ref={titleRef} tabIndex={-1}>
-          Who marked “{card.itemText}”
+          Who got “{card.itemText}”
         </div>
+        {/* The wireframes' player-count subtitle (#263) — the Feed variant is
+            read-only, so no doubt half here. */}
+        {card.markers.length > 0 && (
+          <p className="doubt-summary">
+            {card.markers.length} player{card.markers.length === 1 ? '' : 's'}
+          </p>
+        )}
         {card.markers.length === 0 ? (
           <p className="muted tally-empty">No one has marked this yet.</p>
         ) : (
@@ -444,7 +460,7 @@ export default function ProofFeed() {
             />
           );
         }
-        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} />;
+        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} isStandingsFrozen={() => standingsFrozen(event)} />;
       })}
       {whoListCard && <FeedWhoListSheet card={whoListCard} onClose={() => setWhoListCard(null)} />}
     </div>
