@@ -115,6 +115,65 @@ describe('setMark folds into dayStats[dayIndex] and derives the cruise-wide root
       0: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null },
     });
   });
+
+  it('excludes the CEREMONIAL (farewell) bucket from the summed root totals while still writing its per-Day bucket (#265)', async () => {
+    // Cached Board is the farewell Day (9); the Player already has real Day-2 play.
+    getDocFromCacheSpy
+      .mockResolvedValueOnce(snap({ cells: dealt(), dayIndex: 9 })) // board read
+      .mockResolvedValueOnce(
+        snap({
+          firstBingoAt: 500,
+          displayName: 'Marker',
+          dayStats: { 2: { bingoCount: 1, squaresMarked: 5, firstBingoAt: 500 } },
+        }),
+      ); // player read
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 3,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      tutorialDayIndexes: [0, 9],
+      ceremonialDayIndexes: [9],
+    });
+
+    const playerWrite = setSpy.mock.calls[1][1] as {
+      dayStats: Record<number, unknown>;
+      bingoCount: number;
+      squaresMarked: number;
+    };
+    // The farewell bucket records (its daily honor still renders)…
+    expect(playerWrite.dayStats).toEqual({
+      9: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null },
+    });
+    // …but the ROOT sums exclude it: only Day 2's real play counts.
+    expect(playerWrite.bingoCount).toBe(1);
+    expect(playerWrite.squaresMarked).toBe(5);
+  });
+
+  it('skips the player-stats write entirely once the standings are frozen (#265) — board + Tally still write', async () => {
+    getDocFromCacheSpy
+      .mockResolvedValueOnce(snap({ cells: dealt(), dayIndex: 4 })) // board read
+      .mockResolvedValueOnce(snap({ firstBingoAt: null, displayName: 'Marker' })); // player read
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 3,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      statsFrozen: true,
+    });
+
+    const paths = setSpy.mock.calls.map((c) => (c[0] as { path: string }).path);
+    // The board and the Tally marker write; no players/ doc write at all.
+    expect(paths.some((p) => p.includes('/players/'))).toBe(false);
+    expect(paths.some((p) => p.includes('/boards/') || p.includes('/days/'))).toBe(true);
+    expect(paths.some((p) => p.includes('/tally/'))).toBe(true);
+  });
 });
 
 describe('dayMeta.pinDayFirstBingo (write-once per-Day honor)', () => {

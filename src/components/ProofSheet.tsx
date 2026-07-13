@@ -37,6 +37,10 @@ interface Props {
   // honor Mark takes. Legacy events omit it (single-board flat write).
   daily?: boolean;
   tutorialDayIndexes?: number[];
+  // #265: the ceremonial (farewell) Day indexes + the standings-freeze gate,
+  // threaded straight through to attachProof (same contract as setMark's).
+  ceremonialDayIndexes?: number[];
+  statsFrozen?: boolean;
   // Strip EXIF/GPS from a photo before upload (event `stripPhotoExif`, default
   // true); passed straight through to attachProof → uploadProofMedia.
   stripExif?: boolean;
@@ -47,7 +51,7 @@ interface Props {
 }
 
 export default function ProofSheet(props: Props) {
-  const { uid, displayName, photoURL, cells, cell, claimMode, currentFirstBingoAt, onAttached, onPledge, photoProofSource, dayIndex, daily, tutorialDayIndexes, stripExif, tallyCount, onClose } = props;
+  const { uid, displayName, photoURL, cells, cell, claimMode, currentFirstBingoAt, onAttached, onPledge, photoProofSource, dayIndex, daily, tutorialDayIndexes, ceremonialDayIndexes, statsFrozen, stripExif, tallyCount, onClose } = props;
   // No proof type is pre-selected (issue #181): the sheet opens on EVERY claim
   // now, so it opens compact — the capture body below renders only once a type
   // is chosen, keeping the pledge/segments in immediate thumb reach.
@@ -135,6 +139,8 @@ export default function ProofSheet(props: Props) {
         dayIndex,
         daily,
         tutorialDayIndexes,
+        ceremonialDayIndexes,
+        statsFrozen,
         stripExif,
         proof,
       });

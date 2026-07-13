@@ -7,7 +7,7 @@ import { reportProof, deleteProof } from '../data/proofs';
 import { track } from '../analytics';
 import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
-import { tutorialDayIndexSet } from '../game/logic';
+import { tutorialDayIndexSet, ceremonialDayIndexSet } from '../game/logic';
 import { THEMES } from '../theme/themes';
 import type { BoardDoc, DayDef, MomentDoc, MomentKind, ProofDoc, TallyCard as TallyCardData } from '../types';
 
@@ -55,7 +55,7 @@ const MOMENT_COPY: Record<MomentKind, { icon: string; line: string }> = {
  * js/xss-through-dom #1): mediaURL is resolved from a Firestore doc, so a forged
  * non-media scheme (javascript:, …) is dropped rather than rendered.
  */
-function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: string | undefined; days: DayDef[] | undefined }) {
+function ProofCard({ proof, viewerUid, days, statsFrozen }: { proof: ProofDoc; viewerUid: string | undefined; days: DayDef[] | undefined; statsFrozen?: boolean }) {
   const media = safeMediaUrl(proof.mediaURL);
   return (
     <div className="proof">
@@ -94,6 +94,10 @@ function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: str
               deleteProof(proof.id, proof.storagePath, {
                 daily: !!days?.length,
                 tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
+                // #265: symmetric with the mark path — the farewell bucket never
+                // sums, and a post-freeze deletion never unfolds frozen stats.
+                ceremonialDayIndexes: days ? [...ceremonialDayIndexSet(days)] : undefined,
+                statsFrozen,
               }).catch(console.error)
             }
           >
@@ -444,7 +448,7 @@ export default function ProofFeed() {
             />
           );
         }
-        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} />;
+        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} statsFrozen={event?.frozenAt != null} />;
       })}
       {whoListCard && <FeedWhoListSheet card={whoListCard} onClose={() => setWhoListCard(null)} />}
     </div>

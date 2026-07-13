@@ -23,7 +23,7 @@ import {
 // the proofed-mark completion verdict ProofSheet reports back (PR #110 round 2
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
-import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet } from '../game/logic';
+import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet, ceremonialDayIndexSet } from '../game/logic';
 import { fitTextSize } from '../game/fitText';
 import { useTextSize } from '../hooks/useTextSize';
 import { track } from '../analytics';
@@ -1099,6 +1099,14 @@ export default function Board() {
   // paths so the persisted cruise-wide `firstBingoAt` excludes them (spec §
   // "Resolved decisions" #2). `undefined` for legacy events excludes nothing.
   const tutorialDayIndexes = hasDays ? [...tutorialDayIndexSet(days)] : undefined;
+  // The ceremonial (farewell) Day indexes + the standings freeze (#265): the
+  // farewell bucket never enters the summed root totals, and once `frozenAt`
+  // is stamped (the Day-10 08:00 scheduler beat) marks stop folding player
+  // stats entirely — cells and Tally stay live (past Days stay markable), the
+  // standings don't move. `frozenAt` is only ever stamped when reached, so its
+  // presence IS the freeze.
+  const ceremonialDayIndexes = hasDays ? [...ceremonialDayIndexSet(days)] : undefined;
+  const statsFrozen = event?.frozenAt != null;
   const cardMeta = (
     <div className="card-meta">
       <span>
@@ -1257,6 +1265,8 @@ export default function Board() {
         // `dayStats[viewedIndex]` (#246). Legacy events keep the single-board path.
         daily: hasDays,
         tutorialDayIndexes,
+        ceremonialDayIndexes,
+        statsFrozen,
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
@@ -1607,6 +1617,8 @@ export default function Board() {
           // `dayStats[viewedIndex]` (#246), the SAME path the honor Mark takes.
           daily={hasDays}
           tutorialDayIndexes={tutorialDayIndexes}
+          ceremonialDayIndexes={ceremonialDayIndexes}
+          statsFrozen={statsFrozen}
           tallyCount={proofTargetTally}
           // The proofed-mark completion verdict (PR #110 round 2 finding 1): a
           // successful attachProof reports the SAME win-transition shape setMark

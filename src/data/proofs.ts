@@ -35,6 +35,8 @@ function playerStatWrite(params: {
   firstBingoAt: number | null;
   blackout: boolean;
   tutorialDayIndexes?: number[];
+  // #265: ceremonial (farewell) buckets never enter the summed root totals.
+  ceremonialDayIndexes?: number[];
 }) {
   const { daily, dayIndex, priorDayStats, bingoCount, squaresMarked, firstBingoAt, blackout } = params;
   if (!daily) return { squaresMarked, bingoCount, firstBingoAt, blackout };
@@ -45,6 +47,9 @@ function playerStatWrite(params: {
     blackout,
     isTutorialDay: params.tutorialDayIndexes
       ? (i: number) => params.tutorialDayIndexes!.includes(i)
+      : undefined,
+    isCeremonialDay: params.ceremonialDayIndexes
+      ? (i: number) => params.ceremonialDayIndexes!.includes(i)
       : undefined,
   });
 }
@@ -78,6 +83,11 @@ export interface AttachProofArgs {
   // First-to-BINGO exclusion.
   daily?: boolean;
   tutorialDayIndexes?: number[];
+  // #265: the ceremonial (farewell) Day indexes + the standings-freeze gate —
+  // same contract as setMark's (the fold excludes ceremonial buckets from the
+  // root sums; a frozen event skips the player-stats write entirely).
+  ceremonialDayIndexes?: number[];
+  statsFrozen?: boolean;
   // Strip EXIF/GPS from a photo before upload (event `stripPhotoExif`, default
   // true); threaded straight to uploadProofMedia — this layer never reads the blob.
   stripExif?: boolean;
@@ -148,7 +158,7 @@ export interface AttachProofResult {
  * drain has actually clobbered the projection.
  */
 export async function attachProof(args: AttachProofArgs): Promise<AttachProofResult> {
-  const { uid, displayName, photoURL, cells, cellIndex, itemId, itemText, claimMode, currentFirstBingoAt, source, dayIndex, daily, tutorialDayIndexes, stripExif, proof } =
+  const { uid, displayName, photoURL, cells, cellIndex, itemId, itemText, claimMode, currentFirstBingoAt, source, dayIndex, daily, tutorialDayIndexes, ceremonialDayIndexes, statsFrozen, stripExif, proof } =
     args;
   const now = Date.now();
   const pRef = doc(rawProofs());
@@ -228,20 +238,25 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
       dayIndex: typeof dayIndex === 'number' ? dayIndex : null,
     });
     tx.set(boardRef, { cells: next }, { merge: true });
-    tx.set(
-      playerRef,
-      playerStatWrite({
-        daily: daily === true,
-        dayIndex: dayIndex ?? 0,
-        priorDayStats: playerSnap.data()?.dayStats as DayStats | undefined,
-        bingoCount,
-        squaresMarked: squares,
-        firstBingoAt,
-        blackout,
-        tutorialDayIndexes,
-      }),
-      { merge: true },
-    );
+    // The standings freeze (#265): a post-`frozenAt` proofed Mark keeps the
+    // card + Tally + Proof honest but never folds the player stats.
+    if (!statsFrozen) {
+      tx.set(
+        playerRef,
+        playerStatWrite({
+          daily: daily === true,
+          dayIndex: dayIndex ?? 0,
+          priorDayStats: playerSnap.data()?.dayStats as DayStats | undefined,
+          bingoCount,
+          squaresMarked: squares,
+          firstBingoAt,
+          blackout,
+          tutorialDayIndexes,
+          ceremonialDayIndexes,
+        }),
+        { merge: true },
+      );
+    }
     // Per-Prompt Tally (ADR 0002): a proofed Mark self-publishes the SAME attributed
     // marker a bare honor Mark does (setMark) — EVERY Mark, proofed or not, tallies.
     // The cell above is set marked:true in BOTH claim modes (proof_required →
@@ -314,7 +329,7 @@ export async function deleteProof(
   // the Proof's OWN `dayIndex` and fold the owner's stats into that Day's bucket,
   // mirroring `attachProof`. Absent/false keeps the pre-1.5 flat single-board
   // unmark. `tutorialDayIndexes` scopes the cruise-wide First-to-BINGO exclusion.
-  opts?: { daily?: boolean; tutorialDayIndexes?: number[] },
+  opts?: { daily?: boolean; tutorialDayIndexes?: number[]; ceremonialDayIndexes?: number[]; statsFrozen?: boolean },
 ): Promise<void> {
   // Storage first (ordering preserved): if the blob delete throws we keep the
   // doc so the media isn't orphaned.
@@ -367,20 +382,25 @@ export async function deleteProof(
         const blackout = isBlackout(next);
         const firstBingoAt = bingoCount > 0 ? existingFirst : null;
         tx.set(boardRef, { cells: next }, { merge: true });
-        tx.set(
-          playerRef,
-          playerStatWrite({
-            daily,
-            dayIndex: proofDayIndex,
-            priorDayStats: playerSnap.data()?.dayStats as DayStats | undefined,
-            bingoCount,
-            squaresMarked: squares,
-            firstBingoAt,
-            blackout,
-            tutorialDayIndexes: opts?.tutorialDayIndexes,
-          }),
-          { merge: true },
-        );
+        // The standings freeze (#265): a post-`frozenAt` proof deletion unmarks
+        // the cell but never unfolds the frozen stats (symmetric with setMark).
+        if (!opts?.statsFrozen) {
+          tx.set(
+            playerRef,
+            playerStatWrite({
+              daily,
+              dayIndex: proofDayIndex,
+              priorDayStats: playerSnap.data()?.dayStats as DayStats | undefined,
+              bingoCount,
+              squaresMarked: squares,
+              firstBingoAt,
+              blackout,
+              tutorialDayIndexes: opts?.tutorialDayIndexes,
+              ceremonialDayIndexes: opts?.ceremonialDayIndexes,
+            }),
+            { merge: true },
+          );
+        }
         // Unmarking removes exactly that Player's per-Prompt Tally entry (ADR 0002),
         // mirroring the cell flip — reached only when the cell is still backed by
         // THIS proof (a genuine unmark), and only for a non-free Prompt. Same marker
