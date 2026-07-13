@@ -163,7 +163,14 @@ describe('moments.broadcastBlackout — optional dayIndex names the Day (fix/d15
   });
 
   it('skips the broadcast when the Moment is already in the local cache', async () => {
-    getDocFromCacheSpy.mockResolvedValueOnce(snap({ kind: 'blackout', uid: 'u1' }));
+    // Path-aware (#275 round 2): the day-scoped path pre-checks the LEGACY
+    // day-less doc first, then its own per-card id — here only the per-card
+    // doc is cached, which is what must trigger the skip.
+    getDocFromCacheSpy.mockImplementation((ref: { path: string }) =>
+      ref.path.endsWith('u1-blackout-d4')
+        ? Promise.resolve(snap({ kind: 'blackout', uid: 'u1' }))
+        : Promise.reject(new Error('unavailable')),
+    );
     broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
     await flush();
     expect(setDocSpy).not.toHaveBeenCalled();
