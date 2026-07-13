@@ -1,5 +1,6 @@
 import { doc, getDoc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
-import { db, EVENT_ID } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, functions, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout, foldDayStat, tutorialDayIndexSet, type DayStats } from '../game/logic';
 import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef } from '../types';
@@ -134,6 +135,32 @@ export const setDayTheme = (days: DayDef[], dayIndex: number, theme: ThemeId): P
       days: current.map((d) => (d.index === dayIndex ? { ...d, theme } : d)),
     });
   });
+
+/** What `unlockDayNow` reports back — mirrors `SnapshotResult` in `functions/src/unlockDay.ts`. */
+export type UnlockDayNowResult = 'stamped' | 'already-stamped' | 'not-due' | 'no-event' | 'no-day';
+
+/**
+ * The Admin console's manual "unlock now" fallback (daily-cards-spec §
+ * "Unlock mechanics": "a manual admin 'unlock now' button covers function
+ * failure"). Invokes the EXISTING `unlockDayNow` callable
+ * (`functions/src/index.ts`), which is admin-gated server-side
+ * (`manualUnlockNow` denies a non-admin caller uid with `permission-denied`)
+ * and forces the SAME idempotent `stampDaySnapshot` the 08:00/20:00 scheduler
+ * beats use — so a forced unlock can never diverge from the scheduled path's
+ * semantics, and a retry (or a race with the scheduler firing first) is a
+ * safe no-op (`already-stamped`). Scoped to the single event this build
+ * points at (`EVENT_ID`), matching every other write in this module — no
+ * caller-supplied eventId, so this can't be pointed at a different event by
+ * mistake. Follows the `submitBugReport` callable shape in `data/bugReports.ts`.
+ */
+export async function unlockDayNow(dayIndex: number): Promise<UnlockDayNowResult> {
+  const callable = httpsCallable<{ eventId: string; dayIndex: number }, { result: UnlockDayNowResult }>(
+    functions,
+    'unlockDayNow',
+  );
+  const res = await callable({ eventId: EVENT_ID, dayIndex });
+  return res.data.result;
+}
 
 // The Admin ban (#108): add/remove a uid on the event doc's `bannedUids` roster —
 // the ADR 0004 Phase 0 presentational, event-scoped hide/mute the #113 rules + type

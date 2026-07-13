@@ -33,9 +33,10 @@ import {
   setReportHideThreshold,
   banUser,
   unbanUser,
+  unlockDayNow,
 } from '../data/admin';
 import { deleteProof } from '../data/proofs';
-import { tutorialDayIndexSet } from '../game/logic';
+import { tutorialDayIndexSet, dayDueForManualUnlock } from '../game/logic';
 import { THEMES } from '../theme/themes';
 import type { ClaimMode, DayDef, EventDoc, ItemDoc, ProofDoc, ThemeId } from '../types';
 
@@ -285,6 +286,62 @@ function ApprovalsTab({ adminUid }: { adminUid: string }) {
 }
 
 /**
+ * The Admin console's manual "unlock now" fallback (#249, daily-cards-spec §
+ * "Unlock mechanics": "a manual admin 'unlock now' button covers function
+ * failure"). Renders ONLY inside a `ScheduleRow` whose Day is
+ * `dayDueForManualUnlock` — a Day that's still locked, or already
+ * snapshot-stamped, has nothing for this button to fix. Calls
+ * `unlockDayNow`, the SAME admin-gated callable the 08:00/20:00 scheduler
+ * beats invoke internally, so a forced unlock can never diverge from the
+ * scheduled path's semantics; the Admin-gate itself is enforced server-side
+ * (the callable throws `permission-denied` for a non-admin uid) — this
+ * button only ever renders inside the Schedule tab, which the enclosing
+ * `Admin` component already gates on `isAdmin` before mounting ANY tab, so
+ * there's no separate client-side admin check to duplicate here.
+ *
+ * `visible` (the parent's live `dayDueForManualUnlock`) controls only the
+ * BUTTON itself, not the whole component: once a click lands, the
+ * already-subscribed `useEventDoc` listener refreshes `day.snapshotItemIds`
+ * and `visible` flips false almost immediately (an emulator/production round
+ * trip is fast) — if that unmounted this component entirely, an admin would
+ * see the "Unlocked." confirmation for at most a flicker, or not at all, on
+ * the SAME success it needed the confirmation for. So this stays mounted
+ * (`ScheduleRow` always renders it) and keeps showing its last result
+ * message even after `visible` goes false; only a truly untouched (`idle`)
+ * row that has scrolled out of "due" renders nothing.
+ */
+function UnlockNowButton({ dayIndex, visible }: { dayIndex: number; visible: boolean }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
+  const [message, setMessage] = useState<string | null>(null);
+
+  if (!visible && state === 'idle') return null;
+
+  const onClick = async () => {
+    setState('busy');
+    setMessage(null);
+    try {
+      const result = await unlockDayNow(dayIndex);
+      setState('done');
+      setMessage(result === 'stamped' ? 'Unlocked.' : `Already handled (${result}).`);
+    } catch (err) {
+      setState('error');
+      setMessage(err instanceof Error ? err.message : 'Unlock failed—try again.');
+    }
+  };
+
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {visible && (
+        <button className="btn" onClick={onClick} disabled={state === 'busy'}>
+          {state === 'busy' ? 'Unlocking…' : 'Unlock now'}
+        </button>
+      )}
+      {message && <span className="pill">{message}</span>}
+    </span>
+  );
+}
+
+/**
  * One row in the Schedule editor (#221, daily-cards-spec § "Admin console" / §
  * "Itinerary and schedule"): a single Day's date + port (read-only display)
  * and a theme `<select>`. Date/port are shown for context only — this ticket
@@ -294,7 +351,9 @@ function ApprovalsTab({ adminUid }: { adminUid: string }) {
  * there is no row add/remove here. The lock is CLIENT-SIDE convenience only —
  * `firestore.rules` (`daysThemeLockOk`) is what actually denies a locked
  * Day's write; a direct-SDK caller bypassing this disabled control still gets
- * rejected server-side.
+ * rejected server-side. An `UnlockNowButton` (#249) additionally renders when
+ * the Day is `dayDueForManualUnlock` — unlocked but not yet snapshot-stamped,
+ * the state a lagging/failed 08:00 scheduler run leaves behind.
  */
 function ScheduleRow({
   day,
@@ -306,6 +365,7 @@ function ScheduleRow({
   onChangeTheme: (dayIndex: number, theme: ThemeId) => void;
 }) {
   const locked = day.unlockAt <= now;
+  const dueForManualUnlock = dayDueForManualUnlock(day, now);
   return (
     <div className="row">
       <div className="grow">
@@ -314,6 +374,7 @@ function ScheduleRow({
         </div>
         <div className="sub">{locked ? 'locked — already unlocked or past' : 'editable until unlock'}</div>
       </div>
+      <UnlockNowButton dayIndex={day.index} visible={dueForManualUnlock} />
       <select
         aria-label={`Day ${day.index + 1} theme`}
         value={day.theme}

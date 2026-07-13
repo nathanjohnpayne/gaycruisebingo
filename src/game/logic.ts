@@ -297,6 +297,23 @@ export function dayDealState(params: {
   return 'ready';
 }
 
+/**
+ * A Day is due for the Admin console's manual "unlock now" fallback
+ * (daily-cards-spec § "Unlock mechanics": "a manual admin 'unlock now' button
+ * covers function failure") iff it has unlocked but the scheduler hasn't
+ * stamped its Snapshot yet — the SCHEDULE-level twin of `dayDealState`'s
+ * `waking` branch (same two conditions, `unlockAt <= now` and
+ * `snapshotItemIds == null`), but without `dayDealState`'s per-PLAYER
+ * `hasBoard` check: the Admin console has no single Player's board in view,
+ * it's asking "does this Day need a forced snapshot at all." Mirrors the
+ * scheduler's own `isDueForSnapshot` in `functions/src/unlockDay.ts` exactly,
+ * so the button's visibility can never diverge from what the `unlockDayNow`
+ * callable it drives would actually act on.
+ */
+export function dayDueForManualUnlock(day: { unlockAt: number; snapshotItemIds?: string[] }, now: number): boolean {
+  return day.unlockAt <= now && day.snapshotItemIds == null;
+}
+
 // A Tally Card's Feed POSITION moves to the top at most once per this window,
 // even as its COUNT keeps updating live (#216, daily-cards-spec § "Tally
 // Cards"). Ten minutes: long enough that a hot square during a party hour can't

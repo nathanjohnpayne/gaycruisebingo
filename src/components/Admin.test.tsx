@@ -48,6 +48,7 @@ const H = vi.hoisted(() => ({
   setReportHideThreshold: vi.fn(),
   banUser: vi.fn(),
   unbanUser: vi.fn(),
+  unlockDayNow: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event', storage: {}, auth: {}, googleProvider: {}, analytics: null }));
@@ -100,6 +101,7 @@ vi.mock('../data/admin', () => ({
   setReportHideThreshold: (...a: unknown[]) => H.setReportHideThreshold(...a),
   banUser: (...a: unknown[]) => H.banUser(...a),
   unbanUser: (...a: unknown[]) => H.unbanUser(...a),
+  unlockDayNow: (...a: unknown[]) => H.unlockDayNow(...a),
 }));
 vi.mock('../data/proofs', () => ({ deleteProof: (...a: unknown[]) => H.deleteProof(...a) }));
 vi.mock('../theme/themes', () => ({
@@ -252,6 +254,44 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
 
     const select = screen.getByLabelText('Day 1 theme') as HTMLSelectElement;
     expect(select.disabled).toBe(true);
+  });
+
+  it('an "Unlock now" button appears ONLY for a Day that is unlocked but not yet snapshot-stamped, and invokes unlockDayNow(dayIndex)', async () => {
+    H.unlockDayNow.mockResolvedValue('stamped');
+    const days = [
+      // due: unlocked, no snapshotItemIds yet — scheduler lag/failure.
+      dayDef({ index: 0, unlockAt: Date.now() - 3600_000, snapshotItemIds: undefined }),
+      // not due: still locked (future unlockAt).
+      dayDef({ index: 1, unlockAt: Date.now() + 3600_000 }),
+      // not due: unlocked AND already snapshot-stamped (the normal, healthy state).
+      dayDef({ index: 2, unlockAt: Date.now() - 3600_000, snapshotItemIds: ['item-1'] }),
+    ];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    render(<Admin />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    expect(screen.getAllByRole('button', { name: 'Unlock now' })).toHaveLength(1);
+    const dueRow = screen.getByText(/Day 1 ·/).closest('.row') as HTMLElement;
+    expect(within(dueRow).getByRole('button', { name: 'Unlock now' })).toBeInTheDocument();
+    const lockedRow = screen.getByText(/Day 2 ·/).closest('.row') as HTMLElement;
+    expect(within(lockedRow).queryByRole('button', { name: 'Unlock now' })).toBeNull();
+    const stampedRow = screen.getByText(/Day 3 ·/).closest('.row') as HTMLElement;
+    expect(within(stampedRow).queryByRole('button', { name: 'Unlock now' })).toBeNull();
+
+    fireEvent.click(within(dueRow).getByRole('button', { name: 'Unlock now' }));
+    expect(H.unlockDayNow).toHaveBeenCalledWith(0);
+    expect(await within(dueRow).findByText('Unlocked.')).toBeInTheDocument();
+  });
+
+  it('a failed unlockDayNow call surfaces an error message on the row instead of throwing', async () => {
+    H.unlockDayNow.mockRejectedValue(new Error('permission-denied'));
+    const days = [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, snapshotItemIds: undefined })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    render(<Admin />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock now' }));
+    expect(await screen.findByText('permission-denied')).toBeInTheDocument();
   });
 });
 
