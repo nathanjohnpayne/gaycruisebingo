@@ -1483,7 +1483,10 @@ a {
    (Codex review, PR #238). */
 .install-prompt,
 .update-prompt {
-  --toast-slot-height: 54px;
+  /* Sized for the tallest single-slot toast (#281 round 3): title + body
+     lines plus the 44px-minimum ✕ dismiss and vertical padding — the old
+     54px slot let the taller install toast poke under its neighbor. */
+  --toast-slot-height: 68px;
   position: fixed;
   bottom: calc((var(--toast-count, 1) - 1 - var(--toast-index, 0)) * var(--toast-slot-height));
   left: 0;
