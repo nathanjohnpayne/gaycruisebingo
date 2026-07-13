@@ -156,7 +156,9 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
     const { container } = render(<Board />);
     const badge = container.querySelector('.doubt-badge');
     expect(badge).not.toBeNull();
-    expect(badge!.textContent).toBe('2');
+    // #263: the badge wears the 👀 glyph next to the count, per the wireframe.
+    expect(badge!.textContent).toContain('👀');
+    expect(badge!.textContent).toContain('2');
   });
 
   it('does not render a Doubt count on my Square for Doubts against a DIFFERENT Player sharing the same Prompt', () => {
@@ -244,16 +246,13 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
     // The header summary is the Prompt-wide total (unlike the per-target Square
     // badge) — Carol's is the only Doubt still open.
     expect(container.querySelector('.doubt-summary')!.textContent).toContain('1 open doubt');
-    // Once-only per target (round 2 finding 2): I already doubted BOTH rows — one
-    // open, one satisfied — so both affordances stay disabled ("Doubted"): the
-    // deterministic doubt slot makes a re-raise in place structurally denied, and
-    // the button never offers a write the rules would reject.
-    const rowButtons = container.querySelectorAll('.doubt-btn');
-    expect(rowButtons.length).toBe(2); // bob + carol (my own row offers none)
-    rowButtons.forEach((b) => {
-      expect((b as HTMLButtonElement).disabled).toBe(true);
-      expect(b.textContent).toBe('Doubted');
-    });
+    // #263 (wireframe): a doubted/answered row shows its right-aligned STATE in
+    // place of the raise affordance — no button on either row (my own row never
+    // offers one either). The once-only slot is moot on a stateful row: there is
+    // nothing left to raise there.
+    expect(container.querySelectorAll('.doubt-btn').length).toBe(0);
+    expect(open!.textContent).toContain('Doubted · waiting');
+    expect(satisfied!.textContent).toContain('✓ Answered');
   });
 
   // ---- PR #106 finding 1: a rapid double-tap must not mint duplicate Doubts ----
@@ -318,8 +317,9 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
 
     const { container, rerender } = render(<Board />);
     fireEvent.click(container.querySelector('.tally-badge')!);
-    // Bob's Doubt is dormant — the header shows no open-doubt summary.
-    expect(container.querySelector('.doubt-summary')).toBeNull();
+    // Bob's Doubt is dormant — the header (#263: now always naming the player
+    // count) shows no open-doubt half.
+    expect(container.querySelector('.doubt-summary')!.textContent).not.toContain('open doubt');
 
     // Bob re-marks: his Tally marker returns, so the dormant Doubt reappears.
     H.markers = [
@@ -395,11 +395,11 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
 
     const { container } = render(<Board />);
     fireEvent.click(container.querySelector('.tally-badge')!);
+    // #263: the answered row shows "✓ Answered" in place of any affordance —
+    // structurally nothing to tap, so no doomed duplicate write can happen.
     expect(container.querySelector('.doubt-satisfied')).not.toBeNull(); // answered
-    const btn = container.querySelector('.doubt-btn') as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
-    expect(btn.textContent).toBe('Doubted');
-    fireEvent.click(btn);
+    expect(container.querySelector('.doubt-satisfied')!.textContent).toContain('✓ Answered');
+    expect(container.querySelector('.doubt-btn')).toBeNull();
     expect(H.raiseDoubt).not.toHaveBeenCalled(); // no doomed duplicate write
   });
 

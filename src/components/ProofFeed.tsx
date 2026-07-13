@@ -302,7 +302,7 @@ export function TallyCard({
  * (spec: "the Feed who-list can be view-only to stay scoped").
  *
  * Keyboard-operable dialog (CodeRabbit finding, PR #251): `role="dialog"` +
- * `aria-modal` + `aria-labelledby` the "Who marked" title, focus moved into
+ * `aria-modal` + `aria-labelledby` the "Who got" title, focus moved into
  * the sheet on open (the title itself, `tabIndex={-1}`, since a read-only
  * sheet has no natural first control), Tab/Shift+Tab trapped inside via a
  * document `keydown` listener, and focus restored to whatever was focused
@@ -357,8 +357,15 @@ function FeedWhoListSheet({ card, onClose }: { card: TallyCardData; onClose: () 
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sheet-title" id="feed-wholist-title" ref={titleRef} tabIndex={-1}>
-          Who marked “{card.itemText}”
+          Who got “{card.itemText}”
         </div>
+        {/* The wireframes' player-count subtitle (#263) — the Feed variant is
+            read-only, so no doubt half here. */}
+        {card.markers.length > 0 && (
+          <p className="doubt-summary">
+            {card.markers.length} player{card.markers.length === 1 ? '' : 's'}
+          </p>
+        )}
         {card.markers.length === 0 ? (
           <p className="muted tally-empty">No one has marked this yet.</p>
         ) : (
