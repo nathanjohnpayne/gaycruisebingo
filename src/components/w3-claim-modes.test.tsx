@@ -6,7 +6,7 @@ import type { BoardDoc, Cell, ClaimDoc, EventDoc, PlayerDoc } from '../types';
 // specs/w3-claim-modes.md, component layer (RTL-jsdom). Two surfaces:
 //
 // Admin — the Claim Mode control reads the Event's current mode and writes the
-// chosen one (Honor / Proof req. / Admin-confirmed, NEVER "Verified"), and the
+// chosen one (Honor / Proof-to-mark / Admin-confirmed, NEVER "Verified"), and the
 // pending-claims queue confirms / rejects each Claim.
 //
 // ConfirmWinMoments — the always-mounted, route-independent confirm-path Moment
@@ -194,10 +194,10 @@ describe('Admin — Claim Mode control (specs/w3-claim-modes.md)', () => {
     H.pendingClaims = [];
   });
 
-  it('labels the three modes Honor / Proof req. / Admin-confirmed — never "Verified" — and marks the active one', () => {
+  it('labels the three modes Honor / Proof-to-mark / Admin-confirmed — never "Verified" — and marks the active one', () => {
     render(<Admin />);
     expect(screen.getByRole('button', { name: 'Honor' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Proof req.' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Proof-to-mark' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Admin-confirmed' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /verified/i })).toBeNull();
     // The Event's current mode is reflected as the selected control.
@@ -209,7 +209,7 @@ describe('Admin — Claim Mode control (specs/w3-claim-modes.md)', () => {
     render(<Admin />);
     fireEvent.click(screen.getByRole('button', { name: 'Admin-confirmed' }));
     expect(H.setClaimMode).toHaveBeenCalledWith('admin_confirmed');
-    fireEvent.click(screen.getByRole('button', { name: 'Proof req.' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Proof-to-mark' }));
     expect(H.setClaimMode).toHaveBeenCalledWith('proof_required');
   });
 
