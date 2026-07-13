@@ -77,6 +77,10 @@ beforeEach(async () => {
       name: 'Cruise', sailStart: '2026-01-01', sailEnd: '2026-01-07', status: 'active',
       defaultTheme: 'neon-playground', claimMode: 'honor', admins: [ADMIN],
       settings: { reportHideThreshold: 3 },
+      // Ten minimal Days: the per-card blackout id arm (#267) bounds its Day to
+      // the schedule (`dayIndex < days.size()`), so the fixture needs a real
+      // array. Entries stay minimal — only event UPDATES run the schedule lock.
+      days: Array.from({ length: 10 }, (_, index) => ({ index })),
     });
     await setDoc(doc(s, momentPath(`${CAROL}-bingo`)), moment(CAROL));
   });
@@ -135,11 +139,19 @@ describe('firestore.rules — Feed Moments (specs/w2-feed-moments.md)', () => {
     // A SECOND Day's card posts its own Moment — distinct id, same Player.
     await assertSucceeds(setDoc(p(`${ALICE}-blackout-d7`), moment(ALICE, { kind: 'blackout', dayIndex: 7 })));
     // The id's Day must equal the payload's dayIndex — a mismatch is denied.
-    await assertFails(setDoc(p(`${ALICE}-blackout-d3`), moment(ALICE, { kind: 'blackout', dayIndex: 5 })));
+    // A FRESH id (d8), not one created above: a reused id would be denied as an
+    // immutable-doc update regardless, masking the create-rule condition under
+    // test (Codex P3 on #277).
+    await assertFails(setDoc(p(`${ALICE}-blackout-d8`), moment(ALICE, { kind: 'blackout', dayIndex: 5 })));
     // A day-suffixed id with NO dayIndex field is denied (nothing to bind to).
     await assertFails(setDoc(p(`${ALICE}-blackout-d4`), moment(ALICE, { kind: 'blackout' })));
     // A non-integer dayIndex is denied.
     await assertFails(setDoc(p(`${ALICE}-blackout-d4`), moment(ALICE, { kind: 'blackout', dayIndex: '4' })));
+    // Out-of-schedule Days are denied (Codex P2 on #277): the Day must index a
+    // real entry of the Event's `days` — no unbounded junk-doc minting.
+    await assertFails(setDoc(p(`${ALICE}-blackout-d10`), moment(ALICE, { kind: 'blackout', dayIndex: 10 })));
+    await assertFails(setDoc(p(`${ALICE}-blackout-d999999`), moment(ALICE, { kind: 'blackout', dayIndex: 999999 })));
+    await assertFails(setDoc(p(`${ALICE}-blackout-d-1`), moment(ALICE, { kind: 'blackout', dayIndex: -1 })));
     // The day-scoped form is blackout-only: a bingo cannot ride it.
     await assertFails(setDoc(p(`${ALICE}-bingo-d3`), moment(ALICE, { kind: 'bingo', dayIndex: 3 })));
     // Forged owner: Alice cannot create Bob's per-card blackout id.

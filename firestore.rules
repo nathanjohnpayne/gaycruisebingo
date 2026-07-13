@@ -552,6 +552,14 @@ service cloud.firestore {
                 : (momentId == request.resource.data.uid + '-' + request.resource.data.kind
                     || (request.resource.data.kind == 'blackout'
                         && request.resource.data.dayIndex is int
+                        // Bound the Day to the Event's real schedule (Codex P2 on
+                        // #277): without it an owner could mint unbounded
+                        // publicly-readable junk docs (…-blackout-d999999). A
+                        // legacy Event with no `days` errors the get() access —
+                        // which DENIES (the safe default): no schedule, no
+                        // day-scoped ids.
+                        && request.resource.data.dayIndex >= 0
+                        && request.resource.data.dayIndex < get(/databases/$(database)/documents/events/$(eventId)).data.days.size()
                         && momentId == request.resource.data.uid + '-blackout-d' + string(request.resource.data.dayIndex))))
           && request.resource.data.displayName is string
           && request.resource.data.displayName.size() > 0
