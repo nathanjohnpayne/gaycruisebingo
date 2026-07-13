@@ -72,15 +72,6 @@ async function moderateProofHandler(event: StorageEvent): Promise<void> {
   const eventId = parts[1];
   const proofId = parts[3].replace(/\.[^.]+$/, '');
 
-  // #268 (daily-cards-spec § "Admin console"): the event-level
-  // `settings.visionGate` is the ADMIN toggle — consulted at RUNTIME
-  // (shouldScanProof, visionGate.ts) so the console switch takes effect
-  // without a redeploy. The deploy-time env flag (ENABLE_VISION_MODERATION)
-  // stays the master kill-switch: it gates whether this function exists at
-  // all; this read gates whether an existing deployment SCANS. The thumbnail
-  // is NOT gated — it is a display asset, not moderation.
-  const scanEnabled = await shouldScanProof(db, eventId);
-
   const bucket = getStorage().bucket(event.data.bucket);
   const [buf] = await bucket.file(path).download();
 
@@ -91,7 +82,15 @@ async function moderateProofHandler(event: StorageEvent): Promise<void> {
     /* thumbnail is best-effort */
   }
 
-  if (!scanEnabled) return;
+  // #268 (daily-cards-spec § "Admin console"): the event-level
+  // `settings.visionGate` is the ADMIN toggle — consulted at RUNTIME
+  // (shouldScanProof, visionGate.ts) so the console switch takes effect
+  // without a redeploy. The deploy-time env flag (ENABLE_VISION_MODERATION)
+  // stays the master kill-switch: it gates whether this function exists at
+  // all; this read gates whether an existing deployment SCANS. Read AFTER the
+  // thumbnail save (Codex P3): the thumbnail is a display asset, not
+  // moderation — a degraded Firestore must not cost an upload its thumb.
+  if (!(await shouldScanProof(db, eventId))) return;
 
   try {
     const [res] = await visionClient.safeSearchDetection({ image: { content: buf } });
@@ -118,7 +117,15 @@ async function moderateProofHandler(event: StorageEvent): Promise<void> {
 // (the global default stays us-central1 for the Firestore-triggered notifiers)
 // so the deploy-plan region check passes when the gate is on.
 export const moderateProof = VISION_ENABLED
-  ? onObjectFinalized({ memory: '512MiB', region: 'us-east1' }, moderateProofHandler)
+  ? onObjectFinalized(
+      // `serviceAccount` (#268, Codex P2 on #284): the runtime visionGate read
+      // + the flagged-proof write go through Firestore, and the default Gen2
+      // compute identity has no data-plane access in this project — without
+      // the Admin-SDK identity the toggle read would throw and FAIL OPEN,
+      // silently ignoring an admin's visionGate: false.
+      { memory: '512MiB', region: 'us-east1', serviceAccount: ADMIN_SDK_SERVICE_ACCOUNT },
+      moderateProofHandler,
+    )
   : undefined;
 
 /**
