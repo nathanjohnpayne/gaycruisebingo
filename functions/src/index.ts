@@ -10,7 +10,7 @@ import vision from '@google-cloud/vision';
 import sharp from 'sharp';
 import { BUG_REPORT_APP_CHECK, RESEND_API_KEY } from './params';
 import { shouldNotify, notifyAdminsOfModeration, type ModeratedDoc } from './notify';
-import { visionModerationEnabled } from './visionGate';
+import { visionModerationEnabled, shouldScanProof } from './visionGate';
 import { applyThresholdHide, applyThresholdBackfill, type ReportableDoc } from './autohide';
 import { handleSubmitBugReport } from './bugReports';
 import {
@@ -71,6 +71,16 @@ async function moderateProofHandler(event: StorageEvent): Promise<void> {
   const parts = path.split('/'); // proofs/{eventId}/{uid}/{proofId}.jpg
   const eventId = parts[1];
   const proofId = parts[3].replace(/\.[^.]+$/, '');
+
+  // #268 (daily-cards-spec § "Admin console"): the event-level
+  // `settings.visionGate` is the ADMIN toggle — consulted at RUNTIME
+  // (shouldScanProof, visionGate.ts) so the console switch takes effect
+  // without a redeploy. The deploy-time env flag (ENABLE_VISION_MODERATION)
+  // stays the master kill-switch: it gates whether this function exists at
+  // all; this read gates whether an existing deployment SCANS. The thumbnail
+  // is NOT gated — it is a display asset, not moderation.
+  const scanEnabled = await shouldScanProof(db, eventId);
+
   const bucket = getStorage().bucket(event.data.bucket);
   const [buf] = await bucket.file(path).download();
 
@@ -80,6 +90,8 @@ async function moderateProofHandler(event: StorageEvent): Promise<void> {
   } catch {
     /* thumbnail is best-effort */
   }
+
+  if (!scanEnabled) return;
 
   try {
     const [res] = await visionClient.safeSearchDetection({ image: { content: buf } });

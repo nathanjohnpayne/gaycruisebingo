@@ -111,3 +111,29 @@ function readEnvKey(path: string, key: string): string | undefined {
     return undefined;
   }
 }
+
+/**
+ * #268 (daily-cards-spec § "Admin console" — "AI image screen … now
+ * toggleable"): the RUNTIME half of the gate. `visionModerationEnabled`
+ * (above) is the deploy-time master kill-switch — it decides whether the
+ * moderateProof export exists at all. THIS decides whether an existing
+ * deployment SCANS a given upload, by consulting the event's admin-editable
+ * `settings.visionGate` at handler time, so the console toggle takes effect
+ * without a redeploy.
+ *
+ * Semantics: scan unless the setting is EXPLICITLY false (absent = on, the
+ * seeded default), and FAIL OPEN on a read error — moderation must not
+ * silently disable on a transient Firestore hiccup. Takes a minimal
+ * Firestore-like seam so the decision is unit-testable without firebase-admin.
+ */
+export async function shouldScanProof(
+  dbLike: { doc(path: string): { get(): Promise<{ get(field: string): unknown }> } },
+  eventId: string,
+): Promise<boolean> {
+  try {
+    const snap = await dbLike.doc(`events/${eventId}`).get();
+    return snap.get('settings.visionGate') !== false;
+  } catch {
+    return true;
+  }
+}
