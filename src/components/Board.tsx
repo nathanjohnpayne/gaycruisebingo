@@ -682,8 +682,9 @@ export default function Board() {
   // consumed by the intent effect below once the right Day's board renders.
   const openSquareIntent = useOpenSquareIntent();
   // Day-honor pins held while the viewer's identity was still resolving
-  // (#280 round 2) — released by the effect below the moment it resolves.
-  const heldHonorPins = useRef<{ dayIndex: number; at: number }[]>([]);
+  // (#280 round 2) — keyed to the acted account (round 3) and released by the
+  // effect below the moment that account's identity resolves.
+  const heldHonorPins = useRef<{ uid: string; dayIndex: number; at: number }[]>([]);
   // The open Claim sheet's social heat line (#211): reuse the SAME per-Prompt
   // Tally subscription the TallyBadge uses — no new read — for the Square the
   // sheet is open on. useTally accepts a null id (no proofTarget → no sub).
@@ -1103,19 +1104,23 @@ export default function Board() {
     clearOpenSquare();
   }, [openSquareIntent, hasDays, viewedIndex, cells, cellsAttributable]);
 
-  // Release held day-honor pins once the identity resolves (#280 round 2).
+  // Release held day-honor pins once the identity resolves (#280 round 2) —
+  // only the CURRENT account's holds (round 3); another account's stay queued
+  // for its return, mirroring the pending-Moment queue's uid keying.
   useEffect(() => {
-    if (!identityKnown || heldHonorPins.current.length === 0) return;
-    const held = heldHonorPins.current.splice(0);
-    for (const h of held) {
+    if (!identityKnown || !uid || heldHonorPins.current.length === 0) return;
+    const mine = heldHonorPins.current.filter((h) => h.uid === uid);
+    if (mine.length === 0) return;
+    heldHonorPins.current = heldHonorPins.current.filter((h) => h.uid !== uid);
+    for (const h of mine) {
       void pinDayFirstBingo(h.dayIndex, {
-        uid: uid ?? '',
+        uid,
         displayName,
         photoURL: (player ? player.photoURL : user?.photoURL) ?? null,
       }, h.at);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKnown]);
+  }, [identityKnown, uid]);
 
   if (!uid) return null;
 
@@ -1390,6 +1395,10 @@ export default function Board() {
     bingoTransition: boolean;
     blackoutTransition: boolean;
   }) => {
+    // The verdict's own clock, captured before any await below (#280 round 3):
+    // the honor pin stamps THIS, so a slow upload preceding the verdict never
+    // displays the honor minutes late.
+    const actedAt = Date.now();
     enqueueWinMoments({
       uid,
       bingoTransition: res.bingoTransition,
@@ -1414,20 +1423,26 @@ export default function Board() {
     // 'Anonymous' — an unknown-identity win skips the pin (the honors strip's
     // roster-derived fallback still names them once their row resolves).
     if (res.bingoTransition && hasDays) {
-      if (identityKnown) {
+      // Re-read the LIVE gate through feedCtx (#280 round 3): this verdict can
+      // run after an await (a proofed win's upload), and the render-closure
+      // `identityKnown` may be stale — the row can have resolved mid-flight,
+      // in which case a held pin would idle until an unrelated flip.
+      const live = feedCtx.current;
+      if (live.identityKnown && live.uid === uid) {
         void pinDayFirstBingo(viewedIndex, {
           uid,
-          displayName,
-          photoURL: (player ? player.photoURL : user?.photoURL) ?? null,
-        });
+          displayName: live.displayName,
+          photoURL: live.photoURL,
+        }, actedAt);
       } else {
-        // Identity still resolving (#280 round 2): hold the pin in-memory and
-        // fire it once the saved row loads — the win happened NOW; the honor
-        // must not be permanently forfeited to a loading race. `at` is
-        // captured here so the eventual pin carries the WIN's time. Reload
-        // loses the hold (in-memory), an accepted residual the strip's
-        // earliest-wins derived fallback covers.
-        heldHonorPins.current.push({ dayIndex: viewedIndex, at: Date.now() });
+        // Identity still resolving (#280 round 2): hold the pin in-memory —
+        // KEYED TO THE ACTED ACCOUNT (round 3), so an account switch can
+        // never release another player's honor — and fire it once the saved
+        // row loads. `at` is the verdict's own clock, so a slow upload never
+        // shifts the pinned honor minutes late. Reload loses the hold
+        // (in-memory), an accepted residual the strip's earliest-wins
+        // derived fallback covers.
+        heldHonorPins.current.push({ uid, dayIndex: viewedIndex, at: actedAt });
       }
     }
     // The BIRTH-TIME witness (round 2 finding D; made the SOLE witness site by
