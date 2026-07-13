@@ -105,9 +105,16 @@ interface StoredPendingFlags extends PendingMomentFlags {
   firstBingoGeneration: number;
   blackoutDayIndexes?: number[];
   // The Day the FIRST queued bingo happened on (#262) — first-write-wins,
-  // matching the once-per-Player `${uid}-bingo` id; the ceremonial
-  // first_bingo rides the same Day. Payload-naming only, never part of an id.
+  // matching the once-per-Player `${uid}-bingo` id. Payload-naming only,
+  // never part of an id.
   bingoDayIndex?: number;
+  // The ceremonial candidate's OWN Day (#262; Codex P3 on #286 round 2),
+  // stamped at enqueueFirstBingoMoment time. Deliberately SEPARATE from
+  // `bingoDayIndex`: the candidate is enqueued AFTER an async witness read,
+  // and a snapshot/gate drain can legitimately fire (and clear) the plain
+  // bingo — day included — inside that window, so the ceremony must not
+  // borrow the bingo's day at drain time.
+  firstBingoDayIndex?: number;
 }
 const pendingMoments = new Map<string, StoredPendingFlags>();
 
@@ -196,10 +203,13 @@ export function enqueueWinMoments(params: {
  * STAMPED with the current action generation (PR #110 round 2 finding 3): the
  * drain fires it only while that stamp is current (`firstBingoCandidateCurrent`).
  */
-export function enqueueFirstBingoMoment(uid: string): void {
+export function enqueueFirstBingoMoment(uid: string, dayIndex?: number): void {
   const flags = ensurePending(uid);
   flags.firstBingo = true;
   flags.firstBingoGeneration = pendingActionGeneration(uid);
+  // The candidate's own Day (#262; Codex P3 on #286 round 2) — a re-enqueue is
+  // a NEW candidate (new generation), so it overwrites rather than first-wins.
+  flags.firstBingoDayIndex = dayIndex;
 }
 
 /**
@@ -232,6 +242,12 @@ export function pendingBlackoutDayIndexes(uid: string): number[] {
  *  `undefined` when nothing is queued or the enqueue carried no Day. */
 export function pendingBingoDayIndex(uid: string): number | undefined {
   return pendingMoments.get(pendingKey(uid))?.bingoDayIndex;
+}
+
+/** The still-pending ceremonial candidate's OWN Day (#262; Codex P3 on #286
+ *  round 2) — `undefined` when no candidate is queued or it carried no Day. */
+export function pendingFirstBingoDayIndex(uid: string): number | undefined {
+  return pendingMoments.get(pendingKey(uid))?.firstBingoDayIndex;
 }
 
 /**
@@ -318,6 +334,7 @@ export function dropPendingWins(
     flags.bingo = false;
     flags.firstBingo = false;
     flags.bingoDayIndex = undefined; // the fallen bingo's Day no longer applies
+    flags.firstBingoDayIndex = undefined;
   }
   if (fell.blackout) {
     const days = flags.blackoutDayIndexes;
@@ -350,12 +367,13 @@ export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags):
   if (!flags) return;
   flags[kind] = false;
   if (kind === 'blackout') flags.blackoutDayIndexes = undefined; // fired — nothing left to protect
-  // The queued Day serves BOTH the plain bingo and the ceremonial first_bingo
-  // (they ride the SAME win), and the two can clear in different drain passes: a
-  // roster-HELD ceremony fires its plain bingo first, so clearing the Day on the
-  // bingo alone would strip the Day chip from the later first_bingo (Codex P2 on
-  // #286). Keep it until NEITHER is owed.
-  if (!flags.bingo && !flags.firstBingo) flags.bingoDayIndex = undefined;
+  // Each kind clears ITS OWN Day (#286 round 2, Codex P3): the ceremonial
+  // candidate carries `firstBingoDayIndex` stamped at ITS enqueue, so the plain
+  // bingo's fire-clear can never strip the ceremony's Day chip — including the
+  // async-witness window where the candidate is enqueued only after the plain
+  // bingo already fired and deleted the entry.
+  if (kind === 'bingo') flags.bingoDayIndex = undefined;
+  if (kind === 'firstBingo') flags.firstBingoDayIndex = undefined;
   if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
 }
 

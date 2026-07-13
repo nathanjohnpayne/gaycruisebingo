@@ -348,7 +348,7 @@ describe('doubtsClearedByProof — the wireframes\' "👀 cleared N doubts" pill
     id: 'd', itemId: 'item-1', cellIndex: 0, fromUid: 'f', fromDisplayName: 'F',
     targetUid: 'bob', targetDisplayName: 'Bob', createdAt: 1000, ...over,
   }) as import('../types').DoubtDoc;
-  const proof = { uid: 'bob', itemText: 'Lost passport', createdAt: 2000 };
+  const proof = { id: 'p-late', uid: 'bob', itemText: 'Lost passport', createdAt: 2000 };
 
   it('counts only doubts against the prover, on the same Prompt, satisfied by THIS proof', () => {
     const doubts = [
@@ -362,5 +362,26 @@ describe('doubtsClearedByProof — the wireframes\' "👀 cleared N doubts" pill
 
   it('zero when nothing matches (no pill renders)', () => {
     expect(doubtsClearedByProof(proof, [], mapping)).toBe(0);
+  });
+
+  it('a once-only Doubt belongs to the EARLIEST satisfying proof — later proofs on the same Prompt do not re-count it (Codex P2, round 2)', () => {
+    const doubts = [doubt({ id: 'd1' })];
+    const earliest = { id: 'p-early', uid: 'bob', itemText: 'Lost passport', createdAt: 1500 };
+    const stream = [earliest, proof];
+    // The earliest satisfying proof wears the pill…
+    expect(doubtsClearedByProof(earliest, doubts, mapping, stream)).toBe(1);
+    // …and the later proof does NOT re-claim the already-answered Doubt.
+    expect(doubtsClearedByProof(proof, doubts, mapping, stream)).toBe(0);
+    // A same-timestamp tie breaks deterministically by id (ascending).
+    const twin = { id: 'p-a', uid: 'bob', itemText: 'Lost passport', createdAt: 2000 };
+    expect(doubtsClearedByProof(twin, doubts, mapping, [twin, proof])).toBe(1);
+    expect(doubtsClearedByProof(proof, doubts, mapping, [twin, proof])).toBe(0);
+  });
+
+  it('a proof that predates the Doubt never steals it from the real answer', () => {
+    const doubts = [doubt({ id: 'd1', createdAt: 1000 })];
+    // 200s before the doubt — outside the satisfaction skew, so NOT satisfying.
+    const before = { id: 'p-before', uid: 'bob', itemText: 'Lost passport', createdAt: 800000 - 999999 };
+    expect(doubtsClearedByProof(proof, doubts, mapping, [before, proof])).toBe(1);
   });
 });

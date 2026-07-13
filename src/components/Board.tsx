@@ -18,6 +18,7 @@ import {
   pendingBlackoutDayIndexes,
   removePendingBlackoutDay,
   pendingBingoDayIndex,
+  pendingFirstBingoDayIndex,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -1052,8 +1053,8 @@ export default function Board() {
     const bingoNow = hasBingo(cellsNow);
     const blackoutNow = isBlackout(cellsNow);
     const actor = { uid: cUid, displayName: cName, photoURL: cPhoto };
-    // #262: captured ONCE before the plain-bingo clear below resets it — the
-    // ceremonial first_bingo further down rides the SAME Day.
+    // #262: the plain bingo's queued Day (the ceremonial first_bingo carries
+    // its OWN `firstBingoDayIndex` stamp — see below).
     const bingoDay = pendingBingoDayIndex(cUid);
     // The witnessed Day must MATCH the witnessed cells (Codex P2, #275 round 4):
     // an action/proof continuation passes the ACTED board's cells, and the
@@ -1115,7 +1116,12 @@ export default function Board() {
     // firstBingoAt delivered mid-decision can no longer slip past (finding B):
     // `roster` here is feedCtx.current as of THIS synchronous drain, re-read on
     // every attempt — gate-open, snapshot, and action drains alike.
-    if (pending.firstBingo && bingoNow && bingoDayWitnessed && rosterOk) {
+    // The ceremony's Day is the CANDIDATE's own stamp — decoupled from the
+    // plain bingo's (Codex P3 on #286 round 2) — with the same witnessed-board
+    // match as the other kinds.
+    const firstBingoDay = pendingFirstBingoDayIndex(cUid);
+    const firstBingoDayWitnessed = firstBingoDay === undefined || witnessDay === firstBingoDay;
+    if (pending.firstBingo && bingoNow && firstBingoDayWitnessed && rosterOk) {
       if (!firstBingoCandidateCurrent(cUid)) {
         // Stale candidate (round 2 finding 3a): an observed BINGO fall bumped
         // the generation since this candidate was enqueued — the win context it
@@ -1133,8 +1139,8 @@ export default function Board() {
         // board, standing-ness) never consume.
         const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
         if (!othersBingoed) {
-          if (bingoDay === undefined) broadcastFirstBingo(actor);
-          else broadcastFirstBingo(actor, bingoDay);
+          if (firstBingoDay === undefined) broadcastFirstBingo(actor);
+          else broadcastFirstBingo(actor, firstBingoDay);
         }
         clearPendingMoment(cUid, 'firstBingo');
       }
@@ -1659,7 +1665,14 @@ export default function Board() {
       const generation = pendingActionGeneration(uid);
       const witnessed = await hasPriorBingoWitness(uid);
       if (!witnessed && revalidateAfterAwait(uid, generation).generationUnchanged) {
-        enqueueFirstBingoMoment(uid);
+        // The candidate carries its OWN Day (#262; Codex P3 on #286 round 2):
+        // a snapshot drain can fire the plain bingo — day included — while the
+        // witness read above is in flight, so the ceremony never borrows the
+        // bingo's day at drain time. Same legacy form as enqueueWinMoments
+        // above: `undefined` on a non-daily Event (board.dayIndex defaults to
+        // 0 there, which would both mislabel the chip AND never match the
+        // drain's undefined legacy witnessDay — holding the ceremony forever).
+        enqueueFirstBingoMoment(uid, hasDays ? actedDay : undefined);
       }
     }
     // Draining touches the CURRENT actor/gates, so it does require the acted

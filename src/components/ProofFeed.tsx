@@ -52,16 +52,28 @@ function clockLabel(ts: number, timezone: string | undefined): string {
 // this Proof satisfies. Doubts carry itemId; the Feed's own tally entries
 // provide the itemId → itemText mapping (a doubted Mark implies a marker).
 export function doubtsClearedByProof(
-  proof: Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>,
+  proof: Pick<ProofDoc, 'id' | 'uid' | 'itemText' | 'createdAt'>,
   doubts: readonly DoubtDoc[],
   itemTextById: ReadonlyMap<string, string>,
+  // Every proof the Feed knows (Codex P2, #286 round 2): a once-only Doubt
+  // belongs to the EARLIEST satisfying proof, so a player stacking later
+  // proofs on the same Prompt doesn't wear "cleared 1 doubt" on every card.
+  // Defaults to just this proof (the pre-round-2 behavior) for callers with
+  // no stream in hand.
+  allProofs: readonly Pick<ProofDoc, 'id' | 'uid' | 'itemText' | 'createdAt'>[] = [],
 ): number {
-  return doubts.filter(
-    (d) =>
-      d.targetUid === proof.uid &&
-      itemTextById.get(d.itemId) === proof.itemText &&
-      isDoubtSatisfied(d, proof.itemText, [proof]),
-  ).length;
+  return doubts.filter((d) => {
+    if (d.targetUid !== proof.uid || itemTextById.get(d.itemId) !== proof.itemText) return false;
+    if (!isDoubtSatisfied(d, proof.itemText, [proof])) return false;
+    // Once-only: an EARLIER satisfying proof (createdAt, then id, ascending —
+    // a deterministic order) owns this Doubt's pill instead.
+    return !allProofs.some(
+      (p) =>
+        p.id !== proof.id &&
+        (p.createdAt < proof.createdAt || (p.createdAt === proof.createdAt && p.id < proof.id)) &&
+        isDoubtSatisfied(d, proof.itemText, [p]),
+    );
+  }).length;
 }
 
 function ago(ts: number): string {
@@ -654,15 +666,26 @@ export default function ProofFeed() {
   };
 
   // The UNCAPPED tally stream gives (a) itemId → itemText for the doubt
-  // derivation and (b) itemText → live count for the "tally N" pill (#262) —
-  // not the merged `entries`, which useFeed caps at 60: a recent Proof whose
-  // Prompt's Tally Card fell outside that cap must keep its pills (Codex P2).
+  // derivation and (b) the live count for the "tally N" pill (#262) — not the
+  // merged `entries`, which useFeed caps at 60: a recent Proof whose Prompt's
+  // Tally Card fell outside that cap must keep its pills (Codex P2). The count
+  // is PER (text, Day) when the Proof carries its Day (round 2): the deal can
+  // repeat a Prompt across Days once the exclusion pool exhausts, and a Day-2
+  // proof must not wear a footer that includes a later Day's markers. A
+  // day-less legacy proof keeps the text-wide sum.
   const itemTextById = new Map<string, string>();
   const tallyByText = new Map<string, number>();
+  const tallyByTextDay = new Map<string, number>();
   for (const card of tallyCards) {
     itemTextById.set(card.itemId, card.itemText);
     tallyByText.set(card.itemText, (tallyByText.get(card.itemText) ?? 0) + card.count);
+    const dayKey = `${card.itemText}\u0000${card.dayIndex}`;
+    tallyByTextDay.set(dayKey, (tallyByTextDay.get(dayKey) ?? 0) + card.count);
   }
+  // The once-only doubt attribution needs the proofs the Feed shows (see
+  // doubtsClearedByProof) — a proof older than the merge cap is off the Feed
+  // entirely, so the earliest VISIBLE satisfying proof owns the pill.
+  const feedProofs = entries.flatMap((entry) => (entry.feedKind === 'proof' ? [entry.proof] : []));
 
   return (
     <div className="list">
@@ -700,8 +723,12 @@ export default function ProofFeed() {
             days={event?.days}
             timezone={event?.timezone}
             isStandingsFrozen={() => standingsFrozen(event)}
-            clearedDoubts={doubtsClearedByProof(entry.proof, doubts, itemTextById)}
-            tallyCount={tallyByText.get(entry.proof.itemText) ?? 0}
+            clearedDoubts={doubtsClearedByProof(entry.proof, doubts, itemTextById, feedProofs)}
+            tallyCount={
+              typeof entry.proof.dayIndex === 'number'
+                ? (tallyByTextDay.get(`${entry.proof.itemText}\u0000${entry.proof.dayIndex}`) ?? 0)
+                : (tallyByText.get(entry.proof.itemText) ?? 0)
+            }
           />
         );
       })}
