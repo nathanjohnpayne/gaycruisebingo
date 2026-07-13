@@ -28,6 +28,7 @@ import { fitTextSize } from '../game/fitText';
 import { useTextSize } from '../hooks/useTextSize';
 import { track } from '../analytics';
 import { setClaimSheetOpen } from '../hooks/useToastStack';
+import { useOpenSquareIntent, clearOpenSquare } from '../hooks/useOpenSquare';
 import Celebration from './Celebration';
 import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '../types';
@@ -639,6 +640,9 @@ export default function Board() {
   const [freePulse, setFreePulse] = useState(0);
   const [proofTarget, setProofTarget] = useState<Cell | null>(null);
   const [tallyTarget, setTallyTarget] = useState<Cell | null>(null);
+  // A Feed Tally Card's pending "open this Prompt's sheet" request (#261),
+  // consumed by the intent effect below once the right Day's board renders.
+  const openSquareIntent = useOpenSquareIntent();
   // The open Claim sheet's social heat line (#211): reuse the SAME per-Prompt
   // Tally subscription the TallyBadge uses — no new read — for the Square the
   // sheet is open on. useTally accepts a null id (no proofTarget → no sub).
@@ -1038,6 +1042,25 @@ export default function Board() {
     wasBlackout.current = black;
     drainMoments(); // duty 2
   }, [cells, cellsAttributable, boardConfirmed, uid, drainMoments]);
+
+  // Feed → Board square-opening intent (#261): a Tally Card's ＋ Proof /
+  // 🙋 Got it too recorded {dayIndex, itemId} and navigated here. Switch the
+  // viewed Day first; once the DAY-SCOPED board is rendered and attributable,
+  // open the sheet on that Prompt's cell through the same `proofTarget` the
+  // grid tap uses (marked cell → proof-add open, unmarked → claim open with
+  // the pledge row). The intent is dropped — not retried — if the Prompt is
+  // no longer on the viewer's card by the time the board arrives.
+  useEffect(() => {
+    if (!openSquareIntent || !hasDays) return;
+    if (viewedIndex !== openSquareIntent.dayIndex) {
+      setViewedIndex(openSquareIntent.dayIndex);
+      return;
+    }
+    if (!cellsAttributable || cells.length === 0) return;
+    const cell = cells.find((c) => !c.free && c.itemId === openSquareIntent.itemId);
+    if (cell) setProofTarget(cell);
+    clearOpenSquare();
+  }, [openSquareIntent, hasDays, viewedIndex, cells, cellsAttributable]);
 
   if (!uid) return null;
 

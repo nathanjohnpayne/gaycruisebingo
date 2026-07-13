@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { useFeed, useEventDoc } from '../hooks/useData';
+import { useNavigate } from 'react-router-dom';
+import { useFeed, useEventDoc, useMyDayBoards } from '../hooks/useData';
+import { requestOpenSquare } from '../hooks/useOpenSquare';
 import { useAuth } from '../auth/AuthContext';
 import { reportProof, deleteProof } from '../data/proofs';
 import { track } from '../analytics';
@@ -188,6 +190,39 @@ export function boardItemSets(board: BoardDoc | null): { marked: Set<string>; un
 }
 
 /**
+ * Where a Tally Card's button should land on the viewer's own cards (#261):
+ * the Day whose dealt Board carries this Prompt, and whether it is already
+ * marked there. A marked hit anywhere wins over any unmarked one (`＋ Proof`
+ * beats `🙋 Got it too` — `tallyCardAction`'s precedence, now with a
+ * concrete target); within the same marked-ness, the card's OWN Day is
+ * preferred (tap lands where the social heat is), then the latest Day.
+ * `null` when the Prompt is on none of the viewer's dealt cards — the card
+ * stays informational. Boards exist only for dealt (unlocked) Days, so
+ * every candidate here is claimable by construction.
+ */
+export function tallyActionTarget(
+  card: Pick<TallyCardData, 'itemId' | 'dayIndex'>,
+  boards: ReadonlyMap<number, BoardDoc>,
+): { dayIndex: number; itemId: string; marked: boolean } | null {
+  let best: { dayIndex: number; itemId: string; marked: boolean } | null = null;
+  const beats = (a: { dayIndex: number; marked: boolean }, b: { dayIndex: number; marked: boolean }): boolean => {
+    if (a.marked !== b.marked) return a.marked;
+    const aSame = a.dayIndex === card.dayIndex;
+    const bSame = b.dayIndex === card.dayIndex;
+    if (aSame !== bSame) return aSame;
+    return a.dayIndex > b.dayIndex;
+  };
+  for (const [dayIndex, board] of boards) {
+    for (const c of board.cells) {
+      if (c.free || c.itemId !== card.itemId) continue;
+      const candidate = { dayIndex, itemId: card.itemId, marked: !!c.marked };
+      if (!best || beats(candidate, best)) best = candidate;
+    }
+  }
+  return best;
+}
+
+/**
  * A Tally Card (#216, daily-cards-spec § "Tally Cards") — the Feed's live, lighter-
  * weight rendering of bare Marks: first two names + "+N", an avatar stack of the
  * first three markers, the day chip, and a relative bump time. One line, an accent
@@ -234,7 +269,11 @@ export function TallyCard({
             {' '}
             <span className="tally-day-chip proof-day-chip">{dayChipLabel(card.dayIndex, days)}</span>
             {' '}
-            <span className="sub" style={{ fontWeight: 400 }}>{ago(card.displayBump)}</span>
+            {/* The wireframes' sub-line: "bumped just now · tap for who" — the
+                tap affordance is visible copy, not only a title attribute. */}
+            <span className="sub" style={{ fontWeight: 400 }}>
+              bumped {ago(card.displayBump)} · tap for who
+            </span>
           </span>
         </button>
         {action === 'proof' && (
@@ -353,10 +392,16 @@ function FeedWhoListSheet({ card, onClose }: { card: TallyCardData; onClose: () 
 export default function ProofFeed() {
   const { entries, loading } = useFeed();
   const { user } = useAuth();
+  const navigate = useNavigate();
   // The event's days[] resolves a dayIndex to its theme label for the Day chip
   // (#211/#216). Read-only; absent while loading or on a pre-days[] event, in
   // which case dayChipLabel falls back to a bare "Day N".
   const { data: event } = useEventDoc();
+  // The viewer's own dealt Day Cards (#261): the per-card button gating —
+  // ＋ Proof on a Prompt they marked, 🙋 Got it too on one sitting unmarked on
+  // one of their unlocked cards, nothing otherwise — reads these Boards
+  // through the pure `tallyActionTarget`.
+  const myBoards = useMyDayBoards(user?.uid, event?.days?.length ?? 0);
   // The Feed-level who-list sheet target (#216 gap closure): which Tally Card's
   // markers to show, or null when the sheet is closed. Holding the whole card
   // (not just itemId/dayIndex) is enough to render the sheet directly from the
@@ -367,6 +412,17 @@ export default function ProofFeed() {
   if (loading) return <div className="center muted">Loading…</div>;
   if (!entries.length) return <div className="center muted">Nothing in the feed yet. Somebody do something.</div>;
 
+  // Both buttons land in the SAME place — Board's own sheet, which renders the
+  // claim open (pledge row included) for an unmarked Square and the proof-add
+  // open for a marked one — so the Feed never re-implements claim logic: it
+  // records the intent (`requestOpenSquare`) and navigates to the Card tab,
+  // where Board switches to the Day and opens the sheet through its own
+  // attribution guards and win-Moment pipeline.
+  const openOnBoard = (target: { dayIndex: number; itemId: string }) => {
+    requestOpenSquare({ dayIndex: target.dayIndex, itemId: target.itemId });
+    navigate('/');
+  };
+
   return (
     <div className="list">
       {entries.map((entry) => {
@@ -375,20 +431,16 @@ export default function ProofFeed() {
         }
         if (entry.feedKind === 'tallyCard') {
           const card = entry.card;
-          // Per-viewer button gating (`tallyCardAction`) is wired from the viewer's
-          // own Board; connecting that (and the ＋ Proof / 🙋 Got it too click →
-          // Board sheet navigation) from the Feed tab is a separate follow-up, so
-          // the live Feed still renders the informational (action=null) card. Tap
-          // now opens the read-only Feed who-list sheet (`FeedWhoListSheet`),
-          // which the TallyDoc's own `markers[]` renders directly — no Board
-          // context needed.
+          const target = tallyActionTarget(card, myBoards);
           return (
             <TallyCard
               key={`tally-${card.itemId}-${card.dayIndex}`}
               card={card}
-              action={null}
+              action={target ? (target.marked ? 'proof' : 'gotit') : null}
               days={event?.days}
               onOpenWhoList={setWhoListCard}
+              onAddProof={() => target && openOnBoard(target)}
+              onGotItToo={() => target && openOnBoard(target)}
             />
           );
         }

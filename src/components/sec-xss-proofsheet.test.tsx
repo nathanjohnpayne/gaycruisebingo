@@ -34,6 +34,10 @@ vi.mock('../data/proofs', () => ({
   deleteProof: H.deleteProof,
 }));
 vi.mock('../analytics', () => ({ track: H.track }));
+// ProofFeed navigates to the Card tab from Tally Card actions (#261); mock
+// the router hook so these router-free renders keep working.
+vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
+
 // ProofFeed reads the merged Feed via useFeed (#34); this XSS suite only exercises
 // Proof media sinks, so wrap H.proofs as proof Feed entries (no Moments).
 vi.mock('../hooks/useData', () => ({
@@ -44,6 +48,7 @@ vi.mock('../hooks/useData', () => ({
   // ProofFeed also reads the event for the #211 Day chip; this XSS suite exercises
   // only the media sinks, so an empty event (no days[]) suffices.
   useEventDoc: () => ({ data: null, loading: false }),
+  useMyDayBoards: () => new Map(),
 }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
 
