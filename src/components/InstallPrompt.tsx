@@ -34,6 +34,9 @@ function isDismissed(): boolean {
 export default function InstallPrompt() {
   const { standalone, deferred, showIOSHint, install } = useInstallPrompt();
   const [dismissed, setDismissed] = useState(isDismissed);
+  // iOS "Show me" (#270): Safari never fires beforeinstallprompt, so the
+  // button expands the Share → Add to Home Screen walkthrough in place.
+  const [showWalkthrough, setShowWalkthrough] = useState(false);
   const hasMarkedSquare = useHasMarkedSquare();
 
   const wantsToShow = !standalone && !dismissed && hasMarkedSquare && (!!deferred || showIOSHint);
@@ -63,24 +66,41 @@ export default function InstallPrompt() {
       role="note"
       style={{ '--toast-index': stackIndex, '--toast-count': visibleCount } as CSSProperties}
     >
+      {/* The wireframes' toast shape (#270): a title over the cruise-benefit
+          line, the platform action (one-tap Install on Android/Chromium;
+          "Show me" expanding the Share walkthrough on iOS Safari), and an ✕
+          that dismisses forever — the affordance persists in More → Install
+          the app, which is what lets this toast afford to be shy. */}
+      <div className="install-prompt-body">
+        <p className="toast-title">Add me to your Home Screen</p>
+        <p>Full screen, works offline at sea.</p>
+        {!deferred && showWalkthrough && (
+          <p className="install-prompt-steps">
+            Tap Share <span aria-hidden="true">(the ⬆︎ square)</span>, then &ldquo;Add to Home
+            Screen.&rdquo;
+          </p>
+        )}
+      </div>
       {deferred ? (
-        <>
-          <p>Full screen, works offline at sea.</p>
-          <button className="btn primary" onClick={install}>
-            Install
-          </button>
-          <button className="btn" onClick={dismiss}>
-            Not now
-          </button>
-        </>
+        <button className="btn primary" onClick={install}>
+          Install
+        </button>
       ) : (
-        <>
-          <p>Add to Home Screen: tap Share, then &ldquo;Add to Home Screen,&rdquo; for one-tap access.</p>
-          <button className="btn" onClick={dismiss}>
-            Got it
+        !showWalkthrough && (
+          <button className="btn primary" onClick={() => setShowWalkthrough(true)}>
+            Show me
           </button>
-        </>
+        )
       )}
+      <button
+        type="button"
+        className="iconbtn install-prompt-dismiss"
+        aria-label="Dismiss — reopen anytime from More"
+        title="Dismiss"
+        onClick={dismiss}
+      >
+        ✕
+      </button>
     </div>
   );
 }

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogOut, ChevronRight } from 'lucide-react';
+import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogOut, ChevronRight, ALargeSmall } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useEventDoc, usePendingItemCount } from '../hooks/useData';
 import { useInstallPrompt } from '../hooks/useInstallPrompt';
 import { useTextSize, type TextSize } from '../hooks/useTextSize';
 import { THEMES } from '../theme/themes';
-import { eventTitle } from '../format';
+import { eventTitle, shortSailRange } from '../format';
+import { todaysDayTheme } from '../theme/autoTheme';
 import { track } from '../analytics';
 import ProfileEditor from './ProfileEditor';
 import ThemeSwitcher from './ThemeSwitcher';
@@ -14,6 +15,7 @@ import Admin from './Admin';
 import BugReport from './BugReport';
 import AcceptableUse from './AcceptableUse';
 import CoachOverlay from './CoachOverlay';
+import { WalkthroughContent } from './TutorialBanner';
 
 /**
  * The More tab (#208, daily-cards-spec § "More menu"): profile, theme, text
@@ -37,7 +39,11 @@ export default function More() {
   const { count: pendingCount } = usePendingItemCount(isAdmin);
   const { standalone, deferred, showIOSHint, install } = useInstallPrompt();
 
-  const [panel, setPanel] = useState<null | 'schedule' | 'suggest' | 'howToPlay' | 'admin'>(null);
+  const [panel, setPanel] = useState<null | 'schedule' | 'suggest' | 'howToPlay' | 'coach' | 'admin'>(null);
+  // Today's resolved Day theme for the Theme subtitle (#270) — the same
+  // unlock-based resolution Auto itself uses (theme/autoTheme.ts).
+  const todayThemeId = todaysDayTheme(event);
+  const todayThemeEmoji = todayThemeId ? (THEMES.find((t) => t.id === todayThemeId)?.emoji ?? '') : '';
   const closePanel = () => setPanel(null);
 
   const showInstallRow = !standalone && (!!deferred || showIOSHint);
@@ -52,13 +58,21 @@ export default function More() {
         <h3>
           <Palette className="more-section-icon" aria-hidden="true" /> Theme
         </h3>
+        {/* The wireframes' subtitle (#270): names the Auto default and, when a
+            Day is live, TODAY's resolved theme emoji. */}
+        <p className="more-section-sub muted">
+          Auto: match the day{todayThemeEmoji ? ` (${todayThemeEmoji} today)` : ''} · or pick your own
+        </p>
         <ThemeSwitcher />
       </div>
 
       {/* 2.5. Text size (#215) — Small / Medium / Large; the Square auto-fit
           guard in Board.tsx always has the last word over this pick. */}
       <div className="more-section">
-        <h3>Text size</h3>
+        <h3>
+          <ALargeSmall className="more-section-icon" aria-hidden="true" /> Text size
+        </h3>
+        <p className="more-section-sub muted">Squares grow up to what still fits—long prompts never overflow</p>
         <TextSizeSwitcher />
       </div>
 
@@ -75,13 +89,13 @@ export default function More() {
           <MoreRow
             icon={Lightbulb}
             title="Suggest a square"
-            sub="Add a prompt to the pool"
+            sub="Goes to admin review before it can be dealt"
             onClick={() => setPanel('suggest')}
           />
           <MoreRow
             icon={GraduationCap}
             title="How to play"
-            sub="Replay the badge legend"
+            sub="Replay the Welcome Aboard walkthrough"
             onClick={() => setPanel('howToPlay')}
           />
           {showInstallRow && (
@@ -134,9 +148,16 @@ export default function More() {
       </div>
 
       {/* 8. Version footer: build, sailing, dates. */}
+      {/* #270 — the wireframes' footer: "v2.0 · Trieste → Barcelona · Jul 15–24".
+          The route derives from the Day schedule (first → last port); a legacy
+          event (no days) keeps the eventTitle form. */}
       <p className="more-version muted">
         v{__APP_VERSION__}
-        {event ? ` · ${eventTitle(event.name, event.sailStart, event.sailEnd)}` : ''}
+        {event?.days?.length
+          ? ` · ${event.days[0].port} → ${event.days[event.days.length - 1].port}${shortSailRange(event.sailStart, event.sailEnd) ? ` · ${shortSailRange(event.sailStart, event.sailEnd)}` : ''}`
+          : event
+            ? ` · ${eventTitle(event.name, event.sailStart, event.sailEnd)}`
+            : ''}
       </p>
 
       {panel === 'schedule' && (
@@ -150,6 +171,18 @@ export default function More() {
         </MorePanel>
       )}
       {panel === 'howToPlay' && (
+        // #270 (spec § "More menu" item 4): How to play replays the Welcome
+        // Aboard WALKTHROUGH (the game's narrative), with the badge-legend
+        // coach overlay one tap further — the two complement rather than
+        // repeat (spec § "First-open coach overlay").
+        <MorePanel title="How to play" onClose={closePanel}>
+          <WalkthroughContent />
+          <button type="button" className="btn" onClick={() => setPanel('coach')}>
+            Show the badge legend
+          </button>
+        </MorePanel>
+      )}
+      {panel === 'coach' && (
         // The real first-open coach overlay (#214), reopened on demand.
         // `forceOpen` bypasses the per-Event dismissal read (a replay isn't
         // "already seen it" bookkeeping); CoachOverlay renders its own
@@ -166,10 +199,12 @@ export default function More() {
   );
 }
 
-const TEXT_SIZE_OPTIONS: readonly { id: TextSize; label: string }[] = [
-  { id: 'small', label: 'Small' },
-  { id: 'medium', label: 'Medium' },
-  { id: 'large', label: 'Large' },
+// The wireframes' compact S/M/L segments (#270); `name` keeps the full word
+// as the accessible name so the abbreviation costs nothing for AT users.
+const TEXT_SIZE_OPTIONS: readonly { id: TextSize; label: string; name: string }[] = [
+  { id: 'small', label: 'S', name: 'Small' },
+  { id: 'medium', label: 'M', name: 'Medium' },
+  { id: 'large', label: 'L', name: 'Large' },
 ];
 
 /**
@@ -190,6 +225,7 @@ function TextSizeSwitcher() {
           type="button"
           className={'text-size-chip' + (textSize === opt.id ? ' active' : '')}
           aria-pressed={textSize === opt.id}
+          aria-label={opt.name}
           onClick={() => {
             setTextSize(opt.id);
             track('text_size_change', { textSize: opt.id });

@@ -67,7 +67,8 @@ export default function UpdatePrompt() {
       role="status"
       style={{ '--toast-index': stackIndex, '--toast-count': visibleCount } as CSSProperties}
     >
-      <p>A fresh build just docked&mdash;your marks are safe.</p>
+      <p className="toast-title">A fresh build just docked</p>
+      <p>Your marks are safe&mdash;reload takes two seconds.</p>
       <button className="btn primary" onClick={() => void updateServiceWorker(true)}>
         Reload
       </button>

@@ -160,6 +160,11 @@ describe('More menu — "How to play" replays the coach overlay (#214)', () => {
     const user = userEvent.setup();
     render(<More />);
     await user.click(screen.getByRole('button', { name: /How to play/ }));
+    // #270: How to play opens the Welcome Aboard WALKTHROUGH panel first; the
+    // badge-legend coach overlay is one tap further.
+    expect(screen.getByText('How this works')).toBeInTheDocument();
+    expect(screen.getByText(/Mark what happens/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Show the badge legend/ }));
     expect(screen.getByRole('dialog', { name: 'How to read your card' })).toBeInTheDocument();
     expect(screen.getByText(/Tally count/)).toBeInTheDocument();
 
