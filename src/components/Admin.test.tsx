@@ -318,7 +318,8 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
     expect(within(row('Photo proof source')).getByRole('button', { name: 'Camera only' })).toHaveClass('on');
     expect((within(row('Strip location data')).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
     expect((within(row('AI image screen')).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
-    expect(row('AI image screen').textContent).toMatch(/presentational/i);
+    // #268: the setting is live now — the old 'presentational' caveat is gone.
+    expect(row('AI image screen').textContent).toMatch(/live setting/i);
     expect(within(row('Auto-hide after reports')).getByText('6')).toBeInTheDocument();
     // #269 (the wireframes' caption): the Pending-claims row is admin_confirmed-
     // mode-only — absent here (proof_required).
