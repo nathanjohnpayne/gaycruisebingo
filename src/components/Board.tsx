@@ -26,7 +26,7 @@ import {
 // the proofed-mark completion verdict ProofSheet reports back (PR #110 round 2
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
-import { hasBingo, isBlackout, winningCells, completedLines, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet } from '../game/logic';
+import { hasBingo, isBlackout, winningCells, completedLines, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
 import { fitTextSize } from '../game/fitText';
 import { useTextSize } from '../hooks/useTextSize';
 import { track } from '../analytics';
@@ -1289,6 +1289,22 @@ export default function Board() {
   // paths so the persisted cruise-wide `firstBingoAt` excludes them (spec §
   // "Resolved decisions" #2). `undefined` for legacy events excludes nothing.
   const tutorialDayIndexes = hasDays ? [...tutorialDayIndexSet(days)] : undefined;
+  // The ceremonial (farewell) Day indexes + the standings freeze (#265): the
+  // farewell bucket never enters the summed root totals, and once `frozenAt`
+  // is stamped (the Day-10 08:00 scheduler beat) marks stop folding player
+  // stats entirely — cells and Tally stay live (past Days stay markable), the
+  // standings don't move. `frozenAt` is only ever stamped when reached, so its
+  // presence IS the freeze.
+  const ceremonialDayIndexes = hasDays ? [...ceremonialDayIndexSet(days)] : undefined;
+  // `standingsFrozen` folds the scheduler's stamp with the scheduled farewell
+  // unlock (the stale-cache belt, Codex P2 on #278) — `now` is the same
+  // unlock-rollover clock the deal state reads, so the freeze engages on time
+  // even in a tab that has been open (or offline) across the boundary. The
+  // instant honor-mark path captures the boolean at tap time; the PROOF path
+  // gets the GETTER below, so a slow upload straddling 08:00 is re-checked
+  // inside the transaction (Codex P2 on #278 round 3).
+  const statsFrozen = standingsFrozen(event, now);
+  const isStatsFrozen = () => standingsFrozen(event);
   const cardMeta = (
     <div className="card-meta">
       <span>
@@ -1447,6 +1463,8 @@ export default function Board() {
         // `dayStats[viewedIndex]` (#246). Legacy events keep the single-board path.
         daily: hasDays,
         tutorialDayIndexes,
+        ceremonialDayIndexes,
+        statsFrozen,
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
@@ -1607,7 +1625,15 @@ export default function Board() {
     // FIRE the plain bingo mid-read — that clear says the win STOOD) and NOT
     // gated on the current account (round 3 finding D: the queue is uid-keyed,
     // so the enqueue cannot leak — the candidate waits for the acted account).
-    if (res.bingoTransition) {
+    // The ceremonial First-to-BINGO candidate never mints post-freeze (Codex
+    // P2 on #278 round 2): the headline honor was decided when the podium was
+    // computed — a post-freeze bingo still celebrates locally and posts its
+    // plain bingo/blackout Moments (the farewell card is ceremonial, not
+    // silent), but must not crown a new public First to BINGO after final
+    // standings. Evaluated at VERDICT time (round 3): a proofed submission's
+    // slow upload can straddle the boundary, so the render-time boolean is
+    // not trusted here.
+    if (res.bingoTransition && !isStatsFrozen()) {
       const generation = pendingActionGeneration(uid);
       const witnessed = await hasPriorBingoWitness(uid);
       if (!witnessed && revalidateAfterAwait(uid, generation).generationUnchanged) {
@@ -1861,6 +1887,8 @@ export default function Board() {
           // `dayStats[viewedIndex]` (#246), the SAME path the honor Mark takes.
           daily={hasDays}
           tutorialDayIndexes={tutorialDayIndexes}
+          ceremonialDayIndexes={ceremonialDayIndexes}
+          statsFrozen={isStatsFrozen}
           tallyCount={proofTargetTally}
           // The proofed-mark completion verdict (PR #110 round 2 finding 1): a
           // successful attachProof reports the SAME win-transition shape setMark
