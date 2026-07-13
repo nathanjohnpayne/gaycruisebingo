@@ -63,7 +63,7 @@ describe('AcceptableUse page (behind auth — ADR 0005)', () => {
     expect(main).not.toMatch(/<AcceptableUse/);
 
     const more = readRepoFile('./components/More.tsx');
-    expect(more).toMatch(/<AcceptableUse\s+variant="row"\s*\/>/);
+    expect(more).toMatch(/<AcceptableUse\s+variant="row"\s+attestedAdultAt=/);
   });
 
   it('does not promise automatic report-threshold hiding', async () => {

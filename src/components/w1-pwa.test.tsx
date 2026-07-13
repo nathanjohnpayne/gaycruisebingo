@@ -145,18 +145,24 @@ describe('InstallPrompt', () => {
     const user = userEvent.setup();
     render(<InstallPrompt />);
     fireOnWindow(makeBeforeInstallPromptEvent('accepted'));
-    await user.click(screen.getByRole('button', { name: /not now/i }));
+    await user.click(screen.getByRole('button', { name: /dismiss/i }));
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
     expect(storage.getItem(DISMISS_KEY)).not.toBeNull();
   });
 
-  it('shows the iOS "Add to Home Screen" hint, since Safari never fires beforeinstallprompt', () => {
+  it('shows the iOS "Show me" walkthrough, since Safari never fires beforeinstallprompt (#270)', async () => {
     const originalUA = window.navigator.userAgent;
     Object.defineProperty(window.navigator, 'userAgent', { value: IOS_UA, configurable: true });
     try {
+      const { default: userEvent } = await import('@testing-library/user-event');
+      const user = userEvent.setup();
       render(<InstallPrompt />);
-      expect(screen.getByRole('note')).toHaveTextContent(/add to home screen/i);
+      // The wireframes' toast: a title + the cruise-benefit line; no one-tap
+      // Install on iOS — "Show me" expands the Share walkthrough in place.
+      expect(screen.getByRole('note')).toHaveTextContent(/add me to your home screen/i);
       expect(screen.queryByRole('button', { name: /^install$/i })).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /show me/i }));
+      expect(screen.getByRole('note')).toHaveTextContent(/tap share/i);
     } finally {
       Object.defineProperty(window.navigator, 'userAgent', { value: originalUA, configurable: true });
     }
@@ -176,7 +182,7 @@ describe('InstallPrompt', () => {
     expect(document.body.classList.contains(VISIBLE_CLASS)).toBe(false);
     fireOnWindow(makeBeforeInstallPromptEvent('accepted'));
     expect(document.body.classList.contains(VISIBLE_CLASS)).toBe(true);
-    await user.click(screen.getByRole('button', { name: /not now/i }));
+    await user.click(screen.getByRole('button', { name: /dismiss/i }));
     expect(document.body.classList.contains(VISIBLE_CLASS)).toBe(false);
   });
 

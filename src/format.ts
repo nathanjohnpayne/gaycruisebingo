@@ -70,3 +70,27 @@ export function eventTitle(name: string, sailStart: string, sailEnd: string): st
   const range = formatSailRange(sailStart, sailEnd);
   return range ? `${name}—${range}` : name;
 }
+
+const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/**
+ * The compact sail window for tight chrome (#270 — the More menu's version
+ * footer): 'Jul 15–24' within one month, 'Jul 15 – Aug 2' across months.
+ * Degrades to '' on a malformed/reversed window (the footer just omits it).
+ */
+export function shortSailRange(sailStart: string, sailEnd: string): string {
+  const parse = (v: string) => {
+    const [y, m, d] = String(v ?? '').split('-').map(Number);
+    if (!Number.isFinite(y) || !(m >= 1 && m <= 12) || !(d >= 1 && d <= 31)) return null;
+    // Round-trip through Date to reject impossible calendar dates
+    // (e.g. Feb 30 — Date would roll it over; #281 P3).
+    const dt = new Date(y, m - 1, d);
+    return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d ? { y, m, d } : null;
+  };
+  const a = parse(sailStart);
+  const b = parse(sailEnd);
+  if (!a || !b || new Date(b.y, b.m - 1, b.d) < new Date(a.y, a.m - 1, a.d)) return '';
+  if (a.y === b.y && a.m === b.m && a.d === b.d) return `${SHORT_MONTHS[a.m - 1]} ${a.d}`;
+  if (a.y === b.y && a.m === b.m) return `${SHORT_MONTHS[a.m - 1]} ${a.d}\u2013${b.d}`;
+  return `${SHORT_MONTHS[a.m - 1]} ${a.d} \u2013 ${SHORT_MONTHS[b.m - 1]} ${b.d}`;
+}
