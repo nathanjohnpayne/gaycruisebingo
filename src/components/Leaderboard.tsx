@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useEventDoc, useLeaderboard, useLatestProofByUid, isBanned } from '../hooks/useData';
+import { useEventDoc, useDayMetasStatus, useLeaderboard, useLatestProofByUid, isBanned } from '../hooks/useData';
 import { cruiseFirstBingoUid, perDayHonors, tutorialDayIndexSet } from '../game/logic';
+import { THEMES } from '../theme/themes';
 import { track } from '../analytics';
 import { renderLeaderboardShareCard, shareCardBlob, SHARE_CARD_APP_NAME, type LeaderboardShareRow } from './ShareCard';
 import Avatar from './Avatar';
@@ -97,6 +98,10 @@ function buildShareStandings(
 export default function Leaderboard() {
   const { players, loading } = useLeaderboard();
   const { data: event } = useEventDoc();
+  // #264: the pinned day-meta honors. Called HERE, with the other hooks —
+  // never below the loading/empty early returns, where a later non-empty
+  // render would change the hook order and crash (Codex P1 on #280).
+  const { metas: dayMetas, loaded: dayMetasLoaded } = useDayMetasStatus(event?.days?.length ?? 0);
   const { latestByUid } = useLatestProofByUid();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<LeaderboardFilter>('all');
@@ -145,11 +150,44 @@ export default function Leaderboard() {
   // ban-filtered `roster` so a banned Player's honor never displays, and only
   // renders once a Player has bingoed on some Day (empty on a pre-Day-Cards
   // roster, so the strip is absent there).
-  const honors = perDayHonors(roster);
-  const dayLabel = (dayIndex: number): string => {
+  const derivedHonors = perDayHonors(roster);
+  // #264: the PINNED day-meta honors merge with the roster-derived fallback.
+  // Precedence (Codex P2s on #280): a banned Player's pin renders as "—" —
+  // hidden, never promoted (the ban policy hides content; it never reassigns
+  // an honor) — and the EARLIEST timestamp wins between a pin and a derived
+  // honoree, so a true winner whose unknown-identity bingo skipped its pin is
+  // not permanently displaced by a later Player's pin. On a daily event every
+  // Day gets a chip ("—" until someone bingoes that Day); a legacy event
+  // keeps the derived-only strip.
+  const honors = (event?.days ?? []).map((d) => {
+    const pinned = dayMetas.get(d.index)?.firstBingo;
+    const derived = derivedHonors.find((h) => h.dayIndex === d.index);
+    // THE PIN WINS when present (#280 round 4): the write-once, rules-
+    // timestamped day-meta doc is the honor's source of truth. Derived
+    // dayStats timestamps are NOT reliable tiebreakers — the mark folds can
+    // seed a later day's bucket from the cruise-wide root firstBingoAt, so an
+    // "earlier" derived stamp may be another day's time entirely. The derived
+    // roster is the fallback for UNPINNED days only. If the pinned winner is
+    // banned, the chip renders blank — hidden, never reassigned. The unknown-
+    // identity-winner residual the old earliest-wins rule chased is now covered
+    // by the module-state held-pin queue (which survives unmounts and fires on
+    // identity resolve); what remains — a reload before the row resolves — is
+    // accepted and documented.
+    let winner: { displayName: string } | null;
+    if (pinned && isBanned(pinned.uid, bannedUids)) {
+      winner = null;
+    } else if (pinned) {
+      winner = pinned;
+    } else {
+      winner = dayMetasLoaded ? (derived ?? null) : null;
+    }
+    return { dayIndex: d.index, displayName: winner?.displayName ?? null };
+  });
+  const legacyHonors = event?.days?.length ? [] : derivedHonors;
+  const dayChipLabel = (dayIndex: number): string => {
     const d = event?.days?.find((day) => day.index === dayIndex);
-    if (!d) return `Day ${dayIndex + 1}`;
-    return `Day ${dayIndex + 1} · ${d.port}${d.portEmoji ? ` ${d.portEmoji}` : ''}`;
+    const emoji = d ? (THEMES.find((t) => t.id === d.theme)?.emoji ?? '') : '';
+    return `${emoji ? `${emoji} ` : ''}D${dayIndex + 1}`;
   };
 
   // Filters narrow this render's visible subset of the already-ranked,
@@ -250,14 +288,14 @@ export default function Leaderboard() {
           </button>
         ))}
       </div>
-      {honors.length > 0 && (
+      {(honors.length > 0 || legacyHonors.length > 0) && (
         <div className="lb-honors" aria-label="Daily First to BINGO">
-          <div className="lb-honors-title">Daily First to BINGO</div>
+          <div className="lb-honors-title">Daily first to bingo</div>
           <ul className="lb-honors-strip">
-            {honors.map((h) => (
+            {(honors.length > 0 ? honors : legacyHonors.map((h) => ({ dayIndex: h.dayIndex, displayName: h.displayName as string | null }))).map((h) => (
               <li key={h.dayIndex} className="lb-honor">
-                <span className="lb-honor-day">{dayLabel(h.dayIndex)}</span>
-                <span className="lb-honor-name">{h.displayName}</span>
+                <span className="lb-honor-day">{dayChipLabel(h.dayIndex)}</span>
+                <span className="lb-honor-name">{h.displayName ?? '—'}</span>
               </li>
             ))}
           </ul>
@@ -296,12 +334,17 @@ export default function Leaderboard() {
                     {chips.join('')}
                   </button>
                 )}
-                {isFirst && <div className="badge">1st BINGO</div>}
+                {isFirst && <div className="badge">⭐ First BINGO</div>}
               </div>
             );
           })}
         </div>
       )}
+      {/* The wireframes' explanatory footnote (#264). */}
+      <p className="muted lb-footnote">
+        Totals sum every Day Card. ⭐ cruise-wide First to BINGO counts main-game days only. Proof
+        chips = that player&apos;s latest proofs; tap one to jump to it in the Feed.
+      </p>
       <div className="lb-actions">
         <button
           type="button"

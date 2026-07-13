@@ -37,7 +37,13 @@ vi.mock('firebase/firestore', async (importOriginal) => {
 });
 
 import { setMark } from './api';
-import { pinDayFirstBingo } from './dayMeta';
+import {
+  pinDayFirstBingo,
+  enqueueHeldHonorPin,
+  takeHeldHonorPins,
+  dropHeldHonorPins,
+  __resetHeldHonorPinsForTests,
+} from './dayMeta';
 import { broadcastBlackout } from './moments';
 
 const EVENT_ID = 'med-2026';
@@ -118,7 +124,10 @@ describe('setMark folds into dayStats[dayIndex] and derives the cruise-wide root
 });
 
 describe('dayMeta.pinDayFirstBingo (write-once per-Day honor)', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetHeldHonorPinsForTests();
+  });
 
   it('creates the day-meta doc with the attributed firstBingo payload on a cache miss', async () => {
     await pinDayFirstBingo(4, { uid: 'u1', displayName: 'Alice', photoURL: null }, 1234);
@@ -133,6 +142,18 @@ describe('dayMeta.pinDayFirstBingo (write-once per-Day honor)', () => {
     getDocFromCacheSpy.mockResolvedValueOnce(snap({ firstBingo: { uid: 'x', displayName: 'X', at: 1 } }));
     await pinDayFirstBingo(4, { uid: 'u1', displayName: 'Alice', photoURL: null }, 1234);
     expect(setDocSpy).not.toHaveBeenCalled();
+  });
+
+  it('drains only the requested held Day and can drop a fallen held honor', () => {
+    enqueueHeldHonorPin('u1', 1, 111);
+    enqueueHeldHonorPin('u1', 2, 222);
+    enqueueHeldHonorPin('u2', 1, 333);
+
+    expect(takeHeldHonorPins('u1', 1)).toEqual([{ uid: 'u1', dayIndex: 1, at: 111 }]);
+    dropHeldHonorPins('u1', 2);
+
+    expect(takeHeldHonorPins('u1')).toEqual([]);
+    expect(takeHeldHonorPins('u2')).toEqual([{ uid: 'u2', dayIndex: 1, at: 333 }]);
   });
 });
 

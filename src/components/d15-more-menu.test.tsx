@@ -31,6 +31,10 @@ vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: H.user, signOutUser: H.signOutUser }),
 }));
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   usePendingItemCount: (enabled: boolean) => ({ count: enabled ? H.pendingCount : 0, loading: false }),
 }));

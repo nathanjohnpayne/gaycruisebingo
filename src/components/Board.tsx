@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { Lock } from 'lucide-react';
+import { getDoc } from 'firebase/firestore';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useDayBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, isBanned } from '../hooks/useData';
+import { useBoard, useDayBoard, useDayMeta, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, useDayMetasStatus, isBanned } from '../hooks/useData';
 import { setMark, dealDayCard, resolveDisplayName } from '../data/api';
+import { dayBoardRef } from '../data/paths';
 import { eventTitle } from '../format';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
@@ -24,7 +26,7 @@ import {
 // the proofed-mark completion verdict ProofSheet reports back (PR #110 round 2
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
-import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet } from '../game/logic';
+import { hasBingo, isBlackout, winningCells, completedLines, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet } from '../game/logic';
 import { fitTextSize } from '../game/fitText';
 import { useTextSize } from '../hooks/useTextSize';
 import { track } from '../analytics';
@@ -38,6 +40,7 @@ import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
 import TutorialBanner, { TutorialTag } from './TutorialBanner';
 import FarewellPodium from './FarewellPodium';
 import { farewellPinIndex } from '../data/finale';
+import { pinDayFirstBingo, enqueueHeldHonorPin, takeHeldHonorPins, dropHeldHonorPins } from '../data/dayMeta';
 import CoachOverlay from './CoachOverlay';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
@@ -517,8 +520,21 @@ function formatUnlockAt(unlockAt: number, timezone: string | undefined): string 
  * that contract (and the e2e selector on it) survives the daybar absorbing
  * it; #212's daily-honor pin will extend the meta slot on main Days.
  */
-export function DayBar({ day }: { day: DayDef }) {
+export function DayBar({
+  day,
+  honor,
+  timezone,
+}: {
+  day: DayDef;
+  // The Day's pinned First to BINGO (#264) — when present on a NON-tutorial
+  // Day, the meta slot swaps the port for the wireframes' honor line
+  // ("First to BINGO: Theo, 11:02"). Tutorial Days keep their tag in place of
+  // daily-honor competitiveness (spec § "Embark (tutorial) view").
+  honor?: { displayName: string; at: number } | null;
+  timezone?: string;
+}) {
   const description = themeDescription(day.theme);
+  const showHonor = honor != null && validHonorTime(honor.at) && !day.tutorial;
   return (
     <div className="board-header daybar-block">
       <div className="daybar">
@@ -527,12 +543,56 @@ export function DayBar({ day }: { day: DayDef }) {
           {day.tutorial && <TutorialTag pool={day.pool} className="daybar-tag" />}
         </div>
         <div className="daybar-meta">
-          <span aria-hidden="true">{day.portEmoji}</span> {day.port}
+          {showHonor ? (
+            <>First to BINGO: {honor.displayName}, {honorTime(honor.at, timezone)}</>
+          ) : (
+            <>
+              <span aria-hidden="true">{day.portEmoji}</span> {day.port}
+            </>
+          )}
         </div>
       </div>
       {description && <p className="daybar-desc">{description}</p>}
     </div>
   );
+}
+
+/** "11:02" — the honor line's compact event-timezone clock (wireframes' update-
+ * banner frame shows no meridiem; hour12 kept off for the same reason). */
+function honorTime(at: number, timezone: string | undefined): string {
+  const date = new Date(at);
+  if (!validHonorTime(at)) return '—';
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: timezone || 'UTC',
+    }).format(date);
+  } catch {
+    try {
+      return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+    } catch {
+      return '—';
+    }
+  }
+}
+
+function validHonorTime(at: number): boolean {
+  return Number.isFinite(at) && Number.isFinite(new Date(at).getTime());
+}
+
+function firstCompletedLineAt(cells: Cell[]): number | null {
+  let firstAt: number | null = null;
+  for (const line of completedLines(cells)) {
+    let lineAt = 0;
+    for (const index of line) {
+      const markedAt = cells[index]?.markedAt;
+      if (typeof markedAt === 'number' && markedAt > lineAt) lineAt = markedAt;
+    }
+    if (lineAt > 0 && (firstAt == null || lineAt < firstAt)) firstAt = lineAt;
+  }
+  return firstAt;
 }
 
 /**
@@ -635,6 +695,7 @@ export default function Board() {
   // below inert and Board's single-Board rendering byte-identical to pre-1.5.
   const days: DayDef[] = event?.days ?? [];
   const hasDays = days.length > 0;
+  const { metas: dayMetas, loaded: dayMetasLoaded } = useDayMetasStatus(hasDays ? days.length : 0);
   // The Day switcher's viewed-Day index (daily-cards-spec § "Day switcher"). Held
   // up here (before the day-scoped Board subscription that keys on it) so switching
   // a chip re-subscribes to that Day's own Board. Defaults to 0 and is adopted to
@@ -651,6 +712,9 @@ export default function Board() {
     loading: dayBoardLoading,
     hasServerData: dayBoardConfirmed,
   } = useDayBoard(uid, hasDays ? viewedIndex : undefined);
+  // The VIEWED Day's pinned First to BINGO honor (#264) — one doc sub, keyed on
+  // the viewed index; legacy events (no schedule) open no subscription.
+  const { data: viewedDayMeta } = useDayMeta(hasDays ? viewedIndex : undefined);
   // The ACTIVE Board the whole component renders/marks against: the viewed Day's
   // Board in daily mode, the single legacy Board otherwise. In daily mode the
   // day-scoped subscription clears its previous doc only in a passive effect AFTER
@@ -696,6 +760,7 @@ export default function Board() {
   // A Feed Tally Card's pending "open this Prompt's sheet" request (#261),
   // consumed by the intent effect below once the right Day's board renders.
   const openSquareIntent = useOpenSquareIntent();
+
   // The open Claim sheet's social heat line (#211): reuse the SAME per-Prompt
   // Tally subscription the TallyBadge uses — no new read — for the Square the
   // sheet is open on. useTally accepts a null id (no proofTarget → no sub).
@@ -1087,7 +1152,10 @@ export default function Board() {
     // state before the refs re-seed below. On a mount's first snapshot the refs
     // are 0/false, so nothing can spuriously read as a fall.
     if (uid) {
-      if (wasBingoLines.current > 0 && bingoLines === 0) dropPendingWins(uid, { bingo: true });
+      if (wasBingoLines.current > 0 && bingoLines === 0) {
+        dropPendingWins(uid, { bingo: true });
+        if (hasDays && board?.dayIndex !== undefined) dropHeldHonorPins(uid, board.dayIndex);
+      }
       if (wasBlackout.current && !black)
         // The fall is witnessed by THIS board — drop only its Day's queued
         // blackout (#267); legacy (no schedule) keeps the full clear.
@@ -1144,6 +1212,45 @@ export default function Board() {
     if (cell) setProofTarget(cell);
     clearOpenSquare();
   }, [openSquareIntent, hasDays, viewedIndex, cells, cellsAttributable]);
+
+  // Release held day-honor pins once the identity resolves (#280 round 2).
+  // Holds are uid-keyed, so another account's stay queued for its return. Drain
+  // every held Day for this account: the winning Day may no longer be rendered
+  // when the saved row finally resolves, and fall observers already drop held
+  // pins whose bingo no longer stands.
+  useEffect(() => {
+    if (!identityKnown || !uid) return;
+    const mine = takeHeldHonorPins(uid);
+    if (!mine.length) return;
+    const actor = {
+      uid,
+      displayName,
+      photoURL: (player ? player.photoURL : user?.photoURL) ?? null,
+    };
+    const release = async () => {
+      for (const h of mine) {
+        let stillHasBingo = false;
+        if (hasDays && board?.dayIndex === h.dayIndex && cellsAttributable && cells.length > 0) {
+          stillHasBingo = hasBingo(cells);
+        } else {
+          let readFailed = false;
+          const snap = await getDoc(dayBoardRef(h.dayIndex, uid)).catch(() => {
+            readFailed = true;
+            return null;
+          });
+          if (readFailed) {
+            enqueueHeldHonorPin(h.uid, h.dayIndex, h.at);
+            continue;
+          }
+          const heldCells = snap?.exists() ? ((snap.data().cells ?? []) as Cell[]) : [];
+          stillHasBingo = hasBingo(heldCells);
+        }
+        if (stillHasBingo) void pinDayFirstBingo(h.dayIndex, actor, h.at);
+      }
+    };
+    void release();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identityKnown, uid]);
 
   if (!uid) return null;
 
@@ -1365,6 +1472,7 @@ export default function Board() {
           // The unmark verdict witnesses the ACTED board only (#267).
           blackoutDayIndex: hasDays ? viewedIndex : board?.dayIndex,
         });
+        if (hasDays && !res.bingo) dropHeldHonorPins(uid, viewedIndex);
         // Drain with the action's own folded cells AND its own Day (see
         // broadcastWinVerdict) — skipped if the account switched while the
         // await was in flight (the shared post-await revalidation; no
@@ -1428,6 +1536,11 @@ export default function Board() {
     // below) — the drain override and the enqueue both use THIS, never the
     // render-time day a mid-flight switch could change.
     const actedDay = hasDays ? viewedIndex : board?.dayIndex;
+    // The WIN's own time (#280 round 4): the completing Mark's `markedAt` from
+    // the folded cells — the same clock the stats fold persisted — falling
+    // back to the verdict clock when no cell stamp is readable. A slow upload
+    // preceding the verdict can then never skew the displayed honor time.
+    const actedAt = firstCompletedLineAt(res.cells) ?? Date.now();
     enqueueWinMoments({
       uid,
       bingoTransition: res.bingoTransition,
@@ -1442,6 +1555,37 @@ export default function Board() {
       // misleading "Day 1").
       dayIndex: hasDays ? viewedIndex : undefined,
     });
+    // The per-Day First to BINGO pin (#264, daily-cards-spec § "Scoring and
+    // social surfaces"): fired on the rising edge by the achieving Player
+    // themselves — the day-meta create rule requires firstBingo.uid ==
+    // request.auth.uid — and WRITE-ONCE server-side (create-only, no update),
+    // so the honest race's first create wins (ADR 0001) and a later bingo on
+    // the same Day lands on the deny-all update and is swallowed. Identity-
+    // gated like a Doubt raise: a permanent public honor must never stamp
+    // 'Anonymous' — an unknown-identity win skips the pin (the honors strip's
+    // roster-derived fallback still names them once their row resolves).
+    if (res.bingoTransition && hasDays && actedDay !== undefined) {
+      // Re-read the LIVE gate through feedCtx (#280 round 3): this verdict can
+      // run after an await (a proofed win's upload), and the render-closure
+      // `identityKnown` may be stale — the row can have resolved mid-flight,
+      // in which case a held pin would idle until an unrelated flip.
+      const live = feedCtx.current;
+      if (live.identityKnown && live.uid === uid) {
+        void pinDayFirstBingo(actedDay, {
+          uid,
+          displayName: live.displayName,
+          photoURL: live.photoURL,
+        }, actedAt);
+      } else {
+        // Identity still resolving (#280 round 2): hold the pin — MODULE
+        // state keyed to the acted account (rounds 3-4), so it survives Board
+        // unmounts/route changes and a switch never releases another player's
+        // honor. `at` is the WIN's own time. Reload loses the hold
+        // (in-memory), an accepted residual the strip's derived fallback
+        // covers.
+        enqueueHeldHonorPin(uid, actedDay, actedAt);
+      }
+    }
     // The BIRTH-TIME witness (round 2 finding D; made the SOLE witness site by
     // round 3 finding A): the prior-win question — "is this win a regain?" — is
     // answerable only HERE, at the moment the win happened, before this
@@ -1524,7 +1668,19 @@ export default function Board() {
             tutorial tag, port, and the dress-code description, on every
             viewed Day. Absorbs the pre-#260 tutorial-only board-header
             (the tag now renders inside the daybar's name line). */}
-        {viewedDay && <DayBar day={viewedDay} />}
+        {/* A banned Player's pinned honor never displays (#280 round 2) —
+            same posture as the Ranks strip: hidden, never promoted. */}
+        {viewedDay && (
+          <DayBar
+            day={viewedDay}
+            honor={
+              viewedDayMeta?.firstBingo && !isBanned(viewedDayMeta.firstBingo.uid, event?.bannedUids ?? [])
+                ? viewedDayMeta.firstBingo
+                : null
+            }
+            timezone={event?.timezone}
+          />
+        )}
         {/* The farewell podium (#217, daily-cards-spec § "Farewell view"):
             shown on the farewell Day once the standings freeze (`frozenAt`
             set), ABOVE the goodbye banner below — this ticket owns the
@@ -1539,6 +1695,8 @@ export default function Board() {
           <FarewellPodium
             players={players.filter((p) => !isBanned(p.uid, event?.bannedUids ?? []))}
             days={days}
+            dayMetas={dayMetas}
+            dayMetasLoaded={dayMetasLoaded}
           />
         )}
         {viewedDay && <TutorialBanner day={viewedDay} />}

@@ -144,4 +144,50 @@ describe('buildPodium — champion, First to BINGO, honors', () => {
     expect(podium.dailyHonors.map((h) => h.dayIndex)).toEqual([0, 1]);
     expect(podium.dailyHonors.every((h) => h.displayName === 'alice')).toBe(true);
   });
+
+  it('uses day-meta pinned honors in the farewell podium when available', () => {
+    const players = [
+      player({
+        uid: 'alice',
+        bingoCount: 1,
+        squaresMarked: 10,
+        firstBingoAt: NOW,
+        dayStats: { 1: { bingoCount: 1, squaresMarked: 10, firstBingoAt: NOW } },
+      }),
+    ];
+    const metas = new Map([[1, { firstBingo: { uid: 'alice', displayName: 'Pinned Parker', at: NOW + HOUR } }]]);
+    const podium = buildPodium(players, DAYS, metas);
+    expect(podium.dailyHonors).toEqual([
+      { dayIndex: 1, uid: 'alice', displayName: 'Pinned Parker', firstBingoAt: NOW + HOUR },
+    ]);
+  });
+
+  it('hides a pinned honor whose uid is absent from the filtered podium roster', () => {
+    const players = [
+      player({
+        uid: 'alice',
+        bingoCount: 1,
+        squaresMarked: 10,
+        firstBingoAt: NOW,
+        dayStats: { 1: { bingoCount: 1, squaresMarked: 10, firstBingoAt: NOW } },
+      }),
+    ];
+    const metas = new Map([[1, { firstBingo: { uid: 'banned', displayName: 'Banned Blair', at: NOW - HOUR } }]]);
+    const podium = buildPodium(players, DAYS, metas);
+    expect(podium.dailyHonors).toEqual([]);
+  });
+
+  it('does not use derived daily honors while day-meta pins are still loading', () => {
+    const players = [
+      player({
+        uid: 'alice',
+        bingoCount: 1,
+        squaresMarked: 10,
+        firstBingoAt: NOW,
+        dayStats: { 1: { bingoCount: 1, squaresMarked: 10, firstBingoAt: NOW } },
+      }),
+    ];
+    const podium = buildPodium(players, DAYS, new Map(), false);
+    expect(podium.dailyHonors).toEqual([]);
+  });
 });

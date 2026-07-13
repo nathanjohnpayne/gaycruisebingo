@@ -1751,6 +1751,11 @@ body:has(.sheet-backdrop) .guidelines-trigger {
    and #174): a full-width secondary action BELOW the ranked list, so it no
    longer sits wedged in the narrow band between the global theme carousel and
    the filter row. */
+.lb-footnote {
+  font-size: 11.5px;
+  margin: 10px 2px 0;
+  line-height: 1.4;
+}
 .lb-actions {
   display: flex;
   margin-top: 14px;

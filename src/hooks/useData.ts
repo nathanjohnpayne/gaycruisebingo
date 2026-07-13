@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { collectionGroup, onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
 import { db } from '../firebase';
-import { eventRef, itemsCol, boardRef, dayBoardRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol } from '../data/paths';
+import { eventRef, itemsCol, boardRef, dayBoardRef, dayMetaRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol } from '../data/paths';
 import { isReportHidden, isBanned, isSystemAuthor } from '../data/moderation';
 import { sortPlayers, dayDealState, type DayDealState, nextDisplayBumpTime, BUMP_DEBOUNCE_MS } from '../game/logic';
-import type { EventDoc, ItemDoc, BoardDoc, DayDef, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, TallyCard, MomentDoc, DoubtDoc } from '../types';
+import type { EventDoc, ItemDoc, BoardDoc, DayDef, DayMetaDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, TallyCard, MomentDoc, DoubtDoc } from '../types';
 
 // Both subs subscribe with includeMetadataChanges so the cache→server
 // transition is always observable: with the ADR 0006 persistent cache, a cold
@@ -217,6 +217,83 @@ export function useDayBoard(uid: string | undefined, dayIndex: number | undefine
     enabled ? dayBoardRef(dayIndex, uid) : null,
     `dayboard:${uid ?? 'none'}:${dayIndex ?? 'none'}`,
   );
+}
+
+/**
+ * ONE Day's meta doc — the write-once per-Day First to BINGO honor (#264,
+ * daily-cards-spec § "Scoring and social surfaces"). `undefined` dayIndex (a
+ * legacy event, or no Day viewed) opens no subscription. The returned doc is
+ * tagged with the Day it was FETCHED FOR and returned only while that matches
+ * the CURRENT request, so a day switch can never paint the prior Day's honor
+ * under the new Day for a frame (Codex P3 on #280 — useDocSub clears state in
+ * an effect, one paint too late for this).
+ */
+export function useDayMeta(dayIndex: number | undefined): { data: DayMetaDoc | null } {
+  const [state, setState] = useState<{ forDay: number; data: DayMetaDoc | null } | null>(null);
+  useEffect(() => {
+    if (dayIndex === undefined) {
+      setState(null);
+      return;
+    }
+    const unsub = onSnapshot(
+      dayMetaRef(dayIndex),
+      (snap) => setState({ forDay: dayIndex, data: snap.exists() ? (snap.data() as DayMetaDoc) : null }),
+      () => {},
+    );
+    return () => unsub();
+  }, [dayIndex]);
+  return { data: state && state.forDay === dayIndex ? state.data : null };
+}
+
+/**
+ * EVERY Day's meta doc, as a `Map<dayIndex, DayMetaDoc>` (#264 — the
+ * Leaderboard honors strip reads the PINNED honors, with the roster-derived
+ * `perDayHonors` as its fallback). Same bounded one-effect fan as
+ * `useMyDayBoards` below.
+ */
+export function useDayMetas(dayCount: number): ReadonlyMap<number, DayMetaDoc> {
+  return useDayMetasStatus(dayCount).metas;
+}
+
+export function useDayMetasStatus(dayCount: number): {
+  metas: ReadonlyMap<number, DayMetaDoc>;
+  loaded: boolean;
+} {
+  const [metas, setMetas] = useState<ReadonlyMap<number, DayMetaDoc>>(new Map());
+  const [seen, setSeen] = useState<ReadonlySet<number>>(new Set());
+  useEffect(() => {
+    setMetas(new Map());
+    setSeen(new Set());
+    if (dayCount <= 0) return;
+    const unsubs = Array.from({ length: dayCount }, (_, dayIndex) =>
+      onSnapshot(
+        dayMetaRef(dayIndex),
+        (snap) => {
+          setMetas((prev) => {
+            const next = new Map(prev);
+            if (snap.exists()) next.set(dayIndex, snap.data() as DayMetaDoc);
+            else next.delete(dayIndex);
+            return next;
+          });
+          setSeen((prev) => {
+            const next = new Set(prev);
+            next.add(dayIndex);
+            return next;
+          });
+        },
+        () => {
+          /* permission-denied (signed out mid-flight) — leave the day absent */
+          setSeen((prev) => {
+            const next = new Set(prev);
+            next.add(dayIndex);
+            return next;
+          });
+        },
+      ),
+    );
+    return () => unsubs.forEach((u) => u());
+  }, [dayCount]);
+  return { metas, loaded: dayCount <= 0 || seen.size >= dayCount };
 }
 
 /**
