@@ -143,9 +143,10 @@ describe('moments.broadcastBlackout — optional dayIndex names the Day (fix/d15
     broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
     await flush();
     expect(setDocSpy).toHaveBeenCalledTimes(1);
-    // Deterministic id ${uid}-blackout (create-only + immutable per rules) — the
-    // SAME id the day-less broadcastBlackout call has always used.
-    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout`);
+    // Deterministic PER-CARD id ${uid}-blackout-d${dayIndex} (#267): blackout is
+    // per-card, so the dedup id scopes to the (Player, Day) pair — a second
+    // Day's blackout posts its own Moment; re-marking the same card cannot.
+    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout-d4`);
     expect(setDocSpy.mock.calls[0][1]).toMatchObject({
       kind: 'blackout',
       uid: 'u1',

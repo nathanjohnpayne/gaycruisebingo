@@ -50,7 +50,7 @@ import {
   enqueueWinMoments,
   enqueueFirstBingoMoment,
   peekPendingMoments,
-  pendingBlackoutDayIndex,
+  pendingBlackoutDayIndexes,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -96,7 +96,7 @@ describe('moments broadcasts — the Feed beat writer (specs/w2-feed-moments.md)
     expect('proofId' in payload).toBe(false);
   });
 
-  it('a Blackout broadcasts exactly one `blackout` Moment at the per-Player id', async () => {
+  it('a legacy (day-less) Blackout broadcasts one `blackout` Moment at the per-Player id', async () => {
     broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: 'https://x/a.jpg' });
     await settle();
 
@@ -104,6 +104,18 @@ describe('moments broadcasts — the Feed beat writer (specs/w2-feed-moments.md)
     const [ref, payload] = setDocSpy.mock.calls[0];
     expect(ref.path).toBe(`events/${EVENT_ID}/moments/u1-blackout`);
     expect(payload).toMatchObject({ kind: 'blackout', uid: 'u1', photoURL: 'https://x/a.jpg' });
+  });
+
+  it('a per-card Blackout (#267) writes a per-(Player, Day) id — a second Day posts its own Moment, the same Day dedupes', async () => {
+    broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 3);
+    broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 6);
+    await settle();
+
+    expect(setDocSpy).toHaveBeenCalledTimes(2);
+    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout-d3`);
+    expect(setDocSpy.mock.calls[0][1]).toMatchObject({ kind: 'blackout', uid: 'u1', dayIndex: 3 });
+    expect(setDocSpy.mock.calls[1][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout-d6`);
+    expect(setDocSpy.mock.calls[1][1]).toMatchObject({ kind: 'blackout', uid: 'u1', dayIndex: 6 });
   });
 
   it('First-to-BINGO broadcasts one `first_bingo` Moment at the EVENT-singleton id', async () => {
@@ -237,48 +249,49 @@ describe('the pending-Moment queue — module state that survives Board unmounts
   });
 });
 
-describe('pendingBlackoutDayIndex — the blackout Day captured at ENQUEUE time (Codex finding 2, fix/d15-blackout-day-naming)', () => {
-  it('is undefined when nothing is queued', () => {
-    expect(pendingBlackoutDayIndex('u1')).toBeUndefined();
+describe('pendingBlackoutDayIndexes — the blackout Day(s) captured at ENQUEUE time (#267, per-card)', () => {
+  it('is empty when nothing is queued', () => {
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([]);
   });
 
   it('stamps the Day the enqueue carried, so a later drain (after the Player switches Days) still reads it', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 3 });
-    expect(pendingBlackoutDayIndex('u1')).toBe(3);
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([3]);
     // The Player switches the viewed Day before the drain fires — the STORED
     // value (from enqueue time) is what a later drain must read, never a
     // re-derivation from whatever is on screen now. Nothing re-enqueues here;
     // this asserts the getter keeps returning the ORIGINAL stamp.
-    expect(pendingBlackoutDayIndex('u1')).toBe(3);
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([3]);
   });
 
-  it('omits the Day entirely (undefined) for a legacy, non-daily enqueue — never a misleading "Day 1"', () => {
+  it('omits the Day entirely (empty) for a legacy, non-daily enqueue — never a misleading "Day 1"', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true }); // no dayIndex
     expect(peekPendingMoments('u1').blackout).toBe(true);
-    expect(pendingBlackoutDayIndex('u1')).toBeUndefined();
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([]);
   });
 
-  it('first blackout wins: a second blackoutTransition enqueue (a different Day Card) never overwrites the stamped Day', () => {
+  it('accumulates one entry per distinct Day (#267 — blackout is per-card), deduping re-enqueues of the same Day', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 2 });
     enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 5 });
-    expect(pendingBlackoutDayIndex('u1')).toBe(2);
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 5 });
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([2, 5]);
   });
 
   it('clearPendingMoment("blackout") (the drain FIRED it) resets the stamp — nothing left to protect', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 4 });
     clearPendingMoment('u1', 'blackout');
-    expect(pendingBlackoutDayIndex('u1')).toBeUndefined();
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([]);
   });
 
   it('dropPendingWins({ blackout: true }) (an observed fall) resets the stamp — the fallen blackout no longer applies', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 4 });
     dropPendingWins('u1', { blackout: true });
-    expect(pendingBlackoutDayIndex('u1')).toBeUndefined();
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([]);
   });
 
   it('is isolated per-uid', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 1 });
-    expect(pendingBlackoutDayIndex('u2')).toBeUndefined();
+    expect(pendingBlackoutDayIndexes('u2')).toEqual([]);
   });
 });
 
@@ -407,6 +420,14 @@ describe('hasCanonicalMomentId — read-side singleton/per-player Moment filter'
     expect(hasCanonicalMomentId({ ...moment('u1-bingo', 1, 'bingo'), uid: 'u1' })).toBe(true);
     expect(hasCanonicalMomentId({ ...moment('u1-blackout', 1, 'blackout'), uid: 'u1' })).toBe(true);
     expect(hasCanonicalMomentId({ ...moment('first_bingo', 1, 'first_bingo'), uid: 'u1' })).toBe(true);
+
+    // Per-card blackout ids (#267): day-stamped, and the id's Day must match
+    // the doc's own dayIndex — a forged mismatch (or a day-suffixed id with no
+    // dayIndex field) is dropped.
+    expect(hasCanonicalMomentId({ ...moment('u1-blackout-d4', 1, 'blackout'), uid: 'u1', dayIndex: 4 })).toBe(true);
+    expect(hasCanonicalMomentId({ ...moment('u1-blackout-d4', 1, 'blackout'), uid: 'u1', dayIndex: 5 })).toBe(false);
+    expect(hasCanonicalMomentId({ ...moment('u1-blackout-d4', 1, 'blackout'), uid: 'u1' })).toBe(false);
+    expect(hasCanonicalMomentId({ ...moment('u2-blackout-d4', 1, 'blackout'), uid: 'u1', dayIndex: 4 })).toBe(false);
 
     expect(hasCanonicalMomentId({ ...moment('spoof-first', 1, 'first_bingo'), uid: 'u1' })).toBe(false);
     expect(hasCanonicalMomentId({ ...moment('u1-first_bingo', 1, 'first_bingo'), uid: 'u1' })).toBe(false);

@@ -13,7 +13,7 @@ import {
   enqueueWinMoments,
   enqueueFirstBingoMoment,
   peekPendingMoments,
-  pendingBlackoutDayIndex,
+  pendingBlackoutDayIndexes,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -899,11 +899,15 @@ export default function Board() {
       clearPendingMoment(cUid, 'bingo');
     }
     if (pending.blackout && blackoutNow) {
-      // The Day the blackout-completing Mark happened on, captured at ENQUEUE
+      // The Day(s) blackout-completing Marks happened on, captured at ENQUEUE
       // time (Codex finding 2, fix/d15-blackout-day-naming) — NOT whatever Day
       // is currently VIEWED: a held blackout (behind the identity gate above)
-      // can drain long after the Player has switched Days.
-      broadcastBlackout(actor, pendingBlackoutDayIndex(cUid));
+      // can drain long after the Player has switched Days. One Moment per
+      // queued Day (#267 — blackout is per-card, per-(uid, day) dedup id);
+      // an empty set is the legacy day-less broadcast.
+      const blackoutDays = pendingBlackoutDayIndexes(cUid);
+      if (blackoutDays.length === 0) broadcastBlackout(actor);
+      else blackoutDays.forEach((d) => broadcastBlackout(actor, d));
       clearPendingMoment(cUid, 'blackout');
     }
     // Ceremonial decision — fully SYNCHRONOUS at publish time (PR #110 round 3

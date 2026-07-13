@@ -89,20 +89,21 @@ export interface PendingMomentFlags {
 //     blackout-only fall preserves a valid candidate; every in-app bingo-fall
 //     bump also clears the candidate, so the stamp is belt-and-braces against
 //     future bump sites rather than a reachable kill today).
-//   - `blackoutDayIndex`: the Day the blackout-completing Mark happened on,
+//   - `blackoutDayIndexes`: the Day(s) blackout-completing Marks happened on,
 //     captured at ENQUEUE time (Codex finding 2): a blackout can sit pending
 //     for a while (the identity gate, `drainMoments`'s first check, blocks
 //     EVERY kind — not just the ceremonial one), and a Player who switches the
 //     VIEWED Day during that window must not have the eventual drain stamp the
-//     Moment with whatever Day happens to be on screen when it fires. First
-//     write wins (`enqueueWinMoments` never overwrites an already-stamped
-//     value): the deterministic `${uid}-blackout` id is once-per-Player
-//     (moments.ts: broadcastBlackout), so only the FIRST blackout-completing
-//     Mark's Day can ever actually post.
+//     Moment with whatever Day happens to be on screen when it fires. A SET
+//     of Days, not a single first-write-wins stamp (#267): blackout is
+//     per-card (daily-cards-spec § "Scoring and social surfaces"), the
+//     deterministic id is per-(Player, Day) — `${uid}-blackout-d${dayIndex}`
+//     — so a second Day's card blacking out while an earlier Day's Moment is
+//     still pending must queue its OWN Day rather than be swallowed.
 // `peekPendingMoments` projects the public triple, keeping these internal.
 interface StoredPendingFlags extends PendingMomentFlags {
   firstBingoGeneration: number;
-  blackoutDayIndex?: number;
+  blackoutDayIndexes?: number[];
 }
 const pendingMoments = new Map<string, StoredPendingFlags>();
 
@@ -155,9 +156,9 @@ function ensurePending(uid: string): StoredPendingFlags {
  *
  * `dayIndex` (optional) is the Day the completing Mark happened on — captured
  * HERE, at enqueue time, not re-read from render state at drain time (Codex
- * finding 2 on fix/d15-blackout-day-naming): only stamped on a `blackoutTransition`,
- * and only if no Day is stamped yet (first blackout wins — see
- * `StoredPendingFlags.blackoutDayIndex`).
+ * finding 2 on fix/d15-blackout-day-naming): only stamped on a
+ * `blackoutTransition`, accumulating one entry per distinct Day (#267 — a
+ * per-card win queues its own Day; see `StoredPendingFlags.blackoutDayIndexes`).
  */
 export function enqueueWinMoments(params: {
   uid: string;
@@ -171,7 +172,10 @@ export function enqueueWinMoments(params: {
   if (bingoTransition) flags.bingo = true;
   if (blackoutTransition) {
     flags.blackout = true;
-    if (flags.blackoutDayIndex === undefined) flags.blackoutDayIndex = dayIndex;
+    if (dayIndex !== undefined) {
+      flags.blackoutDayIndexes ??= [];
+      if (!flags.blackoutDayIndexes.includes(dayIndex)) flags.blackoutDayIndexes.push(dayIndex);
+    }
   }
 }
 
@@ -206,15 +210,15 @@ export function peekPendingMoments(uid: string): PendingMomentFlags {
 }
 
 /**
- * The Day a still-pending blackout was ENQUEUED on (Codex finding 2 on
- * fix/d15-blackout-day-naming) — `undefined` when nothing is queued or the
- * enqueue carried no Day (a legacy, non-daily caller). The drain reads this
- * instead of whatever Day happens to be VIEWED at fire time: a blackout can sit
- * pending behind the identity gate for a while, and the Player may have
- * switched Days in that window.
+ * The Day(s) still-pending blackouts were ENQUEUED on (Codex finding 2 on
+ * fix/d15-blackout-day-naming; per-card set per #267) — empty when nothing is
+ * queued or the enqueue carried no Day (a legacy, non-daily caller). The drain
+ * reads this instead of whatever Day happens to be VIEWED at fire time: a
+ * blackout can sit pending behind the identity gate for a while, and the
+ * Player may have switched Days in that window.
  */
-export function pendingBlackoutDayIndex(uid: string): number | undefined {
-  return pendingMoments.get(pendingKey(uid))?.blackoutDayIndex;
+export function pendingBlackoutDayIndexes(uid: string): number[] {
+  return [...(pendingMoments.get(pendingKey(uid))?.blackoutDayIndexes ?? [])];
 }
 
 /**
@@ -277,7 +281,7 @@ export function dropPendingWins(uid: string, fell: { bingo?: boolean; blackout?:
   }
   if (fell.blackout) {
     flags.blackout = false;
-    flags.blackoutDayIndex = undefined; // the fallen blackout's Day no longer applies
+    flags.blackoutDayIndexes = undefined; // the fallen blackout's Day no longer applies
   }
   if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
 }
@@ -294,7 +298,7 @@ export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags):
   const flags = pendingMoments.get(key);
   if (!flags) return;
   flags[kind] = false;
-  if (kind === 'blackout') flags.blackoutDayIndex = undefined; // fired — nothing left to protect
+  if (kind === 'blackout') flags.blackoutDayIndexes = undefined; // fired — nothing left to protect
   if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
 }
 
@@ -437,19 +441,24 @@ export function broadcastBingo(who: MomentActor): void {
 }
 
 /**
- * A Player's Blackout — the whole card (once per Player). `dayIndex` (optional)
- * NAMES the Day the blackout happened on (daily-cards-spec § "Scoring and
- * social surfaces": "a per-card blackout posts a Moment naming the day", e.g.
- * "blacked out Day 4 · Glamiators") — a caller on a daily-cards Event passes
- * the VIEWED Day the completing Mark landed on; a legacy single-Board caller
- * omits it (a legacy Event has no Day schedule to render a chip from). Board's
- * live-mark path captures this at ENQUEUE time via `enqueueWinMoments`'s
- * `dayIndex` and threads it through `pendingBlackoutDayIndex` to the drain —
- * NOT re-derived from whatever Day happens to be on screen when a held
- * blackout finally fires (Codex finding 2, fix/d15-blackout-day-naming).
+ * A Player's Blackout — PER CARD (#267, daily-cards-spec § "Scoring and
+ * social surfaces": "Blackout remains per-card; a per-card blackout posts a
+ * Moment naming the day"). `dayIndex` NAMES the Day the blackout happened on
+ * ("blacked out Day 4 · Glamiators") AND scopes the deterministic dedup id to
+ * that Day (`${uid}-blackout-d${dayIndex}`): re-marking the SAME card can
+ * never double-post, while a second Day's blackout posts its own Moment — the
+ * pre-#267 `${uid}-blackout` id was once-per-Player, so only the first card's
+ * blackout ever reached the Feed. A legacy single-Board caller omits
+ * `dayIndex` and keeps the legacy once-per-Player id (a legacy Event has one
+ * card the whole Event, so per-Player IS per-card there). Board's live-mark
+ * path captures the Day at ENQUEUE time via `enqueueWinMoments` and threads
+ * it through `pendingBlackoutDayIndexes` to the drain — NOT re-derived from
+ * whatever Day happens to be on screen when a held blackout finally fires
+ * (Codex finding 2, fix/d15-blackout-day-naming).
  */
 export function broadcastBlackout(who: MomentActor, dayIndex?: number): void {
-  broadcast(`${who.uid}-blackout`, 'blackout', who, dayIndex);
+  const id = dayIndex === undefined ? `${who.uid}-blackout` : `${who.uid}-blackout-d${dayIndex}`;
+  broadcast(id, 'blackout', who, dayIndex);
 }
 
 /**
