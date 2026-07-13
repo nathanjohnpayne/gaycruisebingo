@@ -31,6 +31,10 @@ const H = vi.hoisted(() => ({
 
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useLeaderboard: () => ({ players: H.players, loading: H.loading }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   // #218: no Proofs fixtured in this suite — an empty map keeps every row
@@ -108,7 +112,7 @@ describe('Leaderboard — the First to BINGO pin tracks earliest firstBingoAt, n
     const topDogRow = screen.getByText('Top Dog').closest('.row');
 
     expect(earlyBirdRow).toHaveClass('leader');
-    expect(earlyBirdRow?.querySelector('.badge')).toHaveTextContent('1st BINGO');
+    expect(earlyBirdRow?.querySelector('.badge')).toHaveTextContent(/First BINGO/);
     // Top Dog outranks Early Bird (more bingos, rank #1) but got their bingo
     // LATER — they must not also carry the pin.
     expect(topDogRow).not.toHaveClass('leader');

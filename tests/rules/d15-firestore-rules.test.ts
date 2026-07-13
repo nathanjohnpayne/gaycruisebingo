@@ -208,6 +208,10 @@ describe('d15-firestore-rules — day-meta firstBingo write-once', () => {
     await assertFails(setDoc(doc(db(ALICE), at('days/0/meta/0')), honor(BOB)));
   });
 
+  it('ALLOWS an admin to create the firstBingo pin for an admin-confirmed claim owner', async () => {
+    await assertSucceeds(setDoc(doc(db(ADMIN), at('days/0/meta/0')), honor(ALICE)));
+  });
+
   it('DENIES a firstBingo create whose doc id != dayIndex', async () => {
     // The honor doc is bound to its Day (metaId == dayIndex): a self-attributed
     // payload written to any other id under days/0 is denied, so parallel honor

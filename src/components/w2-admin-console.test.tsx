@@ -202,6 +202,10 @@ describe('Report queue (specs/w2-admin-console.md)', () => {
     expect(H.deleteProof).toHaveBeenCalledWith('gone', 'proofs/e/u/gone.jpg', {
       daily: false,
       tutorialDayIndexes: undefined,
+      // #265 (Codex P2 on #278 round 3): the admin delete threads the same
+      // freeze/ceremonial gates the player's own delete uses.
+      ceremonialDayIndexes: undefined,
+      statsFrozen: expect.any(Function),
     });
   });
 
@@ -227,6 +231,8 @@ describe('Report queue (specs/w2-admin-console.md)', () => {
     expect(H.restoreProof).toHaveBeenCalledWith('half-lifted');
     fireEvent.click(q.getByTitle('Delete'));
     expect(H.deleteProof).toHaveBeenCalledWith('half-lifted', 'proofs/e/u/half-lifted.jpg', {
+      ceremonialDayIndexes: undefined,
+      statsFrozen: expect.any(Function),
       daily: false,
       tutorialDayIndexes: undefined,
     });
