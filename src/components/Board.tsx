@@ -1109,8 +1109,12 @@ export default function Board() {
   // `standingsFrozen` folds the scheduler's stamp with the scheduled farewell
   // unlock (the stale-cache belt, Codex P2 on #278) — `now` is the same
   // unlock-rollover clock the deal state reads, so the freeze engages on time
-  // even in a tab that has been open (or offline) across the boundary.
+  // even in a tab that has been open (or offline) across the boundary. The
+  // instant honor-mark path captures the boolean at tap time; the PROOF path
+  // gets the GETTER below, so a slow upload straddling 08:00 is re-checked
+  // inside the transaction (Codex P2 on #278 round 3).
   const statsFrozen = standingsFrozen(event, now);
+  const isStatsFrozen = () => standingsFrozen(event);
   const cardMeta = (
     <div className="card-meta">
       <span>
@@ -1389,8 +1393,10 @@ export default function Board() {
     // computed — a post-freeze bingo still celebrates locally and posts its
     // plain bingo/blackout Moments (the farewell card is ceremonial, not
     // silent), but must not crown a new public First to BINGO after final
-    // standings.
-    if (res.bingoTransition && !statsFrozen) {
+    // standings. Evaluated at VERDICT time (round 3): a proofed submission's
+    // slow upload can straddle the boundary, so the render-time boolean is
+    // not trusted here.
+    if (res.bingoTransition && !isStatsFrozen()) {
       const generation = pendingActionGeneration(uid);
       const witnessed = await hasPriorBingoWitness(uid);
       if (!witnessed && revalidateAfterAwait(uid, generation).generationUnchanged) {
@@ -1628,7 +1634,7 @@ export default function Board() {
           daily={hasDays}
           tutorialDayIndexes={tutorialDayIndexes}
           ceremonialDayIndexes={ceremonialDayIndexes}
-          statsFrozen={statsFrozen}
+          statsFrozen={isStatsFrozen}
           tallyCount={proofTargetTally}
           // The proofed-mark completion verdict (PR #110 round 2 finding 1): a
           // successful attachProof reports the SAME win-transition shape setMark

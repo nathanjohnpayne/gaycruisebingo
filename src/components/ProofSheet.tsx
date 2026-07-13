@@ -40,7 +40,7 @@ interface Props {
   // #265: the ceremonial (farewell) Day indexes + the standings-freeze gate,
   // threaded straight through to attachProof (same contract as setMark's).
   ceremonialDayIndexes?: number[];
-  statsFrozen?: boolean;
+  statsFrozen?: boolean | (() => boolean);
   // Strip EXIF/GPS from a photo before upload (event `stripPhotoExif`, default
   // true); passed straight through to attachProof → uploadProofMedia.
   stripExif?: boolean;

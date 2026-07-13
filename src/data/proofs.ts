@@ -85,9 +85,12 @@ export interface AttachProofArgs {
   tutorialDayIndexes?: number[];
   // #265: the ceremonial (farewell) Day indexes + the standings-freeze gate —
   // same contract as setMark's (the fold excludes ceremonial buckets from the
-  // root sums; a frozen event skips the player-stats write entirely).
+  // root sums; a frozen event narrows to the ceremonial bucket-only write).
+  // Accepts a GETTER so the gate is evaluated INSIDE the transaction, after a
+  // slow photo/audio upload — a submission started seconds before 08:00 must
+  // not fold with a pre-freeze capture (Codex P2 on #278 round 3).
   ceremonialDayIndexes?: number[];
-  statsFrozen?: boolean;
+  statsFrozen?: boolean | (() => boolean);
   // Strip EXIF/GPS from a photo before upload (event `stripPhotoExif`, default
   // true); threaded straight to uploadProofMedia — this layer never reads the blob.
   stripExif?: boolean;
@@ -245,6 +248,7 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
     // schedule → standingsFrozen is false), so the legacy flat write needs no
     // frozen arm.
     {
+      const frozenNow = typeof statsFrozen === 'function' ? statsFrozen() : statsFrozen === true;
       const statWrite = playerStatWrite({
         daily: daily === true,
         dayIndex: dayIndex ?? 0,
@@ -256,12 +260,12 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
         tutorialDayIndexes,
         ceremonialDayIndexes,
       });
-      if (statsFrozen && daily === true && 'dayStats' in statWrite && ceremonialDayIndexes?.includes(dayIndex ?? 0)) {
+      if (frozenNow && daily === true && 'dayStats' in statWrite && ceremonialDayIndexes?.includes(dayIndex ?? 0)) {
         // Post-freeze, only the ceremonial (farewell) Day's bucket records —
         // any other Day's bucket would still drift the settled daily honors
         // (Codex P2 on #278 round 2).
         tx.set(playerRef, { dayStats: statWrite.dayStats }, { merge: true });
-      } else if (!statsFrozen) {
+      } else if (!frozenNow) {
         tx.set(playerRef, statWrite, { merge: true });
       }
     }
@@ -337,7 +341,7 @@ export async function deleteProof(
   // the Proof's OWN `dayIndex` and fold the owner's stats into that Day's bucket,
   // mirroring `attachProof`. Absent/false keeps the pre-1.5 flat single-board
   // unmark. `tutorialDayIndexes` scopes the cruise-wide First-to-BINGO exclusion.
-  opts?: { daily?: boolean; tutorialDayIndexes?: number[]; ceremonialDayIndexes?: number[]; statsFrozen?: boolean },
+  opts?: { daily?: boolean; tutorialDayIndexes?: number[]; ceremonialDayIndexes?: number[]; statsFrozen?: boolean | (() => boolean) },
 ): Promise<void> {
   // Storage first (ordering preserved): if the blob delete throws we keep the
   // doc so the media isn't orphaned.
@@ -406,10 +410,12 @@ export async function deleteProof(
             tutorialDayIndexes: opts?.tutorialDayIndexes,
             ceremonialDayIndexes: opts?.ceremonialDayIndexes,
           });
-          if (opts?.statsFrozen && daily && 'dayStats' in statWrite && opts?.ceremonialDayIndexes?.includes(proofDayIndex)) {
+          const frozenNow =
+            typeof opts?.statsFrozen === 'function' ? opts.statsFrozen() : opts?.statsFrozen === true;
+          if (frozenNow && daily && 'dayStats' in statWrite && opts?.ceremonialDayIndexes?.includes(proofDayIndex)) {
             // Ceremonial-day-only post-freeze bucket, mirroring setMark.
             tx.set(playerRef, { dayStats: statWrite.dayStats }, { merge: true });
-          } else if (!opts?.statsFrozen) {
+          } else if (!frozenNow) {
             tx.set(playerRef, statWrite, { merge: true });
           }
         }
