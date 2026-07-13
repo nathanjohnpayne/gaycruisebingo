@@ -80,6 +80,69 @@ test.describe('Admin — Schedule editor', () => {
     await expect(unlockedSelect).toBeDisabled();
     await page.screenshot({ path: `${SHOTS}/admin-schedule-locked-row.png`, fullPage: true });
   });
+
+  // #249, daily-cards-spec § "Unlock mechanics": "a manual admin 'unlock now'
+  // button covers function failure." Drives the real `unlockDayNow` callable
+  // through the Functions emulator against a Day forced into the exact state
+  // a lagging/failed 08:00 scheduler run leaves behind — unlocked, but never
+  // snapshot-stamped — and proves the button both fires the callable and
+  // disappears once the Firestore listener reflects the resulting stamp.
+  test('a Day that is due for unlock but not yet snapshot-stamped shows an "Unlock now" button that calls the callable and stamps the Day', async ({
+    page,
+  }) => {
+    await joinViaSharedLink(page);
+    const uid = await signedInUid(page);
+    await waitForBoardServerConfirmed(page);
+    await dismissCoach(page);
+    await becomeAdminAndOpenPanel(page, testEnv, uid);
+
+    // ONLY NOW — after the join/deal flow has already settled against the
+    // original (healthy) schedule — push the still-LOCKED Day (index 4, no
+    // snapshotItemIds) into the past without stamping it. Doing this before
+    // joining would make it the newly-"due" default-viewed Day mid-deal and
+    // hang the join flow on a Day the scheduler never stamped; the manual
+    // Admin fallback here targets that same unstamped state deliberately.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const snap = await getDoc(doc(ctx.firestore(), 'events', EVENT_ID));
+      const days = (snap.data() as { days: Array<Record<string, unknown>> }).days;
+      await updateDoc(doc(ctx.firestore(), 'events', EVENT_ID), {
+        days: days.map((d) => (d.index === LOCKED_INDEX ? { ...d, unlockAt: Date.now() - 1000 } : d)),
+      });
+    });
+
+    const adminDialog = page.getByRole('dialog', { name: 'Admin' });
+    await adminDialog.getByRole('button', { name: 'Schedule', exact: true }).click();
+
+    const dueRow = page.locator('.row').filter({ hasText: `Day ${LOCKED_INDEX + 1}` });
+    const unlockBtn = dueRow.getByRole('button', { name: 'Unlock now' });
+    await expect(unlockBtn).toBeVisible();
+    // No other seeded Day (all already snapshot-stamped, or still genuinely
+    // locked) offers this affordance.
+    await expect(page.getByRole('button', { name: 'Unlock now' })).toHaveCount(1);
+    await page.screenshot({ path: `${SHOTS}/admin-schedule-unlock-now-due.png`, fullPage: true });
+
+    await unlockBtn.click();
+    await expect(dueRow.locator('.pill')).toHaveText('Unlocked.', { timeout: 10_000 });
+    await page.screenshot({ path: `${SHOTS}/admin-schedule-unlock-now-done.png`, fullPage: true });
+
+    // Ground truth: the callable actually stamped the Day's Snapshot.
+    await expect
+      .poll(async () => {
+        let ids: string[] | undefined;
+        await testEnv.withSecurityRulesDisabled(async (ctx) => {
+          const snap = await getDoc(doc(ctx.firestore(), 'events', EVENT_ID));
+          const days = (snap.data() as { days?: Array<{ index: number; snapshotItemIds?: string[] }> } | undefined)
+            ?.days;
+          ids = days?.find((d) => d.index === LOCKED_INDEX)?.snapshotItemIds;
+        });
+        return ids;
+      }, { timeout: 10_000 })
+      .toBeDefined();
+
+    // The button self-hides once the Firestore listener reflects the stamp —
+    // dayDueForManualUnlock flips false, so there's no dead action left to offer.
+    await expect(page.getByRole('button', { name: 'Unlock now' })).toHaveCount(0, { timeout: 10_000 });
+  });
 });
 
 test.describe('Admin — Proof & Claims panel', () => {
