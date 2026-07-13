@@ -116,7 +116,6 @@ export default function ConfirmWinMoments() {
     identityKnown: boolean;
     cells: Cell[];
     boardOwned: boolean;
-    dayIndex: number | undefined;
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -126,7 +125,6 @@ export default function ConfirmWinMoments() {
     identityKnown: false,
     cells: [],
     boardOwned: false,
-    dayIndex: undefined,
   });
   ctx.current = {
     uid,
@@ -137,12 +135,6 @@ export default function ConfirmWinMoments() {
     identityKnown,
     cells: board?.cells ?? [],
     boardOwned: board != null && board.uid === uid,
-    // The confirmed Claim's own Day (daily-cards-spec § "Scoring and social
-    // surfaces"), so a blackout that materializes on the confirm path names the
-    // same Day the live-mark path would have. `BoardDoc.dayIndex` is a required
-    // field (defaults to 0 for a legacy single-Board Event), so this is always
-    // defined once `board` has loaded.
-    dayIndex: board?.dayIndex,
   };
 
   // Self-reference so the async settle continuation can loop the drain until the
@@ -198,7 +190,19 @@ export default function ConfirmWinMoments() {
               hasPriorBingo: witnessed,
             });
             if (plan.bingo) broadcastBingo(actor);
-            if (plan.blackout) broadcastBlackout(actor, cc.dayIndex);
+            // No dayIndex here (Codex finding 3, fix/d15-blackout-day-naming):
+            // `board` above is `useBoard(uid)`, the LEGACY single-Board hook —
+            // `dealDayCard` never writes that path in daily-cards mode (api.ts),
+            // so `boardOwned` (and therefore this whole drain) can only be true
+            // on a legacy, non-daily Event, where a blackout Moment stays
+            // day-less (mirrors Board.tsx's live-mark path, Codex finding 1).
+            // The confirmed Claim DOES carry its own `dayIndex` in daily-cards
+            // mode, but this component has no day-scoped board/claim wiring to
+            // safely attribute a batch confirm's blackout to ONE Claim's Day —
+            // making the confirm path daily-aware is a separate, out-of-scope
+            // ticket (this component's `admin_confirmed`-mode Moments are
+            // already inert for daily Events today via the `boardOwned` gate).
+            if (plan.blackout) broadcastBlackout(actor);
             if (plan.firstBingo) broadcastFirstBingo(actor);
             else if (plan.firstBingoHeld) st2.heldCeremony = actor;
             nowReflected.forEach(([id]) => st2.awaiting.delete(id));

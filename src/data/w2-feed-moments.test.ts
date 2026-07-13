@@ -50,6 +50,7 @@ import {
   enqueueWinMoments,
   enqueueFirstBingoMoment,
   peekPendingMoments,
+  pendingBlackoutDayIndex,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -233,6 +234,51 @@ describe('the pending-Moment queue — module state that survives Board unmounts
     resetPendingMoments();
     expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
     expect(peekPendingMoments('u2')).toEqual({ bingo: false, blackout: false, firstBingo: false });
+  });
+});
+
+describe('pendingBlackoutDayIndex — the blackout Day captured at ENQUEUE time (Codex finding 2, fix/d15-blackout-day-naming)', () => {
+  it('is undefined when nothing is queued', () => {
+    expect(pendingBlackoutDayIndex('u1')).toBeUndefined();
+  });
+
+  it('stamps the Day the enqueue carried, so a later drain (after the Player switches Days) still reads it', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 3 });
+    expect(pendingBlackoutDayIndex('u1')).toBe(3);
+    // The Player switches the viewed Day before the drain fires — the STORED
+    // value (from enqueue time) is what a later drain must read, never a
+    // re-derivation from whatever is on screen now. Nothing re-enqueues here;
+    // this asserts the getter keeps returning the ORIGINAL stamp.
+    expect(pendingBlackoutDayIndex('u1')).toBe(3);
+  });
+
+  it('omits the Day entirely (undefined) for a legacy, non-daily enqueue — never a misleading "Day 1"', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true }); // no dayIndex
+    expect(peekPendingMoments('u1').blackout).toBe(true);
+    expect(pendingBlackoutDayIndex('u1')).toBeUndefined();
+  });
+
+  it('first blackout wins: a second blackoutTransition enqueue (a different Day Card) never overwrites the stamped Day', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 2 });
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 5 });
+    expect(pendingBlackoutDayIndex('u1')).toBe(2);
+  });
+
+  it('clearPendingMoment("blackout") (the drain FIRED it) resets the stamp — nothing left to protect', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 4 });
+    clearPendingMoment('u1', 'blackout');
+    expect(pendingBlackoutDayIndex('u1')).toBeUndefined();
+  });
+
+  it('dropPendingWins({ blackout: true }) (an observed fall) resets the stamp — the fallen blackout no longer applies', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 4 });
+    dropPendingWins('u1', { blackout: true });
+    expect(pendingBlackoutDayIndex('u1')).toBeUndefined();
+  });
+
+  it('is isolated per-uid', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 1 });
+    expect(pendingBlackoutDayIndex('u2')).toBeUndefined();
   });
 });
 
