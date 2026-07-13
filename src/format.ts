@@ -81,7 +81,11 @@ const SHORT_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'S
 export function shortSailRange(sailStart: string, sailEnd: string): string {
   const parse = (v: string) => {
     const [y, m, d] = String(v ?? '').split('-').map(Number);
-    return Number.isFinite(y) && m >= 1 && m <= 12 && d >= 1 && d <= 31 ? { y, m, d } : null;
+    if (!Number.isFinite(y) || !(m >= 1 && m <= 12) || !(d >= 1 && d <= 31)) return null;
+    // Round-trip through Date to reject impossible calendar dates
+    // (e.g. Feb 30 — Date would roll it over; #281 P3).
+    const dt = new Date(y, m - 1, d);
+    return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d ? { y, m, d } : null;
   };
   const a = parse(sailStart);
   const b = parse(sailEnd);

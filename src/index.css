@@ -1447,6 +1447,10 @@ a {
   flex: 0 0 auto;
   font-size: 14px;
   line-height: 1;
+  /* The ✕ is the ONLY forever-dismiss on both platforms — keep the Apple-HIG
+     44px tap target (Codex P2 on #281). */
+  min-width: 44px;
+  min-height: 44px;
 }
 .install-prompt-body {
   flex: 1;
@@ -1681,7 +1685,10 @@ body:has(.sheet-backdrop) .bug-report-trigger {
 .guidelines-icon {
   width: 18px;
   height: 18px;
-  fill: currentcolor;
+  /* Lucide shield-alert is an OUTLINE icon (#281): stroke, never the old
+     filled-artwork currentcolor fill, which rendered it as a solid blob. */
+  fill: none;
+  stroke-width: 2;
 }
 body.install-prompt-visible .guidelines-trigger,
 body.update-prompt-visible .guidelines-trigger {
