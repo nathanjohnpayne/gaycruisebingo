@@ -1,5 +1,5 @@
 // Pure, framework-free game logic. No Firebase, no React — fully unit-testable.
-import type { Cell, DayDef, PlayerDoc } from '../types';
+import type { Cell, DayDef, EventDoc, PlayerDoc } from '../types';
 
 export const GRID = 5;
 export const CENTER = 12;
@@ -384,6 +384,27 @@ export function ceremonialDayIndexSet(days: readonly DayDef[] | undefined): Set<
   const s = new Set<number>();
   for (const d of days ?? []) if (d.pool === 'farewell') s.add(d.index);
   return s;
+}
+
+/**
+ * Whether the standings are FROZEN (#265; Codex P2 on #278): the scheduler's
+ * `frozenAt` stamp when present, OR — the stale-cache belt — the farewell
+ * Day's scheduled `unlockAt` having passed. The freeze moment IS the farewell
+ * unlock (daily-cards-spec § "Scoring": the two-beat finish), and the schedule
+ * is cached with the event doc, so a client whose persistent cache predates
+ * the scheduler's stamp (or is offline at sea) still fails CLOSED at 08:00 on
+ * Day 10 by its own clock. Legacy events (no schedule) never freeze.
+ */
+export function standingsFrozen(
+  event: Pick<EventDoc, 'frozenAt' | 'days'> | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  if (!event) return false;
+  if (event.frozenAt != null) return true;
+  for (const d of event.days ?? []) {
+    if (d.pool === 'farewell' && now >= d.unlockAt) return true;
+  }
+  return false;
 }
 
 /** Sum `bingoCount` + `squaresMarked` across EVERY Day Card, tutorial Days

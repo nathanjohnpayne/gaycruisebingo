@@ -1,7 +1,7 @@
 import { doc, getDoc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, EVENT_ID } from '../firebase';
-import { completedLines, countMarked, isBlackout, foldDayStat, tutorialDayIndexSet, type DayStats } from '../game/logic';
+import { completedLines, countMarked, isBlackout, foldDayStat, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats } from '../game/logic';
 import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef } from '../types';
 
@@ -207,11 +207,20 @@ async function resolve(
   const daily = typeof c.dayIndex === 'number';
   const boardRef = daily ? dayBoard(c.dayIndex as number, c.uid) : board(c.uid);
   let isTutorialDay: ((i: number) => boolean) | undefined;
+  let isCeremonialDay: ((i: number) => boolean) | undefined;
+  let statsFrozen = false;
   if (daily) {
     const evSnap = await getDoc(evt()).catch(() => null);
     const days = (evSnap?.data()?.days as DayDef[] | undefined) ?? [];
     const set = tutorialDayIndexSet(days);
     isTutorialDay = (i: number) => set.has(i);
+    // The freeze + ceremonial gates apply to the ADMIN resolve fold too (#265,
+    // Codex P1 on #278): a post-freeze claim approval must not move the frozen
+    // standings — it narrows to the bucket-only write below, exactly like
+    // setMark/attachProof — and the farewell bucket never enters the root sums.
+    const ceremonial = ceremonialDayIndexSet(days);
+    isCeremonialDay = (i: number) => ceremonial.has(i);
+    statsFrozen = standingsFrozen({ frozenAt: evSnap?.data()?.frozenAt as number | undefined, days });
   }
   await runTransaction(db, async (tx) => {
     // Read board + player inside the txn so a concurrent mark/proof from the same
@@ -242,8 +251,10 @@ async function resolve(
         bucket: { bingoCount, squaresMarked: squares, firstBingoAt },
         blackout,
         isTutorialDay,
+        isCeremonialDay,
       });
-      tx.set(player(c.uid), playerWrite, { merge: true });
+      if (statsFrozen) tx.set(player(c.uid), { dayStats: playerWrite.dayStats }, { merge: true });
+      else tx.set(player(c.uid), playerWrite, { merge: true });
     } else {
       tx.set(player(c.uid), { squaresMarked: squares, bingoCount, blackout, firstBingoAt }, { merge: true });
     }

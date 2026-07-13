@@ -7,7 +7,7 @@ import { reportProof, deleteProof } from '../data/proofs';
 import { track } from '../analytics';
 import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
-import { tutorialDayIndexSet, ceremonialDayIndexSet } from '../game/logic';
+import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
 import { THEMES } from '../theme/themes';
 import type { BoardDoc, DayDef, MomentDoc, MomentKind, ProofDoc, TallyCard as TallyCardData } from '../types';
 
@@ -448,7 +448,7 @@ export default function ProofFeed() {
             />
           );
         }
-        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} statsFrozen={event?.frozenAt != null} />;
+        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} statsFrozen={standingsFrozen(event)} />;
       })}
       {whoListCard && <FeedWhoListSheet card={whoListCard} onClose={() => setWhoListCard(null)} />}
     </div>

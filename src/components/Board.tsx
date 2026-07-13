@@ -23,7 +23,7 @@ import {
 // the proofed-mark completion verdict ProofSheet reports back (PR #110 round 2
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
-import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet, ceremonialDayIndexSet } from '../game/logic';
+import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
 import { fitTextSize } from '../game/fitText';
 import { useTextSize } from '../hooks/useTextSize';
 import { track } from '../analytics';
@@ -1106,7 +1106,11 @@ export default function Board() {
   // standings don't move. `frozenAt` is only ever stamped when reached, so its
   // presence IS the freeze.
   const ceremonialDayIndexes = hasDays ? [...ceremonialDayIndexSet(days)] : undefined;
-  const statsFrozen = event?.frozenAt != null;
+  // `standingsFrozen` folds the scheduler's stamp with the scheduled farewell
+  // unlock (the stale-cache belt, Codex P2 on #278) — `now` is the same
+  // unlock-rollover clock the deal state reads, so the freeze engages on time
+  // even in a tab that has been open (or offline) across the boundary.
+  const statsFrozen = standingsFrozen(event, now);
   const cardMeta = (
     <div className="card-meta">
       <span>

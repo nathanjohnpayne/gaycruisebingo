@@ -238,24 +238,29 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
       dayIndex: typeof dayIndex === 'number' ? dayIndex : null,
     });
     tx.set(boardRef, { cells: next }, { merge: true });
-    // The standings freeze (#265): a post-`frozenAt` proofed Mark keeps the
-    // card + Tally + Proof honest but never folds the player stats.
-    if (!statsFrozen) {
-      tx.set(
-        playerRef,
-        playerStatWrite({
-          daily: daily === true,
-          dayIndex: dayIndex ?? 0,
-          priorDayStats: playerSnap.data()?.dayStats as DayStats | undefined,
-          bingoCount,
-          squaresMarked: squares,
-          firstBingoAt,
-          blackout,
-          tutorialDayIndexes,
-          ceremonialDayIndexes,
-        }),
-        { merge: true },
-      );
+    // The standings freeze (#265): a post-freeze proofed Mark keeps the card +
+    // Tally + Proof honest and still records its PER-DAY bucket (the farewell
+    // daily honor reads it — Codex P2 on #278); the ROOT aggregates stop
+    // moving (bucket-only write). A frozen LEGACY event cannot arise (no
+    // schedule → standingsFrozen is false), so the legacy flat write needs no
+    // frozen arm.
+    {
+      const statWrite = playerStatWrite({
+        daily: daily === true,
+        dayIndex: dayIndex ?? 0,
+        priorDayStats: playerSnap.data()?.dayStats as DayStats | undefined,
+        bingoCount,
+        squaresMarked: squares,
+        firstBingoAt,
+        blackout,
+        tutorialDayIndexes,
+        ceremonialDayIndexes,
+      });
+      if (statsFrozen && daily === true && 'dayStats' in statWrite) {
+        tx.set(playerRef, { dayStats: statWrite.dayStats }, { merge: true });
+      } else if (!statsFrozen) {
+        tx.set(playerRef, statWrite, { merge: true });
+      }
     }
     // Per-Prompt Tally (ADR 0002): a proofed Mark self-publishes the SAME attributed
     // marker a bare honor Mark does (setMark) — EVERY Mark, proofed or not, tallies.
@@ -382,24 +387,27 @@ export async function deleteProof(
         const blackout = isBlackout(next);
         const firstBingoAt = bingoCount > 0 ? existingFirst : null;
         tx.set(boardRef, { cells: next }, { merge: true });
-        // The standings freeze (#265): a post-`frozenAt` proof deletion unmarks
-        // the cell but never unfolds the frozen stats (symmetric with setMark).
-        if (!opts?.statsFrozen) {
-          tx.set(
-            playerRef,
-            playerStatWrite({
-              daily,
-              dayIndex: proofDayIndex,
-              priorDayStats: playerSnap.data()?.dayStats as DayStats | undefined,
-              bingoCount,
-              squaresMarked: squares,
-              firstBingoAt,
-              blackout,
-              tutorialDayIndexes: opts?.tutorialDayIndexes,
-              ceremonialDayIndexes: opts?.ceremonialDayIndexes,
-            }),
-            { merge: true },
-          );
+        // The standings freeze (#265): a post-freeze proof deletion unmarks the
+        // cell and updates its PER-DAY bucket only (symmetric with setMark's
+        // bucket-only frozen write — Codex P2 on #278); the frozen ROOT
+        // aggregates never unfold.
+        {
+          const statWrite = playerStatWrite({
+            daily,
+            dayIndex: proofDayIndex,
+            priorDayStats: playerSnap.data()?.dayStats as DayStats | undefined,
+            bingoCount,
+            squaresMarked: squares,
+            firstBingoAt,
+            blackout,
+            tutorialDayIndexes: opts?.tutorialDayIndexes,
+            ceremonialDayIndexes: opts?.ceremonialDayIndexes,
+          });
+          if (opts?.statsFrozen && daily && 'dayStats' in statWrite) {
+            tx.set(playerRef, { dayStats: statWrite.dayStats }, { merge: true });
+          } else if (!opts?.statsFrozen) {
+            tx.set(playerRef, statWrite, { merge: true });
+          }
         }
         // Unmarking removes exactly that Player's per-Prompt Tally entry (ADR 0002),
         // mirroring the cell flip — reached only when the cell is still backed by

@@ -153,9 +153,9 @@ describe('setMark folds into dayStats[dayIndex] and derives the cruise-wide root
     expect(playerWrite.squaresMarked).toBe(5);
   });
 
-  it('skips the player-stats write entirely once the standings are frozen (#265) — board + Tally still write', async () => {
+  it('narrows to the BUCKET-ONLY player write once the standings are frozen (#265; Codex P2 on #278) — the per-Day record survives, the roots never move', async () => {
     getDocFromCacheSpy
-      .mockResolvedValueOnce(snap({ cells: dealt(), dayIndex: 4 })) // board read
+      .mockResolvedValueOnce(snap({ cells: dealt(), dayIndex: 9 })) // board read (the farewell card)
       .mockResolvedValueOnce(snap({ firstBingoAt: null, displayName: 'Marker' })); // player read
 
     await setMark({
@@ -168,10 +168,13 @@ describe('setMark folds into dayStats[dayIndex] and derives the cruise-wide root
       statsFrozen: true,
     });
 
+    const playerCall = setSpy.mock.calls.find((c) => (c[0] as { path: string }).path.includes('/players/'));
+    expect(playerCall).toBeTruthy();
+    const write = playerCall![1] as Record<string, unknown>;
+    // ONLY the per-Day bucket — no root aggregates, no blackout flag.
+    expect(Object.keys(write)).toEqual(['dayStats']);
+    expect(write.dayStats).toEqual({ 9: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null } });
     const paths = setSpy.mock.calls.map((c) => (c[0] as { path: string }).path);
-    // The board and the Tally marker write; no players/ doc write at all.
-    expect(paths.some((p) => p.includes('/players/'))).toBe(false);
-    expect(paths.some((p) => p.includes('/boards/') || p.includes('/days/'))).toBe(true);
     expect(paths.some((p) => p.includes('/tally/'))).toBe(true);
   });
 });
