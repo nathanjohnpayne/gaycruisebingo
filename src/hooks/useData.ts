@@ -220,6 +220,42 @@ export function useDayBoard(uid: string | undefined, dayIndex: number | undefine
 }
 
 /**
+ * ALL of a Player's dealt Day Cards, as a `Map<dayIndex, BoardDoc>` (#261 —
+ * the Feed's Tally Card button gating needs the viewer's marked/unmarked
+ * Prompt sets across every unlocked Day Card, and a Board doc exists exactly
+ * for the dealt/unlocked Days). One effect owns the whole fan of per-day doc
+ * subscriptions — `dayCount` is the Event's `days.length` (bounded, ten on
+ * this sailing), so the fan is fixed-size per Event and re-keys only when the
+ * schedule length or the viewer changes. Days without a Board simply never
+ * enter the map.
+ */
+export function useMyDayBoards(uid: string | undefined, dayCount: number): ReadonlyMap<number, BoardDoc> {
+  const [boards, setBoards] = useState<ReadonlyMap<number, BoardDoc>>(new Map());
+  useEffect(() => {
+    setBoards(new Map());
+    if (!uid || dayCount <= 0) return;
+    const unsubs = Array.from({ length: dayCount }, (_, dayIndex) =>
+      onSnapshot(
+        dayBoardRef(dayIndex, uid),
+        (snap) => {
+          setBoards((prev) => {
+            const next = new Map(prev);
+            if (snap.exists()) next.set(dayIndex, snap.data() as BoardDoc);
+            else next.delete(dayIndex);
+            return next;
+          });
+        },
+        () => {
+          /* permission-denied (signed out mid-flight) — leave the day absent */
+        },
+      ),
+    );
+    return () => unsubs.forEach((u) => u());
+  }, [uid, dayCount]);
+  return boards;
+}
+
+/**
  * The viewed Day's deal state for a Player: subscribes to the day-scoped Board
  * and folds it with the DayDef schedule + the current clock through
  * `dayDealState`, so a surface can distinguish `locked` (render the preview),
