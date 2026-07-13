@@ -208,13 +208,13 @@ describe('ProofFeed (default export) — Feed-level who-list sheet (#216 accepta
     const tallyCard = document.querySelector('.tally-card');
     expect(tallyCard).toBeTruthy();
     // No who-list sheet until the card is tapped.
-    expect(screen.queryByText(/^Who marked/)).toBeNull();
+    expect(screen.queryByText(/^Who got/)).toBeNull();
 
     fireEvent.click(tallyCard!.querySelector('.tally-card-body')!);
 
     // The sheet opens, names the SAME Prompt, and lists the marker — read-only
     // (no Doubt affordance; the Board-side who-list owns that).
-    expect(screen.getByText(/Who marked/)).toBeTruthy();
+    expect(screen.getByText(/Who got/)).toBeTruthy();
     const sheetRows = document.querySelectorAll('.sheet .list .row');
     expect(sheetRows).toHaveLength(1);
     expect(sheetRows[0].querySelector('.name')?.textContent).toBe('Alice Anchor');
@@ -222,7 +222,7 @@ describe('ProofFeed (default export) — Feed-level who-list sheet (#216 accepta
 
     // Close dismisses it.
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    expect(screen.queryByText(/^Who marked/)).toBeNull();
+    expect(screen.queryByText(/^Who got/)).toBeNull();
   });
 });
 

@@ -1221,6 +1221,46 @@ a {
    2.54:1). 45% keeps a visible secondary tint while dropping every Theme's
    white numerals to ≥ WCAG AA (4.5:1; worst 4.92:1 on get-sporty). See
    specs/a11y-badge-contrast.md. */
+/* Who-list rows (#263, wireframe): right-aligned state text, the answered
+   row's proof-media chip, the viewer's own "you" pill, and the footer note. */
+/* Who-list rows may wrap their right-side cluster (state + an additional
+   doubter's compact affordance) onto a second line on narrow sheets, instead
+   of pushing the action off-screen at 320px (Codex P2 on #276). */
+.wholist-row {
+  flex-wrap: wrap;
+}
+.wholist-state {
+  font-size: 11px;
+  color: var(--dim);
+  white-space: nowrap;
+  text-align: right;
+}
+.wholist-state.doubt-satisfied {
+  color: var(--ink);
+}
+.wholist-thumb {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--cell);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+.you-pill {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 10px;
+  padding: 1px 7px;
+  color: var(--dim);
+}
+.wholist-note {
+  font-size: 11.5px;
+  margin: 8px 2px 0;
+}
 .doubt-badge {
   position: absolute;
   top: 2px;

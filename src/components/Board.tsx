@@ -199,7 +199,7 @@ function DoubtBadge({
         onOpen();
       }}
     >
-      {open.length}
+      <span aria-hidden="true">👀</span> {open.length}
     </button>
   );
 }
@@ -330,10 +330,18 @@ function TallySheet({
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-title">Who marked “{itemText}”</div>
-        {openCount > 0 && (
+        <div className="sheet-title">Who got “{itemText}”</div>
+        {/* The wireframes' subtitle (#263): "5 players · 3 open doubts 👀 on
+            this square" — the player count always, the doubt half only when
+            any are open. */}
+        {markers.length > 0 && (
           <p className="doubt-summary">
-            {openCount} open doubt{openCount === 1 ? '' : 's'}—pics or it didn&apos;t happen
+            {markers.length} player{markers.length === 1 ? '' : 's'}
+            {openCount > 0 && (
+              <>
+                {' '}· {openCount} open doubt{openCount === 1 ? '' : 's'} <span aria-hidden="true">👀</span> on this square
+              </>
+            )}
           </p>
         )}
         {loading && markers.length === 0 ? (
@@ -352,29 +360,70 @@ function TallySheet({
                 (d) => d.targetUid === m.uid && d.fromUid === meUid,
               );
               const isPending = inFlight.current.has(m.uid);
+              // The satisfying Proof's media chip (#263 — the wireframes'
+              // inline thumb on an Answered row): the LATEST active Proof this
+              // marker attached for this Prompt, mapped to its capture-type
+              // glyph. No chip when the type is unknown (legacy docs).
+              const answeredProof =
+                status === 'satisfied'
+                  ? [...proofs].filter((pr) => pr.uid === m.uid).sort((a, b) => b.createdAt - a.createdAt)[0]
+                  : undefined;
+              const proofChip =
+                answeredProof?.type === 'photo'
+                  ? answeredProof.source === 'library'
+                    ? '🖼️'
+                    : '📷'
+                  : answeredProof?.type === 'audio'
+                    ? '🎙'
+                    : answeredProof?.type === 'text'
+                      ? '✍️'
+                      : null;
+              const rowHasState = status === 'open' || status === 'satisfied';
               return (
-                <div className="row" key={m.uid}>
+                <div className="row wholist-row" key={m.uid}>
                   <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
                   <div className="grow">
                     <div className="name">{m.displayName}</div>
-                    {status === 'open' && (
-                      <div className="sub doubt-open">Doubted—pics or it didn&apos;t happen</div>
-                    )}
-                    {status === 'satisfied' && (
-                      <div className="sub doubt-satisfied">Proof shown ✓</div>
-                    )}
                   </div>
-                  {!isMe && (
+                  {/* Right-aligned state (#263, the wireframes' who-list rows):
+                      open → "👀 Doubted · waiting…"; answered → the proof's
+                      media chip + "✓ Answered". Class names unchanged (they
+                      are the pinned open/satisfied distinction). */}
+                  {status === 'open' && (
+                    <span className="wholist-state doubt-open">👀 Doubted · waiting…</span>
+                  )}
+                  {status === 'satisfied' && (
+                    <>
+                      {proofChip && (
+                        <span className="wholist-thumb" aria-hidden="true">
+                          {proofChip}
+                        </span>
+                      )}
+                      <span className="wholist-state doubt-satisfied">✓ Answered</span>
+                    </>
+                  )}
+                  {isMe && <span className="pill you-pill">you</span>}
+                  {/* The raise affordance suppresses only for the VIEWER's own
+                      involvement — self rows and rows they already doubted
+                      (their deterministic slot is spent; the state above says
+                      so). Someone ELSE's open/satisfied Doubt never blocks an
+                      additional doubter: the slot is per (doubter, target,
+                      Prompt), so Alice's raise stays valid on a row Bob
+                      doubted (Codex P2 on #276). */}
+                  {!isMe && !iAlreadyDoubted && (
                     <button
                       className="btn doubt-btn"
                       title="pics or it didn't happen"
                       // !identityKnown: never let a public, permanent accusation
                       // publish while the accuser's saved name is still unknown
                       // (round 2 finding 3) — the gate opens when the row loads.
-                      disabled={iAlreadyDoubted || isPending || !identityKnown}
+                      disabled={isPending || !identityKnown}
                       onClick={() => doDoubt(m)}
                     >
-                      {iAlreadyDoubted ? 'Doubted' : isPending ? 'Doubting…' : 'Doubt'}
+                      {/* Compact label on a row already carrying a state so the
+                          320px sheet row never overflows (Codex P2 on #276);
+                          the full wireframe phrase stays on stateless rows. */}
+                      {isPending ? 'Doubting…' : rowHasState ? '🤨 Doubt too' : '🤨 Pics or it didn’t happen'}
                     </button>
                   )}
                 </div>
@@ -382,6 +431,9 @@ function TallySheet({
             })}
           </div>
         )}
+        <p className="muted wholist-note">
+          A doubt never blocks or unmarks—it&apos;s social pressure with a scoreboard.
+        </p>
         <div className="sheet-actions">
           <button className="btn" onClick={onClose}>
             Close

@@ -45,7 +45,7 @@ test.describe('tally cards', () => {
       // ProofFeed's default export now wires to `FeedWhoListSheet` — a
       // read-only sheet built straight off the tally doc's own `markers[]`.
       await card.locator('.tally-card-body').click();
-      const sheetTitle = page.locator('.sheet-title', { hasText: /^Who marked/ });
+      const sheetTitle = page.locator('.sheet-title', { hasText: /^Who got/ });
       await expect(sheetTitle).toBeVisible({ timeout: 5_000 });
       // The sheet's title names the SAME Prompt the Tally Card is for.
       await expect(sheetTitle).toContainText(promptText);
