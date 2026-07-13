@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { visionModerationEnabled } from '../../functions/src/visionGate';
+import { visionModerationEnabled, shouldScanProof } from '../../functions/src/visionGate';
 
 // firebase-admin only lives in functions/node_modules (not the repo root).
 // A plain `import ... from 'firebase-admin/app'` in this file resolves node
@@ -176,5 +176,30 @@ describe('moderateProof export gating (#126)', () => {
     expect(mod.submitBugReport.__endpoint.serviceAccountEmail).toBe(
       'firebase-adminsdk-fbsvc@gaycruisebingo.iam.gserviceaccount.com',
     );
+  });
+});
+
+describe('shouldScanProof — the RUNTIME admin toggle (#268)', () => {
+  const dbWith = (settings: Record<string, unknown> | undefined) => ({
+    doc: (_path: string) => ({
+      get: () =>
+        Promise.resolve({
+          get: (field: string) => (field === 'settings.visionGate' ? settings?.visionGate : undefined),
+        }),
+    }),
+  });
+
+  it('scans by default (setting absent) and when explicitly true', async () => {
+    await expect(shouldScanProof(dbWith(undefined), 'e')).resolves.toBe(true);
+    await expect(shouldScanProof(dbWith({ visionGate: true }), 'e')).resolves.toBe(true);
+  });
+
+  it('skips the scan only on an EXPLICIT settings.visionGate === false — the console toggle works without a redeploy', async () => {
+    await expect(shouldScanProof(dbWith({ visionGate: false }), 'e')).resolves.toBe(false);
+  });
+
+  it('fails OPEN on a read error — moderation never silently disables on a transient hiccup', async () => {
+    const failing = { doc: () => ({ get: () => Promise.reject(new Error('unavailable')) }) };
+    await expect(shouldScanProof(failing, 'e')).resolves.toBe(true);
   });
 });
