@@ -37,7 +37,13 @@ vi.mock('firebase/firestore', async (importOriginal) => {
 });
 
 import { setMark } from './api';
-import { pinDayFirstBingo } from './dayMeta';
+import {
+  pinDayFirstBingo,
+  enqueueHeldHonorPin,
+  takeHeldHonorPins,
+  dropHeldHonorPins,
+  __resetHeldHonorPinsForTests,
+} from './dayMeta';
 import { broadcastBlackout } from './moments';
 
 const EVENT_ID = 'med-2026';
@@ -118,7 +124,10 @@ describe('setMark folds into dayStats[dayIndex] and derives the cruise-wide root
 });
 
 describe('dayMeta.pinDayFirstBingo (write-once per-Day honor)', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetHeldHonorPinsForTests();
+  });
 
   it('creates the day-meta doc with the attributed firstBingo payload on a cache miss', async () => {
     await pinDayFirstBingo(4, { uid: 'u1', displayName: 'Alice', photoURL: null }, 1234);
@@ -134,6 +143,18 @@ describe('dayMeta.pinDayFirstBingo (write-once per-Day honor)', () => {
     await pinDayFirstBingo(4, { uid: 'u1', displayName: 'Alice', photoURL: null }, 1234);
     expect(setDocSpy).not.toHaveBeenCalled();
   });
+
+  it('drains only the requested held Day and can drop a fallen held honor', () => {
+    enqueueHeldHonorPin('u1', 1, 111);
+    enqueueHeldHonorPin('u1', 2, 222);
+    enqueueHeldHonorPin('u2', 1, 333);
+
+    expect(takeHeldHonorPins('u1', 1)).toEqual([{ uid: 'u1', dayIndex: 1, at: 111 }]);
+    dropHeldHonorPins('u1', 2);
+
+    expect(takeHeldHonorPins('u1')).toEqual([]);
+    expect(takeHeldHonorPins('u2')).toEqual([{ uid: 'u2', dayIndex: 1, at: 333 }]);
+  });
 });
 
 describe('moments.broadcastBlackout — optional dayIndex names the Day (fix/d15-blackout-day-naming)', () => {
@@ -143,9 +164,10 @@ describe('moments.broadcastBlackout — optional dayIndex names the Day (fix/d15
     broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
     await flush();
     expect(setDocSpy).toHaveBeenCalledTimes(1);
-    // Deterministic id ${uid}-blackout (create-only + immutable per rules) — the
-    // SAME id the day-less broadcastBlackout call has always used.
-    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout`);
+    // Deterministic PER-CARD id ${uid}-blackout-d${dayIndex} (#267): blackout is
+    // per-card, so the dedup id scopes to the (Player, Day) pair — a second
+    // Day's blackout posts its own Moment; re-marking the same card cannot.
+    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout-d4`);
     expect(setDocSpy.mock.calls[0][1]).toMatchObject({
       kind: 'blackout',
       uid: 'u1',
@@ -162,7 +184,13 @@ describe('moments.broadcastBlackout — optional dayIndex names the Day (fix/d15
   });
 
   it('skips the broadcast when the Moment is already in the local cache', async () => {
-    getDocFromCacheSpy.mockResolvedValueOnce(snap({ kind: 'blackout', uid: 'u1' }));
+    // Path-aware (#275 round 2): the day-scoped path pre-checks the LEGACY
+    // day-less doc first, then its own per-card id — here only the per-card
+    // doc is cached, which is what must trigger the skip.
+    getDocFromCacheSpy.mockImplementation(((ref: { path: string }) =>
+      ref.path.endsWith('u1-blackout-d4')
+        ? Promise.resolve(snap({ kind: 'blackout', uid: 'u1' }))
+        : Promise.reject(new Error('unavailable'))) as unknown as () => Promise<never>);
     broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
     await flush();
     expect(setDocSpy).not.toHaveBeenCalled();

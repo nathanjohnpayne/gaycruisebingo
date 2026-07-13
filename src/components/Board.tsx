@@ -13,7 +13,8 @@ import {
   enqueueWinMoments,
   enqueueFirstBingoMoment,
   peekPendingMoments,
-  pendingBlackoutDayIndex,
+  pendingBlackoutDayIndexes,
+  removePendingBlackoutDay,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -37,7 +38,7 @@ import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
 import TutorialBanner, { TutorialTag } from './TutorialBanner';
 import FarewellPodium from './FarewellPodium';
 import { farewellPinIndex } from '../data/finale';
-import { pinDayFirstBingo, enqueueHeldHonorPin, takeHeldHonorPins } from '../data/dayMeta';
+import { pinDayFirstBingo, enqueueHeldHonorPin, takeHeldHonorPins, dropHeldHonorPins } from '../data/dayMeta';
 import CoachOverlay from './CoachOverlay';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
@@ -200,7 +201,7 @@ function DoubtBadge({
         onOpen();
       }}
     >
-      {open.length}
+      <span aria-hidden="true">👀</span> {open.length}
     </button>
   );
 }
@@ -331,10 +332,18 @@ function TallySheet({
   return (
     <div className="sheet-backdrop" onClick={onClose}>
       <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-title">Who marked “{itemText}”</div>
-        {openCount > 0 && (
+        <div className="sheet-title">Who got “{itemText}”</div>
+        {/* The wireframes' subtitle (#263): "5 players · 3 open doubts 👀 on
+            this square" — the player count always, the doubt half only when
+            any are open. */}
+        {markers.length > 0 && (
           <p className="doubt-summary">
-            {openCount} open doubt{openCount === 1 ? '' : 's'}—pics or it didn&apos;t happen
+            {markers.length} player{markers.length === 1 ? '' : 's'}
+            {openCount > 0 && (
+              <>
+                {' '}· {openCount} open doubt{openCount === 1 ? '' : 's'} <span aria-hidden="true">👀</span> on this square
+              </>
+            )}
           </p>
         )}
         {loading && markers.length === 0 ? (
@@ -353,29 +362,70 @@ function TallySheet({
                 (d) => d.targetUid === m.uid && d.fromUid === meUid,
               );
               const isPending = inFlight.current.has(m.uid);
+              // The satisfying Proof's media chip (#263 — the wireframes'
+              // inline thumb on an Answered row): the LATEST active Proof this
+              // marker attached for this Prompt, mapped to its capture-type
+              // glyph. No chip when the type is unknown (legacy docs).
+              const answeredProof =
+                status === 'satisfied'
+                  ? [...proofs].filter((pr) => pr.uid === m.uid).sort((a, b) => b.createdAt - a.createdAt)[0]
+                  : undefined;
+              const proofChip =
+                answeredProof?.type === 'photo'
+                  ? answeredProof.source === 'library'
+                    ? '🖼️'
+                    : '📷'
+                  : answeredProof?.type === 'audio'
+                    ? '🎙'
+                    : answeredProof?.type === 'text'
+                      ? '✍️'
+                      : null;
+              const rowHasState = status === 'open' || status === 'satisfied';
               return (
-                <div className="row" key={m.uid}>
+                <div className="row wholist-row" key={m.uid}>
                   <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
                   <div className="grow">
                     <div className="name">{m.displayName}</div>
-                    {status === 'open' && (
-                      <div className="sub doubt-open">Doubted—pics or it didn&apos;t happen</div>
-                    )}
-                    {status === 'satisfied' && (
-                      <div className="sub doubt-satisfied">Proof shown ✓</div>
-                    )}
                   </div>
-                  {!isMe && (
+                  {/* Right-aligned state (#263, the wireframes' who-list rows):
+                      open → "👀 Doubted · waiting…"; answered → the proof's
+                      media chip + "✓ Answered". Class names unchanged (they
+                      are the pinned open/satisfied distinction). */}
+                  {status === 'open' && (
+                    <span className="wholist-state doubt-open">👀 Doubted · waiting…</span>
+                  )}
+                  {status === 'satisfied' && (
+                    <>
+                      {proofChip && (
+                        <span className="wholist-thumb" aria-hidden="true">
+                          {proofChip}
+                        </span>
+                      )}
+                      <span className="wholist-state doubt-satisfied">✓ Answered</span>
+                    </>
+                  )}
+                  {isMe && <span className="pill you-pill">you</span>}
+                  {/* The raise affordance suppresses only for the VIEWER's own
+                      involvement — self rows and rows they already doubted
+                      (their deterministic slot is spent; the state above says
+                      so). Someone ELSE's open/satisfied Doubt never blocks an
+                      additional doubter: the slot is per (doubter, target,
+                      Prompt), so Alice's raise stays valid on a row Bob
+                      doubted (Codex P2 on #276). */}
+                  {!isMe && !iAlreadyDoubted && (
                     <button
                       className="btn doubt-btn"
                       title="pics or it didn't happen"
                       // !identityKnown: never let a public, permanent accusation
                       // publish while the accuser's saved name is still unknown
                       // (round 2 finding 3) — the gate opens when the row loads.
-                      disabled={iAlreadyDoubted || isPending || !identityKnown}
+                      disabled={isPending || !identityKnown}
                       onClick={() => doDoubt(m)}
                     >
-                      {iAlreadyDoubted ? 'Doubted' : isPending ? 'Doubting…' : 'Doubt'}
+                      {/* Compact label on a row already carrying a state so the
+                          320px sheet row never overflows (Codex P2 on #276);
+                          the full wireframe phrase stays on stateless rows. */}
+                      {isPending ? 'Doubting…' : rowHasState ? '🤨 Doubt too' : '🤨 Pics or it didn’t happen'}
                     </button>
                   )}
                 </div>
@@ -383,6 +433,9 @@ function TallySheet({
             })}
           </div>
         )}
+        <p className="muted wholist-note">
+          A doubt never blocks or unmarks—it&apos;s social pressure with a scoreboard.
+        </p>
         <div className="sheet-actions">
           <button className="btn" onClick={onClose}>
             Close
@@ -479,7 +532,7 @@ export function DayBar({
   timezone?: string;
 }) {
   const description = themeDescription(day.theme);
-  const showHonor = honor != null && !day.tutorial;
+  const showHonor = honor != null && Number.isFinite(honor.at) && !day.tutorial;
   return (
     <div className="board-header daybar-block">
       <div className="daybar">
@@ -868,6 +921,10 @@ export default function Board() {
     identityKnown: boolean;
     rosterConfirmed: boolean;
     cells: Cell[];
+    // The rendered board's OWN Day (daily mode), undefined on a legacy event —
+    // the per-card blackout drain (#267, Codex P2 on #275) adjudicates only the
+    // queued Day that IS this board, never sibling Days it cannot see.
+    boardDayIndex: number | undefined;
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -876,6 +933,7 @@ export default function Board() {
     identityKnown: false,
     rosterConfirmed: false,
     cells: [],
+    boardDayIndex: undefined,
   });
   feedCtx.current = {
     uid,
@@ -893,6 +951,7 @@ export default function Board() {
     identityKnown,
     rosterConfirmed,
     cells: cellsAttributable ? cells : [],
+    boardDayIndex: hasDays && cellsAttributable ? board?.dayIndex : undefined,
   };
 
   // Write-time twin of `tallySourceLive` for the Doubt raise (Codex P2, PR #106
@@ -947,7 +1006,7 @@ export default function Board() {
   // bumps the action generation). A flag whose fall this tab never observes can
   // therefore idle un-fireable (revalidation keeps blocking it) until reload —
   // safe: nothing publishes for it.
-  const drainMoments = useCallback((cellsOverride?: Cell[]) => {
+  const drainMoments = useCallback((cellsOverride?: Cell[], dayOverride?: number) => {
     const {
       uid: cUid,
       displayName: cName,
@@ -956,6 +1015,7 @@ export default function Board() {
       identityKnown: idKnown,
       rosterConfirmed: rosterOk,
       cells: cellsRendered,
+      boardDayIndex,
     } = feedCtx.current;
     if (!cUid || !idKnown) return; // identity gate: hold every kind
     const pending = peekPendingMoments(cUid);
@@ -970,12 +1030,32 @@ export default function Board() {
       clearPendingMoment(cUid, 'bingo');
     }
     if (pending.blackout && blackoutNow) {
-      // The Day the blackout-completing Mark happened on, captured at ENQUEUE
-      // time (Codex finding 2, fix/d15-blackout-day-naming) — NOT whatever Day
-      // is currently VIEWED: a held blackout (behind the identity gate above)
-      // can drain long after the Player has switched Days.
-      broadcastBlackout(actor, pendingBlackoutDayIndex(cUid));
-      clearPendingMoment(cUid, 'blackout');
+      // Per-card adjudication (#267; Codex P2 on #275): `blackoutNow` witnesses
+      // exactly ONE board — the rendered one — so only the queued Day that IS
+      // that board may drain against it. A sibling queued Day (its blackout
+      // completed while identity was unknown, then the Player switched Days)
+      // stays queued until ITS board is rendered blacked-out again; a Day that
+      // meanwhile FELL is dropped by that later pass's own `blackoutNow`/
+      // dropPendingWins, never published off another Day's witness. The Day is
+      // the one captured at ENQUEUE time (Codex finding 2,
+      // fix/d15-blackout-day-naming), not re-derived at fire time. An empty
+      // queue is the legacy day-less broadcast (one card the whole Event —
+      // the rendered board IS the card).
+      // The witnessed Day must MATCH the witnessed cells (Codex P2, #275 round
+      // 4): an action/proof continuation passes the ACTED board's cells, and
+      // the Player may have switched the rendered Day while that await was in
+      // flight — so an override's Day rides WITH the override, and the
+      // rendered-board day is trusted only for the no-override (snapshot)
+      // drains where the two are the same board by construction.
+      const witnessDay = cellsOverride !== undefined ? dayOverride : boardDayIndex;
+      const blackoutDays = pendingBlackoutDayIndexes(cUid);
+      if (blackoutDays.length === 0) {
+        broadcastBlackout(actor);
+        clearPendingMoment(cUid, 'blackout');
+      } else if (witnessDay !== undefined && blackoutDays.includes(witnessDay)) {
+        broadcastBlackout(actor, witnessDay);
+        removePendingBlackoutDay(cUid, witnessDay);
+      }
     }
     // Ceremonial decision — fully SYNCHRONOUS at publish time (PR #110 round 3
     // findings A + B). Round 2 re-read the witness here, which was WRONG: a
@@ -1046,8 +1126,14 @@ export default function Board() {
     // state before the refs re-seed below. On a mount's first snapshot the refs
     // are 0/false, so nothing can spuriously read as a fall.
     if (uid) {
-      if (wasBingoLines.current > 0 && bingoLines === 0) dropPendingWins(uid, { bingo: true });
-      if (wasBlackout.current && !black) dropPendingWins(uid, { blackout: true });
+      if (wasBingoLines.current > 0 && bingoLines === 0) {
+        dropPendingWins(uid, { bingo: true });
+        if (hasDays && board?.dayIndex !== undefined) dropHeldHonorPins(uid, board.dayIndex);
+      }
+      if (wasBlackout.current && !black)
+        // The fall is witnessed by THIS board — drop only its Day's queued
+        // blackout (#267); legacy (no schedule) keeps the full clear.
+        dropPendingWins(uid, { blackout: true, blackoutDayIndex: hasDays ? board?.dayIndex : undefined });
     }
     // Baseline vs detection (round 2 finding C, kept for the animation): under the
     // ADR 0006 persistent cache the first snapshot(s) can be cache-only, and a
@@ -1106,8 +1192,10 @@ export default function Board() {
   // for its return (module state, so a hold made just before an unmount still
   // drains on the next mount — round 4), mirroring the pending-Moment queue.
   useEffect(() => {
-    if (!identityKnown || !uid) return;
-    const mine = takeHeldHonorPins(uid);
+    const currentDay = feedCtx.current.boardDayIndex;
+    if (!identityKnown || !uid || currentDay === undefined) return;
+    if (!hasBingo(feedCtx.current.cells)) return;
+    const mine = takeHeldHonorPins(uid, currentDay);
     for (const h of mine) {
       void pinDayFirstBingo(h.dayIndex, {
         uid,
@@ -1116,7 +1204,7 @@ export default function Board() {
       }, h.at);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKnown, uid]);
+  }, [identityKnown, uid, viewedIndex, cells]);
 
   if (!uid) return null;
 
@@ -1332,12 +1420,19 @@ export default function Board() {
         // (round 4: a NON-falling unmark — another line still standing — bumps
         // nothing, so a legitimate ceremony mid-witness-read survives it). An already-drained
         // flag is a harmless no-op (the Moment is immutable + once-only besides).
-        dropPendingWins(uid, { bingo: !res.bingo, blackout: !res.blackout });
-        // Drain with the action's own folded cells (see broadcastWinVerdict) —
-        // skipped if the account switched while the await was in flight (the
-        // shared post-await revalidation; no generation to compare — this very
-        // action just bumped it).
-        if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells);
+        dropPendingWins(uid, {
+          bingo: !res.bingo,
+          blackout: !res.blackout,
+          // The unmark verdict witnesses the ACTED board only (#267).
+          blackoutDayIndex: hasDays ? viewedIndex : board?.dayIndex,
+        });
+        if (hasDays && !res.bingo) dropHeldHonorPins(uid, viewedIndex);
+        // Drain with the action's own folded cells AND its own Day (see
+        // broadcastWinVerdict) — skipped if the account switched while the
+        // await was in flight (the shared post-await revalidation; no
+        // generation to compare — this very action just bumped it).
+        if (revalidateAfterAwait(uid).isCurrentAccount)
+          drainMoments(res.cells, hasDays ? viewedIndex : board?.dayIndex);
       }
     } catch {
       /* Neither an offline Mark nor an online write REJECTION lands here:
@@ -1391,6 +1486,10 @@ export default function Board() {
     bingoTransition: boolean;
     blackoutTransition: boolean;
   }) => {
+    // The ACTED Day, captured synchronously with the verdict (before any await
+    // below) — the drain override and the enqueue both use THIS, never the
+    // render-time day a mid-flight switch could change.
+    const actedDay = hasDays ? viewedIndex : board?.dayIndex;
     // The WIN's own time (#280 round 4): the completing Mark's `markedAt` from
     // the folded cells — the same clock the stats fold persisted — falling
     // back to the verdict clock when no cell stamp is readable. A slow upload
@@ -1423,14 +1522,19 @@ export default function Board() {
     // gated like a Doubt raise: a permanent public honor must never stamp
     // 'Anonymous' — an unknown-identity win skips the pin (the honors strip's
     // roster-derived fallback still names them once their row resolves).
-    if (res.bingoTransition && hasDays) {
+    if (
+      res.bingoTransition &&
+      hasDays &&
+      actedDay !== undefined &&
+      !(tutorialDayIndexes ?? []).includes(actedDay)
+    ) {
       // Re-read the LIVE gate through feedCtx (#280 round 3): this verdict can
       // run after an await (a proofed win's upload), and the render-closure
       // `identityKnown` may be stale — the row can have resolved mid-flight,
       // in which case a held pin would idle until an unrelated flip.
       const live = feedCtx.current;
       if (live.identityKnown && live.uid === uid) {
-        void pinDayFirstBingo(viewedIndex, {
+        void pinDayFirstBingo(actedDay, {
           uid,
           displayName: live.displayName,
           photoURL: live.photoURL,
@@ -1442,7 +1546,7 @@ export default function Board() {
         // honor. `at` is the WIN's own time. Reload loses the hold
         // (in-memory), an accepted residual the strip's derived fallback
         // covers.
-        enqueueHeldHonorPin(uid, viewedIndex, actedAt);
+        enqueueHeldHonorPin(uid, actedDay, actedAt);
       }
     }
     // The BIRTH-TIME witness (round 2 finding D; made the SOLE witness site by
@@ -1474,8 +1578,11 @@ export default function Board() {
       }
     }
     // Draining touches the CURRENT actor/gates, so it does require the acted
-    // account to still be active; the queue keeps the flags otherwise.
-    if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells);
+    // account to still be active; the queue keeps the flags otherwise. The
+    // override rides with ITS OWN Day (Codex P2, #275 round 4) — actedDay was
+    // captured before the awaits above, so a mid-flight Day switch cannot
+    // relabel the witness.
+    if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells, actedDay);
   };
 
   const toggle = (c: Cell) => {

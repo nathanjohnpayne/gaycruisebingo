@@ -95,10 +95,16 @@ export function enqueueHeldHonorPin(uid: string, dayIndex: number, at: number): 
 }
 
 /** Drain and return the given account's holds (other accounts' stay queued). */
-export function takeHeldHonorPins(uid: string): HeldHonorPin[] {
-  const mine = heldHonorPins.filter((h) => h.uid === uid);
-  heldHonorPins = heldHonorPins.filter((h) => h.uid !== uid);
+export function takeHeldHonorPins(uid: string, dayIndex?: number): HeldHonorPin[] {
+  const matches = (h: HeldHonorPin) => h.uid === uid && (dayIndex === undefined || h.dayIndex === dayIndex);
+  const mine = heldHonorPins.filter(matches);
+  heldHonorPins = heldHonorPins.filter((h) => !matches(h));
   return mine;
+}
+
+/** Drop held pins whose underlying bingo no longer stands. */
+export function dropHeldHonorPins(uid: string, dayIndex?: number): void {
+  heldHonorPins = heldHonorPins.filter((h) => h.uid !== uid || (dayIndex !== undefined && h.dayIndex !== dayIndex));
 }
 
 /** Test-only. */

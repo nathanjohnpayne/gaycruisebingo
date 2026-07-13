@@ -62,6 +62,9 @@ vi.mock('../hooks/useData', () => ({
 // resolve to an empty triple (these gating tests never cross an edge, so the stubs'
 // behaviour is inert — no broadcast fires).
 vi.mock('../data/moments', () => ({
+  // #267: the per-card blackout queue reads — inert stubs (empty queue).
+  pendingBlackoutDayIndexes: vi.fn(() => []),
+  removePendingBlackoutDay: vi.fn(),
   broadcastBingo: vi.fn(),
   broadcastBlackout: vi.fn(),
   broadcastFirstBingo: vi.fn(),

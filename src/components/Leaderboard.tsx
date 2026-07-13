@@ -167,15 +167,15 @@ export default function Leaderboard() {
     // dayStats timestamps are NOT reliable tiebreakers — the mark folds can
     // seed a later day's bucket from the cruise-wide root firstBingoAt, so an
     // "earlier" derived stamp may be another day's time entirely. The derived
-    // roster is the fallback for UNPINNED days, and the pre-pin shape for a
-    // banned pin (only an earlier-stamped derived honoree, never a later
-    // promotion). The unknown-identity-winner residual the old earliest-wins
-    // rule chased is now covered by the module-state held-pin queue (which
-    // survives unmounts and fires on identity resolve); what remains —
-    // a reload before the row resolves — is accepted and documented.
+    // roster is the fallback for UNPINNED days only. If the pinned winner is
+    // banned, the chip renders blank — hidden, never reassigned. The unknown-
+    // identity-winner residual the old earliest-wins rule chased is now covered
+    // by the module-state held-pin queue (which survives unmounts and fires on
+    // identity resolve); what remains — a reload before the row resolves — is
+    // accepted and documented.
     let winner: { displayName: string } | null;
     if (pinned && isBanned(pinned.uid, bannedUids)) {
-      winner = derived && derived.firstBingoAt < pinned.at ? derived : null;
+      winner = null;
     } else {
       winner = pinned ?? derived ?? null;
     }

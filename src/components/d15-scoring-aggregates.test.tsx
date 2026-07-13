@@ -173,9 +173,10 @@ describe('Leaderboard honors strip prefers the PINNED day-meta honor (#264)', ()
   it("a banned Player's pin renders as '—' — hidden, never promoted (Codex P2 on #280)", () => {
     H.players = [embarker, champ];
     H.event = { ...event, bannedUids: ['banned-b'] } as typeof event;
-    // The pin belongs to a banned Player AND is EARLIER than any derived honoree
-    // for Day 2 — the chip hides the name without handing the honor to Champ.
-    H.dayMetas = new Map([[2, { firstBingo: { uid: 'banned-b', displayName: 'Banned Bart', at: 1 } }]]);
+    // The pin belongs to a banned Player and the visible derived honoree's stamp is
+    // EARLIER than that pin. The chip still hides the name without handing the
+    // honor to Champ — a ban never rewrites the canonical holder.
+    H.dayMetas = new Map([[2, { firstBingo: { uid: 'banned-b', displayName: 'Banned Bart', at: 5000 } }]]);
     render(
       <MemoryRouter>
         <Leaderboard />
