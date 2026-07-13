@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import type { BoardDoc, Cell, DayDef, EventDoc, PlayerDoc } from '../types';
 
 // Integration cover for #246 — the wiring the launch-blocking bug was missing:
@@ -70,6 +70,22 @@ vi.mock('../data/api', () => ({
     typeof p?.displayName === 'string' && p.displayName.trim().length > 0 ? p.displayName : (f ?? 'Anonymous'),
 }));
 vi.mock('../data/proofs', () => ({ attachProof: vi.fn() }));
+// The live path pins the per-Day honor on a bingo verdict (#264); inert stubs
+// keep this suite off the real Firestore write path.
+vi.mock('../data/dayMeta', () => ({
+  pinDayFirstBingo: vi.fn(() => Promise.resolve()),
+  enqueueHeldHonorPin: vi.fn(),
+  takeHeldHonorPins: vi.fn(() => []),
+  dropHeldHonorPins: vi.fn(),
+}));
+// EVERY claim tap opens ProofSheet (issue #181); a stub whose 'pledge' button
+// reports the one-tap honor mark keeps this suite off the real capture UI
+// (mirrors w2-feed-moments.test.tsx).
+vi.mock('./ProofSheet', () => ({
+  default: (props: { onPledge?: () => void }) => (
+    <>{props.onPledge && <button onClick={props.onPledge}>pledge</button>}</>
+  ),
+}));
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: H.user, loading: false, signIn: vi.fn(), signOutUser: vi.fn() }),
@@ -77,6 +93,13 @@ vi.mock('../auth/AuthContext', () => ({
 vi.mock('../firebase', () => ({ EVENT_ID: 'test-event' }));
 
 import Board from './Board';
+// Handles onto the mocked moments module (the vi.mock above replaces it, so
+// these bindings ARE the vi.fn()s the component calls).
+import * as momentsModule from '../data/moments';
+const momentsMocks = momentsModule as unknown as {
+  enqueueWinMoments: ReturnType<typeof vi.fn>;
+  enqueueFirstBingoMoment: ReturnType<typeof vi.fn>;
+};
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -150,6 +173,61 @@ describe('Board daily-cards wiring (#246)', () => {
     fireEvent.click(screen.getByText('D0 Prompt 0'));
     expect(H.setMark).toHaveBeenCalledTimes(2);
     expect(H.setMark.mock.calls[1][0]).toMatchObject({ daily: true, dayIndex: 0, nextMarked: false });
+  });
+
+  it('a bingo on a TUTORIAL Day never enqueues the cruise-wide first_bingo candidate; a main-game Day does (Codex P1 on #287)', async () => {
+    // Spec § "Scoring and social surfaces": cruise-wide First to BINGO is
+    // anchored to MAIN-GAME Days only — the embark card is live pre-cruise and
+    // trivially easy by design, so without this gate the first embark bingo
+    // would mint the immutable event-level singleton before anyone boards.
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({ index: 0, theme: 'welcome-aboard', unlockAt: now - 2 * DAY_MS, snapshotItemIds: ['x'], tutorial: true, pool: 'embark' }),
+        day({ index: 1, theme: 'glamiators', unlockAt: now - 1 * DAY_MS, snapshotItemIds: ['x'] }),
+      ],
+    } as unknown as EventDoc;
+    H.dayBoards.set(0, boardFor(0));
+    H.dayBoards.set(1, boardFor(1));
+    H.player = { displayName: 'Deck Daddy', photoURL: null } as unknown as PlayerDoc;
+    const verdict = (cells: Cell[]) => ({ cells, bingo: true, blackout: false, bingoTransition: true, blackoutTransition: false });
+    H.setMark.mockImplementation(({ cells }: { cells: Cell[] }) => Promise.resolve(verdict(cells)));
+
+    render(<Board />);
+
+    // A MARK (not unmark) reaches broadcastWinVerdict: tap an unmarked square,
+    // then complete the honor Mark through the sheet's 🎖️ pledge (issue #181).
+    const markSquare = async (label: string) => {
+      await act(async () => {
+        fireEvent.click(screen.getByText(label));
+      });
+      const pledge = screen.queryByText('pledge');
+      if (pledge) {
+        await act(async () => {
+          fireEvent.click(pledge);
+        });
+      }
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+    };
+
+    // Default view is Day 1 (main game): the SAME verdict enqueues the candidate.
+    await markSquare('D1 Prompt 1');
+    expect(momentsMocks.enqueueWinMoments).toHaveBeenCalledWith(expect.objectContaining({ bingoTransition: true, dayIndex: 1 }));
+    expect(momentsMocks.enqueueFirstBingoMoment).toHaveBeenCalledTimes(1);
+
+    // Switch to the embark tutorial Day: a bingo verdict there enqueues the
+    // plain win Moment(s) but NEVER the ceremonial event singleton.
+    momentsMocks.enqueueFirstBingoMoment.mockClear();
+    momentsMocks.enqueueWinMoments.mockClear();
+    fireEvent.click(screen.getAllByRole('tab')[0]);
+    await markSquare('D0 Prompt 1');
+    expect(momentsMocks.enqueueWinMoments).toHaveBeenCalledWith(expect.objectContaining({ bingoTransition: true, dayIndex: 0 }));
+    expect(momentsMocks.enqueueFirstBingoMoment).not.toHaveBeenCalled();
   });
 
   it('lazily deals a ready Day with no card yet, and never deals a locked future Day', () => {
