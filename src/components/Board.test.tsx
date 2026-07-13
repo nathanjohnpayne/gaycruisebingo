@@ -31,6 +31,7 @@ const H = vi.hoisted(() => ({
 vi.mock('../hooks/useData', () => ({
   // #264: day-meta honor reads — inert stubs (no pinned honors).
   useDayMeta: () => ({ data: H.dayMeta, loading: false, hasServerData: true }),
+  isBanned: (uid: string, list: string[]) => list.includes(uid),
   useDayMetas: () => new Map(),
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   // In daily mode Board reads the VIEWED Day's board here (#246). The suite's

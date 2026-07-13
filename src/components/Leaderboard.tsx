@@ -164,7 +164,10 @@ export default function Leaderboard() {
     const derived = derivedHonors.find((h) => h.dayIndex === d.index);
     let winner: { displayName: string } | null;
     if (pinned && isBanned(pinned.uid, bannedUids)) {
-      winner = null;
+      // A banned pin hides — and only an EARLIER derived winner may show in
+      // its place (their honor predates the banned pin; #280 round 2). A
+      // LATER derived name is never promoted into a banned player's slot.
+      winner = derived && derived.firstBingoAt < pinned.at ? derived : null;
     } else if (pinned && derived && derived.firstBingoAt < pinned.at) {
       winner = derived;
     } else {

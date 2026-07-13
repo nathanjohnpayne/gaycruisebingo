@@ -681,6 +681,9 @@ export default function Board() {
   // A Feed Tally Card's pending "open this Prompt's sheet" request (#261),
   // consumed by the intent effect below once the right Day's board renders.
   const openSquareIntent = useOpenSquareIntent();
+  // Day-honor pins held while the viewer's identity was still resolving
+  // (#280 round 2) — released by the effect below the moment it resolves.
+  const heldHonorPins = useRef<{ dayIndex: number; at: number }[]>([]);
   // The open Claim sheet's social heat line (#211): reuse the SAME per-Prompt
   // Tally subscription the TallyBadge uses — no new read — for the Square the
   // sheet is open on. useTally accepts a null id (no proofTarget → no sub).
@@ -1100,6 +1103,20 @@ export default function Board() {
     clearOpenSquare();
   }, [openSquareIntent, hasDays, viewedIndex, cells, cellsAttributable]);
 
+  // Release held day-honor pins once the identity resolves (#280 round 2).
+  useEffect(() => {
+    if (!identityKnown || heldHonorPins.current.length === 0) return;
+    const held = heldHonorPins.current.splice(0);
+    for (const h of held) {
+      void pinDayFirstBingo(h.dayIndex, {
+        uid: uid ?? '',
+        displayName,
+        photoURL: (player ? player.photoURL : user?.photoURL) ?? null,
+      }, h.at);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identityKnown]);
+
   if (!uid) return null;
 
   // `days`/`hasDays` are resolved once at the top of the component (the
@@ -1396,12 +1413,22 @@ export default function Board() {
     // gated like a Doubt raise: a permanent public honor must never stamp
     // 'Anonymous' — an unknown-identity win skips the pin (the honors strip's
     // roster-derived fallback still names them once their row resolves).
-    if (res.bingoTransition && hasDays && identityKnown) {
-      void pinDayFirstBingo(viewedIndex, {
-        uid,
-        displayName,
-        photoURL: (player ? player.photoURL : user?.photoURL) ?? null,
-      });
+    if (res.bingoTransition && hasDays) {
+      if (identityKnown) {
+        void pinDayFirstBingo(viewedIndex, {
+          uid,
+          displayName,
+          photoURL: (player ? player.photoURL : user?.photoURL) ?? null,
+        });
+      } else {
+        // Identity still resolving (#280 round 2): hold the pin in-memory and
+        // fire it once the saved row loads — the win happened NOW; the honor
+        // must not be permanently forfeited to a loading race. `at` is
+        // captured here so the eventual pin carries the WIN's time. Reload
+        // loses the hold (in-memory), an accepted residual the strip's
+        // earliest-wins derived fallback covers.
+        heldHonorPins.current.push({ dayIndex: viewedIndex, at: Date.now() });
+      }
     }
     // The BIRTH-TIME witness (round 2 finding D; made the SOLE witness site by
     // round 3 finding A): the prior-win question — "is this win a regain?" — is
@@ -1482,7 +1509,19 @@ export default function Board() {
             tutorial tag, port, and the dress-code description, on every
             viewed Day. Absorbs the pre-#260 tutorial-only board-header
             (the tag now renders inside the daybar's name line). */}
-        {viewedDay && <DayBar day={viewedDay} honor={viewedDayMeta?.firstBingo ?? null} timezone={event?.timezone} />}
+        {/* A banned Player's pinned honor never displays (#280 round 2) —
+            same posture as the Ranks strip: hidden, never promoted. */}
+        {viewedDay && (
+          <DayBar
+            day={viewedDay}
+            honor={
+              viewedDayMeta?.firstBingo && !isBanned(viewedDayMeta.firstBingo.uid, event?.bannedUids ?? [])
+                ? viewedDayMeta.firstBingo
+                : null
+            }
+            timezone={event?.timezone}
+          />
+        )}
         {/* The farewell podium (#217, daily-cards-spec § "Farewell view"):
             shown on the farewell Day once the standings freeze (`frozenAt`
             set), ABOVE the goodbye banner below — this ticket owns the

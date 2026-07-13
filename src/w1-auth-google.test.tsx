@@ -25,6 +25,9 @@ vi.mock('./firebase', () => ({
   auth: {}, googleProvider: {}, db: {}, storage: {}, analytics: null, app: {}, EVENT_ID: 'x',
 }));
 vi.mock('./hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs.
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
   useEventDoc: () => ({ data: null, loading: false }),
   useItems: () => ({ items: [], loading: false }),
   // The always-mounted ConfirmWinMoments (#41) subscribes to these; inert stubs
