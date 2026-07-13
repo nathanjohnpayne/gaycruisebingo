@@ -119,6 +119,25 @@ describe('moments broadcasts — the Feed beat writer (specs/w2-feed-moments.md)
     expect(setDocSpy.mock.calls[1][1]).toMatchObject({ kind: 'blackout', uid: 'u1', dayIndex: 6 });
   });
 
+  it('a per-card Blackout skips when a LEGACY day-less Moment already covers the SAME Day (Codex P2 on #275 round 2)', async () => {
+    // The legacy `${uid}-blackout` doc (the #250-era shape: day-less id, day-
+    // stamped payload) is in the local cache for Day 3.
+    getDocFromCacheSpy.mockImplementation((ref: { path: string }) =>
+      ref.path.endsWith('u1-blackout')
+        ? Promise.resolve({ exists: () => true, data: () => ({ dayIndex: 3 }) })
+        : Promise.reject(new Error('unavailable')),
+    );
+    broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 3);
+    await settle();
+    expect(setDocSpy).not.toHaveBeenCalled(); // same card — already posted
+
+    // A DIFFERENT Day is a different card: the legacy doc does not cover it.
+    broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 6);
+    await settle();
+    expect(setDocSpy).toHaveBeenCalledTimes(1);
+    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout-d6`);
+  });
+
   it('First-to-BINGO broadcasts one `first_bingo` Moment at the EVENT-singleton id', async () => {
     expect(FIRST_BINGO_MOMENT_ID).toBe('first_bingo');
     broadcastFirstBingo({ uid: 'u1', displayName: 'Alice', photoURL: null });
@@ -284,10 +303,21 @@ describe('pendingBlackoutDayIndexes — the blackout Day(s) captured at ENQUEUE 
     expect(pendingBlackoutDayIndexes('u1')).toEqual([]);
   });
 
-  it('dropPendingWins({ blackout: true }) (an observed fall) resets the stamp — the fallen blackout no longer applies', () => {
+  it('dropPendingWins({ blackout: true }) (a legacy, day-less fall) resets the whole stamp — the fallen blackout no longer applies', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 4 });
     dropPendingWins('u1', { blackout: true });
     expect(pendingBlackoutDayIndexes('u1')).toEqual([]);
+  });
+
+  it('a day-scoped fall drops ONLY the witnessed Day — sibling queued blackouts survive (Codex P2 on #275 round 2)', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 2 });
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 5 });
+    dropPendingWins('u1', { blackout: true, blackoutDayIndex: 2 });
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([5]);
+    expect(peekPendingMoments('u1').blackout).toBe(true); // Day 5 still owed
+    dropPendingWins('u1', { blackout: true, blackoutDayIndex: 5 });
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([]);
+    expect(peekPendingMoments('u1').blackout).toBe(false);
   });
 
   it('is isolated per-uid', () => {

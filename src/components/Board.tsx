@@ -997,7 +997,10 @@ export default function Board() {
     // are 0/false, so nothing can spuriously read as a fall.
     if (uid) {
       if (wasBingoLines.current > 0 && bingoLines === 0) dropPendingWins(uid, { bingo: true });
-      if (wasBlackout.current && !black) dropPendingWins(uid, { blackout: true });
+      if (wasBlackout.current && !black)
+        // The fall is witnessed by THIS board — drop only its Day's queued
+        // blackout (#267); legacy (no schedule) keeps the full clear.
+        dropPendingWins(uid, { blackout: true, blackoutDayIndex: hasDays ? board?.dayIndex : undefined });
     }
     // Baseline vs detection (round 2 finding C, kept for the animation): under the
     // ADR 0006 persistent cache the first snapshot(s) can be cache-only, and a
@@ -1246,7 +1249,12 @@ export default function Board() {
         // (round 4: a NON-falling unmark — another line still standing — bumps
         // nothing, so a legitimate ceremony mid-witness-read survives it). An already-drained
         // flag is a harmless no-op (the Moment is immutable + once-only besides).
-        dropPendingWins(uid, { bingo: !res.bingo, blackout: !res.blackout });
+        dropPendingWins(uid, {
+          bingo: !res.bingo,
+          blackout: !res.blackout,
+          // The unmark verdict witnesses the ACTED board only (#267).
+          blackoutDayIndex: hasDays ? viewedIndex : board?.dayIndex,
+        });
         // Drain with the action's own folded cells (see broadcastWinVerdict) —
         // skipped if the account switched while the await was in flight (the
         // shared post-await revalidation; no generation to compare — this very

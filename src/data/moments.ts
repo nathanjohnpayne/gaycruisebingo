@@ -287,7 +287,14 @@ export function pendingActionGeneration(uid: string): number {
  * `clearPendingMoment` (a drain FIRE-clear, or a decided-and-lost ceremony),
  * which never bumps: a fire means the win stood and was published.
  */
-export function dropPendingWins(uid: string, fell: { bingo?: boolean; blackout?: boolean }): void {
+export function dropPendingWins(
+  uid: string,
+  // `blackoutDayIndex` (#267, Codex P2 on #275 round 2): a blackout fall is
+  // witnessed by ONE board — the fallen one — so a day-scoped caller drops just
+  // that Day from the queue, leaving sibling Days' still-valid pending
+  // blackouts intact. A legacy (day-less) fall keeps the full clear.
+  fell: { bingo?: boolean; blackout?: boolean; blackoutDayIndex?: number },
+): void {
   const key = pendingKey(uid);
   if (fell.bingo) {
     pendingGenerations.set(key, (pendingGenerations.get(key) ?? 0) + 1);
@@ -299,8 +306,19 @@ export function dropPendingWins(uid: string, fell: { bingo?: boolean; blackout?:
     flags.firstBingo = false;
   }
   if (fell.blackout) {
-    flags.blackout = false;
-    flags.blackoutDayIndexes = undefined; // the fallen blackout's Day no longer applies
+    const days = flags.blackoutDayIndexes;
+    if (fell.blackoutDayIndex !== undefined && days && days.length > 0) {
+      // Day-scoped fall: only the witnessed board's Day drops; the flag stays
+      // owed while sibling Days remain queued.
+      flags.blackoutDayIndexes = days.filter((d) => d !== fell.blackoutDayIndex);
+      if (flags.blackoutDayIndexes.length === 0) {
+        flags.blackoutDayIndexes = undefined;
+        flags.blackout = false;
+      }
+    } else {
+      flags.blackout = false;
+      flags.blackoutDayIndexes = undefined; // the fallen blackout's Day no longer applies
+    }
   }
   if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
 }
@@ -476,8 +494,33 @@ export function broadcastBingo(who: MomentActor): void {
  * (Codex finding 2, fix/d15-blackout-day-naming).
  */
 export function broadcastBlackout(who: MomentActor, dayIndex?: number): void {
-  const id = dayIndex === undefined ? `${who.uid}-blackout` : `${who.uid}-blackout-d${dayIndex}`;
-  broadcast(id, 'blackout', who, dayIndex);
+  if (dayIndex === undefined) {
+    broadcast(`${who.uid}-blackout`, 'blackout', who);
+    return;
+  }
+  // Legacy same-day dedupe (Codex P2 on #275 round 2): a card that already
+  // posted under the pre-#267 day-less id (a day-stamped payload at
+  // `${uid}-blackout`, the #250-era shape) must not post a SECOND, day-stamped
+  // Moment for the SAME card. Same cache-only posture as writeMomentOnce: the
+  // check protects the visible-flash window (the doc IS cached on the device
+  // that posted it); a cold cache proceeds and the residual duplicate is a
+  // distinct id the create rule cannot dedup across — accepted, matching the
+  // existing broadcast dedup model.
+  void (async () => {
+    try {
+      const legacy = await getDocFromCache(rawMoment(`${who.uid}-blackout`));
+      if (legacy.exists() && (legacy.data() as { dayIndex?: number }).dayIndex === dayIndex) {
+        console.debug('[moments] per-card blackout skipped — legacy day-less Moment already covers this Day', {
+          uid: who.uid,
+          dayIndex,
+        });
+        return;
+      }
+    } catch {
+      // No legacy Moment in the local cache — nothing to dedupe against.
+    }
+    await writeMomentOnce(`${who.uid}-blackout-d${dayIndex}`, 'blackout', who, dayIndex);
+  })();
 }
 
 /**
