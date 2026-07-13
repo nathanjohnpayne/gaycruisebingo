@@ -517,7 +517,19 @@ function AdminAddItemForm({ adminUid }: { adminUid: string | undefined }) {
  * One prompt row (#269): pool pill + inline text edit (✏️ → input + save/
  * cancel) alongside the existing hide/restore/delete moderation.
  */
-function AdminItemRow({ item: it, threshold }: { item: ItemDoc; threshold: number | undefined }) {
+function AdminItemRow({
+  item: it,
+  threshold,
+  textLocked,
+}: {
+  item: ItemDoc;
+  threshold: number | undefined;
+  // #282 (Codex P2): true when this prompt sits in an UNLOCKED Day's stamped
+  // snapshot — later deals hydrate text from the item doc at deal time, so an
+  // edit would split the same Day's squares by when each player opened their
+  // card. Text edits lock; hide/restore/delete stay available.
+  textLocked?: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(it.text);
   const save = async () => {
@@ -562,6 +574,10 @@ function AdminItemRow({ item: it, threshold }: { item: ItemDoc; threshold: numbe
             ✕
           </button>
         </>
+      ) : textLocked ? (
+        <span className="iconbtn" title="On an unlocked day's dealt snapshot — text is frozen" aria-label="Text frozen">
+          🔒
+        </span>
       ) : (
         <button
           className="iconbtn"
@@ -713,6 +729,16 @@ export default function Admin() {
   // console and the badge can never disagree. 0 until #210 starts writing
   // `status: 'pending'` items — expected, not broken.
   const pendingCount = items.filter((it) => it.status === 'pending').length;
+  // #282 (Codex P2): prompt ids frozen into an UNLOCKED Day's stamped
+  // snapshot — their text is deal-hydrated, so edits would split that Day's
+  // squares by open time. Locked Days only; a future (locked) Day's snapshot
+  // doesn't exist yet, and text stays editable until its Day opens.
+  const nowMs = Date.now();
+  const lockedSnapshotItemIds = new Set(
+    (event?.days ?? [])
+      .filter((d) => d.unlockAt <= nowMs)
+      .flatMap((d) => d.snapshotItemIds ?? []),
+  );
   // Prompts needing moderation attention: reported at least once, or already
   // hard-hidden. Derived from useAllItems (already subscribed) so the queue opens
   // NO extra listener, and UNfiltered by the threshold so an auto-hidden Prompt
@@ -874,7 +900,12 @@ export default function Admin() {
         <AdminAddItemForm adminUid={user?.uid} />
         <div className="list">
           {items.map((it) => (
-            <AdminItemRow key={it.id} item={it} threshold={threshold} />
+            <AdminItemRow
+              key={it.id}
+              item={it}
+              threshold={threshold}
+              textLocked={lockedSnapshotItemIds.has(it.id)}
+            />
           ))}
         </div>
       </div>
