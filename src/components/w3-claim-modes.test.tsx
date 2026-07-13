@@ -74,6 +74,8 @@ vi.mock('../hooks/useData', () => ({
 // Keep planConfirmBroadcasts + MomentActor real (the decision under test); stub the
 // three writers + the durable-witness read.
 vi.mock('../data/moments', async (importOriginal) => {
+  // #267: spreads the real module, so the per-card blackout queue reads come
+  // through genuinely — no stub needed.
   const actual = await importOriginal<typeof import('../data/moments')>();
   return {
     ...actual,

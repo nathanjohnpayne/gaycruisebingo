@@ -14,6 +14,7 @@ import {
   enqueueFirstBingoMoment,
   peekPendingMoments,
   pendingBlackoutDayIndexes,
+  removePendingBlackoutDay,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -797,6 +798,10 @@ export default function Board() {
     identityKnown: boolean;
     rosterConfirmed: boolean;
     cells: Cell[];
+    // The rendered board's OWN Day (daily mode), undefined on a legacy event —
+    // the per-card blackout drain (#267, Codex P2 on #275) adjudicates only the
+    // queued Day that IS this board, never sibling Days it cannot see.
+    boardDayIndex: number | undefined;
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -805,6 +810,7 @@ export default function Board() {
     identityKnown: false,
     rosterConfirmed: false,
     cells: [],
+    boardDayIndex: undefined,
   });
   feedCtx.current = {
     uid,
@@ -822,6 +828,7 @@ export default function Board() {
     identityKnown,
     rosterConfirmed,
     cells: cellsAttributable ? cells : [],
+    boardDayIndex: hasDays && cellsAttributable ? board?.dayIndex : undefined,
   };
 
   // Write-time twin of `tallySourceLive` for the Doubt raise (Codex P2, PR #106
@@ -885,6 +892,7 @@ export default function Board() {
       identityKnown: idKnown,
       rosterConfirmed: rosterOk,
       cells: cellsRendered,
+      boardDayIndex,
     } = feedCtx.current;
     if (!cUid || !idKnown) return; // identity gate: hold every kind
     const pending = peekPendingMoments(cUid);
@@ -899,16 +907,25 @@ export default function Board() {
       clearPendingMoment(cUid, 'bingo');
     }
     if (pending.blackout && blackoutNow) {
-      // The Day(s) blackout-completing Marks happened on, captured at ENQUEUE
-      // time (Codex finding 2, fix/d15-blackout-day-naming) — NOT whatever Day
-      // is currently VIEWED: a held blackout (behind the identity gate above)
-      // can drain long after the Player has switched Days. One Moment per
-      // queued Day (#267 — blackout is per-card, per-(uid, day) dedup id);
-      // an empty set is the legacy day-less broadcast.
+      // Per-card adjudication (#267; Codex P2 on #275): `blackoutNow` witnesses
+      // exactly ONE board — the rendered one — so only the queued Day that IS
+      // that board may drain against it. A sibling queued Day (its blackout
+      // completed while identity was unknown, then the Player switched Days)
+      // stays queued until ITS board is rendered blacked-out again; a Day that
+      // meanwhile FELL is dropped by that later pass's own `blackoutNow`/
+      // dropPendingWins, never published off another Day's witness. The Day is
+      // the one captured at ENQUEUE time (Codex finding 2,
+      // fix/d15-blackout-day-naming), not re-derived at fire time. An empty
+      // queue is the legacy day-less broadcast (one card the whole Event —
+      // the rendered board IS the card).
       const blackoutDays = pendingBlackoutDayIndexes(cUid);
-      if (blackoutDays.length === 0) broadcastBlackout(actor);
-      else blackoutDays.forEach((d) => broadcastBlackout(actor, d));
-      clearPendingMoment(cUid, 'blackout');
+      if (blackoutDays.length === 0) {
+        broadcastBlackout(actor);
+        clearPendingMoment(cUid, 'blackout');
+      } else if (boardDayIndex !== undefined && blackoutDays.includes(boardDayIndex)) {
+        broadcastBlackout(actor, boardDayIndex);
+        removePendingBlackoutDay(cUid, boardDayIndex);
+      }
     }
     // Ceremonial decision — fully SYNCHRONOUS at publish time (PR #110 round 3
     // findings A + B). Round 2 re-read the witness here, which was WRONG: a

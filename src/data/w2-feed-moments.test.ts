@@ -51,6 +51,7 @@ import {
   enqueueFirstBingoMoment,
   peekPendingMoments,
   pendingBlackoutDayIndexes,
+  removePendingBlackoutDay,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -292,6 +293,26 @@ describe('pendingBlackoutDayIndexes — the blackout Day(s) captured at ENQUEUE 
   it('is isolated per-uid', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 1 });
     expect(pendingBlackoutDayIndexes('u2')).toEqual([]);
+  });
+
+  it('removePendingBlackoutDay drops ONE fired Day, keeping siblings queued and the flag owed (#267, Codex P2 on #275)', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 2 });
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 5 });
+    removePendingBlackoutDay('u1', 2);
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([5]);
+    expect(peekPendingMoments('u1').blackout).toBe(true); // Day 5 still owed
+    removePendingBlackoutDay('u1', 5);
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([]);
+    expect(peekPendingMoments('u1').blackout).toBe(false); // queue empty — nothing owed
+  });
+
+  it('removePendingBlackoutDay is a no-op for a Day not in the queue (and for an empty queue)', () => {
+    removePendingBlackoutDay('u1', 3);
+    expect(peekPendingMoments('u1').blackout).toBe(false);
+    enqueueWinMoments({ uid: 'u1', bingoTransition: false, blackoutTransition: true, dayIndex: 4 });
+    removePendingBlackoutDay('u1', 9);
+    expect(pendingBlackoutDayIndexes('u1')).toEqual([4]);
+    expect(peekPendingMoments('u1').blackout).toBe(true);
   });
 });
 

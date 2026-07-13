@@ -41,6 +41,9 @@ vi.mock('../hooks/useData', () => ({
   useProofsForItemText: () => ({ proofs: [], loading: false, hasServerData: true }),
 }));
 vi.mock('../data/moments', () => ({
+  // #267: the per-card blackout queue reads — inert stubs (empty queue).
+  pendingBlackoutDayIndexes: vi.fn(() => []),
+  removePendingBlackoutDay: vi.fn(),
   broadcastBingo: vi.fn(),
   broadcastBlackout: vi.fn(),
   broadcastFirstBingo: vi.fn(),

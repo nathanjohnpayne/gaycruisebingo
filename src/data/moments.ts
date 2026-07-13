@@ -222,6 +222,25 @@ export function pendingBlackoutDayIndexes(uid: string): number[] {
 }
 
 /**
+ * Remove ONE drained Day from the pending blackout queue (#267; Codex P2 on
+ * #275): the drain adjudicates per-Day — only the Day whose own board is the
+ * rendered, blacked-out one may fire — so a fired Day leaves the queue while
+ * sibling queued Days stay pending. The `blackout` flag clears only when the
+ * queue empties (the flag means "something is still owed").
+ */
+export function removePendingBlackoutDay(uid: string, dayIndex: number): void {
+  const key = pendingKey(uid);
+  const flags = pendingMoments.get(key);
+  if (!flags?.blackoutDayIndexes) return;
+  flags.blackoutDayIndexes = flags.blackoutDayIndexes.filter((d) => d !== dayIndex);
+  if (flags.blackoutDayIndexes.length === 0) {
+    flags.blackoutDayIndexes = undefined;
+    flags.blackout = false;
+    if (!flags.bingo && !flags.firstBingo) pendingMoments.delete(key);
+  }
+}
+
+/**
  * True when a ceremonial candidate is queued AND was enqueued at the CURRENT
  * action generation — no OBSERVED BINGO FALL has interleaved since (PR #110
  * round 2 finding 3; round 4 narrowed the bump to actual bingo falls). A stale candidate (generation moved) must be KILLED by the
