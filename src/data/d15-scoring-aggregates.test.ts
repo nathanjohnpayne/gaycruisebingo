@@ -166,11 +166,10 @@ describe('moments.broadcastBlackout — optional dayIndex names the Day (fix/d15
     // Path-aware (#275 round 2): the day-scoped path pre-checks the LEGACY
     // day-less doc first, then its own per-card id — here only the per-card
     // doc is cached, which is what must trigger the skip.
-    getDocFromCacheSpy.mockImplementation((ref: { path: string }) =>
+    getDocFromCacheSpy.mockImplementation(((ref: { path: string }) =>
       ref.path.endsWith('u1-blackout-d4')
         ? Promise.resolve(snap({ kind: 'blackout', uid: 'u1' }))
-        : Promise.reject(new Error('unavailable')),
-    );
+        : Promise.reject(new Error('unavailable'))) as unknown as () => Promise<never>);
     broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
     await flush();
     expect(setDocSpy).not.toHaveBeenCalled();

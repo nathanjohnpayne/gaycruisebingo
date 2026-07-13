@@ -915,7 +915,7 @@ export default function Board() {
   // bumps the action generation). A flag whose fall this tab never observes can
   // therefore idle un-fireable (revalidation keeps blocking it) until reload —
   // safe: nothing publishes for it.
-  const drainMoments = useCallback((cellsOverride?: Cell[]) => {
+  const drainMoments = useCallback((cellsOverride?: Cell[], dayOverride?: number) => {
     const {
       uid: cUid,
       displayName: cName,
@@ -950,13 +950,20 @@ export default function Board() {
       // fix/d15-blackout-day-naming), not re-derived at fire time. An empty
       // queue is the legacy day-less broadcast (one card the whole Event —
       // the rendered board IS the card).
+      // The witnessed Day must MATCH the witnessed cells (Codex P2, #275 round
+      // 4): an action/proof continuation passes the ACTED board's cells, and
+      // the Player may have switched the rendered Day while that await was in
+      // flight — so an override's Day rides WITH the override, and the
+      // rendered-board day is trusted only for the no-override (snapshot)
+      // drains where the two are the same board by construction.
+      const witnessDay = cellsOverride !== undefined ? dayOverride : boardDayIndex;
       const blackoutDays = pendingBlackoutDayIndexes(cUid);
       if (blackoutDays.length === 0) {
         broadcastBlackout(actor);
         clearPendingMoment(cUid, 'blackout');
-      } else if (boardDayIndex !== undefined && blackoutDays.includes(boardDayIndex)) {
-        broadcastBlackout(actor, boardDayIndex);
-        removePendingBlackoutDay(cUid, boardDayIndex);
+      } else if (witnessDay !== undefined && blackoutDays.includes(witnessDay)) {
+        broadcastBlackout(actor, witnessDay);
+        removePendingBlackoutDay(cUid, witnessDay);
       }
     }
     // Ceremonial decision — fully SYNCHRONOUS at publish time (PR #110 round 3
@@ -1306,11 +1313,12 @@ export default function Board() {
           // The unmark verdict witnesses the ACTED board only (#267).
           blackoutDayIndex: hasDays ? viewedIndex : board?.dayIndex,
         });
-        // Drain with the action's own folded cells (see broadcastWinVerdict) —
-        // skipped if the account switched while the await was in flight (the
-        // shared post-await revalidation; no generation to compare — this very
-        // action just bumped it).
-        if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells);
+        // Drain with the action's own folded cells AND its own Day (see
+        // broadcastWinVerdict) — skipped if the account switched while the
+        // await was in flight (the shared post-await revalidation; no
+        // generation to compare — this very action just bumped it).
+        if (revalidateAfterAwait(uid).isCurrentAccount)
+          drainMoments(res.cells, hasDays ? viewedIndex : board?.dayIndex);
       }
     } catch {
       /* Neither an offline Mark nor an online write REJECTION lands here:
@@ -1364,6 +1372,10 @@ export default function Board() {
     bingoTransition: boolean;
     blackoutTransition: boolean;
   }) => {
+    // The ACTED Day, captured synchronously with the verdict (before any await
+    // below) — the drain override and the enqueue both use THIS, never the
+    // render-time day a mid-flight switch could change.
+    const actedDay = hasDays ? viewedIndex : board?.dayIndex;
     enqueueWinMoments({
       uid,
       bingoTransition: res.bingoTransition,
@@ -1407,8 +1419,11 @@ export default function Board() {
       }
     }
     // Draining touches the CURRENT actor/gates, so it does require the acted
-    // account to still be active; the queue keeps the flags otherwise.
-    if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells);
+    // account to still be active; the queue keeps the flags otherwise. The
+    // override rides with ITS OWN Day (Codex P2, #275 round 4) — actedDay was
+    // captured before the awaits above, so a mid-flight Day switch cannot
+    // relabel the witness.
+    if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells, actedDay);
   };
 
   const toggle = (c: Cell) => {
