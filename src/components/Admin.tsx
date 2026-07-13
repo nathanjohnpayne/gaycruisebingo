@@ -484,11 +484,13 @@ function AdminAddItemForm({ adminUid }: { adminUid: string | undefined }) {
   const [spicy, setSpicy] = useState(false);
   const [pool, setPool] = useState<'main' | 'embark' | 'farewell'>('main');
   const [busy, setBusy] = useState(false);
+  const spicyAllowed = pool === 'main';
+  const effectiveSpicy = spicyAllowed && spicy;
   const submit = async () => {
     if (!adminUid || !text.trim() || busy) return;
     setBusy(true);
     try {
-      await adminAddItem(adminUid, text, spicy, pool);
+      await adminAddItem(adminUid, text, effectiveSpicy, pool);
       setText('');
     } finally {
       setBusy(false);
@@ -508,9 +510,23 @@ function AdminAddItemForm({ adminUid }: { adminUid: string | undefined }) {
         }}
       />
       <label style={{ fontSize: 12 }}>
-        <input type="checkbox" checked={spicy} onChange={(e) => setSpicy(e.target.checked)} /> 🔞
+        <input
+          type="checkbox"
+          checked={effectiveSpicy}
+          disabled={!spicyAllowed}
+          onChange={(e) => setSpicy(e.target.checked)}
+        />{' '}
+        🔞
       </label>
-      <select aria-label="Pool" value={pool} onChange={(e) => setPool(e.target.value as 'main' | 'embark' | 'farewell')}>
+      <select
+        aria-label="Pool"
+        value={pool}
+        onChange={(e) => {
+          const next = e.target.value as 'main' | 'embark' | 'farewell';
+          setPool(next);
+          if (next !== 'main') setSpicy(false);
+        }}
+      >
         <option value="main">main</option>
         <option value="embark">embark</option>
         <option value="farewell">farewell</option>

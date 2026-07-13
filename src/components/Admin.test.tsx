@@ -396,6 +396,23 @@ describe('Admin curated pools (#269)', () => {
     expect(H.adminAddItem).toHaveBeenCalledWith('admin-uid', 'Final soft-serve encore', false, 'farewell');
   });
 
+  it('forces embark/farewell prompt additions to stay tame even after 🔞 was checked on main', async () => {
+    render(<Admin />);
+    const input = screen.getByLabelText('New prompt text') as HTMLInputElement;
+    const spicy = screen.getByRole('checkbox', { name: /🔞/ }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Embark icebreaker' } });
+    fireEvent.click(spicy);
+    expect(spicy.checked).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('Pool'), { target: { value: 'embark' } });
+    expect(spicy.checked).toBe(false);
+    expect(spicy.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await Promise.resolve();
+    expect(H.adminAddItem).toHaveBeenCalledWith('admin-uid', 'Embark icebreaker', false, 'embark');
+  });
+
   it('the inline edit saves via adminUpdateItemText and shows the pool pill', async () => {
     H.items = [
       { id: 'i1', text: 'Original wording', createdBy: 'u1', createdAt: 1, isFreeSpace: false, status: 'active', reportCount: 0, spicy: false, pool: 'embark' } as unknown as ItemDoc,

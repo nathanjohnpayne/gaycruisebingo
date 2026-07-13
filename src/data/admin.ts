@@ -212,6 +212,7 @@ export async function adminAddItem(
 ): Promise<void> {
   const t = text.trim();
   if (!t) return;
+  const safeSpicy = pool === 'main' ? spicy : false;
   await addDoc(itemsRaw(), {
     text: t.slice(0, 80),
     createdBy: uid,
@@ -219,23 +220,36 @@ export async function adminAddItem(
     isFreeSpace: false,
     status: 'active',
     reportCount: 0,
-    spicy,
+    spicy: safeSpicy,
     pool,
   });
+}
+
+function itemTextLockedByUnlockedSnapshot(days: DayDef[] | undefined, id: string, now = Date.now()): boolean {
+  return (days ?? []).some(
+    (d) =>
+      typeof d.unlockAt === 'number' &&
+      d.unlockAt <= now &&
+      Array.isArray(d.snapshotItemIds) &&
+      d.snapshotItemIds.includes(id),
+  );
 }
 
 /**
  * Admin-only text edit (#269) — curated-pool wording fixes without a reseed.
  * Rules: the isAdmin update arm allows it; the 80-char clamp matches create.
- * Editing text after a Day's snapshot froze that item's DEAL is safe: dealt
- * cells denormalize their text at deal time, so an edit affects future deals
- * and the pool list only, never an already-dealt card (the same posture as
- * hide/delete).
+ * Re-reads the Event in the transaction so a stale Admin tab or direct call
+ * cannot change text once an unlocked Day's snapshot can still deal that item.
  */
 export async function adminUpdateItemText(id: string, text: string): Promise<void> {
   const t = text.trim();
   if (!t) return;
-  await updateDoc(item(id), { text: t.slice(0, 80) });
+  await runTransaction(db, async (tx) => {
+    const evSnap = await tx.get(evt());
+    const days = evSnap.exists() ? (evSnap.data().days as DayDef[] | undefined) : undefined;
+    if (itemTextLockedByUnlockedSnapshot(days, id)) return;
+    tx.update(item(id), { text: t.slice(0, 80) });
+  });
 }
 
 async function resolve(

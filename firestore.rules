@@ -9,6 +9,18 @@ service cloud.firestore {
       return signedIn() &&
         request.auth.uid in get(/databases/$(database)/documents/events/$(eventId)).data.admins;
     }
+    function validItemPool() {
+      return request.resource.data.pool in ['main', 'embark', 'farewell'];
+    }
+    function nonAdminPendingMainItemCreate() {
+      return request.resource.data.status == 'pending'
+        && request.resource.data.pool == 'main';
+    }
+    function adminActiveItemCreate(eventId) {
+      return isAdmin(eventId)
+        && request.resource.data.status == 'active'
+        && validItemPool();
+    }
     // A `days/{dayIndex}` path segment is canonical only when it round-trips
     // through int(): `string(int(dayIndex)) == dayIndex`. This rejects numerically
     // equivalent aliases like `00`/`01`/`+0` that `int()` would still coerce to a
@@ -194,7 +206,7 @@ service cloud.firestore {
           || resource.data.status == 'active'
           || (resource.data.status == 'pending' && resource.data.createdBy == request.auth.uid)
         );
-        // Anyone signed in can add an item (basic validation).
+        // Anyone signed in can add a pending main-pool item (basic validation).
         //
         // Phase 1.5 approval flow (#210, daily-cards-spec § "Item pools and the
         // approval flow"): a non-admin's create may now also land 'pending' — the
@@ -202,19 +214,21 @@ service cloud.firestore {
         // 'pending'` so a new Prompt starts invisible outside the Admin queue and
         // its own submitter (the read rule's carve-out above already expects a
         // 'pending' row to exist; this is the write side that actually lets one be
-        // created). 'active' stays allowed too — admin-seeded curated-pool rows
-        // (embark/farewell, #207) and any direct write still land visible.
-        // 'rejected' is deliberately NOT in this set: only an admin's `update` (the
-        // isAdmin(eventId) arm below) may transition a row to 'rejected' — a
-        // non-admin can never CREATE one pre-rejected.
+        // created). Active creates are admin-only now (#282): otherwise a modified
+        // client could bypass the approval queue and inject visible/dealable main,
+        // embark, or farewell Prompts. 'rejected' is deliberately NOT in this set:
+        // only an admin's `update` (the isAdmin(eventId) arm below) may transition
+        // a row to 'rejected' — a non-admin can never CREATE one pre-rejected.
         allow create: if signedIn()
           && request.resource.data.text is string
           && request.resource.data.text.size() > 0
           && request.resource.data.text.size() <= 80
           && request.resource.data.createdBy == request.auth.uid
-          && request.resource.data.status in ['active', 'pending']
+          && request.resource.data.pool is string
+          && validItemPool()
           && request.resource.data.reportCount == 0
-          && request.resource.data.spicy is bool;
+          && request.resource.data.spicy is bool
+          && (nonAdminPendingMainItemCreate() || adminActiveItemCreate(eventId));
         // Report = increment reportCount by 1 only; admins can do anything.
         //
         // `status` is SERVER-AUTHORITATIVE for the community-hide transition
