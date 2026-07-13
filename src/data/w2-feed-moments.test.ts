@@ -51,6 +51,7 @@ import {
   enqueueFirstBingoMoment,
   peekPendingMoments,
   pendingBlackoutDayIndexes,
+  pendingBingoDayIndex,
   removePendingBlackoutDay,
   clearPendingMoment,
   dropPendingWins,
@@ -343,6 +344,49 @@ describe('pendingBlackoutDayIndexes — the blackout Day(s) captured at ENQUEUE 
     removePendingBlackoutDay('u1', 9);
     expect(pendingBlackoutDayIndexes('u1')).toEqual([4]);
     expect(peekPendingMoments('u1').blackout).toBe(true);
+  });
+});
+
+describe('pendingBingoDayIndex — the bingo Day captured at ENQUEUE time (#262)', () => {
+  it('first-write-wins, matching the once-per-Player `${uid}-bingo` id', () => {
+    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 2 });
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 5 });
+    expect(pendingBingoDayIndex('u1')).toBe(2); // the FIRST queued bingo's Day
+  });
+
+  it('undefined on a legacy (day-less) enqueue', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+  });
+
+  it('SURVIVES the plain-bingo fire while the ceremonial candidate is still owed (Codex P2 on #286)', () => {
+    // The roster-held path: the plain bingo fires in an EARLIER drain pass than
+    // the ceremony. The Day serves BOTH Moments, so the bingo's fire-clear must
+    // not strip the first_bingo's Day chip.
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 3 });
+    enqueueFirstBingoMoment('u1');
+    clearPendingMoment('u1', 'bingo'); // the plain bingo fired; the ceremony holds
+    expect(pendingBingoDayIndex('u1')).toBe(3); // still owed to the ceremony
+    clearPendingMoment('u1', 'firstBingo'); // the ceremony decided
+    expect(pendingBingoDayIndex('u1')).toBeUndefined(); // nothing left to protect
+  });
+
+  it('clears with the bingo fire when NO ceremonial candidate is queued', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 3 });
+    clearPendingMoment('u1', 'bingo');
+    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+    // A LATER bingo on a different Day must capture ITS OWN Day, never inherit
+    // a stale one.
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 7 });
+    expect(pendingBingoDayIndex('u1')).toBe(7);
+  });
+
+  it('a bingo FALL drops the Day with the win (dropPendingWins)', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 4 });
+    enqueueFirstBingoMoment('u1');
+    dropPendingWins('u1', { bingo: true });
+    expect(pendingBingoDayIndex('u1')).toBeUndefined();
   });
 });
 

@@ -323,8 +323,13 @@ function MomentCard({ moment, days, bannedUids }: { moment: MomentDoc; days: Day
             {/* Every Moment kind wears the day chip when it carries a Day
                 (#262) — bingo/first_bingo payloads gained dayIndex, the finale
                 beats carry it from the scheduler — so the Feed reads as a
-                cruise diary. */}
-            {typeof moment.dayIndex === 'number' && (
+                cruise diary. Only when the index resolves to a REAL schedule
+                Day (Codex P2): the rules bind dayIndex to the schedule only on
+                day-suffixed blackout ids, so a forged bingo/first_bingo could
+                otherwise wear a "Day 1000" (or "Day 0") chip. Honest daily
+                Moments always resolve; a legacy Event has no schedule to name
+                a Day from in the first place. */}
+            {typeof moment.dayIndex === 'number' && days?.[moment.dayIndex] != null && (
               <>
                 {' '}
                 <span className="moment-day-chip proof-day-chip">{dayChipLabel(moment.dayIndex, days)}</span>
@@ -611,7 +616,7 @@ function FeedWhoListSheet({ card, onClose }: { card: TallyCardData; onClose: () 
  * play is no longer invisible; Proofs and Moments keep their existing rendering.
  */
 export default function ProofFeed() {
-  const { entries, loading } = useFeed();
+  const { entries, tallyCards, loading } = useFeed();
   const { user } = useAuth();
   const navigate = useNavigate();
   // The event's days[] resolves a dayIndex to its theme label for the Day chip
@@ -648,14 +653,15 @@ export default function ProofFeed() {
     navigate('/');
   };
 
-  // The Feed's own tally entries give (a) itemId → itemText for the doubt
-  // derivation and (b) itemText → live count for the "tally N" pill (#262).
+  // The UNCAPPED tally stream gives (a) itemId → itemText for the doubt
+  // derivation and (b) itemText → live count for the "tally N" pill (#262) —
+  // not the merged `entries`, which useFeed caps at 60: a recent Proof whose
+  // Prompt's Tally Card fell outside that cap must keep its pills (Codex P2).
   const itemTextById = new Map<string, string>();
   const tallyByText = new Map<string, number>();
-  for (const entry of entries) {
-    if (entry.feedKind !== 'tallyCard') continue;
-    itemTextById.set(entry.card.itemId, entry.card.itemText);
-    tallyByText.set(entry.card.itemText, (tallyByText.get(entry.card.itemText) ?? 0) + entry.card.count);
+  for (const card of tallyCards) {
+    itemTextById.set(card.itemId, card.itemText);
+    tallyByText.set(card.itemText, (tallyByText.get(card.itemText) ?? 0) + card.count);
   }
 
   return (

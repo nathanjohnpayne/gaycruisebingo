@@ -350,7 +350,12 @@ export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags):
   if (!flags) return;
   flags[kind] = false;
   if (kind === 'blackout') flags.blackoutDayIndexes = undefined; // fired — nothing left to protect
-  if (kind === 'bingo') flags.bingoDayIndex = undefined; // fired — nothing left to protect
+  // The queued Day serves BOTH the plain bingo and the ceremonial first_bingo
+  // (they ride the SAME win), and the two can clear in different drain passes: a
+  // roster-HELD ceremony fires its plain bingo first, so clearing the Day on the
+  // bingo alone would strip the Day chip from the later first_bingo (Codex P2 on
+  // #286). Keep it until NEITHER is owed.
+  if (!flags.bingo && !flags.firstBingo) flags.bingoDayIndex = undefined;
   if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
 }
 

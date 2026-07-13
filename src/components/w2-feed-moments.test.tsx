@@ -33,6 +33,8 @@ const H = vi.hoisted(() => ({
   rosterConfirmed: true,
   feedEntries: [] as FeedEntry[],
   bannedUids: [] as string[],
+  days: undefined as import('../types').DayDef[] | undefined,
+  feedTallyCards: [] as import('../types').TallyCard[],
   // EVERY claim tap opens ProofSheet now (issue #181): in 'honor' the mocked
   // sheet's pledge trigger completes the bare doMark; 'proof_required' uses its
   // submit trigger so the proofed completion path (PR #110 round 2 finding 1)
@@ -62,11 +64,11 @@ vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
   useDayBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
-  useEventDoc: () => ({ data: { claimMode: H.claimMode, bannedUids: H.bannedUids }, loading: false }),
+  useEventDoc: () => ({ data: { claimMode: H.claimMode, bannedUids: H.bannedUids, days: H.days }, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
   useLeaderboard: () => ({ players: H.players, loading: false, hasServerData: H.rosterConfirmed }),
-  useFeed: () => ({ entries: H.feedEntries, loading: false }),
+  useFeed: () => ({ entries: H.feedEntries, tallyCards: H.feedTallyCards, loading: false }),
   useMyDayBoards: () => new Map(),
   useAllDoubts: () => ({ doubts: [], loading: false, hasServerData: true }),
   // Board subscribes the per-Square Doubt count + the Feed's Proofs for the #33
@@ -211,6 +213,8 @@ beforeEach(() => {
   H.rosterConfirmed = true;
   H.feedEntries = [];
   H.bannedUids = [];
+  H.days = undefined;
+  H.feedTallyCards = [];
   H.claimMode = 'honor';
   H.proofAttachResult = null;
   H.setMark.mockResolvedValue({ cells: [], ...NO_WIN });
@@ -1049,13 +1053,54 @@ describe('ProofFeed — the merged Feed (specs/w2-feed-moments.md)', () => {
   });
 
   it('a blackout Moment NAMES its Day when dayIndex is carried (fix/d15-blackout-day-naming)', () => {
+    // The Day must RESOLVE on the Event schedule for the chip to render (Codex
+    // P2 on #286); an unknown theme id still degrades the label to a bare
+    // "Day N" (dayChipLabel's documented fallback).
+    H.days = Array.from({ length: 5 }, (_, index) => ({ index, theme: 'nope' })) as unknown as import('../types').DayDef[];
     H.feedEntries = [momentEntry('m1', 1, 'blackout', { displayName: 'Deck Daddy', dayIndex: 3 })];
     render(<ProofFeed />);
 
     const moment = document.querySelector('.moment') as HTMLElement;
-    // 1-based Day label; `useEventDoc` here carries no `days[]`, so the chip
-    // degrades to a bare "Day N" (dayChipLabel's documented fallback).
-    expect(moment).toHaveTextContent('Day 4');
+    expect(moment).toHaveTextContent('Day 4'); // 1-based Day label
+  });
+
+  it('a Moment whose dayIndex resolves to NO schedule Day renders no chip (Codex P2 on #286: the rules bind the Day only on day-suffixed blackout ids)', () => {
+    H.days = Array.from({ length: 5 }, (_, index) => ({ index, theme: 'nope' })) as unknown as import('../types').DayDef[];
+    H.feedEntries = [
+      momentEntry('m1', 2, 'bingo', { displayName: 'Deck Daddy', dayIndex: 999 }),
+      momentEntry('m2', 1, 'bingo', { displayName: 'Deck Daddy', dayIndex: -1 }),
+    ];
+    render(<ProofFeed />);
+    expect(document.querySelector('.moment-day-chip')).toBeNull();
+  });
+
+  it('proof pills derive from the UNCAPPED tally stream — a card that fell outside the Feed cap still counts (Codex P2 on #286)', () => {
+    // The Proof's Prompt has a live Tally, but its Tally Card did NOT survive
+    // useFeed's 60-entry merge cap: `entries` holds only the Proof, while the
+    // uncapped `tallyCards` stream carries the card. The "tally N" pill must
+    // read the stream, not the capped entries.
+    H.feedEntries = [proofEntry('p1', 1000, { itemText: 'Ordered a seventh cocktail' })];
+    H.feedTallyCards = [
+      {
+        itemId: 'i-cocktail',
+        dayIndex: 0,
+        itemText: 'Ordered a seventh cocktail',
+        count: 4,
+        markers: [],
+        lastMarkedAt: 900,
+        displayBump: 900,
+      },
+    ];
+    render(<ProofFeed />);
+    expect(document.querySelector('.proof-foot')).toHaveTextContent('tally 4');
+  });
+
+  it('a day-stamped bingo Moment wears the chip when its Day resolves (#262)', () => {
+    H.days = Array.from({ length: 5 }, (_, index) => ({ index, theme: 'nope' })) as unknown as import('../types').DayDef[];
+    H.feedEntries = [momentEntry('m1', 1, 'bingo', { displayName: 'Deck Daddy', dayIndex: 1 })];
+    render(<ProofFeed />);
+    const moment = document.querySelector('.moment') as HTMLElement;
+    expect(moment.querySelector('.moment-day-chip')).toHaveTextContent('Day 2');
   });
 
   it('a blackout Moment with no dayIndex (pre-fix data) renders no Day chip', () => {

@@ -1055,7 +1055,24 @@ export default function Board() {
     // #262: captured ONCE before the plain-bingo clear below resets it — the
     // ceremonial first_bingo further down rides the SAME Day.
     const bingoDay = pendingBingoDayIndex(cUid);
-    if (pending.bingo && bingoNow) {
+    // The witnessed Day must MATCH the witnessed cells (Codex P2, #275 round 4):
+    // an action/proof continuation passes the ACTED board's cells, and the
+    // Player may have switched the rendered Day while that await was in flight —
+    // so an override's Day rides WITH the override, and the rendered-board day
+    // is trusted only for the no-override (snapshot) drains where the two are
+    // the same board by construction.
+    const witnessDay = cellsOverride !== undefined ? dayOverride : boardDayIndex;
+    // A day-stamped queued bingo adjudicates ONLY against ITS OWN Day's board
+    // (Codex P2 on #286, mirroring the blackout witnessDay check below):
+    // `bingoNow` witnesses exactly one board — the rendered/acted one — and a
+    // bingo held behind the identity/roster gates can be queued on Day 1, then
+    // drained while Day 2 renders with its own standing bingo. Without the
+    // match, that pass would publish a Day-1-stamped Moment off Day 2's
+    // witness. A mismatched Day HOLDS (it never clears): the queued win fires
+    // when its own board next renders standing, and a fall on that board drops
+    // it via dropPendingWins. A legacy (day-less) queue keeps the plain check.
+    const bingoDayWitnessed = bingoDay === undefined || witnessDay === bingoDay;
+    if (pending.bingo && bingoNow && bingoDayWitnessed) {
       // Single-arg on a legacy (day-less) queue — the call contract mirrors
       // broadcastBlackout's legacy form.
       if (bingoDay === undefined) broadcastBingo(actor);
@@ -1074,13 +1091,8 @@ export default function Board() {
       // fix/d15-blackout-day-naming), not re-derived at fire time. An empty
       // queue is the legacy day-less broadcast (one card the whole Event —
       // the rendered board IS the card).
-      // The witnessed Day must MATCH the witnessed cells (Codex P2, #275 round
-      // 4): an action/proof continuation passes the ACTED board's cells, and
-      // the Player may have switched the rendered Day while that await was in
-      // flight — so an override's Day rides WITH the override, and the
-      // rendered-board day is trusted only for the no-override (snapshot)
-      // drains where the two are the same board by construction.
-      const witnessDay = cellsOverride !== undefined ? dayOverride : boardDayIndex;
+      // `witnessDay` (above) rides the override for the same reason it does on
+      // the bingo path.
       const blackoutDays = pendingBlackoutDayIndexes(cUid);
       if (blackoutDays.length === 0) {
         broadcastBlackout(actor);
@@ -1103,7 +1115,7 @@ export default function Board() {
     // firstBingoAt delivered mid-decision can no longer slip past (finding B):
     // `roster` here is feedCtx.current as of THIS synchronous drain, re-read on
     // every attempt — gate-open, snapshot, and action drains alike.
-    if (pending.firstBingo && bingoNow && rosterOk) {
+    if (pending.firstBingo && bingoNow && bingoDayWitnessed && rosterOk) {
       if (!firstBingoCandidateCurrent(cUid)) {
         // Stale candidate (round 2 finding 3a): an observed BINGO fall bumped
         // the generation since this candidate was enqueued — the win context it

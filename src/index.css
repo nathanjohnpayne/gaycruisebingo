@@ -1517,6 +1517,7 @@ a {
 }
 .walkthrough-content {
   margin-bottom: 12px;
+}
 /* #262 — the wireframes' proof-card treatment: outlined quote pill, media
    source-badge overlay, footer pills, and the custom audio player. */
 .proof-quote-pill {

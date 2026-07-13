@@ -47,6 +47,7 @@ vi.mock('../hooks/useData', () => ({
   useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useFeed: () => ({
     entries: H.proofs.map((proof) => ({ feedKind: 'proof' as const, createdAt: proof.createdAt, proof })),
+    tallyCards: [],
     loading: false,
   }),
   // ProofFeed also reads the event for the #211 Day chip; this XSS suite exercises

@@ -639,6 +639,12 @@ export function useFeed(max = 60) {
   const { cards, loading: tallyLoading } = useTallyCards();
   return {
     entries: mergeFeed(proofs, moments, cards, max),
+    // The UNCAPPED tally stream (Codex P2 on #286): the proof-card pills
+    // (itemId → text for the doubts derivation, itemText → live count) must be
+    // derived from EVERY Tally Card, not just the ones that survived the
+    // `max`-entry merge cap — a busy Feed would otherwise zero the pills on
+    // any Proof whose Prompt's card fell outside the cap.
+    tallyCards: cards,
     loading: proofsLoading || momentsLoading || tallyLoading,
   };
 }
