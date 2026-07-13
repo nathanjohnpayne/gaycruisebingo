@@ -533,6 +533,13 @@ function AdminItemRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(it.text);
   const save = async () => {
+    // Save-time re-check (Codex P2): the Day can unlock mid-edit — the row's
+    // prop refreshes on the event re-render, so bail rather than committing a
+    // now-frozen prompt's text.
+    if (textLocked) {
+      setEditing(false);
+      return;
+    }
     if (draft.trim() && draft.trim() !== it.text) await adminUpdateItemText(it.id, draft);
     setEditing(false);
   };
