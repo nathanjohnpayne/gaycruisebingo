@@ -517,7 +517,20 @@ export async function hasPriorBingoWitness(
     if (opts?.excludeDayIndexes) {
       const witnessedDay = (snap.data() as { dayIndex?: number } | undefined)?.dayIndex;
       if (typeof witnessedDay === 'number' && opts.excludeDayIndexes.has(witnessedDay)) {
-        return false; // a tutorial-Day win is not a prior MAIN-GAME win
+        // A tutorial-Day win is not a prior MAIN-GAME win — but the shared
+        // `${uid}-bingo` id means a later main-game win could never write its
+        // own witness, so before treating the player as witness-clean consult
+        // the first_bingo SINGLETON itself (cache-only, Codex P1 on #288
+        // round 5): if the headline honor is already claimed — by this player
+        // (their earlier main-game ceremony; a lost-and-regained line must
+        // stay suppressed) or by anyone else (a candidate is pointless) — the
+        // ceremony gate reads as witnessed. Absent → genuinely witness-clean.
+        try {
+          const singleton = await getDocFromCache(rawMoment(FIRST_BINGO_MOMENT_ID));
+          return singleton.exists();
+        } catch {
+          return false; // singleton not cached — witness-clean, roster gate decides
+        }
       }
     }
     return true;

@@ -218,12 +218,34 @@ describe('hasPriorBingoWitness — the durable prior-win witness (PR #99 round 2
     await expect(hasPriorBingoWitness('u1')).resolves.toBe(false);
   });
 
-  it('a TUTORIAL-Day witness is NOT a prior main-game win (Codex P1 on #288)', async () => {
+  it('a TUTORIAL-Day witness is NOT a prior main-game win when the singleton is unclaimed (Codex P1 on #288)', async () => {
     // The `${uid}-bingo` doc is once-per-Player and a warm-up win writes it too;
     // without the exclusion, everyone who bingoed the embark card would be
-    // permanently disqualified from the cruise-wide First to BINGO.
-    getDocFromCacheSpy.mockResolvedValue({ exists: () => true, data: () => ({ dayIndex: 0 }) });
+    // permanently disqualified from the cruise-wide First to BINGO. The
+    // fallback read of the first_bingo singleton finds nothing → clean.
+    getDocFromCacheSpy
+      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 0 }) })
+      .mockResolvedValueOnce({ exists: () => false });
     await expect(hasPriorBingoWitness('u1', { excludeDayIndexes: new Set([0, 9]) })).resolves.toBe(false);
+    expect(getDocFromCacheSpy).toHaveBeenCalledTimes(2);
+    expect(getDocFromCacheSpy.mock.calls[1][0].path).toBe(`events/${EVENT_ID}/moments/first_bingo`);
+  });
+
+  it('a tutorial-stamped witness FALLS BACK to the first_bingo singleton: claimed → still witnessed (round 5)', async () => {
+    // The shared `${uid}-bingo` id means a main-game win can never write its
+    // own witness after a warm-up win — so a lost-and-regained main-game line
+    // must be suppressed by the SINGLETON the earlier ceremony wrote.
+    getDocFromCacheSpy
+      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 0 }) })
+      .mockResolvedValueOnce({ exists: () => true });
+    await expect(hasPriorBingoWitness('u1', { excludeDayIndexes: new Set([0]) })).resolves.toBe(true);
+  });
+
+  it('a tutorial-stamped witness with the singleton NOT cached resolves clean — the roster gate decides', async () => {
+    getDocFromCacheSpy
+      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 0 }) })
+      .mockRejectedValueOnce(new Error('unavailable'));
+    await expect(hasPriorBingoWitness('u1', { excludeDayIndexes: new Set([0]) })).resolves.toBe(false);
   });
 
   it('a MAIN-GAME-Day witness stays a prior win under the same exclusion set', async () => {
