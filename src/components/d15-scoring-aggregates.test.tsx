@@ -149,4 +149,40 @@ describe('Leaderboard honors strip prefers the PINNED day-meta honor (#264)', ()
     expect(strip).toHaveTextContent('Embarker'); // derived fallback where unpinned
     H.dayMetas = new Map();
   });
+
+  it('the EARLIEST timestamp wins — a later pin never displaces an earlier derived winner (Codex P2 on #280)', () => {
+    H.players = [embarker, champ];
+    H.event = event;
+    // Champ's derived Day-2 bingo is at 900; this pin landed later (at 5000) —
+    // the true earlier winner (whose unknown-identity win skipped its pin)
+    // keeps the honor.
+    H.dayMetas = new Map([[2, { firstBingo: { uid: 'late', displayName: 'Late Larry', at: 5000 } }]]);
+    render(
+      <MemoryRouter>
+        <Leaderboard />
+      </MemoryRouter>,
+    );
+    const strip = screen.getByLabelText('Daily First to BINGO');
+    expect(strip).toHaveTextContent('Champ');
+    expect(strip).not.toHaveTextContent('Late Larry');
+    H.dayMetas = new Map();
+  });
+
+  it("a banned Player's pin renders as '—' — hidden, never promoted (Codex P2 on #280)", () => {
+    H.players = [embarker, champ];
+    H.event = { ...event, bannedUids: ['banned-b'] } as typeof event;
+    // The pin belongs to a banned Player AND is EARLIER than any derived honoree
+    // for Day 2 — the chip hides the name without handing the honor to Champ.
+    H.dayMetas = new Map([[2, { firstBingo: { uid: 'banned-b', displayName: 'Banned Bart', at: 1 } }]]);
+    render(
+      <MemoryRouter>
+        <Leaderboard />
+      </MemoryRouter>,
+    );
+    const strip = screen.getByLabelText('Daily First to BINGO');
+    expect(strip).not.toHaveTextContent('Banned Bart');
+    const d3chip = within(strip).getByText('🌈 D3').closest('.lb-honor');
+    expect(d3chip?.textContent).toContain('—');
+    H.dayMetas = new Map();
+  });
 });

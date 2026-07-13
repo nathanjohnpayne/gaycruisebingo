@@ -98,6 +98,10 @@ function buildShareStandings(
 export default function Leaderboard() {
   const { players, loading } = useLeaderboard();
   const { data: event } = useEventDoc();
+  // #264: the pinned day-meta honors. Called HERE, with the other hooks —
+  // never below the loading/empty early returns, where a later non-empty
+  // render would change the hook order and crash (Codex P1 on #280).
+  const dayMetas = useDayMetas(event?.days?.length ?? 0);
   const { latestByUid } = useLatestProofByUid();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<LeaderboardFilter>('all');
@@ -147,17 +151,25 @@ export default function Leaderboard() {
   // renders once a Player has bingoed on some Day (empty on a pre-Day-Cards
   // roster, so the strip is absent there).
   const derivedHonors = perDayHonors(roster);
-  // #264: the PINNED day-meta honors are the strip's source of truth (the same
-  // write-once doc the board's daybar pin reads), with the roster-derived
-  // `perDayHonors` as the fallback for days pinned before the pin write
-  // shipped (or an unknown-identity win that skipped its pin). On a daily
-  // event every Day gets a chip — "—" until someone bingoes that Day
-  // (the wireframes' placeholder); a legacy event keeps the derived-only strip.
-  const dayMetas = useDayMetas(event?.days?.length ?? 0);
+  // #264: the PINNED day-meta honors merge with the roster-derived fallback.
+  // Precedence (Codex P2s on #280): a banned Player's pin renders as "—" —
+  // hidden, never promoted (the ban policy hides content; it never reassigns
+  // an honor) — and the EARLIEST timestamp wins between a pin and a derived
+  // honoree, so a true winner whose unknown-identity bingo skipped its pin is
+  // not permanently displaced by a later Player's pin. On a daily event every
+  // Day gets a chip ("—" until someone bingoes that Day); a legacy event
+  // keeps the derived-only strip.
   const honors = (event?.days ?? []).map((d) => {
     const pinned = dayMetas.get(d.index)?.firstBingo;
     const derived = derivedHonors.find((h) => h.dayIndex === d.index);
-    const winner = pinned ?? derived ?? null;
+    let winner: { displayName: string } | null;
+    if (pinned && isBanned(pinned.uid, bannedUids)) {
+      winner = null;
+    } else if (pinned && derived && derived.firstBingoAt < pinned.at) {
+      winner = derived;
+    } else {
+      winner = pinned ?? derived ?? null;
+    }
     return { dayIndex: d.index, displayName: winner?.displayName ?? null };
   });
   const legacyHonors = event?.days?.length ? [] : derivedHonors;

@@ -222,14 +222,27 @@ export function useDayBoard(uid: string | undefined, dayIndex: number | undefine
 /**
  * ONE Day's meta doc — the write-once per-Day First to BINGO honor (#264,
  * daily-cards-spec § "Scoring and social surfaces"). `undefined` dayIndex (a
- * legacy event, or no Day viewed) opens no subscription.
+ * legacy event, or no Day viewed) opens no subscription. The returned doc is
+ * tagged with the Day it was FETCHED FOR and returned only while that matches
+ * the CURRENT request, so a day switch can never paint the prior Day's honor
+ * under the new Day for a frame (Codex P3 on #280 — useDocSub clears state in
+ * an effect, one paint too late for this).
  */
-export function useDayMeta(dayIndex: number | undefined) {
-  const enabled = dayIndex !== undefined;
-  return useDocSub<DayMetaDoc>(
-    enabled ? dayMetaRef(dayIndex) : null,
-    `daymeta:${dayIndex ?? 'none'}`,
-  );
+export function useDayMeta(dayIndex: number | undefined): { data: DayMetaDoc | null } {
+  const [state, setState] = useState<{ forDay: number; data: DayMetaDoc | null } | null>(null);
+  useEffect(() => {
+    if (dayIndex === undefined) {
+      setState(null);
+      return;
+    }
+    const unsub = onSnapshot(
+      dayMetaRef(dayIndex),
+      (snap) => setState({ forDay: dayIndex, data: snap.exists() ? (snap.data() as DayMetaDoc) : null }),
+      () => {},
+    );
+    return () => unsub();
+  }, [dayIndex]);
+  return { data: state && state.forDay === dayIndex ? state.data : null };
 }
 
 /**
