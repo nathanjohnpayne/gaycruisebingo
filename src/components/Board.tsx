@@ -13,6 +13,7 @@ import {
   enqueueWinMoments,
   enqueueFirstBingoMoment,
   peekPendingMoments,
+  pendingBlackoutDayIndex,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -898,7 +899,11 @@ export default function Board() {
       clearPendingMoment(cUid, 'bingo');
     }
     if (pending.blackout && blackoutNow) {
-      broadcastBlackout(actor);
+      // The Day the blackout-completing Mark happened on, captured at ENQUEUE
+      // time (Codex finding 2, fix/d15-blackout-day-naming) — NOT whatever Day
+      // is currently VIEWED: a held blackout (behind the identity gate above)
+      // can drain long after the Player has switched Days.
+      broadcastBlackout(actor, pendingBlackoutDayIndex(cUid));
       clearPendingMoment(cUid, 'blackout');
     }
     // Ceremonial decision — fully SYNCHRONOUS at publish time (PR #110 round 3
@@ -1283,6 +1288,15 @@ export default function Board() {
       uid,
       bingoTransition: res.bingoTransition,
       blackoutTransition: res.blackoutTransition,
+      // The Day THIS Mark landed on, captured NOW (Codex finding 2,
+      // fix/d15-blackout-day-naming) — never re-derived at drain time, when the
+      // Player may be looking at a different Day. `undefined` on a legacy
+      // (non-daily) Event: daily-cards-spec's "Day N" naming doesn't apply
+      // there, so a blackout Moment on that shape stays day-less (Codex finding
+      // 1: a legacy single-Board Event has no Day schedule to render a chip
+      // from — `board?.dayIndex` defaulting to 0 would otherwise read as a
+      // misleading "Day 1").
+      dayIndex: hasDays ? viewedIndex : undefined,
     });
     // The BIRTH-TIME witness (round 2 finding D; made the SOLE witness site by
     // round 3 finding A): the prior-win question — "is this win a regain?" — is

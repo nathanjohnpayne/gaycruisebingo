@@ -280,6 +280,19 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     rerender(<Board />);
     await clickMark('p24', { bingo: true, blackout: true, blackoutTransition: true }, dealtWith(FULL_CARD));
     expect(H.broadcastBlackout).toHaveBeenCalledTimes(1);
+    // No Day stamped on this LEGACY (non-daily) fixture — `useEventDoc` here
+    // carries no `days[]`, so `hasDays` is false and the enqueue passes no
+    // dayIndex (fix/d15-blackout-day-naming, Codex finding 1): a legacy Event
+    // has no Day schedule to render a chip from, so `board.dayIndex`'s default
+    // of 0 must NOT leak in as a misleading "Day 1". The daily-cards case (a
+    // real dayIndex threaded through) is unit-tested directly at the
+    // pending-queue layer — src/data/w2-feed-moments.test.ts's
+    // `pendingBlackoutDayIndex` suite — since this fixture's mocks don't model
+    // a Day schedule.
+    expect(H.broadcastBlackout).toHaveBeenCalledWith(
+      { uid: 'u1', displayName: 'Deck Daddy', photoURL: null },
+      undefined,
+    );
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // not re-announced (bingoTransition false)
   });
 
@@ -1022,6 +1035,24 @@ describe('ProofFeed — the merged Feed (specs/w2-feed-moments.md)', () => {
     expect(moment.querySelector('img.proof-media, audio.proof-media, .proof-quote')).toBeNull();
     expect(moment.querySelector('button')).toBeNull();
     expect(moment).toHaveTextContent(/blacked out the whole card/i);
+  });
+
+  it('a blackout Moment NAMES its Day when dayIndex is carried (fix/d15-blackout-day-naming)', () => {
+    H.feedEntries = [momentEntry('m1', 1, 'blackout', { displayName: 'Deck Daddy', dayIndex: 3 })];
+    render(<ProofFeed />);
+
+    const moment = document.querySelector('.moment') as HTMLElement;
+    // 1-based Day label; `useEventDoc` here carries no `days[]`, so the chip
+    // degrades to a bare "Day N" (dayChipLabel's documented fallback).
+    expect(moment).toHaveTextContent('Day 4');
+  });
+
+  it('a blackout Moment with no dayIndex (pre-fix data) renders no Day chip', () => {
+    H.feedEntries = [momentEntry('m1', 1, 'blackout', { displayName: 'Deck Daddy' })];
+    render(<ProofFeed />);
+
+    const moment = document.querySelector('.moment') as HTMLElement;
+    expect(moment.querySelector('.moment-day-chip')).toBeNull();
   });
 
   it('a Proof keeps its report and owner-delete affordances in the Feed', () => {

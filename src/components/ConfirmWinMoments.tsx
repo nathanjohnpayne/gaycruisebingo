@@ -190,6 +190,18 @@ export default function ConfirmWinMoments() {
               hasPriorBingo: witnessed,
             });
             if (plan.bingo) broadcastBingo(actor);
+            // No dayIndex here (Codex finding 3, fix/d15-blackout-day-naming):
+            // `board` above is `useBoard(uid)`, the LEGACY single-Board hook —
+            // `dealDayCard` never writes that path in daily-cards mode (api.ts),
+            // so `boardOwned` (and therefore this whole drain) can only be true
+            // on a legacy, non-daily Event, where a blackout Moment stays
+            // day-less (mirrors Board.tsx's live-mark path, Codex finding 1).
+            // The confirmed Claim DOES carry its own `dayIndex` in daily-cards
+            // mode, but this component has no day-scoped board/claim wiring to
+            // safely attribute a batch confirm's blackout to ONE Claim's Day —
+            // making the confirm path daily-aware is a separate, out-of-scope
+            // ticket (this component's `admin_confirmed`-mode Moments are
+            // already inert for daily Events today via the `boardOwned` gate).
             if (plan.blackout) broadcastBlackout(actor);
             if (plan.firstBingo) broadcastFirstBingo(actor);
             else if (plan.firstBingoHeld) st2.heldCeremony = actor;

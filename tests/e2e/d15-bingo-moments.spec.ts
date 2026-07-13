@@ -95,7 +95,7 @@ test.describe('bingo + blackout moments', () => {
     }
   });
 
-  test('Blackout posts a Moment; recording whether it names the day', async ({ page }) => {
+  test('Blackout posts a Moment that names the day', async ({ page }) => {
     // Blacking out a card is 24 honor claims (tap + pledge each), well past the
     // 30s default — this is a deliberate marathon, not a hang.
     test.setTimeout(240_000);
@@ -139,14 +139,16 @@ test.describe('bingo + blackout moments', () => {
       await page.screenshot({ path: `${SHOTS}/moments-blackout-feed.png`, fullPage: true });
 
       // The spec calls for the blackout Moment to NAME the day ("blacked out Day 3
-      // · …"). Record — not silently pass — whether the day is actually carried on
-      // the doc and rendered in the Feed. The verification report reads this.
-      const namesDayOnDoc = typeof blackout?.dayIndex === 'number';
+      // · …", daily-cards-spec § "Scoring and social surfaces") —
+      // fix/d15-blackout-day-naming closes this: the doc carries the dayIndex the
+      // blackout happened on (today's Day, TODAY_INDEX), and the Feed renders it.
+      expect(blackout?.dayIndex, 'blackout Moment carries its dayIndex').toBe(TODAY_INDEX);
+      // "Day 3" — the 1-based label for TODAY_INDEX (2) — Valletta/get-sporty.
+      await expect(page.locator('.moment-blackout').first()).toContainText(`Day ${TODAY_INDEX + 1}`, {
+        timeout: 15_000,
+      });
       const feedText = (await page.locator('.moment-blackout').first().textContent()) ?? '';
-      const namesDayInFeed = /Day\s*\d/i.test(feedText);
-      console.log(
-        `[blackout-moment] viewedDay=${TODAY_INDEX} dayIndex-on-doc=${namesDayOnDoc} names-day-in-feed=${namesDayInFeed} feed="${feedText.trim()}"`,
-      );
+      console.log(`[blackout-moment] viewedDay=${TODAY_INDEX} feed="${feedText.trim()}"`);
     } finally {
       await testEnv.cleanup();
     }

@@ -5,9 +5,11 @@ import type { Cell } from '../types';
 //   1. setMark folds a Mark into `dayStats[dayIndex]` (the marked Board's own
 //      dayIndex) and writes the summed cruise-wide root alongside — leaving other
 //      Days' buckets untouched (a nested { merge:true } write).
-//   2. dayMeta.ts writers: the write-once per-Day First to BINGO pin and the
-//      per-card blackout Moment that names its Day, both cache-pre-checked and
-//      fire-and-forget (mirroring moments.ts).
+//   2. dayMeta.ts's `pinDayFirstBingo`: the write-once per-Day First to BINGO pin,
+//      cache-pre-checked and fire-and-forget (mirroring moments.ts).
+//   3. moments.ts's `broadcastBlackout`'s optional `dayIndex`: the per-card
+//      blackout Moment that names its Day (fix/d15-blackout-day-naming), same
+//      cache-pre-checked, fire-and-forget write as every other Moment.
 
 type FakeSnap = { exists: () => boolean; data: () => unknown };
 
@@ -35,7 +37,8 @@ vi.mock('firebase/firestore', async (importOriginal) => {
 });
 
 import { setMark } from './api';
-import { pinDayFirstBingo, broadcastDayBlackout } from './dayMeta';
+import { pinDayFirstBingo } from './dayMeta';
+import { broadcastBlackout } from './moments';
 
 const EVENT_ID = 'med-2026';
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -133,14 +136,15 @@ describe('dayMeta.pinDayFirstBingo (write-once per-Day honor)', () => {
   });
 });
 
-describe('dayMeta.broadcastDayBlackout (per-card blackout Moment naming the Day)', () => {
+describe('moments.broadcastBlackout — optional dayIndex names the Day (fix/d15-blackout-day-naming)', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('posts a blackout Moment carrying the dayIndex on a cache miss', async () => {
-    broadcastDayBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
+    broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
     await flush();
     expect(setDocSpy).toHaveBeenCalledTimes(1);
-    // Deterministic id ${uid}-blackout (create-only + immutable per rules).
+    // Deterministic id ${uid}-blackout (create-only + immutable per rules) — the
+    // SAME id the day-less broadcastBlackout call has always used.
     expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout`);
     expect(setDocSpy.mock.calls[0][1]).toMatchObject({
       kind: 'blackout',
@@ -150,9 +154,16 @@ describe('dayMeta.broadcastDayBlackout (per-card blackout Moment naming the Day)
     });
   });
 
+  it('omits dayIndex entirely (never an explicit undefined) when the caller supplies none', async () => {
+    broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null });
+    await flush();
+    expect(setDocSpy).toHaveBeenCalledTimes(1);
+    expect('dayIndex' in (setDocSpy.mock.calls[0][1] as object)).toBe(false);
+  });
+
   it('skips the broadcast when the Moment is already in the local cache', async () => {
     getDocFromCacheSpy.mockResolvedValueOnce(snap({ kind: 'blackout', uid: 'u1' }));
-    broadcastDayBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
+    broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
     await flush();
     expect(setDocSpy).not.toHaveBeenCalled();
   });
