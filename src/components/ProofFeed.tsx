@@ -122,14 +122,20 @@ function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: str
  */
 function MomentCard({ moment, days }: { moment: MomentDoc; days: DayDef[] | undefined }) {
   const copy = MOMENT_COPY[moment.kind] ?? { icon: '🎉', line: 'made a Moment!' };
+  // #266: the finale beats carry their real content when the scheduler built
+  // it — the last-call standings line, and the podium's structured payload.
+  // Older minimal beats keep the generic line.
+  const isFinale = moment.kind === 'last_call' || moment.kind === 'podium';
+  const finaleLine = moment.kind === 'last_call' ? moment.line : undefined;
+  const podium = moment.kind === 'podium' ? moment.podium : undefined;
   return (
     <div className={`moment moment-${moment.kind}`}>
       <div className="row" style={{ border: 'none', background: 'none', padding: 0 }}>
-        <Avatar name={moment.displayName} src={moment.photoURL} size={30} />
+        {!isFinale && <Avatar name={moment.displayName} src={moment.photoURL} size={30} />}
         <div className="grow">
           <div className="name" style={{ fontSize: 14 }}>
-            {moment.displayName}{' '}
-            <span className="moment-line">{copy.line}</span>
+            {!isFinale && <>{moment.displayName}{' '}</>}
+            <span className="moment-line">{finaleLine ?? (podium ? 'The podium is in!' : `${isFinale ? '' : ''}${copy.line}`)}</span>
             {moment.kind === 'blackout' && typeof moment.dayIndex === 'number' && (
               <>
                 {' '}
@@ -137,6 +143,26 @@ function MomentCard({ moment, days }: { moment: MomentDoc; days: DayDef[] | unde
               </>
             )}
           </div>
+          {podium && (
+            <div className="moment-podium">
+              {podium.champion && (
+                <div className="moment-podium-row">
+                  🏆 Cruise champion: <b>{podium.champion.displayName}</b> — {podium.champion.bingoCount} bingo
+                  {podium.champion.bingoCount === 1 ? '' : 's'} · {podium.champion.squaresMarked} squares
+                </div>
+              )}
+              {podium.firstBingo && (
+                <div className="moment-podium-row">
+                  👑 First to BINGO: <b>{podium.firstBingo.displayName}</b>
+                </div>
+              )}
+              {podium.dailyHonors.length > 0 && (
+                <div className="moment-podium-row moment-podium-honors">
+                  {podium.dailyHonors.map((h) => `D${h.dayIndex + 1} ${h.displayName}`).join(' · ')}
+                </div>
+              )}
+            </div>
+          )}
           <div className="sub">{ago(moment.createdAt)}</div>
         </div>
         <span className="moment-icon" aria-hidden="true">{copy.icon}</span>

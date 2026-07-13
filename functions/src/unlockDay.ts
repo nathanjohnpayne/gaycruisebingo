@@ -50,6 +50,14 @@ export interface EventLike {
 }
 
 /** The finale Moment kinds this ticket posts. */
+import {
+  lastCallStandingsCopy,
+  buildPodiumPayload,
+  type FinalePlayer,
+  type FinaleDay,
+  type FinaleDayHonorDoc,
+} from './finaleContent';
+
 export type FinaleMomentKind = 'last_call' | 'podium';
 
 // --- Pure decisions -------------------------------------------------------------
@@ -288,16 +296,19 @@ async function postFinaleMoment(
   kind: FinaleMomentKind,
   dayIndex: number,
   now: number,
+  // #266: the beat's CONTENT — the last-call standings line, or the podium
+  // payload — merged into the Moment doc so the Feed renders the real finale
+  // instead of a generic placeholder. Optional: a content-build failure still
+  // posts the minimal beat (content is best-effort; the beat itself is not).
+  extra?: Record<string, unknown>,
 ): Promise<void> {
-  // Minimal, scheduler-posted payload: the standings / podium CONTENT is #212 /
-  // #217, which read this beat by `kind` + `dayIndex`. No human author — a
-  // `system` uid keeps the MomentDoc shape intact without impersonating a Player.
-  //
   // Write at the DETERMINISTIC `kind` id, not an auto-id: the public Feed read
   // (`hasCanonicalMomentId`, src/hooks/useData.ts) only renders these singleton
   // finale beats when `moment.id === moment.kind`, so an auto-id moment would exist
   // in Firestore but never surface (Codex #228 P1). The deterministic id also makes
-  // a retry overwrite the one doc rather than fan out duplicates.
+  // a retry overwrite the one doc rather than fan out duplicates. No human
+  // author — a `system` uid keeps the MomentDoc shape intact without
+  // impersonating a Player.
   await db.collection(`events/${eventId}/moments`).doc(kind).set({
     kind,
     uid: 'system',
@@ -305,7 +316,51 @@ async function postFinaleMoment(
     photoURL: null,
     createdAt: now,
     dayIndex,
+    ...(extra ?? {}),
   });
+}
+
+/** The ban-filtered roster as `FinalePlayer[]` (#266) — the same shape the
+ *  content builders and the client-side podium consume. */
+async function readFinaleRoster(
+  db: AdminFirestore,
+  eventId: string,
+  bannedUids: readonly string[],
+): Promise<FinalePlayer[]> {
+  const snap = await db.collection(`events/${eventId}/players`).get();
+  return snap.docs
+    .map((d) => {
+      const data = (d.data() ?? {}) as Partial<FinalePlayer>;
+      return {
+        uid: typeof data.uid === 'string' ? data.uid : '',
+        displayName: typeof data.displayName === 'string' && data.displayName ? data.displayName : 'Anonymous',
+        bingoCount: typeof data.bingoCount === 'number' ? data.bingoCount : 0,
+        squaresMarked: typeof data.squaresMarked === 'number' ? data.squaresMarked : 0,
+        firstBingoAt: typeof data.firstBingoAt === 'number' ? data.firstBingoAt : null,
+        dayStats: data.dayStats,
+      };
+    })
+    .filter((p) => p.uid !== '' && !bannedUids.includes(p.uid));
+}
+
+/** Every pinned per-Day honor doc (#266) — days/{i}/meta/{i}, present ones only. */
+async function readDayHonors(
+  db: AdminFirestore,
+  eventId: string,
+  days: readonly FinaleDay[],
+): Promise<FinaleDayHonorDoc[]> {
+  const honors = await Promise.all(
+    days.map(async (d) => {
+      try {
+        const snap = await db.doc(`events/${eventId}/days/${d.index}/meta/${d.index}`).get();
+        const firstBingo = (snap.data() as { firstBingo?: FinaleDayHonorDoc['firstBingo'] } | undefined)?.firstBingo;
+        return firstBingo ? ({ dayIndex: d.index, firstBingo } as FinaleDayHonorDoc) : null;
+      } catch {
+        return null;
+      }
+    }),
+  );
+  return honors.filter((h): h is FinaleDayHonorDoc => h !== null);
 }
 
 // --- Snapshot stamping ----------------------------------------------------------
@@ -405,7 +460,18 @@ export async function runFinaleBeats(db: AdminFirestore, eventId: string, deps: 
 
   if (postLastCall) {
     try {
-      await postFinaleMoment(db, eventId, 'last_call', times.lastCallDayIndex, now);
+      // #266: the going-into-the-final-night standings line ("X leads by 2
+      // bingos—standings freeze at 8 a.m."), built from the ban-filtered
+      // roster. Content is best-effort: a roster read failure posts the
+      // minimal beat rather than skipping it.
+      let extra: Record<string, unknown> | undefined;
+      try {
+        const roster = await readFinaleRoster(db, eventId, event.bannedUids ?? []);
+        extra = { line: lastCallStandingsCopy(roster) };
+      } catch (err) {
+        console.error('runFinaleBeats: last_call content build failed', eventId, err);
+      }
+      await postFinaleMoment(db, eventId, 'last_call', times.lastCallDayIndex, now, extra);
     } catch (err) {
       console.error('runFinaleBeats: last_call post failed', eventId, err);
     }
@@ -424,7 +490,21 @@ export async function runFinaleBeats(db: AdminFirestore, eventId: string, deps: 
   }
   if (postPodium) {
     try {
-      await postFinaleMoment(db, eventId, 'podium', times.podiumDayIndex, now);
+      // #266: the podium payload — champion, cruise-wide First to BINGO, and
+      // the pinned daily honors — computed AT the freeze from the ban-filtered
+      // roster + day-meta pins. Best-effort like the last-call content.
+      let extra: Record<string, unknown> | undefined;
+      try {
+        const days = (Array.isArray(event.days) ? event.days : []) as FinaleDay[];
+        const [roster, honors] = await Promise.all([
+          readFinaleRoster(db, eventId, event.bannedUids ?? []),
+          readDayHonors(db, eventId, days),
+        ]);
+        extra = { podium: buildPodiumPayload(roster, days, honors) as unknown as Record<string, unknown> };
+      } catch (err) {
+        console.error('runFinaleBeats: podium content build failed', eventId, err);
+      }
+      await postFinaleMoment(db, eventId, 'podium', times.podiumDayIndex, now, extra);
     } catch (err) {
       console.error('runFinaleBeats: podium post failed', eventId, err);
     }

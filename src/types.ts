@@ -326,6 +326,21 @@ export interface MomentDoc {
   // Which Day this beat belongs to, so the Feed reads "BINGO — Day 4 ·
   // Glamiators". Optional until the day-scoped Moment writers stamp it.
   dayIndex?: number;
+  // #266 — the finale beats' CONTENT, written by the scheduler
+  // (functions/src/unlockDay.ts). `line` is the last-call standings copy
+  // ("X leads by 2 bingos—standings freeze at 8 a.m."); `podium` is the
+  // Day-10 freeze payload. Both optional: an older minimal beat (or a
+  // content-build failure) renders the generic line.
+  line?: string;
+  podium?: PodiumMomentPayload;
+}
+
+// The podium Moment's payload (#266) — the shape
+// functions/src/finaleContent.ts buildPodiumPayload writes.
+export interface PodiumMomentPayload {
+  champion: { uid: string; displayName: string; bingoCount: number; squaresMarked: number } | null;
+  firstBingo: { uid: string; displayName: string; at: number } | null;
+  dailyHonors: { dayIndex: number; uid: string; displayName: string; at: number }[];
 }
 
 // Per-Day honor doc at events/{eventId}/days/{dayIndex}/meta/{dayIndex} — a

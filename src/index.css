@@ -1476,6 +1476,16 @@ a {
 }
 
 /* ---------- install + update toasts ---------- */
+/* #266 — the podium Moment's structured content. */
+.moment-podium {
+  margin: 4px 0 2px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.moment-podium-honors {
+  font-size: 11px;
+  opacity: 0.85;
+}
 /* Shared bottom-toast shell: .install-prompt (specs/w1-pwa.md) and .update-prompt
    (specs/app-update-reload-prompt.md, restyled by specs/d15-pwa-toasts.md).
    `--toast-index` (0 = topmost) and `--toast-count` (how many toasts are
