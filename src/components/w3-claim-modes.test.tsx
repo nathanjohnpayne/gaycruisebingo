@@ -871,6 +871,58 @@ describe('ConfirmWinMoments — daily-cards events adjudicate against the Claim�
     expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
   });
 
+  it('the batch singleton goes to the EARLIEST-claimed win, not the lowest Day (Codex P3 on #288 round 3)', async () => {
+    // The Day-3 claim was raised BEFORE the Day-1 claim: its win crossed
+    // first, so the event singleton wears Day 3.
+    H.event = { days: [{ index: 0 }, { index: 1 }, { index: 2 }, { index: 3 }] } as unknown as Partial<EventDoc>;
+    H.dayBoards = new Map([
+      [1, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
+      [3, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
+    ]);
+    H.claims = [
+      claim({ id: 'c-d3', status: 'pending', resolvedBy: null, dayIndex: 3, createdAt: 100 }),
+      claim({ id: 'c-d1', status: 'pending', resolvedBy: null, dayIndex: 1, createdAt: 200 }),
+    ];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [
+      claim({ id: 'c-d3', status: 'confirmed', dayIndex: 3, createdAt: 100 }),
+      claim({ id: 'c-d1', status: 'confirmed', dayIndex: 1, createdAt: 200 }),
+    ];
+    H.dayBoards = new Map([
+      [1, boardDoc(cellsWith(ROW0))],
+      [3, boardDoc(cellsWith(ROW0))],
+    ]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 3);
+  });
+
+  it('a held daily ceremony is VOIDED when the freeze lands before the roster gate opens (Codex P2 on #288 round 3)', async () => {
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [claim({ status: 'confirmed', dayIndex: 1 })];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 1);
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // parked at the roster gate
+
+    // The finale freeze stamps while the candidate is parked; the roster then
+    // confirms — the settled headline honor must NOT be rewritten.
+    H.event = { days: DAYS, frozenAt: 1 } as unknown as Partial<EventDoc>;
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+
   it('a POST-FREEZE confirm posts its plain bingo but never mints the ceremony (Codex P1 on #287, mirrors the live verdict-time gate)', async () => {
     // The finale freeze has been stamped: a late admin approval of a main-Day
     // claim must not rewrite the settled headline honor.

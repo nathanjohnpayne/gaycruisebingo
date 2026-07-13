@@ -25,6 +25,11 @@ interface AwaitingConfirm {
   // The Claim's Day (#274): a daily Claim adjudicates against ITS day-scoped
   // board and its Moments name that Day. `null` = a legacy single-board Claim.
   dayIndex: number | null;
+  // The Claim's creation time — the batch's ceremony ORDER (Codex P3 on #288
+  // round 3): when two Day groups cross eligible bingos in one drain, the
+  // event singleton goes to the group whose claim was raised FIRST (the claim
+  // precedes its win), not to the lowest day number.
+  createdAt: number;
 }
 
 /**
@@ -242,13 +247,17 @@ export default function ConfirmWinMoments() {
           // ONE ceremonial decision per batch (Codex P2 on #288): first_bingo
           // is the event singleton, so when two Day groups both cross an
           // eligible bingo in the same batch, only ONE may fire or park it —
-          // deterministically the lowest Day (legacy day-less group first);
-          // the true cross-player race still resolves at the create-once doc
-          // id. A ceremony already parked from an earlier batch keeps its
-          // slot (never overwritten by a later group).
+          // the group whose claim was raised EARLIEST (round 3 P3: the claim
+          // precedes its win, so claim age approximates which bingo crossed
+          // first far better than day number; day index breaks ties). The
+          // true cross-player race still resolves at the create-once doc id.
+          // A ceremony already parked from an earlier batch keeps its slot
+          // (never overwritten by a later group).
           let ceremonyOpen = st2.heldCeremony == null;
+          const groupAge = (entries: Array<[string, AwaitingConfirm]>) =>
+            Math.min(...entries.map(([, e]) => e.createdAt));
           const orderedGroups = [...groups.entries()].sort(
-            ([a], [b]) => (a ?? -1) - (b ?? -1),
+            ([a, ea], [b, eb]) => groupAge(ea) - groupAge(eb) || (a ?? -1) - (b ?? -1),
           );
           for (const [dayKey, entries] of orderedGroups) {
             const cells = cellsForDayRef.current(cc, dayKey);
@@ -337,6 +346,16 @@ export default function ConfirmWinMoments() {
       st.heldCeremonyDay = null;
       return;
     }
+    // The freeze can land while the candidate is parked (Codex P2 on #288
+    // round 3): admin approvals are arbitrarily delayed, so re-check at
+    // RELEASE time and VOID a candidate the finale has overtaken — the
+    // headline honor is settled with the podium and a late roster
+    // confirmation must not rewrite it.
+    if (standingsFrozen(c.event)) {
+      st.heldCeremony = null;
+      st.heldCeremonyDay = null;
+      return;
+    }
     // The win still stands — publish only once the identity + roster gates open.
     if (!c.identityKnown || !c.rosterConfirmed) return; // still held
     const othersBingoed = c.players.some((p) => p.uid !== c.uid && p.firstBingoAt != null);
@@ -386,6 +405,7 @@ export default function ConfirmWinMoments() {
           cellIndex: c.cellIndex,
           proofId: c.proofId ?? null,
           dayIndex: typeof c.dayIndex === 'number' ? c.dayIndex : null,
+          createdAt: c.createdAt,
         });
         added = true;
       }

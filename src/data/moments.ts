@@ -706,7 +706,10 @@ export interface ConfirmListenerState {
   // proofId makes board reflection claim-SPECIFIC (Codex #116 R4 finding 2):
   // `confirmClaim` resolves the cell by proofId, so a DIFFERENT claim's
   // confirm at the same index must not count as this one's.
-  awaiting: Map<string, { cellIndex: number; proofId: string | null; dayIndex: number | null }>;
+  awaiting: Map<
+    string,
+    { cellIndex: number; proofId: string | null; dayIndex: number | null; createdAt: number }
+  >;
   // A first_bingo candidate parked at the roster gate, with its winner actor
   // captured; its prior-win eligibility was fixed at detection (never re-read).
   // `heldCeremonyDay` (#274) is the Day the held win stood on — the fall-clear
