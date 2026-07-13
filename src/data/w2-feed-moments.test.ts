@@ -51,6 +51,8 @@ import {
   enqueueFirstBingoMoment,
   peekPendingMoments,
   pendingBlackoutDayIndexes,
+  pendingBingoDayIndex,
+  pendingFirstBingoDayIndex,
   removePendingBlackoutDay,
   clearPendingMoment,
   dropPendingWins,
@@ -343,6 +345,61 @@ describe('pendingBlackoutDayIndexes — the blackout Day(s) captured at ENQUEUE 
     removePendingBlackoutDay('u1', 9);
     expect(pendingBlackoutDayIndexes('u1')).toEqual([4]);
     expect(peekPendingMoments('u1').blackout).toBe(true);
+  });
+});
+
+describe('pendingBingoDayIndex — the bingo Day captured at ENQUEUE time (#262)', () => {
+  it('first-write-wins, matching the once-per-Player `${uid}-bingo` id', () => {
+    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 2 });
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 5 });
+    expect(pendingBingoDayIndex('u1')).toBe(2); // the FIRST queued bingo's Day
+  });
+
+  it('undefined on a legacy (day-less) enqueue', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
+    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+  });
+
+  it('the ceremonial candidate carries ITS OWN Day — the plain-bingo fire cannot strip it (Codex P2 R1 + P3 R2 on #286)', () => {
+    // The roster-held path: the plain bingo fires in an EARLIER drain pass than
+    // the ceremony, and each kind's Day clears with ITS OWN fire.
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 3 });
+    enqueueFirstBingoMoment('u1', 3);
+    clearPendingMoment('u1', 'bingo'); // the plain bingo fired; the ceremony holds
+    expect(pendingFirstBingoDayIndex('u1')).toBe(3); // the candidate's own stamp survives
+    clearPendingMoment('u1', 'firstBingo'); // the ceremony decided
+    expect(pendingFirstBingoDayIndex('u1')).toBeUndefined(); // nothing left to protect
+  });
+
+  it('R2 P3: the async-witness window — plain bingo fires (entry deleted) BEFORE the candidate enqueues; the ceremony still knows its Day', () => {
+    // enqueueWinMoments and enqueueFirstBingoMoment straddle the durable-witness
+    // read: a snapshot drain can fire + clear the plain bingo (deleting the
+    // whole flags entry) inside that gap. The late candidate stamps its own Day.
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 5 });
+    clearPendingMoment('u1', 'bingo'); // fired mid-witness-read; entry deleted
+    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+    enqueueFirstBingoMoment('u1', 5); // the witness continuation lands after
+    expect(pendingFirstBingoDayIndex('u1')).toBe(5);
+    expect(peekPendingMoments('u1').firstBingo).toBe(true);
+  });
+
+  it('clears with the bingo fire when NO ceremonial candidate is queued', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 3 });
+    clearPendingMoment('u1', 'bingo');
+    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+    // A LATER bingo on a different Day must capture ITS OWN Day, never inherit
+    // a stale one.
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 7 });
+    expect(pendingBingoDayIndex('u1')).toBe(7);
+  });
+
+  it('a bingo FALL drops both Days with the win (dropPendingWins)', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 4 });
+    enqueueFirstBingoMoment('u1', 4);
+    dropPendingWins('u1', { bingo: true });
+    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+    expect(pendingFirstBingoDayIndex('u1')).toBeUndefined();
   });
 });
 

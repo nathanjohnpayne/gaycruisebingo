@@ -47,14 +47,21 @@ vi.mock('../hooks/useData', () => ({
   useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useFeed: () => ({
     entries: H.proofs.map((proof) => ({ feedKind: 'proof' as const, createdAt: proof.createdAt, proof })),
+    tallyCards: [],
     loading: false,
   }),
   // ProofFeed also reads the event for the #211 Day chip; this XSS suite exercises
   // only the media sinks, so an empty event (no days[]) suffices.
   useEventDoc: () => ({ data: null, loading: false }),
   useMyDayBoards: () => new Map(),
+  useAllDoubts: () => ({ doubts: [], loading: false, hasServerData: true }),
 }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
+// ProofFeed's doubts-cleared pill (#262) imports isDoubtSatisfied, whose module
+// initializes the REAL firebase app at import — fatal in CI, where no API key
+// exists (locally .env.local masks it). This suite exercises only the media
+// sinks; an inert stub keeps the SDK out of the graph.
+vi.mock('../data/doubts', () => ({ isDoubtSatisfied: () => false }));
 
 import ProofSheet from './ProofSheet';
 import ProofFeed from './ProofFeed';
@@ -213,7 +220,7 @@ describe('ProofFeed — text Proof is inert; media schemes are guarded', () => {
     H.proofs = [proof({ id: 'a', createdAt: 1, type: 'audio', mediaURL: 'https://x/a.webm' })];
     render(<ProofFeed />);
 
-    const audio = document.querySelector('audio.proof-media') as HTMLAudioElement;
+    const audio = document.querySelector('.proof-audio audio') as HTMLAudioElement;
     expect(audio).toBeInTheDocument();
     expect(audio.getAttribute('src')).toBe('https://x/a.webm');
   });

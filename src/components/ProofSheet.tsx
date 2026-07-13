@@ -257,6 +257,12 @@ export default function ProofSheet(props: Props) {
                 </label>
               )}
             </div>
+            {/* The #190 transparency note (spec § "Square tap", #262): shown
+                exactly when the Library pick is offered. */}
+            {photoProofSource !== 'camera_only' && (
+              <p className="muted photo-library-note">Library picks wear a 🖼️ badge on the Feed</p>
+            )}
+
             {safePhotoSrc && <img className="preview" src={safePhotoSrc} alt="preview" />}
           </div>
         )}

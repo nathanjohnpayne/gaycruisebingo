@@ -104,6 +104,17 @@ export interface PendingMomentFlags {
 interface StoredPendingFlags extends PendingMomentFlags {
   firstBingoGeneration: number;
   blackoutDayIndexes?: number[];
+  // The Day the FIRST queued bingo happened on (#262) — first-write-wins,
+  // matching the once-per-Player `${uid}-bingo` id. Payload-naming only,
+  // never part of an id.
+  bingoDayIndex?: number;
+  // The ceremonial candidate's OWN Day (#262; Codex P3 on #286 round 2),
+  // stamped at enqueueFirstBingoMoment time. Deliberately SEPARATE from
+  // `bingoDayIndex`: the candidate is enqueued AFTER an async witness read,
+  // and a snapshot/gate drain can legitimately fire (and clear) the plain
+  // bingo — day included — inside that window, so the ceremony must not
+  // borrow the bingo's day at drain time.
+  firstBingoDayIndex?: number;
 }
 const pendingMoments = new Map<string, StoredPendingFlags>();
 
@@ -169,7 +180,10 @@ export function enqueueWinMoments(params: {
   const { uid, bingoTransition, blackoutTransition, dayIndex } = params;
   if (!bingoTransition && !blackoutTransition) return;
   const flags = ensurePending(uid);
-  if (bingoTransition) flags.bingo = true;
+  if (bingoTransition) {
+    flags.bingo = true;
+    if (flags.bingoDayIndex === undefined) flags.bingoDayIndex = dayIndex;
+  }
   if (blackoutTransition) {
     flags.blackout = true;
     if (dayIndex !== undefined) {
@@ -189,10 +203,13 @@ export function enqueueWinMoments(params: {
  * STAMPED with the current action generation (PR #110 round 2 finding 3): the
  * drain fires it only while that stamp is current (`firstBingoCandidateCurrent`).
  */
-export function enqueueFirstBingoMoment(uid: string): void {
+export function enqueueFirstBingoMoment(uid: string, dayIndex?: number): void {
   const flags = ensurePending(uid);
   flags.firstBingo = true;
   flags.firstBingoGeneration = pendingActionGeneration(uid);
+  // The candidate's own Day (#262; Codex P3 on #286 round 2) — a re-enqueue is
+  // a NEW candidate (new generation), so it overwrites rather than first-wins.
+  flags.firstBingoDayIndex = dayIndex;
 }
 
 /**
@@ -219,6 +236,18 @@ export function peekPendingMoments(uid: string): PendingMomentFlags {
  */
 export function pendingBlackoutDayIndexes(uid: string): number[] {
   return [...(pendingMoments.get(pendingKey(uid))?.blackoutDayIndexes ?? [])];
+}
+
+/** The Day the still-pending (first) bingo was ENQUEUED on (#262) —
+ *  `undefined` when nothing is queued or the enqueue carried no Day. */
+export function pendingBingoDayIndex(uid: string): number | undefined {
+  return pendingMoments.get(pendingKey(uid))?.bingoDayIndex;
+}
+
+/** The still-pending ceremonial candidate's OWN Day (#262; Codex P3 on #286
+ *  round 2) — `undefined` when no candidate is queued or it carried no Day. */
+export function pendingFirstBingoDayIndex(uid: string): number | undefined {
+  return pendingMoments.get(pendingKey(uid))?.firstBingoDayIndex;
 }
 
 /**
@@ -304,6 +333,8 @@ export function dropPendingWins(
   if (fell.bingo) {
     flags.bingo = false;
     flags.firstBingo = false;
+    flags.bingoDayIndex = undefined; // the fallen bingo's Day no longer applies
+    flags.firstBingoDayIndex = undefined;
   }
   if (fell.blackout) {
     const days = flags.blackoutDayIndexes;
@@ -336,6 +367,13 @@ export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags):
   if (!flags) return;
   flags[kind] = false;
   if (kind === 'blackout') flags.blackoutDayIndexes = undefined; // fired — nothing left to protect
+  // Each kind clears ITS OWN Day (#286 round 2, Codex P3): the ceremonial
+  // candidate carries `firstBingoDayIndex` stamped at ITS enqueue, so the plain
+  // bingo's fire-clear can never strip the ceremony's Day chip — including the
+  // async-witness window where the candidate is enqueued only after the plain
+  // bingo already fired and deleted the entry.
+  if (kind === 'bingo') flags.bingoDayIndex = undefined;
+  if (kind === 'firstBingo') flags.firstBingoDayIndex = undefined;
   if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
 }
 
@@ -473,8 +511,11 @@ export async function hasPriorBingoWitness(uid: string): Promise<boolean> {
  * A Player's first BINGO (once per Player, ADR 0002). Broadcast on the transition
  * INTO having a bingo (Board's `wasBingo` edge), never on every completed line.
  */
-export function broadcastBingo(who: MomentActor): void {
-  broadcast(`${who.uid}-bingo`, 'bingo', who);
+export function broadcastBingo(who: MomentActor, dayIndex?: number): void {
+  // The id stays once-per-Player (`${uid}-bingo`); `dayIndex` (#262) rides the
+  // PAYLOAD only, naming the Day the first bingo happened on for the Feed's
+  // day chip — captured at ENQUEUE time like the blackout Day.
+  broadcast(`${who.uid}-bingo`, 'bingo', who, dayIndex);
 }
 
 /**
@@ -529,8 +570,10 @@ export function broadcastBlackout(who: MomentActor, dayIndex?: number): void {
  * shows, no other Player has bingoed yet. The event-singleton id (above) makes it
  * structurally once-per-Event even under the honest race.
  */
-export function broadcastFirstBingo(who: MomentActor): void {
-  broadcast(FIRST_BINGO_MOMENT_ID, 'first_bingo', who);
+export function broadcastFirstBingo(who: MomentActor, dayIndex?: number): void {
+  // Payload-only `dayIndex` (#262), same as broadcastBingo — the singleton id
+  // is untouched.
+  broadcast(FIRST_BINGO_MOMENT_ID, 'first_bingo', who, dayIndex);
 }
 
 /**

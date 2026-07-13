@@ -61,32 +61,41 @@ type SnapCb = (snap: unknown) => void;
 // doc, so existing call sites — `sub.fire(colSnap([...]))` — keep working.
 const emptyDocSnap = { exists: () => false, data: () => undefined, metadata: { fromCache: false } };
 function captureOnNext(): { fire: (proofs: unknown, moments?: unknown, event?: unknown) => void } {
-  const captured: { proofs: SnapCb | null; moments: SnapCb | null; event: SnapCb | null; tally: SnapCb | null } = {
+  const captured: { proofs: SnapCb | null; moments: SnapCb | null; events: SnapCb[]; tally: SnapCb | null; doubtsAll: SnapCb | null } = {
     proofs: null,
     moments: null,
-    event: null,
+    events: [],
     tally: null,
+    doubtsAll: null,
   };
-  H.onSnapshot.mockImplementation((target: unknown, _options: unknown, onNext: SnapCb) => {
+  H.onSnapshot.mockImplementation(((target: unknown, optionsOrNext: unknown, maybeNext?: SnapCb) => {
+    // #262: useAllDoubts subscribes WITHOUT an options arg; normalize.
+    const onNext = (typeof optionsOrNext === 'function' ? optionsOrNext : maybeNext) as SnapCb;
     const kind = target && typeof target === 'object' ? (target as { kind?: string }).kind : undefined;
+    const args = target && typeof target === 'object' ? ((target as { args?: unknown[] }).args ?? []) : [];
     if (target && typeof target === 'object' && 'query' in (target as object)) captured.proofs = onNext;
-    else if (kind === 'doc') captured.event = onNext;
+    // #262: useAllDoubts' moderation read opens a SECOND event-doc sub — feed
+    // them all so none starves the feed's loading gates.
+    else if (kind === 'doc') captured.events.push(onNext);
     // #216: useFeed's third stream (useTallyCards) is a `collectionGroup` sub over
     // every Tally marker — route it separately so it never clobbers the moments slot.
     else if (kind === 'collectionGroup') captured.tally = onNext;
+    // #262: the Feed's flat doubts subscription, routed by its path segment.
+    else if (args[3] === 'doubts') captured.doubtsAll = onNext;
     else captured.moments = onNext;
     return () => {};
-  });
+  }) as never);
   return {
     fire: (proofs: unknown, moments: unknown = colSnap([]), event: unknown = emptyDocSnap) => {
       if (!captured.proofs || !captured.moments) throw new Error('feed not fully subscribed');
       act(() => {
         captured.proofs!(proofs);
         captured.moments!(moments);
-        captured.event?.(event);
+        captured.events.forEach((fn) => fn(event));
         // Deliver an empty Tally-Card stream so useFeed's tally half stops loading;
         // this suite exercises the proof side (Tally Cards have their own suite).
         captured.tally?.(colSnap([]));
+        captured.doubtsAll?.(colSnap([]));
       });
     },
   };
@@ -160,7 +169,10 @@ describe('ProofFeed — the Proof IS the Feed entry (ADR 0002)', () => {
     );
 
     expect(document.querySelector('img.proof-media')).toBeInTheDocument();
-    expect(document.querySelector('audio.proof-media')).toBeInTheDocument();
+    // #262: audio renders through the custom player — the <audio> element
+    // lives (hidden) inside .proof-audio, with a Lucide play button.
+    expect(document.querySelector('.proof-audio audio')).toBeInTheDocument();
+    expect(document.querySelector('.proof-audio-play')).toBeInTheDocument();
     expect(screen.getByText(/he DID say that/)).toBeInTheDocument();
   });
 
@@ -204,10 +216,12 @@ describe('ProofFeed — the Proof IS the Feed entry (ADR 0002)', () => {
 
     const cards = document.querySelectorAll('.proof');
     // The library pick carries the 🖼️ badge and the resolved Day chip…
-    expect(cards[0]).toHaveTextContent('🖼️');
-    expect(cards[0]).toHaveTextContent('Day 2 · Get Sporty');
-    // …the camera pick (no source, no dayIndex) carries neither.
-    expect(cards[1]).not.toHaveTextContent('🖼️');
+    // #262: the badge is the wireframes' media OVERLAY ('🖼️ library'), and
+    // the chip carries the theme emoji.
+    expect(cards[0].querySelector('.proof-src-badge')?.textContent).toBe('🖼️ library');
+    expect(cards[0]).toHaveTextContent('Day 2 · 🏋️ Get Sporty');
+    // …the camera pick overlays '📷 live' and (no dayIndex) has no chip.
+    expect(cards[1].querySelector('.proof-src-badge')?.textContent).toBe('📷 live');
     expect(cards[1].querySelector('.proof-day-chip')).toBeNull();
   });
 

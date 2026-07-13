@@ -1518,6 +1518,89 @@ a {
 .walkthrough-content {
   margin-bottom: 12px;
 }
+/* #262 — the wireframes' proof-card treatment: outlined quote pill, media
+   source-badge overlay, footer pills, and the custom audio player. */
+.proof-quote-pill {
+  align-self: flex-start;
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--dim);
+  font-style: italic;
+  margin: 6px 0;
+}
+.proof-media-wrap {
+  position: relative;
+}
+.proof-src-badge {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+}
+.proof-foot {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 6px;
+}
+.proof-foot .pill {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  color: var(--dim);
+}
+.proof-audio {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  padding: 8px 10px;
+  margin-top: 6px;
+}
+.proof-audio-play {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--on-gradient, #000);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+.proof-audio-play svg {
+  width: 13px;
+  height: 13px;
+}
+.proof-audio-wave {
+  flex: 1;
+  height: 22px;
+  opacity: 0.75;
+  background: repeating-linear-gradient(90deg, var(--primary) 0 2px, transparent 2px 5px);
+}
+.proof-audio-time {
+  font-size: 11px;
+  color: var(--dim);
+}
+.proof-audio audio {
+  display: none;
+}
+.photo-library-note {
+  font-size: 11px;
+  margin: 4px 0 0;
+  text-align: center;
+}
 /* Shared bottom-toast shell: .install-prompt (specs/w1-pwa.md) and .update-prompt
    (specs/app-update-reload-prompt.md, restyled by specs/d15-pwa-toasts.md).
    `--toast-index` (0 = topmost) and `--toast-count` (how many toasts are
