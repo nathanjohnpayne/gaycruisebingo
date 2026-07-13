@@ -863,10 +863,11 @@ describe('ConfirmWinMoments — daily-cards events adjudicate against the Claim�
     rerender(<ConfirmWinMoments />);
     await flushAsync();
 
-    // BOTH days' plain bingos post (per-card beats)…
+    // The plain bingo Moment is once-per-Player, so the batch fires it ONCE —
+    // for the earliest-claimed group (equal createdAt here → day tiebreak)…
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
     expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 1);
-    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 2);
-    // …but the event-singleton ceremony fires exactly ONCE, for the lowest Day.
+    // …and the event-singleton ceremony likewise fires exactly ONCE.
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
     expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
   });
@@ -921,6 +922,51 @@ describe('ConfirmWinMoments — daily-cards events adjudicate against the Claim�
     rerender(<ConfirmWinMoments />);
     await flushAsync();
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('a STALE parked ceremony frees the slot for a fresh win arriving in the same snapshot (Codex P2 on #288 round 4)', async () => {
+    // Day-1 ceremony parks at the roster gate; its win then FALLS while a
+    // Day-2 confirm becomes reflected in the SAME render. The fall-clear must
+    // run before the drain so the fresh win can park — the reverse order
+    // consumed the Day-2 confirm ceremony-less and later emitted nothing.
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ id: 'c-d1', status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [claim({ id: 'c-d1', status: 'confirmed', dayIndex: 1 })];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // day-1 parked
+
+    // Same snapshot: day-1's win falls AND day-2's confirm reflects.
+    H.claims = [
+      claim({ id: 'c-d1', status: 'confirmed', dayIndex: 1 }),
+      claim({ id: 'c-d2', status: 'pending', resolvedBy: null, cellIndex: 4, dayIndex: 2 }),
+    ];
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [
+      claim({ id: 'c-d1', status: 'confirmed', dayIndex: 1 }),
+      claim({ id: 'c-d2', status: 'confirmed', cellIndex: 4, dayIndex: 2 }),
+    ];
+    H.dayBoards = new Map([
+      [1, boardDoc(cellsWith([0, 1, 2, 3]))], // day-1 win FELL
+      [2, boardDoc(cellsWith(ROW0))], // day-2 win reflected
+    ]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+
+    // Roster confirms: the FRESH (day-2) candidate publishes; the stale day-1
+    // one was voided, never fired.
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 2);
   });
 
   it('a POST-FREEZE confirm posts its plain bingo but never mints the ceremony (Codex P1 on #287, mirrors the live verdict-time gate)', async () => {

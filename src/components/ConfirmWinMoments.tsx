@@ -254,6 +254,7 @@ export default function ConfirmWinMoments() {
           // A ceremony already parked from an earlier batch keeps its slot
           // (never overwritten by a later group).
           let ceremonyOpen = st2.heldCeremony == null;
+          let plainBingoOpen = true;
           const groupAge = (entries: Array<[string, AwaitingConfirm]>) =>
             Math.min(...entries.map(([, e]) => e.createdAt));
           const orderedGroups = [...groups.entries()].sort(
@@ -278,7 +279,15 @@ export default function ConfirmWinMoments() {
             // the isAdmin arm of the day-meta create rule), so a winner-side pin
             // would only re-create an existing write-once doc — denied noise.
             const day = dayKey ?? undefined;
-            if (plan.bingo) broadcastBingo(actor, day);
+            // The plain bingo Moment is once-per-Player (`${uid}-bingo`), so a
+            // batch crossing bingos on TWO Day boards fires it once — for the
+            // earliest-claimed group (Codex P2 on #288 round 4): a second
+            // same-tick call could only churn the local cache before the
+            // server denies it. Blackouts stay per-group (per-card ids, #267).
+            if (plan.bingo && plainBingoOpen) {
+              broadcastBingo(actor, day);
+              plainBingoOpen = false;
+            }
             if (plan.blackout) broadcastBlackout(actor, day);
             // The ceremonial event singleton is anchored to MAIN-GAME Days only
             // (Codex P1 on #287; daily-cards-spec § "Scoring and social
@@ -416,8 +425,14 @@ export default function ConfirmWinMoments() {
   // Re-attempt on a board snapshot (the confirm's board write can lag its claim) or
   // when a gate opens (identity resolves / the roster becomes server-confirmed).
   useEffect(() => {
-    drain();
+    // Fall-clear FIRST (Codex P2 on #288 round 4): a parked candidate whose
+    // win has fallen must free the ceremony slot before the drain adjudicates
+    // new confirms from the same snapshot — the reverse order let a stale
+    // held candidate block a fresh eligible win from parking (the fresh
+    // confirm was consumed ceremony-less, then the stale candidate voided,
+    // and the later roster confirmation emitted nothing).
     resolveHeldCeremony();
+    drain();
   }, [board, dayBoards, identityKnown, rosterConfirmed, drain, resolveHeldCeremony]);
 
   return null;
