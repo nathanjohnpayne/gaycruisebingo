@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import type { TallyCard as TallyCardData, TallyEntry } from '../types';
 
 // ProofFeed imports the useData/firebase graph (real getAuth) + auth/proofs/
@@ -13,19 +13,30 @@ vi.mock('../firebase', () => ({
   googleProvider: {},
   analytics: null,
 }));
-vi.mock('firebase/firestore', () => ({
-  doc: (...args: unknown[]) => ({ kind: 'doc', args, withConverter: () => ({}) }),
-  collection: (...args: unknown[]) => ({ kind: 'collection', args, withConverter: () => ({}) }),
-  collectionGroup: (...args: unknown[]) => ({ kind: 'collectionGroup', args }),
-  query: (...args: unknown[]) => ({ query: args }),
-  where: (...args: unknown[]) => ({ where: args }),
-  onSnapshot: vi.fn(() => () => {}),
-}));
+
+const H = vi.hoisted(() => ({ onSnapshot: vi.fn() }));
+H.onSnapshot.mockReturnValue(() => {});
+
+vi.mock('firebase/firestore', () => {
+  const makeRef = (kind: string, args: unknown[]) => {
+    const ref: Record<string, unknown> = { kind, args };
+    ref.withConverter = () => ref; // paths.ts chains .withConverter on refs
+    return ref;
+  };
+  return {
+    doc: (...args: unknown[]) => makeRef('doc', args),
+    collection: (...args: unknown[]) => makeRef('collection', args),
+    collectionGroup: (...args: unknown[]) => makeRef('collectionGroup', args),
+    query: (...args: unknown[]) => ({ query: args }),
+    where: (...args: unknown[]) => ({ where: args }),
+    onSnapshot: H.onSnapshot,
+  };
+});
 vi.mock('../data/proofs', () => ({ reportProof: vi.fn(), deleteProof: vi.fn() }));
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
 
-import { TallyCard, tallyCardAction } from './ProofFeed';
+import ProofFeed, { TallyCard, tallyCardAction } from './ProofFeed';
 
 // specs/d15-tally-cards.md — the Feed's Tally Card renderer + its per-viewer
 // button gate (#216, daily-cards-spec § "Tally Cards"). The card shows the
@@ -110,5 +121,86 @@ describe('tallyCardAction — per-viewer button gate (specs/d15-tally-cards.md)'
 
   it('＋ Proof wins if a Prompt is somehow both — a marked Prompt is never also unmarked', () => {
     expect(tallyCardAction('p1', new Set(['p1']), new Set(['p1']))).toBe('proof');
+  });
+});
+
+// #216 gap closure — the LIVE `ProofFeed` default export now wires its
+// Feed-level `TallyCard`'s `onOpenWhoList` to a read-only who-list sheet built
+// straight off the tally doc's own `markers[]`. Drives the REAL `useFeed`
+// (proofs/moments/tally streams stubbed via `onSnapshot`) rather than the
+// isolated `<TallyCard>` above, so the wiring itself — not just the
+// presentational component — is under test.
+const emptyColSnap = { docs: [], metadata: { fromCache: false } };
+const emptyDocSnap = { exists: () => false, data: () => undefined, metadata: { fromCache: false } };
+
+function markerDoc(itemId: string, entry: TallyEntry) {
+  return {
+    data: () => entry,
+    ref: { parent: { parent: { id: itemId, parent: { id: 'tally' } } } },
+  };
+}
+
+function captureOnNext(): {
+  fire: (tally: unknown, proofs?: unknown, moments?: unknown, event?: unknown) => void;
+} {
+  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; event: ((s: unknown) => void) | null; tally: ((s: unknown) => void) | null } = {
+    proofs: null,
+    moments: null,
+    event: null,
+    tally: null,
+  };
+  H.onSnapshot.mockImplementation((target: unknown, _options: unknown, onNext: (s: unknown) => void) => {
+    const kind = target && typeof target === 'object' ? (target as { kind?: string }).kind : undefined;
+    if (target && typeof target === 'object' && 'query' in (target as object)) captured.proofs = onNext;
+    else if (kind === 'doc') captured.event = onNext;
+    else if (kind === 'collectionGroup') captured.tally = onNext;
+    else captured.moments = onNext;
+    return () => {};
+  });
+  return {
+    fire: (tally, proofs = emptyColSnap, moments = emptyColSnap, event = emptyDocSnap) => {
+      act(() => {
+        captured.proofs?.(proofs);
+        captured.moments?.(moments);
+        captured.event?.(event);
+        captured.tally?.(tally);
+      });
+    },
+  };
+}
+
+describe('ProofFeed (default export) — Feed-level who-list sheet (#216 acceptance: "Tap opens the who-list sheet")', () => {
+  it('tapping a live Feed Tally Card opens a read-only sheet listing its markers', () => {
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+
+    const entry: TallyEntry = {
+      uid: 'alice',
+      displayName: 'Alice Anchor',
+      markedAt: 1000,
+      dayIndex: 0,
+      itemText: 'Balcony or porthole photo',
+    };
+    sub.fire({ docs: [markerDoc('p1', entry)], metadata: { fromCache: false } });
+
+    const tallyCard = document.querySelector('.tally-card');
+    expect(tallyCard).toBeTruthy();
+    // No who-list sheet until the card is tapped.
+    expect(screen.queryByText(/^Who marked/)).toBeNull();
+
+    fireEvent.click(tallyCard!.querySelector('.tally-card-body')!);
+
+    // The sheet opens, names the SAME Prompt, and lists the marker — read-only
+    // (no Doubt affordance; the Board-side who-list owns that).
+    expect(screen.getByText(/Who marked/)).toBeTruthy();
+    const sheetRows = document.querySelectorAll('.sheet .list .row');
+    expect(sheetRows).toHaveLength(1);
+    expect(sheetRows[0].querySelector('.name')?.textContent).toBe('Alice Anchor');
+    expect(document.querySelector('.sheet .doubt-btn')).toBeNull();
+
+    // Close dismisses it.
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.queryByText(/^Who marked/)).toBeNull();
   });
 });
