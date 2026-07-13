@@ -95,6 +95,9 @@ vi.mock('../auth/AuthContext', () => ({
 // the real onSnapshot subscription — that gate is proven directly against the
 // real hook in src/hooks/useData.test.ts.
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
   useBoard: () => ({
     data: H.data.board,
     loading: H.data.boardLoading,

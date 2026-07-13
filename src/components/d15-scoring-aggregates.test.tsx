@@ -72,10 +72,14 @@ const event: EventDoc = {
 const H = vi.hoisted(() => ({
   players: [] as PlayerDoc[],
   event: null as EventDoc | null,
+  dayMetas: new Map() as Map<number, { firstBingo: { uid: string; displayName: string; at: number } }>,
 }));
 
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — the strip's pinned-honor source.
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => H.dayMetas,
   useLeaderboard: () => ({ players: H.players, loading: false }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   // #218: no Proofs fixtured in this scoring-aggregates suite — an empty map
@@ -102,8 +106,11 @@ describe('Leaderboard cruise-wide honors (#212)', () => {
     // the cruise-wide pin), plus main-game Day 2.
     expect(strip).toHaveTextContent('Embarker');
     expect(strip).toHaveTextContent('Champ');
-    expect(strip).toHaveTextContent('Day 1'); // dayIndex 0 → "Day 1 · Embark"
-    expect(strip).toHaveTextContent('Day 3'); // dayIndex 2 → "Day 3 · Port 2"
+    // #264: chips read theme-emoji + D<n> (wireframe), one per Day, with a "—"
+    // placeholder for winnerless Days.
+    expect(strip).toHaveTextContent('D1');
+    expect(strip).toHaveTextContent('D3');
+    expect(strip).toHaveTextContent('—');
   });
 
   it('never lands the cruise "1st BINGO" pin on an embark/farewell-only first bingo', () => {
@@ -120,7 +127,26 @@ describe('Leaderboard cruise-wide honors (#212)', () => {
     // bingoed earlier in wall-clock terms and ranks above them.
     const champRow = within(list).getByText('Champ').closest('.row');
     const embarkerRow = within(list).getByText('Embarker').closest('.row');
-    expect(champRow?.querySelector('.badge')).toHaveTextContent('1st BINGO');
+    expect(champRow?.querySelector('.badge')).toHaveTextContent('First BINGO');
     expect(embarkerRow?.querySelector('.badge')).toBeNull();
+  });
+});
+
+describe('Leaderboard honors strip prefers the PINNED day-meta honor (#264)', () => {
+  it('renders the pinned name over the roster-derived one, and the derived name where no pin exists', () => {
+    H.players = [embarker, champ];
+    H.event = event;
+    // Day 2 (index 2) is pinned to a DIFFERENT player than the derived honoree
+    // (a pre-resolution race the write-once pin settled first) — the pin wins.
+    H.dayMetas = new Map([[2, { firstBingo: { uid: 'p9', displayName: 'Pinned Pat', at: 1 } }]]);
+    render(
+      <MemoryRouter>
+        <Leaderboard />
+      </MemoryRouter>,
+    );
+    const strip = screen.getByLabelText('Daily First to BINGO');
+    expect(strip).toHaveTextContent('Pinned Pat'); // the pin, not 'Champ'
+    expect(strip).toHaveTextContent('Embarker'); // derived fallback where unpinned
+    H.dayMetas = new Map();
   });
 });

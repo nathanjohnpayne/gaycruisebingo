@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useEventDoc, useLeaderboard, useLatestProofByUid, isBanned } from '../hooks/useData';
+import { useEventDoc, useDayMetas, useLeaderboard, useLatestProofByUid, isBanned } from '../hooks/useData';
 import { cruiseFirstBingoUid, perDayHonors, tutorialDayIndexSet } from '../game/logic';
+import { THEMES } from '../theme/themes';
 import { track } from '../analytics';
 import { renderLeaderboardShareCard, shareCardBlob, SHARE_CARD_APP_NAME, type LeaderboardShareRow } from './ShareCard';
 import Avatar from './Avatar';
@@ -145,11 +146,25 @@ export default function Leaderboard() {
   // ban-filtered `roster` so a banned Player's honor never displays, and only
   // renders once a Player has bingoed on some Day (empty on a pre-Day-Cards
   // roster, so the strip is absent there).
-  const honors = perDayHonors(roster);
-  const dayLabel = (dayIndex: number): string => {
+  const derivedHonors = perDayHonors(roster);
+  // #264: the PINNED day-meta honors are the strip's source of truth (the same
+  // write-once doc the board's daybar pin reads), with the roster-derived
+  // `perDayHonors` as the fallback for days pinned before the pin write
+  // shipped (or an unknown-identity win that skipped its pin). On a daily
+  // event every Day gets a chip — "—" until someone bingoes that Day
+  // (the wireframes' placeholder); a legacy event keeps the derived-only strip.
+  const dayMetas = useDayMetas(event?.days?.length ?? 0);
+  const honors = (event?.days ?? []).map((d) => {
+    const pinned = dayMetas.get(d.index)?.firstBingo;
+    const derived = derivedHonors.find((h) => h.dayIndex === d.index);
+    const winner = pinned ?? derived ?? null;
+    return { dayIndex: d.index, displayName: winner?.displayName ?? null };
+  });
+  const legacyHonors = event?.days?.length ? [] : derivedHonors;
+  const dayChipLabel = (dayIndex: number): string => {
     const d = event?.days?.find((day) => day.index === dayIndex);
-    if (!d) return `Day ${dayIndex + 1}`;
-    return `Day ${dayIndex + 1} · ${d.port}${d.portEmoji ? ` ${d.portEmoji}` : ''}`;
+    const emoji = d ? (THEMES.find((t) => t.id === d.theme)?.emoji ?? '') : '';
+    return `${emoji ? `${emoji} ` : ''}D${dayIndex + 1}`;
   };
 
   // Filters narrow this render's visible subset of the already-ranked,
@@ -250,14 +265,14 @@ export default function Leaderboard() {
           </button>
         ))}
       </div>
-      {honors.length > 0 && (
+      {(honors.length > 0 || legacyHonors.length > 0) && (
         <div className="lb-honors" aria-label="Daily First to BINGO">
-          <div className="lb-honors-title">Daily First to BINGO</div>
+          <div className="lb-honors-title">Daily first to bingo</div>
           <ul className="lb-honors-strip">
-            {honors.map((h) => (
+            {(honors.length > 0 ? honors : legacyHonors.map((h) => ({ dayIndex: h.dayIndex, displayName: h.displayName as string | null }))).map((h) => (
               <li key={h.dayIndex} className="lb-honor">
-                <span className="lb-honor-day">{dayLabel(h.dayIndex)}</span>
-                <span className="lb-honor-name">{h.displayName}</span>
+                <span className="lb-honor-day">{dayChipLabel(h.dayIndex)}</span>
+                <span className="lb-honor-name">{h.displayName ?? '—'}</span>
               </li>
             ))}
           </ul>
@@ -296,12 +311,17 @@ export default function Leaderboard() {
                     {chips.join('')}
                   </button>
                 )}
-                {isFirst && <div className="badge">1st BINGO</div>}
+                {isFirst && <div className="badge">⭐ First BINGO</div>}
               </div>
             );
           })}
         </div>
       )}
+      {/* The wireframes' explanatory footnote (#264). */}
+      <p className="muted lb-footnote">
+        Totals sum every Day Card. ⭐ cruise-wide First to BINGO counts main-game days only. Proof
+        chips = that player&apos;s latest proofs; tap one to jump to it in the Feed.
+      </p>
       <div className="lb-actions">
         <button
           type="button"

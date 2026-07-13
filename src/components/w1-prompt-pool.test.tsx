@@ -32,6 +32,9 @@ vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => authState.current }));
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
   useItems: () => itemsState.current,
   // #210: ItemPool also reads the submitter's own pending items so a fresh
   // `status: 'pending'` add doesn't silently vanish — pinned in its own

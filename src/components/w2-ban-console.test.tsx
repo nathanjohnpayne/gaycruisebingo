@@ -275,7 +275,7 @@ describe('Leaderboard — presentational ban filter + first-bingo split (specs/w
     expect(screen.getByText('Later OK')).toBeInTheDocument(); // the other Player shows
     // The badge does NOT reappear on a later Player: its holder is banned, so no
     // visible row wins it.
-    expect(screen.queryByText('1st BINGO')).toBeNull();
+    expect(screen.queryByText(/First BINGO/)).toBeNull();
   });
 
   it('baseline: without the ban, the first-to-BINGO Player shows WITH the 1st BINGO badge', () => {
@@ -285,6 +285,6 @@ describe('Leaderboard — presentational ban filter + first-bingo split (specs/w
     render(<Leaderboard />, { wrapper: MemoryRouter });
 
     const row = screen.getByText('First Banned').closest('.row') as HTMLElement;
-    expect(within(row).getByText('1st BINGO')).toBeInTheDocument();
+    expect(within(row).getByText(/First BINGO/)).toBeInTheDocument();
   });
 });

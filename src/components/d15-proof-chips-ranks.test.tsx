@@ -22,6 +22,9 @@ const H = vi.hoisted(() => ({
 
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
   useLeaderboard: () => ({ players: H.players, loading: false }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   useLatestProofByUid: () => ({ latestByUid: H.latestByUid, loading: false }),

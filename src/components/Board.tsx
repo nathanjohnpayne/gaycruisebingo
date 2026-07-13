@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { Lock } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useDayBoard, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, isBanned } from '../hooks/useData';
+import { useBoard, useDayBoard, useDayMeta, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, isBanned } from '../hooks/useData';
 import { setMark, dealDayCard, resolveDisplayName } from '../data/api';
 import { eventTitle } from '../format';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
@@ -37,6 +37,7 @@ import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
 import TutorialBanner, { TutorialTag } from './TutorialBanner';
 import FarewellPodium from './FarewellPodium';
 import { farewellPinIndex } from '../data/finale';
+import { pinDayFirstBingo } from '../data/dayMeta';
 import CoachOverlay from './CoachOverlay';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
@@ -464,8 +465,21 @@ function formatUnlockAt(unlockAt: number, timezone: string | undefined): string 
  * that contract (and the e2e selector on it) survives the daybar absorbing
  * it; #212's daily-honor pin will extend the meta slot on main Days.
  */
-export function DayBar({ day }: { day: DayDef }) {
+export function DayBar({
+  day,
+  honor,
+  timezone,
+}: {
+  day: DayDef;
+  // The Day's pinned First to BINGO (#264) — when present on a NON-tutorial
+  // Day, the meta slot swaps the port for the wireframes' honor line
+  // ("First to BINGO: Theo, 11:02"). Tutorial Days keep their tag in place of
+  // daily-honor competitiveness (spec § "Embark (tutorial) view").
+  honor?: { displayName: string; at: number } | null;
+  timezone?: string;
+}) {
   const description = themeDescription(day.theme);
+  const showHonor = honor != null && !day.tutorial;
   return (
     <div className="board-header daybar-block">
       <div className="daybar">
@@ -474,12 +488,33 @@ export function DayBar({ day }: { day: DayDef }) {
           {day.tutorial && <TutorialTag pool={day.pool} className="daybar-tag" />}
         </div>
         <div className="daybar-meta">
-          <span aria-hidden="true">{day.portEmoji}</span> {day.port}
+          {showHonor ? (
+            <>First to BINGO: {honor.displayName}, {honorTime(honor.at, timezone)}</>
+          ) : (
+            <>
+              <span aria-hidden="true">{day.portEmoji}</span> {day.port}
+            </>
+          )}
         </div>
       </div>
       {description && <p className="daybar-desc">{description}</p>}
     </div>
   );
+}
+
+/** "11:02" — the honor line's compact event-timezone clock (wireframes' update-
+ * banner frame shows no meridiem; hour12 kept off for the same reason). */
+function honorTime(at: number, timezone: string | undefined): string {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+      timeZone: timezone || 'UTC',
+    }).format(new Date(at));
+  } catch {
+    return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(at));
+  }
 }
 
 /**
@@ -598,6 +633,9 @@ export default function Board() {
     loading: dayBoardLoading,
     hasServerData: dayBoardConfirmed,
   } = useDayBoard(uid, hasDays ? viewedIndex : undefined);
+  // The VIEWED Day's pinned First to BINGO honor (#264) — one doc sub, keyed on
+  // the viewed index; legacy events (no schedule) open no subscription.
+  const { data: viewedDayMeta } = useDayMeta(hasDays ? viewedIndex : undefined);
   // The ACTIVE Board the whole component renders/marks against: the viewed Day's
   // Board in daily mode, the single legacy Board otherwise. In daily mode the
   // day-scoped subscription clears its previous doc only in a passive effect AFTER
@@ -1349,6 +1387,22 @@ export default function Board() {
       // misleading "Day 1").
       dayIndex: hasDays ? viewedIndex : undefined,
     });
+    // The per-Day First to BINGO pin (#264, daily-cards-spec § "Scoring and
+    // social surfaces"): fired on the rising edge by the achieving Player
+    // themselves — the day-meta create rule requires firstBingo.uid ==
+    // request.auth.uid — and WRITE-ONCE server-side (create-only, no update),
+    // so the honest race's first create wins (ADR 0001) and a later bingo on
+    // the same Day lands on the deny-all update and is swallowed. Identity-
+    // gated like a Doubt raise: a permanent public honor must never stamp
+    // 'Anonymous' — an unknown-identity win skips the pin (the honors strip's
+    // roster-derived fallback still names them once their row resolves).
+    if (res.bingoTransition && hasDays && identityKnown) {
+      void pinDayFirstBingo(viewedIndex, {
+        uid,
+        displayName,
+        photoURL: (player ? player.photoURL : user?.photoURL) ?? null,
+      });
+    }
     // The BIRTH-TIME witness (round 2 finding D; made the SOLE witness site by
     // round 3 finding A): the prior-win question — "is this win a regain?" — is
     // answerable only HERE, at the moment the win happened, before this
@@ -1428,7 +1482,7 @@ export default function Board() {
             tutorial tag, port, and the dress-code description, on every
             viewed Day. Absorbs the pre-#260 tutorial-only board-header
             (the tag now renders inside the daybar's name line). */}
-        {viewedDay && <DayBar day={viewedDay} />}
+        {viewedDay && <DayBar day={viewedDay} honor={viewedDayMeta?.firstBingo ?? null} timezone={event?.timezone} />}
         {/* The farewell podium (#217, daily-cards-spec § "Farewell view"):
             shown on the farewell Day once the standings freeze (`frozenAt`
             set), ABOVE the goodbye banner below — this ticket owns the

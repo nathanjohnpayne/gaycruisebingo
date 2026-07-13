@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import type { BoardDoc, Cell, DayDef, EventDoc, PlayerDoc } from '../types';
 import { ThemeProvider } from '../theme/ThemeContext';
 
@@ -24,9 +24,14 @@ const H = vi.hoisted(() => ({
   setMark: vi.fn(),
   attachProof: vi.fn(),
   track: vi.fn(),
+  dayMeta: null as { firstBingo: { uid: string; displayName: string; at: number } } | null,
+  pinDayFirstBingo: vi.fn((..._args: unknown[]) => Promise.resolve()),
 }));
 
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: H.dayMeta, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   // In daily mode Board reads the VIEWED Day's board here (#246). The suite's
   // fixtures set `H.board` with a `dayIndex` matching the viewed Day, so returning
@@ -74,6 +79,7 @@ vi.mock('../data/api', () => ({
       : (fallback ?? 'Anonymous'),
 }));
 vi.mock('../data/proofs', () => ({ attachProof: H.attachProof }));
+vi.mock('../data/dayMeta', () => ({ pinDayFirstBingo: H.pinDayFirstBingo }));
 vi.mock('../analytics', () => ({ track: H.track }));
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: H.user, loading: false, signIn: vi.fn(), signOutUser: vi.fn() }),
@@ -110,6 +116,7 @@ function day(overrides: Partial<DayDef> & Pick<DayDef, 'index' | 'unlockAt' | 't
 
 beforeEach(() => {
   vi.clearAllMocks();
+  H.dayMeta = null;
   H.user = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null };
   H.event = { claimMode: 'honor', timezone: 'UTC', days: [] } as unknown as EventDoc;
   H.board = null;
@@ -396,5 +403,69 @@ describe('Feed → Board square-opening intent (#261)', () => {
 
     expect(screen.queryByText(/Proof for/)).not.toBeInTheDocument();
     __resetOpenSquareForTests();
+  });
+});
+
+// --- #264: per-Day First to BINGO — pin write + daybar honor line ------------
+
+describe('per-Day First to BINGO (#264)', () => {
+  it('pins the Day honor on a bingo transition, attributed to the achieving Player', async () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({ index: 0, theme: 'welcome-aboard', unlockAt: now - 2 * DAY_MS, tutorial: true, pool: 'embark' }),
+        day({ index: 1, theme: 'get-sporty', unlockAt: now - DAY_MS }),
+      ],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 1, seed: 1, createdAt: 0, cells: dealt() };
+    H.player = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null, bingoCount: 0, squaresMarked: 0, firstBingoAt: null, blackout: false } as unknown as PlayerDoc;
+    const marked = dealt().map((c, i) => (i === 3 ? { ...c, marked: true, markedAt: 1 } : c));
+    H.setMark.mockResolvedValue({ cells: marked, bingo: true, blackout: false, bingoTransition: true, blackoutTransition: false });
+
+    render(<Board />);
+    // Unmarking is instant (no sheet) — but here we tap an UNMARKED cell in
+    // honor mode and take the pledge path? Simpler: tap a MARKED cell to
+    // trigger doMark directly; the mocked setMark returns the transition.
+    const cells = document.querySelectorAll('.grid .cell');
+    fireEvent.click(cells[12]); // free cell — no-op sanity
+    // Tap the pledge path: cell 3 is unmarked → sheet opens → pledge marks.
+    fireEvent.click(cells[3]);
+    fireEvent.click(screen.getByText(/Cross My Heart/));
+    await act(async () => {});
+
+    expect(H.pinDayFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.pinDayFirstBingo.mock.calls[0][0]).toBe(1); // the VIEWED Day
+    expect(H.pinDayFirstBingo.mock.calls[0][1]).toMatchObject({ uid: 'u1', displayName: 'Deck Daddy' });
+  });
+
+  it('renders the daybar honor line for a pinned non-tutorial Day, and keeps the port on tutorial Days', () => {
+    const now = Date.now();
+    H.dayMeta = { firstBingo: { uid: 'u9', displayName: 'Theo', at: Date.UTC(2026, 6, 18, 11, 2) } };
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+
+    render(<Board />);
+    const meta = document.querySelector('.daybar-meta');
+    expect(meta?.textContent).toContain('First to BINGO: Theo, 11:02');
+  });
+
+  it('keeps the port in the daybar when the Day has no pinned honor', () => {
+    const now = Date.now();
+    H.dayMeta = null;
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+
+    render(<Board />);
+    expect(document.querySelector('.daybar-meta')?.textContent).toContain('Port 0');
   });
 });
