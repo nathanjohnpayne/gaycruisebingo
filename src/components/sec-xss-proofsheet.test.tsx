@@ -57,6 +57,11 @@ vi.mock('../hooks/useData', () => ({
   useAllDoubts: () => ({ doubts: [], loading: false, hasServerData: true }),
 }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
+// ProofFeed's doubts-cleared pill (#262) imports isDoubtSatisfied, whose module
+// initializes the REAL firebase app at import — fatal in CI, where no API key
+// exists (locally .env.local masks it). This suite exercises only the media
+// sinks; an inert stub keeps the SDK out of the graph.
+vi.mock('../data/doubts', () => ({ isDoubtSatisfied: () => false }));
 
 import ProofSheet from './ProofSheet';
 import ProofFeed from './ProofFeed';
