@@ -51,6 +51,7 @@ vi.mock('../hooks/useData', () => ({
   // #264: day-meta honor reads — inert stubs (no pinned honors).
   useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
   useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   // ConfirmWinMoments
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),

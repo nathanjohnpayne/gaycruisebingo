@@ -252,9 +252,18 @@ export function useDayMeta(dayIndex: number | undefined): { data: DayMetaDoc | n
  * `useMyDayBoards` below.
  */
 export function useDayMetas(dayCount: number): ReadonlyMap<number, DayMetaDoc> {
+  return useDayMetasStatus(dayCount).metas;
+}
+
+export function useDayMetasStatus(dayCount: number): {
+  metas: ReadonlyMap<number, DayMetaDoc>;
+  loaded: boolean;
+} {
   const [metas, setMetas] = useState<ReadonlyMap<number, DayMetaDoc>>(new Map());
+  const [seen, setSeen] = useState<ReadonlySet<number>>(new Set());
   useEffect(() => {
     setMetas(new Map());
+    setSeen(new Set());
     if (dayCount <= 0) return;
     const unsubs = Array.from({ length: dayCount }, (_, dayIndex) =>
       onSnapshot(
@@ -266,15 +275,25 @@ export function useDayMetas(dayCount: number): ReadonlyMap<number, DayMetaDoc> {
             else next.delete(dayIndex);
             return next;
           });
+          setSeen((prev) => {
+            const next = new Set(prev);
+            next.add(dayIndex);
+            return next;
+          });
         },
         () => {
           /* permission-denied (signed out mid-flight) — leave the day absent */
+          setSeen((prev) => {
+            const next = new Set(prev);
+            next.add(dayIndex);
+            return next;
+          });
         },
       ),
     );
     return () => unsubs.forEach((u) => u());
   }, [dayCount]);
-  return metas;
+  return { metas, loaded: dayCount <= 0 || seen.size >= dayCount };
 }
 
 /**

@@ -44,6 +44,7 @@ vi.mock('../hooks/useData', () => ({
   // #264: day-meta honor reads — inert stubs (no pinned honors).
   useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
   useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useFeed: () => ({
     entries: H.proofs.map((proof) => ({ feedKind: 'proof' as const, createdAt: proof.createdAt, proof })),
     loading: false,

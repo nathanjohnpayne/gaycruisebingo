@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import { Lock } from 'lucide-react';
+import { getDoc } from 'firebase/firestore';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useDayBoard, useDayMeta, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, isBanned } from '../hooks/useData';
+import { useBoard, useDayBoard, useDayMeta, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, useDayMetasStatus, isBanned } from '../hooks/useData';
 import { setMark, dealDayCard, resolveDisplayName } from '../data/api';
+import { dayBoardRef } from '../data/paths';
 import { eventTitle } from '../format';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
@@ -532,7 +534,7 @@ export function DayBar({
   timezone?: string;
 }) {
   const description = themeDescription(day.theme);
-  const showHonor = honor != null && Number.isFinite(honor.at) && !day.tutorial;
+  const showHonor = honor != null && validHonorTime(honor.at) && !day.tutorial;
   return (
     <div className="board-header daybar-block">
       <div className="daybar">
@@ -558,16 +560,26 @@ export function DayBar({
 /** "11:02" — the honor line's compact event-timezone clock (wireframes' update-
  * banner frame shows no meridiem; hour12 kept off for the same reason). */
 function honorTime(at: number, timezone: string | undefined): string {
+  const date = new Date(at);
+  if (!validHonorTime(at)) return '—';
   try {
     return new Intl.DateTimeFormat('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
       timeZone: timezone || 'UTC',
-    }).format(new Date(at));
+    }).format(date);
   } catch {
-    return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(at));
+    try {
+      return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+    } catch {
+      return '—';
+    }
   }
+}
+
+function validHonorTime(at: number): boolean {
+  return Number.isFinite(at) && Number.isFinite(new Date(at).getTime());
 }
 
 /**
@@ -670,6 +682,7 @@ export default function Board() {
   // below inert and Board's single-Board rendering byte-identical to pre-1.5.
   const days: DayDef[] = event?.days ?? [];
   const hasDays = days.length > 0;
+  const { metas: dayMetas, loaded: dayMetasLoaded } = useDayMetasStatus(hasDays ? days.length : 0);
   // The Day switcher's viewed-Day index (daily-cards-spec § "Day switcher"). Held
   // up here (before the day-scoped Board subscription that keys on it) so switching
   // a chip re-subscribes to that Day's own Board. Defaults to 0 and is adopted to
@@ -1195,13 +1208,26 @@ export default function Board() {
   useEffect(() => {
     if (!identityKnown || !uid) return;
     const mine = takeHeldHonorPins(uid);
-    for (const h of mine) {
-      void pinDayFirstBingo(h.dayIndex, {
-        uid,
-        displayName,
-        photoURL: (player ? player.photoURL : user?.photoURL) ?? null,
-      }, h.at);
-    }
+    if (!mine.length) return;
+    const actor = {
+      uid,
+      displayName,
+      photoURL: (player ? player.photoURL : user?.photoURL) ?? null,
+    };
+    const release = async () => {
+      for (const h of mine) {
+        let stillHasBingo = false;
+        if (hasDays && board?.dayIndex === h.dayIndex && cellsAttributable && cells.length > 0) {
+          stillHasBingo = hasBingo(cells);
+        } else {
+          const snap = await getDoc(dayBoardRef(h.dayIndex, uid)).catch(() => null);
+          const heldCells = snap?.exists() ? ((snap.data().cells ?? []) as Cell[]) : [];
+          stillHasBingo = hasBingo(heldCells);
+        }
+        if (stillHasBingo) void pinDayFirstBingo(h.dayIndex, actor, h.at);
+      }
+    };
+    void release();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identityKnown, uid]);
 
@@ -1652,6 +1678,8 @@ export default function Board() {
           <FarewellPodium
             players={players.filter((p) => !isBanned(p.uid, event?.bannedUids ?? []))}
             days={days}
+            dayMetas={dayMetas}
+            dayMetasLoaded={dayMetasLoaded}
           />
         )}
         {viewedDay && <TutorialBanner day={viewedDay} />}

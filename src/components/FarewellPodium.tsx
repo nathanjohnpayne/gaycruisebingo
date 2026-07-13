@@ -1,4 +1,4 @@
-import type { DayDef, PlayerDoc } from '../types';
+import type { DayDef, DayMetaDoc, PlayerDoc } from '../types';
 import { buildPodium, type Podium } from '../data/finale';
 
 /**
@@ -91,9 +91,13 @@ export function FarewellPodiumView({
 export default function FarewellPodium({
   players,
   days,
+  dayMetas,
+  dayMetasLoaded = true,
 }: {
   players: readonly PlayerDoc[];
   days: readonly DayDef[] | undefined;
+  dayMetas?: ReadonlyMap<number, DayMetaDoc>;
+  dayMetasLoaded?: boolean;
 }) {
-  return <FarewellPodiumView podium={buildPodium(players, days)} dayLabel={makeDayLabel(days)} />;
+  return <FarewellPodiumView podium={buildPodium(players, days, dayMetas, dayMetasLoaded)} dayLabel={makeDayLabel(days)} />;
 }

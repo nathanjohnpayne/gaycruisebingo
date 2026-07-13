@@ -34,6 +34,7 @@ vi.mock('../hooks/useData', () => ({
   // #264: day-meta honor reads — inert stubs (no pinned honors).
   useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
   useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useLeaderboard: () => ({ players: H.players, loading: H.loading }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   // #218: no Proofs fixtured in this suite — an empty map keeps every row

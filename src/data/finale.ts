@@ -3,7 +3,7 @@
 // framework-free, so the podium + default-view rules are unit-testable without
 // mounting a component. The functions-side mirror (functions/src/finaleContent.ts)
 // posts the SAME podium as a Moment; this module is what the farewell VIEW renders.
-import type { DayDef, PlayerDoc } from '../types';
+import type { DayDef, DayMetaDoc, PlayerDoc } from '../types';
 import {
   comparePlayers,
   cruiseFirstBingoUid,
@@ -82,7 +82,38 @@ function podiumStandingRow(
  * per-Day `dayStats`, with the farewell Day frozen out so a post-freeze goodbye
  * mark never changes who is on the podium.
  */
-export function buildPodium(players: readonly PlayerDoc[], days: readonly DayDef[] | undefined): Podium {
+function pinnedOrDerivedDailyHonors(
+  players: readonly PlayerDoc[],
+  days: readonly DayDef[] | undefined,
+  dayMetas: ReadonlyMap<number, DayMetaDoc> | undefined,
+  dayMetasLoaded: boolean,
+): DayHonor[] {
+  const derivedHonors = perDayHonors(players);
+  if (!days?.length || !dayMetas) return derivedHonors;
+  return days.flatMap((day) => {
+    const pinned = dayMetas.get(day.index)?.firstBingo;
+    if (pinned) {
+      return [
+        {
+          dayIndex: day.index,
+          uid: pinned.uid,
+          displayName: pinned.displayName,
+          firstBingoAt: pinned.at,
+        },
+      ];
+    }
+    if (!dayMetasLoaded) return [];
+    const derived = derivedHonors.find((h) => h.dayIndex === day.index);
+    return derived ? [derived] : [];
+  });
+}
+
+export function buildPodium(
+  players: readonly PlayerDoc[],
+  days: readonly DayDef[] | undefined,
+  dayMetas?: ReadonlyMap<number, DayMetaDoc>,
+  dayMetasLoaded = true,
+): Podium {
   const tutorial = tutorialDayIndexSet(days);
   const isTutorialDay = (i: number): boolean => tutorial.has(i);
   const farewellIndex = farewellDayIndex(days);
@@ -109,7 +140,7 @@ export function buildPodium(players: readonly PlayerDoc[], days: readonly DayDef
       ? { uid: firstPlayer.uid, displayName: firstPlayer.displayName, at: firstAt }
       : null;
 
-  return { champion, firstBingo, dailyHonors: perDayHonors(players) };
+  return { champion, firstBingo, dailyHonors: pinnedOrDerivedDailyHonors(players, days, dayMetas, dayMetasLoaded) };
 }
 
 /**

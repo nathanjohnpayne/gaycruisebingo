@@ -25,6 +25,7 @@ vi.mock('../hooks/useData', () => ({
   // #264: day-meta honor reads — inert stubs (no pinned honors).
   useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
   useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useLeaderboard: () => ({ players: H.players, loading: false }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   useLatestProofByUid: () => ({ latestByUid: H.latestByUid, loading: false }),

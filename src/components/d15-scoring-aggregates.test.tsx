@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import type { DayDef, EventDoc, PlayerDoc } from '../types';
@@ -73,6 +73,7 @@ const H = vi.hoisted(() => ({
   players: [] as PlayerDoc[],
   event: null as EventDoc | null,
   dayMetas: new Map() as Map<number, { firstBingo: { uid: string; displayName: string; at: number } }>,
+  dayMetasLoaded: true,
 }));
 
 vi.mock('../analytics', () => ({ track: vi.fn() }));
@@ -80,6 +81,7 @@ vi.mock('../hooks/useData', () => ({
   // #264: day-meta honor reads — the strip's pinned-honor source.
   useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
   useDayMetas: () => H.dayMetas,
+  useDayMetasStatus: () => ({ metas: H.dayMetas, loaded: H.dayMetasLoaded }),
   useLeaderboard: () => ({ players: H.players, loading: false }),
   useEventDoc: () => ({ data: H.event, loading: false }),
   // #218: no Proofs fixtured in this scoring-aggregates suite — an empty map
@@ -90,6 +92,13 @@ vi.mock('../hooks/useData', () => ({
 }));
 
 import Leaderboard from './Leaderboard';
+
+beforeEach(() => {
+  H.players = [];
+  H.event = null;
+  H.dayMetas = new Map();
+  H.dayMetasLoaded = true;
+});
 
 describe('Leaderboard cruise-wide honors (#212)', () => {
   it("renders a per-Day honors strip pinning each Day's first-bingo Player", () => {
@@ -148,6 +157,21 @@ describe('Leaderboard honors strip prefers the PINNED day-meta honor (#264)', ()
     expect(strip).toHaveTextContent('Pinned Pat'); // the pin, not 'Champ'
     expect(strip).toHaveTextContent('Embarker'); // derived fallback where unpinned
     H.dayMetas = new Map();
+  });
+
+  it('does not use derived honors while day-meta pins are still loading', () => {
+    H.players = [embarker, champ];
+    H.event = event;
+    H.dayMetasLoaded = false;
+    render(
+      <MemoryRouter>
+        <Leaderboard />
+      </MemoryRouter>,
+    );
+    const strip = screen.getByLabelText('Daily First to BINGO');
+    expect(strip).not.toHaveTextContent('Embarker');
+    expect(strip).not.toHaveTextContent('Champ');
+    expect(strip).toHaveTextContent('—');
   });
 
   it('the PIN wins when present — derived dayStats stamps cannot tiebreak it (Codex round 4 on #280)', () => {

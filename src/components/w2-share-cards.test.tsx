@@ -49,6 +49,7 @@ vi.mock('../hooks/useData', () => ({
   // #264: day-meta honor reads — inert stubs (no pinned honors).
   useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
   useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   // Celebration no longer calls useBoard OR useMyPlayer — it takes `cells`
   // (Codex P2, PR #111 finding 1) and `playerName` (round 2 finding 1) as
   // props instead, fed straight into every render below. Both stubs

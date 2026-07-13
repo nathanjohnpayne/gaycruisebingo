@@ -26,6 +26,7 @@ vi.mock('../hooks/useData', () => ({
   // #264: day-meta honor reads — inert stubs (no pinned honors).
   useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
   useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useBoard: () => ({ data: null, loading: false, hasServerData: true }),
   // The heart of the fix: Board reads the VIEWED Day's board here. Returning a
   // different board per dayIndex is exactly what "a different card per Day" means.

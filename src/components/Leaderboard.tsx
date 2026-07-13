@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useEventDoc, useDayMetas, useLeaderboard, useLatestProofByUid, isBanned } from '../hooks/useData';
+import { useEventDoc, useDayMetasStatus, useLeaderboard, useLatestProofByUid, isBanned } from '../hooks/useData';
 import { cruiseFirstBingoUid, perDayHonors, tutorialDayIndexSet } from '../game/logic';
 import { THEMES } from '../theme/themes';
 import { track } from '../analytics';
@@ -101,7 +101,7 @@ export default function Leaderboard() {
   // #264: the pinned day-meta honors. Called HERE, with the other hooks —
   // never below the loading/empty early returns, where a later non-empty
   // render would change the hook order and crash (Codex P1 on #280).
-  const dayMetas = useDayMetas(event?.days?.length ?? 0);
+  const { metas: dayMetas, loaded: dayMetasLoaded } = useDayMetasStatus(event?.days?.length ?? 0);
   const { latestByUid } = useLatestProofByUid();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<LeaderboardFilter>('all');
@@ -176,8 +176,10 @@ export default function Leaderboard() {
     let winner: { displayName: string } | null;
     if (pinned && isBanned(pinned.uid, bannedUids)) {
       winner = null;
+    } else if (pinned) {
+      winner = pinned;
     } else {
-      winner = pinned ?? derived ?? null;
+      winner = dayMetasLoaded ? (derived ?? null) : null;
     }
     return { dayIndex: d.index, displayName: winner?.displayName ?? null };
   });

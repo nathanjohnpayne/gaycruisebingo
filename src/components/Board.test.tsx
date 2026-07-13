@@ -27,8 +27,9 @@ const H = vi.hoisted(() => ({
   dayMeta: null as { firstBingo: { uid: string; displayName: string; at: number } } | null,
   pinDayFirstBingo: vi.fn((..._args: unknown[]) => Promise.resolve()),
   enqueueHeldHonorPin: vi.fn(),
-  takeHeldHonorPins: vi.fn(() => []),
+  takeHeldHonorPins: vi.fn(() => [] as Array<{ uid: string; dayIndex: number; at: number }>),
   dropHeldHonorPins: vi.fn(),
+  getDoc: vi.fn(),
 }));
 
 vi.mock('../hooks/useData', () => ({
@@ -36,6 +37,7 @@ vi.mock('../hooks/useData', () => ({
   useDayMeta: () => ({ data: H.dayMeta, loading: false, hasServerData: true }),
   isBanned: (uid: string, list: string[]) => list.includes(uid),
   useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   // In daily mode Board reads the VIEWED Day's board here (#246). The suite's
   // fixtures set `H.board` with a `dayIndex` matching the viewed Day, so returning
@@ -96,9 +98,18 @@ vi.mock('../analytics', () => ({ track: H.track }));
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: H.user, loading: false, signIn: vi.fn(), signOutUser: vi.fn() }),
 }));
+vi.mock('firebase/firestore', () => ({
+  getDoc: H.getDoc,
+  doc: (...args: unknown[]) => ({
+    args,
+    withConverter() {
+      return this;
+    },
+  }),
+}));
 // CoachOverlay (#214) imports EVENT_ID from '../firebase' — mocked so
 // mounting Board here never touches the real Firebase app init.
-vi.mock('../firebase', () => ({ EVENT_ID: 'test-event' }));
+vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
 
 import Board from './Board';
 
@@ -135,6 +146,7 @@ beforeEach(() => {
   H.player = null;
   H.setMark.mockResolvedValue({ cells: [], bingo: false, blackout: false });
   H.attachProof.mockResolvedValue(undefined);
+  H.getDoc.mockResolvedValue({ exists: () => false, data: () => ({}) });
 });
 
 afterEach(() => {
@@ -487,9 +499,9 @@ describe('per-Day First to BINGO (#264)', () => {
     expect(meta?.textContent).toContain('First to BINGO: Theo, 11:02');
   });
 
-  it('falls back to the port line when a pinned honor carries a non-finite timestamp', () => {
+  it('falls back to the port line when a pinned honor carries an invalid timestamp', () => {
     const now = Date.now();
-    H.dayMeta = { firstBingo: { uid: 'u9', displayName: 'Theo', at: Number.NaN } };
+    H.dayMeta = { firstBingo: { uid: 'u9', displayName: 'Theo', at: 8.64e15 + 1 } };
     H.event = {
       claimMode: 'honor',
       timezone: 'UTC',
@@ -500,6 +512,28 @@ describe('per-Day First to BINGO (#264)', () => {
     render(<Board />);
 
     expect(document.querySelector('.daybar-meta')?.textContent).toContain('Port 0');
+  });
+
+  it('does not publish a held pin when the saved Day board no longer has BINGO', async () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS }),
+        day({ index: 1, theme: 'get-sporty', unlockAt: now - DAY_MS }),
+      ],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+    H.player = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null, bingoCount: 0, squaresMarked: 0, firstBingoAt: null } as unknown as PlayerDoc;
+    H.takeHeldHonorPins.mockReturnValue([{ uid: 'u1', dayIndex: 1, at: now }]);
+    H.getDoc.mockResolvedValue({ exists: () => true, data: () => ({ cells: dealt('held') }) });
+
+    render(<Board />);
+    await act(async () => {});
+
+    expect(H.getDoc).toHaveBeenCalledTimes(1);
+    expect(H.pinDayFirstBingo).not.toHaveBeenCalled();
   });
 
   it('keeps the port in the daybar when the Day has no pinned honor', () => {

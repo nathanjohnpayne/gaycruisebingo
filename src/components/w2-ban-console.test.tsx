@@ -65,6 +65,7 @@ vi.mock('../hooks/useData', async (importOriginal) => {
     usePendingClaims: () => ({ claims: H.claims }),
     useReportedProofs: () => ({ flagged: H.flagged, loading: false }),
     useAllItems: () => ({ items: H.items, loading: false }),
+    useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
     useLeaderboard: () => ({ players: H.players, loading: false, hasServerData: true }),
   };
 });
