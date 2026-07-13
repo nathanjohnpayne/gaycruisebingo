@@ -11,9 +11,8 @@ import {
   getConfirmState,
   type MomentActor,
 } from '../data/moments';
-import { pinDayFirstBingo } from '../data/dayMeta';
-import { hasBingo } from '../game/logic';
-import type { BoardDoc, Cell, PlayerDoc } from '../types';
+import { hasBingo, standingsFrozen, tutorialDayIndexSet } from '../game/logic';
+import type { BoardDoc, Cell, EventDoc, PlayerDoc } from '../types';
 
 /** A confirm awaiting its board write: the Claim's cell AND the proof it resolves on. */
 interface AwaitingConfirm {
@@ -129,6 +128,8 @@ export default function ConfirmWinMoments() {
     cells: Cell[];
     boardOwned: boolean;
     dayBoards: ReadonlyMap<number, BoardDoc>;
+    event: EventDoc | null;
+    tutorialDays: ReadonlySet<number>;
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -139,6 +140,8 @@ export default function ConfirmWinMoments() {
     cells: [],
     boardOwned: false,
     dayBoards: new Map(),
+    event: null,
+    tutorialDays: new Set(),
   });
   ctx.current = {
     uid,
@@ -150,6 +153,8 @@ export default function ConfirmWinMoments() {
     cells: board?.cells ?? [],
     boardOwned: board != null && board.uid === uid,
     dayBoards,
+    event: event ?? null,
+    tutorialDays: tutorialDayIndexSet(event?.days),
   };
 
   // The cells a Day's confirms adjudicate against (#274): that Day's own board
@@ -242,19 +247,27 @@ export default function ConfirmWinMoments() {
             });
             // The Day rides every broadcast (#274): the per-card blackout id
             // (#267), and the bingo/first_bingo payload chips (#262). A legacy
-            // (null-day) group keeps the day-less calls.
+            // (null-day) group keeps the day-less calls. NO day-honor pin here
+            // (Codex P3 on #287): `confirmClaim` already pins the per-Day First
+            // to BINGO inside the ADMIN's resolve transaction (src/data/admin.ts,
+            // the isAdmin arm of the day-meta create rule), so a winner-side pin
+            // would only re-create an existing write-once doc — denied noise.
             const day = dayKey ?? undefined;
             if (plan.bingo) broadcastBingo(actor, day);
-            // The per-Day First to BINGO honor pin (#264) fires on the SAME
-            // bingo transition the live path pins on (Board's broadcastWinVerdict)
-            // — without it an off-route confirm wins the Moment but never the
-            // day-meta honor. `plan.bingo` IS the transition (not witness-gated),
-            // identity is known (the drain gates on it), and the write-once
-            // create rule swallows a re-cross of an already-pinned Day.
-            if (plan.bingo && dayKey != null) void pinDayFirstBingo(dayKey, actor);
             if (plan.blackout) broadcastBlackout(actor, day);
-            if (plan.firstBingo) broadcastFirstBingo(actor, day);
-            else if (plan.firstBingoHeld) {
+            // The ceremonial event singleton is anchored to MAIN-GAME Days only
+            // (Codex P1 on #287; daily-cards-spec § "Scoring and social
+            // surfaces": the embark card is live pre-cruise and trivially easy
+            // by design) and never minted POST-FREEZE (the second P1; mirrors
+            // the live path's verdict-time gate, Codex P2 on #278) — a late
+            // admin approval must not rewrite the settled headline honor. Both
+            // gates are decision-time: an ineligible group neither fires NOR
+            // parks a held candidate. The plain bingo/blackout above (and
+            // confirmClaim's own per-Day honor pin) still land.
+            const ceremonyEligible =
+              (dayKey == null || !cc.tutorialDays.has(dayKey)) && !standingsFrozen(cc.event);
+            if (plan.firstBingo && ceremonyEligible) broadcastFirstBingo(actor, day);
+            else if (plan.firstBingoHeld && ceremonyEligible) {
               st2.heldCeremony = actor;
               st2.heldCeremonyDay = dayKey;
             }

@@ -1643,7 +1643,17 @@ export default function Board() {
     // standings. Evaluated at VERDICT time (round 3): a proofed submission's
     // slow upload can straddle the boundary, so the render-time boolean is
     // not trusted here.
-    if (res.bingoTransition && !isStatsFrozen()) {
+    //
+    // And never minted from a TUTORIAL Day (Codex P1 on #287, closing the
+    // spec contract on the live path too — daily-cards-spec § "Scoring and
+    // social surfaces": cruise-wide First to BINGO is anchored to MAIN-GAME
+    // Days only; the embark card is live pre-cruise and trivially easy by
+    // design, so it would otherwise decide the headline honor before anyone
+    // boards). The tutorial Day still posts its plain bingo/blackout and pins
+    // its own per-Day honor above; only the event-level singleton is gated.
+    const actedTutorialDay =
+      hasDays && actedDay !== undefined && (tutorialDayIndexes?.includes(actedDay) ?? false);
+    if (res.bingoTransition && !isStatsFrozen() && !actedTutorialDay) {
       const generation = pendingActionGeneration(uid);
       const witnessed = await hasPriorBingoWitness(uid);
       if (!witnessed && revalidateAfterAwait(uid, generation).generationUnchanged) {
