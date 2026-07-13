@@ -32,8 +32,11 @@ function attestedLabel(at: number | undefined | null): string | null {
 export default function AcceptableUse({ variant = 'floating' }: { variant?: 'floating' | 'row' }) {
   const { user } = useAuth();
   // The viewer's own 18+ attestation stamp (users/{uid}.attestedAdultAt),
-  // surfaced on the More row (#270). Hook order is stable: called every render.
-  const { data: myUser } = useMyUser(user?.uid);
+  // surfaced on the More row (#270). The subscription opens for the ROW
+  // variant only (a conditional ARG, never a conditional hook) — the floating
+  // variant renders no attestation line, and its otherwise-hermetic suites
+  // must not touch Firestore (Codex P2 on #281 round 2).
+  const { data: myUser } = useMyUser(variant === 'row' ? user?.uid : undefined);
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);

@@ -90,6 +90,7 @@ export function shortSailRange(sailStart: string, sailEnd: string): string {
   const a = parse(sailStart);
   const b = parse(sailEnd);
   if (!a || !b || new Date(b.y, b.m - 1, b.d) < new Date(a.y, a.m - 1, a.d)) return '';
+  if (a.y === b.y && a.m === b.m && a.d === b.d) return `${SHORT_MONTHS[a.m - 1]} ${a.d}`;
   if (a.y === b.y && a.m === b.m) return `${SHORT_MONTHS[a.m - 1]} ${a.d}\u2013${b.d}`;
   return `${SHORT_MONTHS[a.m - 1]} ${a.d} \u2013 ${SHORT_MONTHS[b.m - 1]} ${b.d}`;
 }

@@ -74,7 +74,11 @@ export default function InstallPrompt() {
       <div className="install-prompt-body">
         <p className="toast-title">Add me to your Home Screen</p>
         <p>Full screen, works offline at sea.</p>
-        {!deferred && showWalkthrough && (
+        {/* The expansion defers while another toast shares the stack (Codex
+            P2 on #281 round 2): the slot offset is a fixed height, so a
+            three-line toast under the urgent one would overlap — solo, it
+            can grow freely. */}
+        {!deferred && showWalkthrough && visibleCount === 1 && (
           <p className="install-prompt-steps">
             Tap Share <span aria-hidden="true">(the ⬆︎ square)</span>, then &ldquo;Add to Home
             Screen.&rdquo;
@@ -86,7 +90,7 @@ export default function InstallPrompt() {
           Install
         </button>
       ) : (
-        !showWalkthrough && (
+        (!showWalkthrough || visibleCount > 1) && (
           <button className="btn primary" onClick={() => setShowWalkthrough(true)}>
             Show me
           </button>
