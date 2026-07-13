@@ -442,7 +442,13 @@ describe('per-Day First to BINGO (#264)', () => {
     } as unknown as EventDoc;
     H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
     H.player = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null, bingoCount: 0, squaresMarked: 0, firstBingoAt: null, blackout: false } as unknown as PlayerDoc;
-    const marked = dealt().map((c, i) => (i === 3 ? { ...c, marked: true, markedAt: 1 } : c));
+    const marked = dealt().map((c, i) =>
+      [0, 1, 2, 3, 4].includes(i)
+        ? { ...c, marked: true, markedAt: (i + 1) * 10 }
+        : i === 6
+          ? { ...c, marked: true, markedAt: 999 }
+          : c,
+    );
     H.setMark.mockResolvedValue({ cells: marked, bingo: true, blackout: false, bingoTransition: true, blackoutTransition: false });
 
     render(<Board />);
@@ -459,6 +465,7 @@ describe('per-Day First to BINGO (#264)', () => {
     expect(H.pinDayFirstBingo).toHaveBeenCalledTimes(1);
     expect(H.pinDayFirstBingo.mock.calls[0][0]).toBe(0); // the VIEWED Day
     expect(H.pinDayFirstBingo.mock.calls[0][1]).toMatchObject({ uid: 'u1', displayName: 'Deck Daddy' });
+    expect(H.pinDayFirstBingo.mock.calls[0][2]).toBe(50);
   });
 
   it('pins tutorial Day honors for finale data while the daybar keeps them hidden', async () => {
@@ -534,6 +541,28 @@ describe('per-Day First to BINGO (#264)', () => {
 
     expect(H.getDoc).toHaveBeenCalledTimes(1);
     expect(H.pinDayFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('requeues a held pin when saved-Day validation cannot read the board', async () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS }),
+        day({ index: 1, theme: 'get-sporty', unlockAt: now - DAY_MS }),
+      ],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+    H.player = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null, bingoCount: 0, squaresMarked: 0, firstBingoAt: null } as unknown as PlayerDoc;
+    H.takeHeldHonorPins.mockReturnValue([{ uid: 'u1', dayIndex: 1, at: now }]);
+    H.getDoc.mockRejectedValue(new Error('offline'));
+
+    render(<Board />);
+    await act(async () => {});
+
+    expect(H.pinDayFirstBingo).not.toHaveBeenCalled();
+    expect(H.enqueueHeldHonorPin).toHaveBeenCalledWith('u1', 1, now);
   });
 
   it('keeps the port in the daybar when the Day has no pinned honor', () => {

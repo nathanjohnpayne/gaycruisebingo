@@ -26,7 +26,7 @@ import {
 // the proofed-mark completion verdict ProofSheet reports back (PR #110 round 2
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
-import { hasBingo, isBlackout, winningCells, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet } from '../game/logic';
+import { hasBingo, isBlackout, winningCells, completedLines, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet } from '../game/logic';
 import { fitTextSize } from '../game/fitText';
 import { useTextSize } from '../hooks/useTextSize';
 import { track } from '../analytics';
@@ -580,6 +580,19 @@ function honorTime(at: number, timezone: string | undefined): string {
 
 function validHonorTime(at: number): boolean {
   return Number.isFinite(at) && Number.isFinite(new Date(at).getTime());
+}
+
+function firstCompletedLineAt(cells: Cell[]): number | null {
+  let firstAt: number | null = null;
+  for (const line of completedLines(cells)) {
+    let lineAt = 0;
+    for (const index of line) {
+      const markedAt = cells[index]?.markedAt;
+      if (typeof markedAt === 'number' && markedAt > lineAt) lineAt = markedAt;
+    }
+    if (lineAt > 0 && (firstAt == null || lineAt < firstAt)) firstAt = lineAt;
+  }
+  return firstAt;
 }
 
 /**
@@ -1220,7 +1233,15 @@ export default function Board() {
         if (hasDays && board?.dayIndex === h.dayIndex && cellsAttributable && cells.length > 0) {
           stillHasBingo = hasBingo(cells);
         } else {
-          const snap = await getDoc(dayBoardRef(h.dayIndex, uid)).catch(() => null);
+          let readFailed = false;
+          const snap = await getDoc(dayBoardRef(h.dayIndex, uid)).catch(() => {
+            readFailed = true;
+            return null;
+          });
+          if (readFailed) {
+            enqueueHeldHonorPin(h.uid, h.dayIndex, h.at);
+            continue;
+          }
           const heldCells = snap?.exists() ? ((snap.data().cells ?? []) as Cell[]) : [];
           stillHasBingo = hasBingo(heldCells);
         }
@@ -1519,11 +1540,7 @@ export default function Board() {
     // the folded cells — the same clock the stats fold persisted — falling
     // back to the verdict clock when no cell stamp is readable. A slow upload
     // preceding the verdict can then never skew the displayed honor time.
-    const latestMark = res.cells.reduce<number>(
-      (max, c) => (c.marked && typeof c.markedAt === 'number' && c.markedAt > max ? c.markedAt : max),
-      0,
-    );
-    const actedAt = latestMark > 0 ? latestMark : Date.now();
+    const actedAt = firstCompletedLineAt(res.cells) ?? Date.now();
     enqueueWinMoments({
       uid,
       bingoTransition: res.bingoTransition,
