@@ -150,21 +150,23 @@ describe('Leaderboard honors strip prefers the PINNED day-meta honor (#264)', ()
     H.dayMetas = new Map();
   });
 
-  it('the EARLIEST timestamp wins — a later pin never displaces an earlier derived winner (Codex P2 on #280)', () => {
+  it('the PIN wins when present — derived dayStats stamps cannot tiebreak it (Codex round 4 on #280)', () => {
     H.players = [embarker, champ];
     H.event = event;
-    // Champ's derived Day-2 bingo is at 900; this pin landed later (at 5000) —
-    // the true earlier winner (whose unknown-identity win skipped its pin)
-    // keeps the honor.
-    H.dayMetas = new Map([[2, { firstBingo: { uid: 'late', displayName: 'Late Larry', at: 5000 } }]]);
+    // Champ's derived Day-2 bucket carries an earlier stamp (900), but derived
+    // stamps can be seeded from the cruise-wide root (another day's time
+    // entirely) — the write-once, rules-timestamped pin is the source of
+    // truth. The unknown-identity residual is covered by the module-state
+    // held-pin queue, not by distrusting pins.
+    H.dayMetas = new Map([[2, { firstBingo: { uid: 'late', displayName: 'Pinned Pete', at: 5000 } }]]);
     render(
       <MemoryRouter>
         <Leaderboard />
       </MemoryRouter>,
     );
     const strip = screen.getByLabelText('Daily First to BINGO');
-    expect(strip).toHaveTextContent('Champ');
-    expect(strip).not.toHaveTextContent('Late Larry');
+    expect(strip).toHaveTextContent('Pinned Pete');
+    expect(strip).not.toHaveTextContent('Champ');
     H.dayMetas = new Map();
   });
 
