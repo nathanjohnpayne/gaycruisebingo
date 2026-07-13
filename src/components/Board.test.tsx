@@ -185,6 +185,11 @@ describe('Locked-Day preview', () => {
     render(<Board />);
 
     expect(screen.getByText(/unlocks/i)).toBeInTheDocument();
+    // #260: the unlock copy lowercases the meridiem ("8:00 a.m."), never "AM".
+    expect(screen.getByText(/unlocks/i).textContent).toMatch(/[ap]\.m\./);
+    expect(screen.getByText(/unlocks/i).textContent).not.toMatch(/[AP]M/);
+    // #260: the locked preview opens with the daybar — "Day N · Theme" + port.
+    expect(document.querySelector('.daybar-name')?.textContent).toContain('Day 1 · Get Sporty');
     // get-sporty's ThemeMeta description (src/theme/themes.ts), verbatim.
     expect(screen.getByText(/locker-room fantasy/i)).toBeInTheDocument();
     expect(screen.getByText('A per-day free space override')).toBeInTheDocument();
@@ -207,11 +212,11 @@ describe('Locked-Day preview', () => {
   });
 });
 
-// specs/d15-tutorial-banners.md: Board mounts the tutorial banner + the
-// "Warm-up" board-header tag above the grid, gated on the VIEWED Day's
-// `tutorial` flag — an unlocked, dealt tutorial Day gets both; an unlocked
-// main Day gets neither.
-describe('Tutorial banner + board header', () => {
+// specs/d15-tutorial-banners.md + #260: Board mounts the tutorial banner
+// gated on the VIEWED Day's `tutorial` flag, and the daybar (board-header)
+// on EVERY viewed Day — with the tutorial tag ("Warm-up"/"Goodbye") inside
+// the daybar's name line on the two tutorial Days only.
+describe('Tutorial banner + board header (daybar)', () => {
   it('mounts the embark banner and the "Warm-up" board-header tag on an unlocked Welcome Aboard Day', () => {
     const now = Date.now();
     H.event = {
@@ -228,7 +233,7 @@ describe('Tutorial banner + board header', () => {
     expect(document.querySelector('.board-header')?.textContent).toContain('Warm-up');
   });
 
-  it('renders neither the tutorial banner nor the board-header tag on an unlocked main Day', () => {
+  it('renders the daybar without a banner or tag on an unlocked main Day (#260)', () => {
     const now = Date.now();
     H.event = {
       claimMode: 'honor',
@@ -240,7 +245,32 @@ describe('Tutorial banner + board header', () => {
     render(<Board />);
 
     expect(screen.queryByText(/mark what happens/i)).not.toBeInTheDocument();
-    expect(document.querySelector('.board-header')).toBeNull();
+    // The daybar renders on every viewed Day now: "Day N · Theme" + port +
+    // dress-code description — but no tutorial tag on a main Day.
+    const header = document.querySelector('.board-header');
+    expect(header).not.toBeNull();
+    expect(header?.querySelector('.daybar-name')?.textContent).toContain('Day 3 · Glamiators');
+    expect(header?.querySelector('.daybar-meta')?.textContent).toContain('Port 2');
+    expect(header?.textContent).toContain('Roman toga-chic');
+    expect(header?.textContent).not.toContain('Warm-up');
+    expect(header?.textContent).not.toContain('Goodbye');
+  });
+
+  it('tags the farewell Day "Goodbye", not "Warm-up" (#260)', () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 9, theme: 'so-long-farewell', unlockAt: now - DAY_MS, tutorial: true, pool: 'farewell' })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 9, seed: 1, createdAt: 0, cells: dealt() };
+
+    render(<Board />);
+
+    const header = document.querySelector('.board-header');
+    expect(header?.querySelector('.daybar-name')?.textContent).toContain('Day 10 · So Long, Farewell');
+    expect(header?.textContent).toContain('Goodbye');
+    expect(header?.textContent).not.toContain('Warm-up');
   });
 });
 
@@ -322,5 +352,52 @@ describe('Text size auto-fit guard (specs/d15-text-size.md)', () => {
     const target = document.querySelector('.cell-text') as HTMLElement;
     expect(target.textContent).toBe('Kissed a stranger');
     expect(parseFloat(target.style.fontSize)).toBe(CEILING_PX);
+  });
+});
+
+// --- #261: Feed → Board square-opening intent -------------------------------
+
+import { requestOpenSquare, __resetOpenSquareForTests } from '../hooks/useOpenSquare';
+
+describe('Feed → Board square-opening intent (#261)', () => {
+  it('switches to the intended Day and opens the sheet on that Prompt, then clears the intent', () => {
+    __resetOpenSquareForTests();
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({ index: 0, theme: 'welcome-aboard', unlockAt: now - 2 * DAY_MS, tutorial: true, pool: 'embark' }),
+        day({ index: 1, theme: 'get-sporty', unlockAt: now - DAY_MS }),
+      ],
+    } as unknown as EventDoc;
+    // The suite's useDayBoard mock returns H.board for any requested Day; give
+    // it the INTENDED Day's index so the switched view renders it.
+    H.board = { uid: 'u1', dayIndex: 1, seed: 1, createdAt: 0, cells: dealt() };
+    requestOpenSquare({ dayIndex: 1, itemId: 'i5' });
+
+    render(<Board />);
+
+    // The claim sheet opened on the intended Prompt (unmarked → pledge row).
+    expect(screen.getByText(/Proof for/)).toBeInTheDocument();
+    expect(screen.getByText(/Cross My Heart/)).toBeInTheDocument();
+    __resetOpenSquareForTests();
+  });
+
+  it('drops the intent without opening anything when the Prompt is no longer on the card', () => {
+    __resetOpenSquareForTests();
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'get-sporty', unlockAt: now - DAY_MS })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+    requestOpenSquare({ dayIndex: 0, itemId: 'not-on-this-card' });
+
+    render(<Board />);
+
+    expect(screen.queryByText(/Proof for/)).not.toBeInTheDocument();
+    __resetOpenSquareForTests();
   });
 });

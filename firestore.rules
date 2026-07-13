@@ -534,8 +534,14 @@ service cloud.firestore {
           // MISMATCHED kind (issue #103). Mirrors the writer's deterministic scheme
           // (src/data/moments.ts): the event-singleton `first_bingo` id must carry kind
           // 'first_bingo', and every per-Player id must be `${uid}-${kind}`
-          // (`${uid}-bingo` / `${uid}-blackout`). Without it any signed-in Player could
-          // create moments/first_bingo with a non-first_bingo kind: the read-side filter
+          // (`${uid}-bingo` / `${uid}-blackout`) — plus, for blackout only, the
+          // PER-CARD form `${uid}-blackout-d${dayIndex}` (#267: blackout is per-card,
+          // so the dedup id scopes to the (Player, Day) pair), valid only when the
+          // id's Day equals the payload's own integer `dayIndex` — the same
+          // id↔payload binding discipline as id↔kind, mirroring the read-side
+          // hasCanonicalMomentId filter (a mismatched or dayIndex-less day-suffixed
+          // id is denied). Without the binding any signed-in Player could create
+          // moments/first_bingo with a non-first_bingo kind: the read-side filter
           // (useData.ts hasCanonicalMomentId) hides it, but a Moment is fully immutable,
           // so the legitimate First-to-BINGO create then hits the deny-all `update` rule
           // on the same id and is denied FOREVER — a denial-of-ceremony squat (only
@@ -543,7 +549,18 @@ service cloud.firestore {
           // create already requires isOwner). The read-side filter stays defense-in-depth.
           && (momentId == 'first_bingo'
                 ? request.resource.data.kind == 'first_bingo'
-                : momentId == request.resource.data.uid + '-' + request.resource.data.kind)
+                : (momentId == request.resource.data.uid + '-' + request.resource.data.kind
+                    || (request.resource.data.kind == 'blackout'
+                        && request.resource.data.dayIndex is int
+                        // Bound the Day to the Event's real schedule (Codex P2 on
+                        // #277): without it an owner could mint unbounded
+                        // publicly-readable junk docs (…-blackout-d999999). A
+                        // legacy Event with no `days` errors the get() access —
+                        // which DENIES (the safe default): no schedule, no
+                        // day-scoped ids.
+                        && request.resource.data.dayIndex >= 0
+                        && request.resource.data.dayIndex < get(/databases/$(database)/documents/events/$(eventId)).data.days.size()
+                        && momentId == request.resource.data.uid + '-blackout-d' + string(request.resource.data.dayIndex))))
           && request.resource.data.displayName is string
           && request.resource.data.displayName.size() > 0
           && request.resource.data.displayName.size() <= 100

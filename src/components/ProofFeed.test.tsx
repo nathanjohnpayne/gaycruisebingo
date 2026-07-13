@@ -14,7 +14,7 @@ vi.mock('../firebase', () => ({
   analytics: null,
 }));
 
-const H = vi.hoisted(() => ({ onSnapshot: vi.fn() }));
+const H = vi.hoisted(() => ({ onSnapshot: vi.fn(), navigate: vi.fn() }));
 H.onSnapshot.mockReturnValue(() => {});
 
 vi.mock('firebase/firestore', () => {
@@ -33,10 +33,15 @@ vi.mock('firebase/firestore', () => {
   };
 });
 vi.mock('../data/proofs', () => ({ reportProof: vi.fn(), deleteProof: vi.fn() }));
+// ProofFeed's ＋ Proof / 🙋 Got it too navigate to the Card tab (#261); the
+// module mock keeps the default-export integration renders router-free.
+vi.mock('react-router-dom', () => ({ useNavigate: () => H.navigate }));
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
 
-import ProofFeed, { TallyCard, tallyCardAction } from './ProofFeed';
+import ProofFeed, { TallyCard, tallyCardAction, tallyActionTarget } from './ProofFeed';
+import { useOpenSquareIntent, __resetOpenSquareForTests } from '../hooks/useOpenSquare';
+import type { BoardDoc } from '../types';
 
 // specs/d15-tally-cards.md — the Feed's Tally Card renderer + its per-viewer
 // button gate (#216, daily-cards-spec § "Tally Cards"). The card shows the
@@ -142,16 +147,23 @@ function markerDoc(itemId: string, entry: TallyEntry) {
 
 function captureOnNext(): {
   fire: (tally: unknown, proofs?: unknown, moments?: unknown, event?: unknown) => void;
+  fireBoard: (dayIndex: number, board: BoardDoc | null) => void;
 } {
-  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; event: ((s: unknown) => void) | null; tally: ((s: unknown) => void) | null } = {
+  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; event: ((s: unknown) => void) | null; tally: ((s: unknown) => void) | null; boards: Record<number, (s: unknown) => void> } = {
     proofs: null,
     moments: null,
     event: null,
     tally: null,
+    boards: {},
   };
-  H.onSnapshot.mockImplementation((target: unknown, _options: unknown, onNext: (s: unknown) => void) => {
+  H.onSnapshot.mockImplementation((target: unknown, optionsOrNext: unknown, maybeNext?: (s: unknown) => void) => {
+    // useMyDayBoards (#261) subscribes WITHOUT an options arg; useDocSub passes
+    // one. Normalize so both shapes capture their onNext.
+    const onNext = (typeof optionsOrNext === 'function' ? optionsOrNext : maybeNext) as (s: unknown) => void;
     const kind = target && typeof target === 'object' ? (target as { kind?: string }).kind : undefined;
+    const args = target && typeof target === 'object' ? ((target as { args?: unknown[] }).args ?? []) : [];
     if (target && typeof target === 'object' && 'query' in (target as object)) captured.proofs = onNext;
+    else if (kind === 'doc' && args[3] === 'days') captured.boards[Number(args[4])] = onNext;
     else if (kind === 'doc') captured.event = onNext;
     else if (kind === 'collectionGroup') captured.tally = onNext;
     else captured.moments = onNext;
@@ -164,6 +176,15 @@ function captureOnNext(): {
         captured.moments?.(moments);
         captured.event?.(event);
         captured.tally?.(tally);
+      });
+    },
+    fireBoard: (dayIndex: number, board: BoardDoc | null) => {
+      act(() => {
+        captured.boards[dayIndex]?.({
+          exists: () => board != null,
+          data: () => board ?? undefined,
+          metadata: { fromCache: false },
+        });
       });
     },
   };
@@ -202,5 +223,114 @@ describe('ProofFeed (default export) — Feed-level who-list sheet (#216 accepta
     // Close dismisses it.
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.queryByText(/^Who marked/)).toBeNull();
+  });
+});
+
+// --- #261: Feed Tally Card actions — target resolution + live wiring -------
+
+const boardWith = (cells: { itemId: string; marked?: boolean; free?: boolean }[], dayIndex = 0): BoardDoc => ({
+  uid: 'viewer',
+  dayIndex,
+  seed: 1,
+  createdAt: 0,
+  cells: cells.map((c, index) => ({
+    index,
+    itemId: c.free ? '' : c.itemId,
+    text: c.itemId,
+    spicy: false,
+    free: !!c.free,
+    marked: !!c.marked,
+    markedAt: c.marked ? 1 : null,
+  })),
+});
+
+describe('tallyActionTarget — where a Tally Card button lands (#261)', () => {
+  it('resolves the Day carrying the Prompt, marked-ness included', () => {
+    const boards = new Map([[1, boardWith([{ itemId: 'p1' }], 1)]]);
+    expect(tallyActionTarget({ itemId: 'p1', dayIndex: 0 }, boards)).toEqual({ dayIndex: 1, itemId: 'p1', marked: false });
+  });
+
+  it('a marked hit anywhere beats an unmarked one (＋ Proof beats 🙋 Got it too)', () => {
+    const boards = new Map([
+      [0, boardWith([{ itemId: 'p1' }], 0)],
+      [2, boardWith([{ itemId: 'p1', marked: true }], 2)],
+    ]);
+    expect(tallyActionTarget({ itemId: 'p1', dayIndex: 0 }, boards)).toEqual({ dayIndex: 2, itemId: 'p1', marked: true });
+  });
+
+  it("prefers the card's own Day among equal marked-ness, then the latest Day", () => {
+    const boards = new Map([
+      [0, boardWith([{ itemId: 'p1' }], 0)],
+      [3, boardWith([{ itemId: 'p1' }], 3)],
+    ]);
+    expect(tallyActionTarget({ itemId: 'p1', dayIndex: 3 }, boards)?.dayIndex).toBe(3);
+    expect(tallyActionTarget({ itemId: 'p1', dayIndex: 7 }, boards)?.dayIndex).toBe(3);
+  });
+
+  it('null when the Prompt is on none of the viewer cards (informational card)', () => {
+    const boards = new Map([[0, boardWith([{ itemId: 'other' }, { itemId: '', free: true }], 0)]]);
+    expect(tallyActionTarget({ itemId: 'p1', dayIndex: 0 }, boards)).toBeNull();
+  });
+});
+
+describe('ProofFeed — Tally Card actions wired to the Board sheet (#261)', () => {
+  const dayFixture = (index: number) => ({
+    index,
+    date: `2026-07-${15 + index}`,
+    port: `Port ${index}`,
+    portEmoji: '🇭🇷',
+    theme: 'get-sporty',
+    pool: 'main',
+    tutorial: false,
+    unlockAt: 0,
+  });
+  const eventSnap = {
+    exists: () => true,
+    data: () => ({ days: [dayFixture(0)] }),
+    metadata: { fromCache: false },
+  };
+  const IntentProbe = () => {
+    const intent = useOpenSquareIntent();
+    return <div data-testid="intent">{intent ? `${intent.dayIndex}:${intent.itemId}` : ''}</div>;
+  };
+  const markers = { docs: [markerDoc('p1', { uid: 'alice', displayName: 'Alice', markedAt: 1, dayIndex: 0, itemText: 'Balcony or porthole photo' })], metadata: { fromCache: false } };
+
+  it('🙋 Got it too renders for an unmarked Prompt on the viewer card; tap records the intent and navigates to the Card tab', () => {
+    __resetOpenSquareForTests();
+    H.navigate.mockReset();
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(
+      <>
+        <ProofFeed />
+        <IntentProbe />
+      </>,
+    );
+    sub.fire(markers, emptyColSnap, emptyColSnap, eventSnap);
+    sub.fireBoard(0, boardWith([{ itemId: 'p1' }], 0));
+
+    const btn = screen.getByText(/Got it too/);
+    fireEvent.click(btn);
+    expect(H.navigate).toHaveBeenCalledWith('/');
+    expect(screen.getByTestId('intent').textContent).toBe('0:p1');
+  });
+
+  it('＋ Proof renders for a marked Prompt; an off-card Prompt stays informational', () => {
+    __resetOpenSquareForTests();
+    H.navigate.mockReset();
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+    sub.fire(markers, emptyColSnap, emptyColSnap, eventSnap);
+
+    // Board arrives with the Prompt already marked → ＋ Proof.
+    sub.fireBoard(0, boardWith([{ itemId: 'p1', marked: true }], 0));
+    expect(screen.getByTitle('Add a proof')).toBeTruthy();
+    expect(screen.queryByText(/Got it too/)).toBeNull();
+
+    // Board swaps to one without the Prompt → no button at all.
+    sub.fireBoard(0, boardWith([{ itemId: 'other' }], 0));
+    expect(screen.queryByTitle('Add a proof')).toBeNull();
+    expect(screen.queryByText(/Got it too/)).toBeNull();
   });
 });

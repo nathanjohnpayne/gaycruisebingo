@@ -19,7 +19,7 @@ function makeDays(count = 10, startUnlock = 0): DayDef[] {
     port: `Port ${index}`,
     portEmoji: '🇭🇷',
     theme: 'get-sporty',
-    pool: 'main',
+    pool: index === 0 ? 'embark' : index === count - 1 ? 'farewell' : 'main',
     tutorial: index === 0 || index === count - 1,
     unlockAt: startUnlock + index * DAY_MS,
   }));
@@ -99,32 +99,34 @@ describe('<DaySwitcher />', () => {
   // specs/d15-tutorial-banners.md: the "Warm-up" tag renders on exactly the
   // two tutorial Day chips (index 0 and the last index — `makeDays` seeds
   // `tutorial` there) and never on the eight main Days.
-  it('renders the "Warm-up" tag on exactly the two tutorial Day chips, never on the eight main Days', () => {
+  it('renders "Warm-up" on the embark chip, "Goodbye" on the farewell chip, nothing on the eight main Days', () => {
     const days = makeDays();
     const now = days[3].unlockAt + 1000;
     render(<DaySwitcher days={days} viewedIndex={3} onSelect={vi.fn()} now={now} />);
     const chips = screen.getAllByRole('tab');
-    const warmUpCount = screen.getAllByText('Warm-up').length;
-    expect(warmUpCount).toBe(2);
+    expect(screen.getAllByText('Warm-up').length).toBe(1);
+    expect(screen.getAllByText('Goodbye').length).toBe(1);
     expect(chips[0].textContent).toContain('Warm-up');
-    expect(chips[days.length - 1].textContent).toContain('Warm-up');
+    expect(chips[days.length - 1].textContent).toContain('Goodbye');
     for (let i = 1; i < days.length - 1; i++) {
       expect(chips[i].textContent).not.toContain('Warm-up');
+      expect(chips[i].textContent).not.toContain('Goodbye');
     }
   });
 
   // The chip's own aria-label overrides its descendant text for assistive
   // tech, so the "Warm-up" tag's visible label is otherwise unannounced —
   // fold the tutorial state into the chip's accessible name too.
-  it('includes "Warm-up" in the accessible name of tutorial Day chips, and omits it on main Days', () => {
+  it('includes the tag in the accessible name of tutorial Day chips, and omits it on main Days', () => {
     const days = makeDays();
     const now = days[3].unlockAt + 1000;
     render(<DaySwitcher days={days} viewedIndex={3} onSelect={vi.fn()} now={now} />);
     const chips = screen.getAllByRole('tab');
     expect(chips[0]).toHaveAccessibleName(/warm-up/i);
-    expect(chips[days.length - 1]).toHaveAccessibleName(/warm-up/i);
+    expect(chips[days.length - 1]).toHaveAccessibleName(/goodbye/i);
     for (let i = 1; i < days.length - 1; i++) {
       expect(chips[i]).not.toHaveAccessibleName(/warm-up/i);
+      expect(chips[i]).not.toHaveAccessibleName(/goodbye/i);
     }
   });
 });

@@ -48,6 +48,10 @@ const H = vi.hoisted(() => ({
 
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
 vi.mock('../analytics', () => ({ track: vi.fn() }));
+// ProofFeed navigates to the Card tab from Tally Card actions (#261); mock
+// the router hook so these router-free renders keep working.
+vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
+
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user, loading: false }) }));
 vi.mock('../hooks/useData', () => ({
   useBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
@@ -58,6 +62,7 @@ vi.mock('../hooks/useData', () => ({
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
   useLeaderboard: () => ({ players: H.players, loading: false, hasServerData: H.rosterConfirmed }),
   useFeed: () => ({ entries: H.feedEntries, loading: false }),
+  useMyDayBoards: () => new Map(),
   // Board subscribes the per-Square Doubt count + the Feed's Proofs for the #33
   // satisfied derivation. These Moment-edge fixtures never open the Tally sheet or
   // assert a Doubt count, so empty streams keep them focused on the edge machinery.
