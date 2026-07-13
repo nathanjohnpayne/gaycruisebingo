@@ -128,6 +128,30 @@ describe('firestore.rules — Feed Moments (specs/w2-feed-moments.md)', () => {
     await assertSucceeds(setDoc(p(`${ALICE}-first_bingo`), moment(ALICE, { kind: 'first_bingo' })));
   });
 
+  it('allows the PER-CARD blackout id `${uid}-blackout-d${dayIndex}` only when the id Day matches the payload (#267)', async () => {
+    const p = (id: string) => doc(db(ALICE), momentPath(id));
+    // The canonical per-card create: day-scoped id, matching integer dayIndex.
+    await assertSucceeds(setDoc(p(`${ALICE}-blackout-d3`), moment(ALICE, { kind: 'blackout', dayIndex: 3 })));
+    // A SECOND Day's card posts its own Moment — distinct id, same Player.
+    await assertSucceeds(setDoc(p(`${ALICE}-blackout-d7`), moment(ALICE, { kind: 'blackout', dayIndex: 7 })));
+    // The id's Day must equal the payload's dayIndex — a mismatch is denied.
+    await assertFails(setDoc(p(`${ALICE}-blackout-d3`), moment(ALICE, { kind: 'blackout', dayIndex: 5 })));
+    // A day-suffixed id with NO dayIndex field is denied (nothing to bind to).
+    await assertFails(setDoc(p(`${ALICE}-blackout-d4`), moment(ALICE, { kind: 'blackout' })));
+    // A non-integer dayIndex is denied.
+    await assertFails(setDoc(p(`${ALICE}-blackout-d4`), moment(ALICE, { kind: 'blackout', dayIndex: '4' })));
+    // The day-scoped form is blackout-only: a bingo cannot ride it.
+    await assertFails(setDoc(p(`${ALICE}-bingo-d3`), moment(ALICE, { kind: 'bingo', dayIndex: 3 })));
+    // Forged owner: Alice cannot create Bob's per-card blackout id.
+    await assertFails(setDoc(p(`${BOB}-blackout-d3`), moment(ALICE, { kind: 'blackout', dayIndex: 3 })));
+    // The legacy day-less per-Player id still works (asserted above too) — and a
+    // legacy id carrying a dayIndex payload stays valid: the binding constrains
+    // the day-SUFFIXED id form, not the field's presence.
+    await assertSucceeds(
+      setDoc(doc(db(BOB), momentPath(`${BOB}-blackout`)), moment(BOB, { kind: 'blackout', dayIndex: 2 })),
+    );
+  });
+
   it('enforces the shape — valid kind, non-empty ≤100 displayName, numeric createdAt', async () => {
     // Every id here SATISFIES the #103 id↔kind binding (`${uid}-${kind}`), so the only
     // clause that can deny is the shape rule under test — never the binding. The denied
