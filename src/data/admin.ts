@@ -253,8 +253,15 @@ async function resolve(
         isTutorialDay,
         isCeremonialDay,
       });
-      if (statsFrozen) tx.set(player(c.uid), { dayStats: playerWrite.dayStats }, { merge: true });
-      else tx.set(player(c.uid), playerWrite, { merge: true });
+      if (statsFrozen) {
+        // Ceremonial-day-only post-freeze bucket, mirroring setMark (Codex P2
+        // on #278 round 2): any other Day's bucket would drift settled honors.
+        if (isCeremonialDay?.(c.dayIndex as number)) {
+          tx.set(player(c.uid), { dayStats: playerWrite.dayStats }, { merge: true });
+        }
+      } else {
+        tx.set(player(c.uid), playerWrite, { merge: true });
+      }
     } else {
       tx.set(player(c.uid), { squaresMarked: squares, bingoCount, blackout, firstBingoAt }, { merge: true });
     }

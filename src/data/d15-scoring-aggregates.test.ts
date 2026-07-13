@@ -153,7 +153,7 @@ describe('setMark folds into dayStats[dayIndex] and derives the cruise-wide root
     expect(playerWrite.squaresMarked).toBe(5);
   });
 
-  it('narrows to the BUCKET-ONLY player write once the standings are frozen (#265; Codex P2 on #278) — the per-Day record survives, the roots never move', async () => {
+  it('frozen + CEREMONIAL day: narrows to the bucket-only player write — the farewell honor record survives, the roots never move (#265; Codex P2s on #278)', async () => {
     getDocFromCacheSpy
       .mockResolvedValueOnce(snap({ cells: dealt(), dayIndex: 9 })) // board read (the farewell card)
       .mockResolvedValueOnce(snap({ firstBingoAt: null, displayName: 'Marker' })); // player read
@@ -166,6 +166,7 @@ describe('setMark folds into dayStats[dayIndex] and derives the cruise-wide root
       claimMode: 'honor',
       currentFirstBingoAt: null,
       statsFrozen: true,
+      ceremonialDayIndexes: [9],
     });
 
     const playerCall = setSpy.mock.calls.find((c) => (c[0] as { path: string }).path.includes('/players/'));
@@ -176,6 +177,27 @@ describe('setMark folds into dayStats[dayIndex] and derives the cruise-wide root
     expect(write.dayStats).toEqual({ 9: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null } });
     const paths = setSpy.mock.calls.map((c) => (c[0] as { path: string }).path);
     expect(paths.some((p) => p.includes('/tally/'))).toBe(true);
+  });
+
+  it('frozen + MAIN day: writes NO player stats at all — a post-freeze mark cannot drift the settled daily honors (Codex P2 on #278 round 2)', async () => {
+    getDocFromCacheSpy
+      .mockResolvedValueOnce(snap({ cells: dealt(), dayIndex: 4 })) // board read (a main day)
+      .mockResolvedValueOnce(snap({ firstBingoAt: null, displayName: 'Marker' })); // player read
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 3,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      statsFrozen: true,
+      ceremonialDayIndexes: [9],
+    });
+
+    const paths = setSpy.mock.calls.map((c) => (c[0] as { path: string }).path);
+    expect(paths.some((p) => p.includes('/players/'))).toBe(false);
+    expect(paths.some((p) => p.includes('/tally/'))).toBe(true); // the card stays honest
   });
 });
 

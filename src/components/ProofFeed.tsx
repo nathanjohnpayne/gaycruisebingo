@@ -55,7 +55,7 @@ const MOMENT_COPY: Record<MomentKind, { icon: string; line: string }> = {
  * js/xss-through-dom #1): mediaURL is resolved from a Firestore doc, so a forged
  * non-media scheme (javascript:, …) is dropped rather than rendered.
  */
-function ProofCard({ proof, viewerUid, days, statsFrozen }: { proof: ProofDoc; viewerUid: string | undefined; days: DayDef[] | undefined; statsFrozen?: boolean }) {
+function ProofCard({ proof, viewerUid, days, isStandingsFrozen }: { proof: ProofDoc; viewerUid: string | undefined; days: DayDef[] | undefined; isStandingsFrozen: () => boolean }) {
   const media = safeMediaUrl(proof.mediaURL);
   return (
     <div className="proof">
@@ -96,8 +96,11 @@ function ProofCard({ proof, viewerUid, days, statsFrozen }: { proof: ProofDoc; v
                 tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
                 // #265: symmetric with the mark path — the farewell bucket never
                 // sums, and a post-freeze deletion never unfolds frozen stats.
+                // Evaluated at CLICK time (Codex P2 on #278 round 2): a Feed
+                // left open across the freeze boundary must not act on a
+                // render-time false.
                 ceremonialDayIndexes: days ? [...ceremonialDayIndexSet(days)] : undefined,
-                statsFrozen,
+                statsFrozen: isStandingsFrozen(),
               }).catch(console.error)
             }
           >
@@ -448,7 +451,7 @@ export default function ProofFeed() {
             />
           );
         }
-        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} statsFrozen={standingsFrozen(event)} />;
+        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} isStandingsFrozen={() => standingsFrozen(event)} />;
       })}
       {whoListCard && <FeedWhoListSheet card={whoListCard} onClose={() => setWhoListCard(null)} />}
     </div>

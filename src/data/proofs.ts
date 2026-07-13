@@ -256,7 +256,10 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
         tutorialDayIndexes,
         ceremonialDayIndexes,
       });
-      if (statsFrozen && daily === true && 'dayStats' in statWrite) {
+      if (statsFrozen && daily === true && 'dayStats' in statWrite && ceremonialDayIndexes?.includes(dayIndex ?? 0)) {
+        // Post-freeze, only the ceremonial (farewell) Day's bucket records —
+        // any other Day's bucket would still drift the settled daily honors
+        // (Codex P2 on #278 round 2).
         tx.set(playerRef, { dayStats: statWrite.dayStats }, { merge: true });
       } else if (!statsFrozen) {
         tx.set(playerRef, statWrite, { merge: true });
@@ -403,7 +406,8 @@ export async function deleteProof(
             tutorialDayIndexes: opts?.tutorialDayIndexes,
             ceremonialDayIndexes: opts?.ceremonialDayIndexes,
           });
-          if (opts?.statsFrozen && daily && 'dayStats' in statWrite) {
+          if (opts?.statsFrozen && daily && 'dayStats' in statWrite && opts?.ceremonialDayIndexes?.includes(proofDayIndex)) {
+            // Ceremonial-day-only post-freeze bucket, mirroring setMark.
             tx.set(playerRef, { dayStats: statWrite.dayStats }, { merge: true });
           } else if (!opts?.statsFrozen) {
             tx.set(playerRef, statWrite, { merge: true });

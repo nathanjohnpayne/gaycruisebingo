@@ -866,14 +866,21 @@ async function runSetMark(
 
   const batch = writeBatch(database);
   batch.set(boardRef, { cells }, { merge: true });
-  // The standings freeze (#265): post-freeze marks keep the card honest and
-  // still record their PER-DAY bucket (the farewell card unlocks AT the
-  // freeze, and its daily honor reads `dayStats[farewell]` — Codex P2 on
-  // #278), but the ROOT aggregates stop moving: the write narrows to the
-  // dayStats bucket alone, dropping bingoCount/squaresMarked/firstBingoAt/
-  // blackout. The Leaderboard is frozen; the podium was computed at the freeze.
-  if (params.statsFrozen) batch.set(playerRef, { dayStats: playerWrite.dayStats }, { merge: true });
-  else batch.set(playerRef, playerWrite, { merge: true });
+  // The standings freeze (#265): post-freeze marks keep the card honest, and
+  // ONLY the ceremonial (farewell) Day still records its PER-DAY bucket — the
+  // farewell card unlocks AT the freeze and its daily honor reads
+  // dayStats[farewell] (Codex P2 on #278 round 1) — while a post-freeze mark
+  // on any OTHER Day writes no player stats at all: main-day buckets feed the
+  // podium's daily honors and the pins' derived fallback, so letting them
+  // drift post-freeze would still move the settled honors (Codex P2 on #278
+  // round 2). The ROOT aggregates never move once frozen either way.
+  if (params.statsFrozen) {
+    if (params.ceremonialDayIndexes?.includes(dayIndex)) {
+      batch.set(playerRef, { dayStats: playerWrite.dayStats }, { merge: true });
+    }
+  } else {
+    batch.set(playerRef, playerWrite, { merge: true });
+  }
 
   // Per-Prompt Tally (ADR 0002, the embarkation-critical differentiator): every
   // Mark — proofed or not — self-publishes an ATTRIBUTED entry to its Prompt's

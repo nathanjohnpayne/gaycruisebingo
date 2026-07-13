@@ -1384,7 +1384,13 @@ export default function Board() {
     // FIRE the plain bingo mid-read — that clear says the win STOOD) and NOT
     // gated on the current account (round 3 finding D: the queue is uid-keyed,
     // so the enqueue cannot leak — the candidate waits for the acted account).
-    if (res.bingoTransition) {
+    // The ceremonial First-to-BINGO candidate never mints post-freeze (Codex
+    // P2 on #278 round 2): the headline honor was decided when the podium was
+    // computed — a post-freeze bingo still celebrates locally and posts its
+    // plain bingo/blackout Moments (the farewell card is ceremonial, not
+    // silent), but must not crown a new public First to BINGO after final
+    // standings.
+    if (res.bingoTransition && !statsFrozen) {
       const generation = pendingActionGeneration(uid);
       const witnessed = await hasPriorBingoWitness(uid);
       if (!witnessed && revalidateAfterAwait(uid, generation).generationUnchanged) {
