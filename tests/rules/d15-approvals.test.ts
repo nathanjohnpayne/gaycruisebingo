@@ -35,6 +35,7 @@ const pendingPayload = (createdBy: string, over: Record<string, unknown> = {}) =
   createdBy,
   createdAt: NOW(),
   status: 'pending',
+  pool: 'main',
   reportCount: 0,
   spicy: false,
   ...over,
@@ -78,8 +79,25 @@ describe('d15-approvals — create: a non-admin CAN land status: "pending"', () 
     await assertSucceeds(setDoc(doc(db(ALICE), at('items/p1')), pendingPayload(ALICE)));
   });
 
-  it('still ALLOWS status: "active" on create (unwidened, existing behavior)', async () => {
-    await assertSucceeds(setDoc(doc(db(ALICE), at('items/a1')), pendingPayload(ALICE, { status: 'active' })));
+  it('DENIES status: "active" on non-admin create — visible prompts require admin approval', async () => {
+    await assertFails(setDoc(doc(db(ALICE), at('items/a1')), pendingPayload(ALICE, { status: 'active' })));
+  });
+
+  it('DENIES non-admin pending creates outside the main pool', async () => {
+    await assertFails(setDoc(doc(db(ALICE), at('items/embark1')), pendingPayload(ALICE, { pool: 'embark' })));
+    await assertFails(setDoc(doc(db(ALICE), at('items/farewell1')), pendingPayload(ALICE, { pool: 'farewell' })));
+  });
+
+  it('ALLOWS an admin active create in curated pools', async () => {
+    await assertSucceeds(
+      setDoc(doc(db(ADMIN), at('items/a1')), pendingPayload(ADMIN, { status: 'active', pool: 'main' })),
+    );
+    await assertSucceeds(
+      setDoc(doc(db(ADMIN), at('items/e1')), pendingPayload(ADMIN, { status: 'active', pool: 'embark' })),
+    );
+    await assertSucceeds(
+      setDoc(doc(db(ADMIN), at('items/f1')), pendingPayload(ADMIN, { status: 'active', pool: 'farewell' })),
+    );
   });
 
   it('DENIES a non-admin create with status: "rejected" — only an admin update may reject', async () => {

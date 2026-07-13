@@ -1,4 +1,4 @@
-import { doc, getDoc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
+import { addDoc, collection, doc, getDoc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout, foldDayStat, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats } from '../game/logic';
@@ -8,6 +8,7 @@ import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef } from '../typ
 
 const evt = () => doc(db, 'events', EVENT_ID);
 const item = (id: string) => doc(db, 'events', EVENT_ID, 'items', id);
+const itemsRaw = () => collection(db, 'events', EVENT_ID, 'items');
 const proof = (id: string) => doc(db, 'events', EVENT_ID, 'proofs', id);
 const claim = (id: string) => doc(db, 'events', EVENT_ID, 'claims', id);
 const board = (uid: string) => doc(db, 'events', EVENT_ID, 'boards', uid);
@@ -195,6 +196,62 @@ export const banUser = (uid: string): Promise<void> =>
 export const unbanUser = (uid: string) => updateDoc(evt(), { bannedUids: arrayRemove(uid) });
 
 /** Recompute a player's stats after an admin resolves one of their claims. */
+/**
+ * Admin-only curated add (#269, daily-cards-spec § "Item pools and the
+ * approval flow": "Curated pools: … Admins can add/edit/hide them through the
+ * Admin console"): lands ACTIVE directly — the approval gate exists for
+ * player submissions; an admin adding a prompt IS the approval — with the
+ * chosen pool (embark/farewell curation, or main). Same payload shape as the
+ * player path (src/data/api.ts addItem), same 80-char clamp the rules pin.
+ */
+export async function adminAddItem(
+  uid: string,
+  text: string,
+  spicy: boolean,
+  pool: 'main' | 'embark' | 'farewell',
+): Promise<void> {
+  const t = text.trim();
+  if (!t) return;
+  const safeSpicy = pool === 'main' ? spicy : false;
+  await addDoc(itemsRaw(), {
+    text: t.slice(0, 80),
+    createdBy: uid,
+    createdAt: Date.now(),
+    isFreeSpace: false,
+    status: 'active',
+    reportCount: 0,
+    spicy: safeSpicy,
+    pool,
+  });
+}
+
+function itemTextLockedByUnlockedSnapshot(days: DayDef[] | undefined, id: string, now = Date.now()): boolean {
+  return (days ?? []).some(
+    (d) =>
+      typeof d.unlockAt === 'number' &&
+      d.unlockAt <= now &&
+      Array.isArray(d.snapshotItemIds) &&
+      d.snapshotItemIds.includes(id),
+  );
+}
+
+/**
+ * Admin-only text edit (#269) — curated-pool wording fixes without a reseed.
+ * Rules: the isAdmin update arm allows it; the 80-char clamp matches create.
+ * Re-reads the Event in the transaction so a stale Admin tab or direct call
+ * cannot change text once an unlocked Day's snapshot can still deal that item.
+ */
+export async function adminUpdateItemText(id: string, text: string): Promise<void> {
+  const t = text.trim();
+  if (!t) return;
+  await runTransaction(db, async (tx) => {
+    const evSnap = await tx.get(evt());
+    const days = evSnap.exists() ? (evSnap.data().days as DayDef[] | undefined) : undefined;
+    if (itemTextLockedByUnlockedSnapshot(days, id)) return;
+    tx.update(item(id), { text: t.slice(0, 80) });
+  });
+}
+
 async function resolve(
   c: ClaimDoc,
   transform: (cells: Cell[]) => Cell[],
