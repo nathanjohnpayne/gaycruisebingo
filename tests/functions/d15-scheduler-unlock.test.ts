@@ -14,6 +14,7 @@ import {
   type AdminFirestore,
   type DayLike,
   type EventLike,
+  runFinaleBeats,
 } from '../../functions/src/unlockDay';
 
 // specs/d15-scheduler-unlock.md — the Phase 1.5 daily scheduler (#202,
@@ -46,10 +47,18 @@ function makeDb(seed: {
   event: EventLike;
   items?: StoredItem[];
   moments?: StoredMoment[];
+  // #266: the roster the finale content builders read.
+  players?: Array<Record<string, unknown>>;
+  // #266: pinned day honors, keyed by dayIndex.
+  dayHonors?: Record<number, Record<string, unknown>>;
 }): AdminFirestore & { readEvent(): EventLike; moments(): StoredMoment[] } {
   const docs: Record<string, Record<string, unknown> | undefined> = {
     [`events/${seed.eventId}`]: { ...seed.event } as Record<string, unknown>,
   };
+  for (const [dayIndex, honor] of Object.entries(seed.dayHonors ?? {})) {
+    docs[`events/${seed.eventId}/days/${dayIndex}/meta/${dayIndex}`] = honor;
+  }
+  const players = [...(seed.players ?? [])];
   const items = [...(seed.items ?? [])];
   const moments = [...(seed.moments ?? [])];
   let momentSeq = moments.length;
@@ -69,8 +78,14 @@ function makeDb(seed: {
 
   const collectionRef = (path: string) => {
     const filters: Array<[string, unknown]> = [];
-    const backing = (): StoredMoment[] | StoredItem[] =>
-      path.endsWith('/items') ? items : path.endsWith('/moments') ? moments : [];
+    const backing = (): Array<Record<string, unknown>> =>
+      path.endsWith('/items')
+        ? (items as Array<Record<string, unknown>>)
+        : path.endsWith('/moments')
+          ? (moments as Array<Record<string, unknown>>)
+          : path.endsWith('/players')
+            ? players
+            : [];
     const api: any = {
       where(field: string, _op: string, value: unknown) {
         filters.push([field, value]);
@@ -417,5 +432,161 @@ describe('manualUnlockNow — the admin fallback (AC 2)', () => {
       UnlockPermissionError,
     );
     expect(db.readEvent().days!.find((d) => d.index === 8)!.snapshotItemIds).toBeUndefined();
+  });
+});
+
+describe('runFinaleBeats — the beats carry their CONTENT (#266)', () => {
+  it('the last-call Moment carries the standings line built from the ban-filtered roster', async () => {
+    const db = makeDb({
+      eventId: 'e',
+      event: { days: mainDays(), bannedUids: ['muted'] },
+      players: [
+        { uid: 'jess', displayName: 'Jess', bingoCount: 3, squaresMarked: 40, firstBingoAt: 10 },
+        { uid: 'rex', displayName: 'Rex', bingoCount: 1, squaresMarked: 44, firstBingoAt: 20 },
+        { uid: 'muted', displayName: 'Muted', bingoCount: 9, squaresMarked: 99, firstBingoAt: 1 },
+      ],
+    });
+    await runFinaleBeats(db, 'e', { now: () => D9_UNLOCK + 13 * 60 * 60 * 1000 });
+    const lastCall = db.moments().find((m) => m.kind === 'last_call')!;
+    // The banned leader never headlines; Jess leads Rex by 2 bingos.
+    expect(lastCall.line).toBe('Jess leads by 2 bingos—standings freeze at 8 a.m.');
+    expect(lastCall.lastCall).toMatchObject({
+      players: [
+        { uid: 'jess', displayName: 'Jess', bingoCount: 3, squaresMarked: 40 },
+        { uid: 'rex', displayName: 'Rex', bingoCount: 1, squaresMarked: 44 },
+        { uid: 'muted', displayName: 'Muted', bingoCount: 9, squaresMarked: 99 },
+      ],
+    });
+  });
+
+  it('uses the player document id as the canonical finale roster uid when the field is missing', async () => {
+    const db = makeDb({
+      eventId: 'e',
+      event: { days: mainDays() },
+      players: [
+        { id: 'jess', displayName: 'Jess', bingoCount: 3, squaresMarked: 40, firstBingoAt: 10 },
+        { id: 'rex', displayName: 'Rex', bingoCount: 1, squaresMarked: 44, firstBingoAt: 20 },
+      ],
+    });
+    await runFinaleBeats(db, 'e', { now: () => D9_UNLOCK + 13 * 60 * 60 * 1000 });
+    const lastCall = db.moments().find((m) => m.kind === 'last_call')!;
+    expect(lastCall.line).toBe('Jess leads by 2 bingos—standings freeze at 8 a.m.');
+    expect(lastCall.lastCall).toMatchObject({
+      players: [
+        { uid: 'jess', displayName: 'Jess' },
+        { uid: 'rex', displayName: 'Rex' },
+      ],
+    });
+  });
+
+  it('uses the player document id as the canonical uid for ban filtering and stored payloads', async () => {
+    const db = makeDb({
+      eventId: 'e',
+      event: { days: mainDays(), bannedUids: ['muted'] },
+      players: [
+        { id: 'jess', uid: 'jess', displayName: 'Jess', bingoCount: 3, squaresMarked: 40, firstBingoAt: 10 },
+        { id: 'muted', uid: 'spoofed-safe-uid', displayName: 'Muted', bingoCount: 9, squaresMarked: 99, firstBingoAt: 1 },
+      ],
+    });
+    await runFinaleBeats(db, 'e', { now: () => D9_UNLOCK + 13 * 60 * 60 * 1000 });
+    const lastCall = db.moments().find((m) => m.kind === 'last_call')!;
+    expect(lastCall.line).toBe('Jess has the board to themselves going into the final night—standings freeze at 8 a.m.');
+    expect(lastCall.lastCall).toMatchObject({
+      players: [
+        { uid: 'jess', displayName: 'Jess' },
+        { uid: 'muted', displayName: 'Muted' },
+      ],
+    });
+  });
+
+  it('the podium Moment carries champion + cruise First-to-BINGO + the pinned daily honors', async () => {
+    const db = makeDb({
+      eventId: 'e',
+      event: { days: mainDays() },
+      players: [
+        {
+          uid: 'jess',
+          displayName: 'Jess',
+          bingoCount: 3,
+          squaresMarked: 40,
+          firstBingoAt: 10,
+          dayStats: { 8: { bingoCount: 3, squaresMarked: 40, firstBingoAt: 10 } },
+        },
+      ],
+      dayHonors: { 8: { firstBingo: { uid: 'jess', displayName: 'Jess', at: 10 } } },
+    });
+    await runFinaleBeats(db, 'e', { now: () => D10_UNLOCK + 1000 });
+    const podium = db.moments().find((m) => m.kind === 'podium')! as Record<string, unknown> & {
+      podium?: { champion?: { displayName?: string } | null; firstBingo?: { displayName?: string } | null; dailyHonors?: unknown[] };
+    };
+    expect(podium.podium?.champion?.displayName).toBe('Jess');
+    expect(podium.podium?.firstBingo?.displayName).toBe('Jess');
+    expect(podium.podium?.dailyHonors).toHaveLength(1);
+  });
+
+  it('preserves raw daily honors in the stored podium Moment so reversible bans can re-render', async () => {
+    const db = makeDb({
+      eventId: 'e',
+      event: { days: mainDays(), bannedUids: ['muted'] },
+      players: [
+        {
+          uid: 'jess',
+          displayName: 'Jess',
+          bingoCount: 3,
+          squaresMarked: 40,
+          firstBingoAt: 10,
+          dayStats: { 8: { bingoCount: 3, squaresMarked: 40, firstBingoAt: 10 } },
+        },
+      ],
+      dayHonors: {
+        8: { firstBingo: { uid: 'muted', displayName: 'Muted', at: 1 } },
+        9: { firstBingo: { uid: 'jess', displayName: 'Jess', at: 10 } },
+      },
+    });
+    await runFinaleBeats(db, 'e', { now: () => D10_UNLOCK + 1000 });
+    const podium = db.moments().find((m) => m.kind === 'podium')! as Record<string, unknown> & {
+      podium?: { dailyHonors?: Array<{ uid: string; displayName: string }> };
+    };
+    expect(podium.podium?.dailyHonors).toEqual([
+      { dayIndex: 8, uid: 'muted', displayName: 'Muted', at: 1 },
+      { dayIndex: 9, uid: 'jess', displayName: 'Jess', at: 10 },
+    ]);
+  });
+
+  it('normalizes malformed player dayStats before building podium content', async () => {
+    const db = makeDb({
+      eventId: 'e',
+      event: { days: mainDays() },
+      players: [
+        {
+          uid: 'jess',
+          displayName: 'Jess',
+          bingoCount: 3,
+          squaresMarked: 40,
+          firstBingoAt: 10,
+          dayStats: { 8: null, 9: { bingoCount: 'bad', squaresMarked: 'bad', firstBingoAt: 'bad' } },
+        },
+      ],
+    });
+    await runFinaleBeats(db, 'e', { now: () => D10_UNLOCK + 1000 });
+    const podium = db.moments().find((m) => m.kind === 'podium')! as Record<string, unknown> & {
+      podium?: { champion?: { displayName?: string; bingoCount?: number; squaresMarked?: number } | null };
+    };
+    expect(podium.podium?.champion).toMatchObject({ displayName: 'Jess', bingoCount: 3, squaresMarked: 40 });
+  });
+
+  it('a roster read failure still posts the minimal beat (content is best-effort)', async () => {
+    const db = makeDb({ eventId: 'e', event: { days: mainDays() } });
+    const failing = {
+      ...db,
+      collection: (path: string) => {
+        if (path.endsWith('/players')) throw new Error('unavailable');
+        return db.collection(path);
+      },
+    } as typeof db;
+    await runFinaleBeats(failing, 'e', { now: () => D9_UNLOCK + 13 * 60 * 60 * 1000 });
+    const lastCall = db.moments().find((m) => m.kind === 'last_call')!;
+    expect(lastCall.id).toBe('last_call');
+    expect(lastCall.line).toBeUndefined();
   });
 });

@@ -146,7 +146,11 @@ export interface LastCallOptions {
 
 /** The default freeze phrase, matching the spec's verbatim example
  *  ("…—standings freeze at 8 a.m."). */
-export const DEFAULT_FREEZE_PHRASE = 'standings freeze at 8 a.m.';
+// No trailing period — every template supplies the sentence's own full stop,
+// so the rendered copy reads "…—standings freeze at 8 a.m." (single period,
+// the spec's exact line), not the double-dotted "a.m.." the phrase-with-
+// period produced (#266).
+export const DEFAULT_FREEZE_PHRASE = 'standings freeze at 8 a.m';
 
 /**
  * The going-into-the-final-night last-call line posted at 20:00 on Day 9. Names

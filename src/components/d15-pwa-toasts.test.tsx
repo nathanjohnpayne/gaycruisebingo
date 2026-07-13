@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act, cleanup } from '@testing-library/react';
+import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
 import {
   __resetToastStackForTests,
   __resetHasMarkedForTests,
@@ -77,7 +77,7 @@ describe('useToastSlot stacking', () => {
     expect(screen.getByTestId('install')).toHaveTextContent('1');
   });
 
-  it('caps visible toasts at MAX_VISIBLE_TOASTS — a third-comer waits for a slot', () => {
+  it('caps visible toasts at MAX_VISIBLE_TOASTS — a third-comer waits for a slot', async () => {
     render(
       <>
         <SlotProbe id="a" priority="urgent" />
@@ -85,9 +85,11 @@ describe('useToastSlot stacking', () => {
         <SlotProbe id="c" priority="invitational" />
       </>,
     );
-    expect(screen.getByTestId('a')).toHaveTextContent('0');
-    expect(screen.getByTestId('b')).toHaveTextContent('1');
-    expect(screen.getByTestId('c')).toHaveTextContent('waiting');
+    await waitFor(() => {
+      expect(screen.getByTestId('a')).toHaveTextContent('0');
+      expect(screen.getByTestId('b')).toHaveTextContent('1');
+      expect(screen.getByTestId('c')).toHaveTextContent('waiting');
+    });
   });
 });
 

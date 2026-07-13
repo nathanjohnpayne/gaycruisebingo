@@ -1476,6 +1476,17 @@ a {
 }
 
 /* ---------- install + update toasts ---------- */
+/* #266 — the podium Moment's structured content. */
+.moment-podium {
+  margin: 4px 0 2px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.moment-podium-honors {
+  font-size: 11px;
+  opacity: 0.85;
+}
+
 /* #270 — toast titles (install nudge / update banner), the install toast's
    ✕ forever-dismiss, the More sections' subtitle line, and the How-to-play
    walkthrough spacing. */
