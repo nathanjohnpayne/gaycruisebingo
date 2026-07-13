@@ -13,7 +13,8 @@ import {
   enqueueWinMoments,
   enqueueFirstBingoMoment,
   peekPendingMoments,
-  pendingBlackoutDayIndex,
+  pendingBlackoutDayIndexes,
+  removePendingBlackoutDay,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -881,6 +882,10 @@ export default function Board() {
     identityKnown: boolean;
     rosterConfirmed: boolean;
     cells: Cell[];
+    // The rendered board's OWN Day (daily mode), undefined on a legacy event —
+    // the per-card blackout drain (#267, Codex P2 on #275) adjudicates only the
+    // queued Day that IS this board, never sibling Days it cannot see.
+    boardDayIndex: number | undefined;
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -889,6 +894,7 @@ export default function Board() {
     identityKnown: false,
     rosterConfirmed: false,
     cells: [],
+    boardDayIndex: undefined,
   });
   feedCtx.current = {
     uid,
@@ -906,6 +912,7 @@ export default function Board() {
     identityKnown,
     rosterConfirmed,
     cells: cellsAttributable ? cells : [],
+    boardDayIndex: hasDays && cellsAttributable ? board?.dayIndex : undefined,
   };
 
   // Write-time twin of `tallySourceLive` for the Doubt raise (Codex P2, PR #106
@@ -960,7 +967,7 @@ export default function Board() {
   // bumps the action generation). A flag whose fall this tab never observes can
   // therefore idle un-fireable (revalidation keeps blocking it) until reload —
   // safe: nothing publishes for it.
-  const drainMoments = useCallback((cellsOverride?: Cell[]) => {
+  const drainMoments = useCallback((cellsOverride?: Cell[], dayOverride?: number) => {
     const {
       uid: cUid,
       displayName: cName,
@@ -969,6 +976,7 @@ export default function Board() {
       identityKnown: idKnown,
       rosterConfirmed: rosterOk,
       cells: cellsRendered,
+      boardDayIndex,
     } = feedCtx.current;
     if (!cUid || !idKnown) return; // identity gate: hold every kind
     const pending = peekPendingMoments(cUid);
@@ -983,12 +991,32 @@ export default function Board() {
       clearPendingMoment(cUid, 'bingo');
     }
     if (pending.blackout && blackoutNow) {
-      // The Day the blackout-completing Mark happened on, captured at ENQUEUE
-      // time (Codex finding 2, fix/d15-blackout-day-naming) — NOT whatever Day
-      // is currently VIEWED: a held blackout (behind the identity gate above)
-      // can drain long after the Player has switched Days.
-      broadcastBlackout(actor, pendingBlackoutDayIndex(cUid));
-      clearPendingMoment(cUid, 'blackout');
+      // Per-card adjudication (#267; Codex P2 on #275): `blackoutNow` witnesses
+      // exactly ONE board — the rendered one — so only the queued Day that IS
+      // that board may drain against it. A sibling queued Day (its blackout
+      // completed while identity was unknown, then the Player switched Days)
+      // stays queued until ITS board is rendered blacked-out again; a Day that
+      // meanwhile FELL is dropped by that later pass's own `blackoutNow`/
+      // dropPendingWins, never published off another Day's witness. The Day is
+      // the one captured at ENQUEUE time (Codex finding 2,
+      // fix/d15-blackout-day-naming), not re-derived at fire time. An empty
+      // queue is the legacy day-less broadcast (one card the whole Event —
+      // the rendered board IS the card).
+      // The witnessed Day must MATCH the witnessed cells (Codex P2, #275 round
+      // 4): an action/proof continuation passes the ACTED board's cells, and
+      // the Player may have switched the rendered Day while that await was in
+      // flight — so an override's Day rides WITH the override, and the
+      // rendered-board day is trusted only for the no-override (snapshot)
+      // drains where the two are the same board by construction.
+      const witnessDay = cellsOverride !== undefined ? dayOverride : boardDayIndex;
+      const blackoutDays = pendingBlackoutDayIndexes(cUid);
+      if (blackoutDays.length === 0) {
+        broadcastBlackout(actor);
+        clearPendingMoment(cUid, 'blackout');
+      } else if (witnessDay !== undefined && blackoutDays.includes(witnessDay)) {
+        broadcastBlackout(actor, witnessDay);
+        removePendingBlackoutDay(cUid, witnessDay);
+      }
     }
     // Ceremonial decision — fully SYNCHRONOUS at publish time (PR #110 round 3
     // findings A + B). Round 2 re-read the witness here, which was WRONG: a
@@ -1060,7 +1088,10 @@ export default function Board() {
     // are 0/false, so nothing can spuriously read as a fall.
     if (uid) {
       if (wasBingoLines.current > 0 && bingoLines === 0) dropPendingWins(uid, { bingo: true });
-      if (wasBlackout.current && !black) dropPendingWins(uid, { blackout: true });
+      if (wasBlackout.current && !black)
+        // The fall is witnessed by THIS board — drop only its Day's queued
+        // blackout (#267); legacy (no schedule) keeps the full clear.
+        dropPendingWins(uid, { blackout: true, blackoutDayIndex: hasDays ? board?.dayIndex : undefined });
     }
     // Baseline vs detection (round 2 finding C, kept for the animation): under the
     // ADR 0006 persistent cache the first snapshot(s) can be cache-only, and a
@@ -1328,12 +1359,18 @@ export default function Board() {
         // (round 4: a NON-falling unmark — another line still standing — bumps
         // nothing, so a legitimate ceremony mid-witness-read survives it). An already-drained
         // flag is a harmless no-op (the Moment is immutable + once-only besides).
-        dropPendingWins(uid, { bingo: !res.bingo, blackout: !res.blackout });
-        // Drain with the action's own folded cells (see broadcastWinVerdict) —
-        // skipped if the account switched while the await was in flight (the
-        // shared post-await revalidation; no generation to compare — this very
-        // action just bumped it).
-        if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells);
+        dropPendingWins(uid, {
+          bingo: !res.bingo,
+          blackout: !res.blackout,
+          // The unmark verdict witnesses the ACTED board only (#267).
+          blackoutDayIndex: hasDays ? viewedIndex : board?.dayIndex,
+        });
+        // Drain with the action's own folded cells AND its own Day (see
+        // broadcastWinVerdict) — skipped if the account switched while the
+        // await was in flight (the shared post-await revalidation; no
+        // generation to compare — this very action just bumped it).
+        if (revalidateAfterAwait(uid).isCurrentAccount)
+          drainMoments(res.cells, hasDays ? viewedIndex : board?.dayIndex);
       }
     } catch {
       /* Neither an offline Mark nor an online write REJECTION lands here:
@@ -1387,6 +1424,10 @@ export default function Board() {
     bingoTransition: boolean;
     blackoutTransition: boolean;
   }) => {
+    // The ACTED Day, captured synchronously with the verdict (before any await
+    // below) — the drain override and the enqueue both use THIS, never the
+    // render-time day a mid-flight switch could change.
+    const actedDay = hasDays ? viewedIndex : board?.dayIndex;
     enqueueWinMoments({
       uid,
       bingoTransition: res.bingoTransition,
@@ -1430,8 +1471,11 @@ export default function Board() {
       }
     }
     // Draining touches the CURRENT actor/gates, so it does require the acted
-    // account to still be active; the queue keeps the flags otherwise.
-    if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells);
+    // account to still be active; the queue keeps the flags otherwise. The
+    // override rides with ITS OWN Day (Codex P2, #275 round 4) — actedDay was
+    // captured before the awaits above, so a mid-flight Day switch cannot
+    // relabel the witness.
+    if (revalidateAfterAwait(uid).isCurrentAccount) drainMoments(res.cells, actedDay);
   };
 
   const toggle = (c: Cell) => {

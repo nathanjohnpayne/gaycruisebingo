@@ -143,9 +143,10 @@ describe('moments.broadcastBlackout — optional dayIndex names the Day (fix/d15
     broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
     await flush();
     expect(setDocSpy).toHaveBeenCalledTimes(1);
-    // Deterministic id ${uid}-blackout (create-only + immutable per rules) — the
-    // SAME id the day-less broadcastBlackout call has always used.
-    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout`);
+    // Deterministic PER-CARD id ${uid}-blackout-d${dayIndex} (#267): blackout is
+    // per-card, so the dedup id scopes to the (Player, Day) pair — a second
+    // Day's blackout posts its own Moment; re-marking the same card cannot.
+    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout-d4`);
     expect(setDocSpy.mock.calls[0][1]).toMatchObject({
       kind: 'blackout',
       uid: 'u1',
@@ -162,7 +163,13 @@ describe('moments.broadcastBlackout — optional dayIndex names the Day (fix/d15
   });
 
   it('skips the broadcast when the Moment is already in the local cache', async () => {
-    getDocFromCacheSpy.mockResolvedValueOnce(snap({ kind: 'blackout', uid: 'u1' }));
+    // Path-aware (#275 round 2): the day-scoped path pre-checks the LEGACY
+    // day-less doc first, then its own per-card id — here only the per-card
+    // doc is cached, which is what must trigger the skip.
+    getDocFromCacheSpy.mockImplementation(((ref: { path: string }) =>
+      ref.path.endsWith('u1-blackout-d4')
+        ? Promise.resolve(snap({ kind: 'blackout', uid: 'u1' }))
+        : Promise.reject(new Error('unavailable'))) as unknown as () => Promise<never>);
     broadcastBlackout({ uid: 'u1', displayName: 'Alice', photoURL: null }, 4);
     await flush();
     expect(setDocSpy).not.toHaveBeenCalled();
