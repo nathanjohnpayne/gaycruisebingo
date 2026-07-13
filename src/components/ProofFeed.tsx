@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useFeed, useEventDoc } from '../hooks/useData';
 import { useAuth } from '../auth/AuthContext';
 import { reportProof, deleteProof } from '../data/proofs';
@@ -248,6 +249,45 @@ export function TallyCard({
 }
 
 /**
+ * The Feed-level who-list sheet (#216 gap closure): tapping a Feed Tally Card
+ * opens this — every marker who got the Prompt, chronologically, reusing the
+ * same `.sheet-backdrop`/`.sheet` chrome as Board's `TallySheet`. Unlike the
+ * Board-side sheet, this is READ-ONLY — no Doubt affordance — because the
+ * Feed's `TallyCardData` carries only `markers[]` (uid + displayName +
+ * markedAt), not the viewer's own Board/Doubt context `TallySheet` needs to
+ * raise one; that scope is deliberately left to the existing Board-side sheet
+ * (spec: "the Feed who-list can be view-only to stay scoped").
+ */
+function FeedWhoListSheet({ card, onClose }: { card: TallyCardData; onClose: () => void }) {
+  return (
+    <div className="sheet-backdrop" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+        <div className="sheet-title">Who marked “{card.itemText}”</div>
+        {card.markers.length === 0 ? (
+          <p className="muted tally-empty">No one has marked this yet.</p>
+        ) : (
+          <div className="list">
+            {card.markers.map((m) => (
+              <div className="row" key={m.uid}>
+                <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
+                <div className="grow">
+                  <div className="name">{m.displayName}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="sheet-actions">
+          <button className="btn" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The Feed (ADR 0002 / #216): Proofs, Moments, and Tally Cards merged newest-first
  * into one stream — the honor-system source of truth the group watches together. A
  * bare Mark now reaches the Feed as a live Tally Card (its position debounced), so
@@ -260,6 +300,12 @@ export default function ProofFeed() {
   // (#211/#216). Read-only; absent while loading or on a pre-days[] event, in
   // which case dayChipLabel falls back to a bare "Day N".
   const { data: event } = useEventDoc();
+  // The Feed-level who-list sheet target (#216 gap closure): which Tally Card's
+  // markers to show, or null when the sheet is closed. Holding the whole card
+  // (not just itemId/dayIndex) is enough to render the sheet directly from the
+  // tally doc already in hand — no extra subscription, unlike Board's
+  // `TallySheet` which re-subscribes via `useTally`.
+  const [whoListCard, setWhoListCard] = useState<TallyCardData | null>(null);
 
   if (loading) return <div className="center muted">Loading…</div>;
   if (!entries.length) return <div className="center muted">Nothing in the feed yet. Somebody do something.</div>;
@@ -274,19 +320,24 @@ export default function ProofFeed() {
           const card = entry.card;
           // Per-viewer button gating (`tallyCardAction`) is wired from the viewer's
           // own Board; connecting that (and the ＋ Proof / 🙋 Got it too click →
-          // Board sheet navigation) from the Feed tab is the spec's follow-up, so
-          // the live Feed renders the informational card today.
+          // Board sheet navigation) from the Feed tab is a separate follow-up, so
+          // the live Feed still renders the informational (action=null) card. Tap
+          // now opens the read-only Feed who-list sheet (`FeedWhoListSheet`),
+          // which the TallyDoc's own `markers[]` renders directly — no Board
+          // context needed.
           return (
             <TallyCard
               key={`tally-${card.itemId}-${card.dayIndex}`}
               card={card}
               action={null}
               days={event?.days}
+              onOpenWhoList={setWhoListCard}
             />
           );
         }
         return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} />;
       })}
+      {whoListCard && <FeedWhoListSheet card={whoListCard} onClose={() => setWhoListCard(null)} />}
     </div>
   );
 }
