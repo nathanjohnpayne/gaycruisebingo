@@ -119,6 +119,23 @@ a {
   text-shadow: 0 0 12px var(--shadow);
   flex: 1;
 }
+/* The header's two "where are we" lines (#259, daily-cards-spec § "Header"):
+   today's port (bold) over today's theme (dim), right-aligned against the
+   brand — the wireframes' .today block. */
+.day-identity {
+  display: flex;
+  flex-direction: column;
+  text-align: right;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.day-identity-port {
+  font-weight: 700;
+  color: var(--ink);
+}
+.day-identity-theme {
+  color: var(--dim);
+}
 .brand b {
   /* --ink, not --primary (issue #72, specs/theme-on-color-contrast.md,
      retiring w1-themes.md's former "gradient-tinted backdrops are not

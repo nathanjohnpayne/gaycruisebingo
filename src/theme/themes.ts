@@ -60,14 +60,14 @@ export const THEMES: ThemeMeta[] = [
   },
   {
     id: 'revival-disco',
-    label: 'Revival Disco',
+    label: 'Revival: Classic Disco',
     emoji: '🪩',
     description:
       "A '70s disco afternoon—artificial fabrics, facial hair, oversized shoes, obnoxious accessories.",
   },
   {
     id: 'seriously-pink',
-    label: 'Seriously Pink',
+    label: 'Seriously Pink T-Dance',
     emoji: '💖',
     description:
       'A hot afternoon of pink silliness, Barbie energy, and frivolous dolled-up fun.',
@@ -78,7 +78,7 @@ export const THEMES: ThemeMeta[] = [
   {
     id: 'welcome-aboard',
     label: 'Welcome Aboard',
-    emoji: '⚓',
+    emoji: '🛳️',
     description: 'You made it. Learn the game, find the soft-serve, wave goodbye to land.',
   },
   {

@@ -1,4 +1,7 @@
+import { useEffect, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
+import { useEventDoc } from '../hooks/useData';
+import { DayIdentityLines, headerDayIdentity } from './dayIdentity';
 import TabBar from './TabBar';
 
 /**
@@ -13,15 +16,25 @@ import TabBar from './TabBar';
  * avatar as its icon — `Nav.tsx` resolves the photo URL from `useAuth()` and
  * passes it to the presentational `TabBar`.
  *
- * The two stacked header lines (today's port + theme) are placeholder-only
- * here: wiring them to live `EventDoc.days[]` data is #205's job, which depends
- * on this ticket AND the schema ticket. `ThemeSwitcher` no longer mounts here —
- * #208 relocated it into `More.tsx` (daily-cards-spec § "More menu"), the one
- * piece of Nav's Phase 1.5 simplification `d15-tab-contract` deliberately left
- * for this ticket.
+ * The two stacked header lines are TODAY's port and theme (#259,
+ * daily-cards-spec § "Header") — a "where are we" instrument that never
+ * follows the viewed Day. Resolution lives in `./dayIdentity` (pure,
+ * clock-parameterized); this component only ticks the clock.
  */
 export default function Nav() {
   const { user } = useAuth();
+  const { data: event } = useEventDoc(!!user);
+  // The identity is calendar-based in the event timezone, so it rolls over at
+  // midnight (and flips pre-cruise → embark on sail day) while a tab stays
+  // open. A minute tick is the simplest rollover-safe clock here: unlike
+  // main.tsx's next-unlockAt timer, the boundary is a timezone-local midnight,
+  // and a 60s interval on this one tiny component is cheaper than tz math.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  const identity = headerDayIdentity(event, now);
 
   return (
     <>
@@ -29,13 +42,7 @@ export default function Nav() {
         <div className="brand">
           GAY CRUISE <b>BINGO</b>
         </div>
-        {/* Two-line "where are we" header slot. Placeholder until #205 wires
-            live EventDoc.days[] port/theme text; kept aria-hidden so the
-            placeholder dashes are not announced. */}
-        <div className="day-identity" aria-hidden="true">
-          <span className="day-identity-line">—</span>
-          <span className="day-identity-line">—</span>
-        </div>
+        <DayIdentityLines identity={identity} />
       </div>
       <TabBar morePhotoURL={user?.photoURL ?? null} />
     </>
