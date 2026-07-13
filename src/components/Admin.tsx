@@ -13,6 +13,8 @@ import {
 import {
   confirmClaim,
   rejectClaim,
+  adminAddItem,
+  adminUpdateItemText,
   hideProof,
   restoreProof,
   clearProofReports,
@@ -36,7 +38,7 @@ import {
   unlockDayNow,
 } from '../data/admin';
 import { deleteProof } from '../data/proofs';
-import { tutorialDayIndexSet, dayDueForManualUnlock } from '../game/logic';
+import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, dayDueForManualUnlock } from '../game/logic';
 import { THEMES } from '../theme/themes';
 import type { ClaimMode, DayDef, EventDoc, ItemDoc, ProofDoc, ThemeId } from '../types';
 
@@ -109,6 +111,7 @@ function ProofQueueRow({
   bannedUids,
   admins,
   days,
+  frozenAt,
 }: {
   proof: ProofDoc;
   threshold: number | undefined;
@@ -117,6 +120,9 @@ function ProofQueueRow({
   // The Event's Day schedule (#246): present ⇒ daily-cards mode, so a proof
   // deletion unmarks the DAY-SCOPED board for the Proof's own `dayIndex`.
   days: DayDef[] | undefined;
+  // The scheduler's freeze stamp (#265) — folded with the schedule through
+  // standingsFrozen at delete time.
+  frozenAt?: number;
 }) {
   const autoHidden = isReportHidden(p.reportCount, threshold);
   return (
@@ -154,6 +160,11 @@ function ProofQueueRow({
           deleteProof(p.id, p.storagePath, {
             daily: !!days?.length,
             tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
+            // #265 (Codex P2 on #278 round 3): the admin moderation delete
+            // observes the same freeze/ceremonial gates as the player's own —
+            // evaluated inside the transaction via the getter.
+            ceremonialDayIndexes: days ? [...ceremonialDayIndexSet(days)] : undefined,
+            statsFrozen: () => standingsFrozen({ frozenAt, days: days ?? [] }),
           })
         }
       >
@@ -463,6 +474,170 @@ function ReportThresholdStepper({ value, onChange }: { value: number; onChange: 
   );
 }
 
+/**
+ * Admin curated add (#269): text + spicy + pool, landing ACTIVE (an admin
+ * adding IS the approval). Pool defaults to main; embark/farewell are the
+ * curated pools the spec says admins edit through the console.
+ */
+function AdminAddItemForm({ adminUid }: { adminUid: string | undefined }) {
+  const [text, setText] = useState('');
+  const [spicy, setSpicy] = useState(false);
+  const [pool, setPool] = useState<'main' | 'embark' | 'farewell'>('main');
+  const [busy, setBusy] = useState(false);
+  const spicyAllowed = pool === 'main';
+  const effectiveSpicy = spicyAllowed && spicy;
+  const submit = async () => {
+    if (!adminUid || !text.trim() || busy) return;
+    setBusy(true);
+    try {
+      await adminAddItem(adminUid, text, effectiveSpicy, pool);
+      setText('');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="row admin-add-item">
+      <input
+        className="grow"
+        value={text}
+        maxLength={80}
+        placeholder="Add a prompt (lands active, no review)"
+        aria-label="New prompt text"
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') void submit();
+        }}
+      />
+      <label style={{ fontSize: 12 }}>
+        <input
+          type="checkbox"
+          checked={effectiveSpicy}
+          disabled={!spicyAllowed}
+          onChange={(e) => setSpicy(e.target.checked)}
+        />{' '}
+        🔞
+      </label>
+      <select
+        aria-label="Pool"
+        value={pool}
+        onChange={(e) => {
+          const next = e.target.value as 'main' | 'embark' | 'farewell';
+          setPool(next);
+          if (next !== 'main') setSpicy(false);
+        }}
+      >
+        <option value="main">main</option>
+        <option value="embark">embark</option>
+        <option value="farewell">farewell</option>
+      </select>
+      <button className="btn" disabled={busy || !text.trim()} onClick={() => void submit()}>
+        Add
+      </button>
+    </div>
+  );
+}
+
+/**
+ * One prompt row (#269): pool pill + inline text edit (✏️ → input + save/
+ * cancel) alongside the existing hide/restore/delete moderation.
+ */
+function AdminItemRow({
+  item: it,
+  threshold,
+  textLocked,
+}: {
+  item: ItemDoc;
+  threshold: number | undefined;
+  // #282 (Codex P2): true when this prompt sits in an UNLOCKED Day's stamped
+  // snapshot — later deals hydrate text from the item doc at deal time, so an
+  // edit would split the same Day's squares by when each player opened their
+  // card. Text edits lock; hide/restore/delete stay available.
+  textLocked?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(it.text);
+  const save = async () => {
+    // Save-time re-check (Codex P2): the Day can unlock mid-edit — the row's
+    // prop refreshes on the event re-render, so bail rather than committing a
+    // now-frozen prompt's text.
+    if (textLocked) {
+      setEditing(false);
+      return;
+    }
+    if (draft.trim() && draft.trim() !== it.text) await adminUpdateItemText(it.id, draft);
+    setEditing(false);
+  };
+  return (
+    <div className="row">
+      <div className="grow">
+        {editing ? (
+          <input
+            className="admin-item-edit"
+            value={draft}
+            maxLength={80}
+            aria-label="Edit prompt text"
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void save();
+              if (e.key === 'Escape') setEditing(false);
+            }}
+            autoFocus
+          />
+        ) : (
+          <div className="name" style={{ fontWeight: 500 }}>
+            {it.text}
+            {isReportHidden(it.reportCount, threshold) && (
+              <span className="pill pill-hidden">auto-hidden</span>
+            )}
+          </div>
+        )}
+        <div className="sub">
+          {it.status} · {it.pool}
+          {it.reportCount ? ` · ${it.reportCount} ⚑` : ''}
+        </div>
+      </div>
+      {editing ? (
+        <>
+          <button className="btn" onClick={() => void save()}>
+            Save
+          </button>
+          <button className="iconbtn" title="Cancel" onClick={() => setEditing(false)}>
+            ✕
+          </button>
+        </>
+      ) : textLocked ? (
+        <span className="iconbtn" title="On an unlocked day's dealt snapshot — text is frozen" aria-label="Text frozen">
+          🔒
+        </span>
+      ) : (
+        <button
+          className="iconbtn"
+          title="Edit text"
+          onClick={() => {
+            setDraft(it.text);
+            setEditing(true);
+          }}
+        >
+          ✏️
+        </button>
+      )}
+      {it.status === 'hidden' ? (
+        <button className="btn" onClick={() => restoreItem(it.id)}>
+          Restore
+        </button>
+      ) : (
+        <button className="btn" onClick={() => hideItem(it.id)}>
+          Hide
+        </button>
+      )}
+      <button className="iconbtn" title="Delete" onClick={() => deleteItem(it.id)}>
+        🗑
+      </button>
+    </div>
+  );
+}
+
 // The "Proof & Claims" panel (#222, daily-cards-spec § "Admin console"): six
 // rows over knobs that mostly already exist with no UI — no new backend
 // behavior. Claim mode is RELOCATED here (recaptioned, ADR 0001 verbatim).
@@ -478,7 +653,7 @@ function ProofClaimsPanel({
   pendingClaimCount: number;
 }) {
   const modes: ClaimMode[] = ['honor', 'proof_required', 'admin_confirmed'];
-  const modeLabel: Record<ClaimMode, string> = { honor: 'Honor', proof_required: 'Proof req.', admin_confirmed: 'Admin-confirmed' };
+  const modeLabel: Record<ClaimMode, string> = { honor: 'Honor', proof_required: 'Proof-to-mark', admin_confirmed: 'Admin-confirmed' };
   const photoSource = event?.settings?.photoProofSource ?? 'camera_or_library';
   const stripExif = event?.settings?.stripPhotoExif ?? true;
   const visionGate = event?.settings?.visionGate ?? true;
@@ -526,7 +701,7 @@ function ProofClaimsPanel({
       <div className="row">
         <div className="grow">
           <div className="name">AI image screen</div>
-          <div className="sub">Flags proofs for review via the existing moderation function. Presentational for now — the deployed function still gates on its own deploy-time flag, not this setting.</div>
+          <div className="sub">Flags proofs for review via the existing moderation function. Live setting (#268): a deployed scanner consults it per upload — no redeploy needed. The deploy-time env flag remains the master kill-switch for whether the scanner exists at all.</div>
         </div>
         <label style={{ fontSize: 12 }}>
           <input type="checkbox" checked={visionGate} onChange={(e) => setVisionGate(e.target.checked)} /> On
@@ -539,14 +714,18 @@ function ProofClaimsPanel({
         </div>
         <ReportThresholdStepper value={threshold} onChange={setReportHideThreshold} />
       </div>
-      <div className="row">
-        <div className="grow">
-          <div className="name">Pending claims</div>
-          <div className="sub">Admin-confirmed claims awaiting a decision.</div>
+      {/* Admin-confirmed mode only (#269, the wireframes' caption) — in other
+          modes there is no claims queue to jump to. */}
+      {event?.claimMode === 'admin_confirmed' && (
+        <div className="row">
+          <div className="grow">
+            <div className="name">Pending claims</div>
+            <div className="sub">Admin-confirmed claims awaiting a decision.</div>
+          </div>
+          <span className="pill">{pendingClaimCount}</span>
+          <a className="btn" href="#admin-pending-claims">Jump to queue</a>
         </div>
-        <span className="pill">{pendingClaimCount}</span>
-        <a className="btn" href="#admin-pending-claims">Jump to queue</a>
-      </div>
+      )}
     </div>
   );
 }
@@ -582,6 +761,16 @@ export default function Admin() {
   // console and the badge can never disagree. 0 until #210 starts writing
   // `status: 'pending'` items — expected, not broken.
   const pendingCount = items.filter((it) => it.status === 'pending').length;
+  // #282 (Codex P2): prompt ids frozen into an UNLOCKED Day's stamped
+  // snapshot — their text is deal-hydrated, so edits would split that Day's
+  // squares by open time. Locked Days only; a future (locked) Day's snapshot
+  // doesn't exist yet, and text stays editable until its Day opens.
+  const nowMs = Date.now();
+  const lockedSnapshotItemIds = new Set(
+    (event?.days ?? [])
+      .filter((d) => d.unlockAt <= nowMs)
+      .flatMap((d) => d.snapshotItemIds ?? []),
+  );
   // Prompts needing moderation attention: reported at least once, or already
   // hard-hidden. Derived from useAllItems (already subscribed) so the queue opens
   // NO extra listener, and UNfiltered by the threshold so an auto-hidden Prompt
@@ -652,6 +841,7 @@ export default function Admin() {
                 bannedUids={bannedUids}
                 admins={admins}
                 days={event?.days}
+                frozenAt={event?.frozenAt}
               />
             ) : (
               <ItemQueueRow
@@ -735,34 +925,20 @@ export default function Admin() {
           Prompts ({items.length})
           {pendingCount > 0 && <span className="pill">{pendingCount} pending</span>}
         </h3>
+        {/* Curated add (#269, spec § "Item pools and the approval flow"):
+            admins add straight-to-active prompts into ANY pool — this is how
+            the embark/farewell curated pools are edited without a reseed. The
+            player-facing form (More → Suggest a square) still writes pending
+            main-pool submissions only. */}
+        <AdminAddItemForm adminUid={user?.uid} />
         <div className="list">
           {items.map((it) => (
-            <div key={it.id} className="row">
-              <div className="grow">
-                <div className="name" style={{ fontWeight: 500 }}>
-                  {it.text}
-                  {isReportHidden(it.reportCount, threshold) && (
-                    <span className="pill pill-hidden">auto-hidden</span>
-                  )}
-                </div>
-                <div className="sub">
-                  {it.status}
-                  {it.reportCount ? ` · ${it.reportCount} ⚑` : ''}
-                </div>
-              </div>
-              {it.status === 'hidden' ? (
-                <button className="btn" onClick={() => restoreItem(it.id)}>
-                  Restore
-                </button>
-              ) : (
-                <button className="btn" onClick={() => hideItem(it.id)}>
-                  Hide
-                </button>
-              )}
-              <button className="iconbtn" title="Delete" onClick={() => deleteItem(it.id)}>
-                🗑
-              </button>
-            </div>
+            <AdminItemRow
+              key={it.id}
+              item={it}
+              threshold={threshold}
+              textLocked={lockedSnapshotItemIds.has(it.id)}
+            />
           ))}
         </div>
       </div>

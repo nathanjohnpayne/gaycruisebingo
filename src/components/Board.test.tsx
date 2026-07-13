@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import type { BoardDoc, Cell, DayDef, EventDoc, PlayerDoc } from '../types';
 import { ThemeProvider } from '../theme/ThemeContext';
 
@@ -24,9 +24,20 @@ const H = vi.hoisted(() => ({
   setMark: vi.fn(),
   attachProof: vi.fn(),
   track: vi.fn(),
+  dayMeta: null as { firstBingo: { uid: string; displayName: string; at: number } } | null,
+  pinDayFirstBingo: vi.fn((..._args: unknown[]) => Promise.resolve()),
+  enqueueHeldHonorPin: vi.fn(),
+  takeHeldHonorPins: vi.fn(() => [] as Array<{ uid: string; dayIndex: number; at: number }>),
+  dropHeldHonorPins: vi.fn(),
+  getDoc: vi.fn(),
 }));
 
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: H.dayMeta, loading: false, hasServerData: true }),
+  isBanned: (uid: string, list: string[]) => list.includes(uid),
+  useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   // In daily mode Board reads the VIEWED Day's board here (#246). The suite's
   // fixtures set `H.board` with a `dayIndex` matching the viewed Day, so returning
@@ -77,13 +88,28 @@ vi.mock('../data/api', () => ({
       : (fallback ?? 'Anonymous'),
 }));
 vi.mock('../data/proofs', () => ({ attachProof: H.attachProof }));
+vi.mock('../data/dayMeta', () => ({
+  pinDayFirstBingo: H.pinDayFirstBingo,
+  enqueueHeldHonorPin: H.enqueueHeldHonorPin,
+  takeHeldHonorPins: H.takeHeldHonorPins,
+  dropHeldHonorPins: H.dropHeldHonorPins,
+}));
 vi.mock('../analytics', () => ({ track: H.track }));
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: H.user, loading: false, signIn: vi.fn(), signOutUser: vi.fn() }),
 }));
+vi.mock('firebase/firestore', () => ({
+  getDoc: H.getDoc,
+  doc: (...args: unknown[]) => ({
+    args,
+    withConverter() {
+      return this;
+    },
+  }),
+}));
 // CoachOverlay (#214) imports EVENT_ID from '../firebase' — mocked so
 // mounting Board here never touches the real Firebase app init.
-vi.mock('../firebase', () => ({ EVENT_ID: 'test-event' }));
+vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
 
 import Board from './Board';
 
@@ -113,12 +139,14 @@ function day(overrides: Partial<DayDef> & Pick<DayDef, 'index' | 'unlockAt' | 't
 
 beforeEach(() => {
   vi.clearAllMocks();
+  H.dayMeta = null;
   H.user = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null };
   H.event = { claimMode: 'honor', timezone: 'UTC', days: [] } as unknown as EventDoc;
   H.board = null;
   H.player = null;
   H.setMark.mockResolvedValue({ cells: [], bingo: false, blackout: false });
   H.attachProof.mockResolvedValue(undefined);
+  H.getDoc.mockResolvedValue({ exists: () => false, data: () => ({}) });
 });
 
 afterEach(() => {
@@ -399,5 +427,155 @@ describe('Feed → Board square-opening intent (#261)', () => {
 
     expect(screen.queryByText(/Proof for/)).not.toBeInTheDocument();
     __resetOpenSquareForTests();
+  });
+});
+
+// --- #264: per-Day First to BINGO — pin write + daybar honor line ------------
+
+describe('per-Day First to BINGO (#264)', () => {
+  it('pins the Day honor on a bingo transition, attributed to the achieving Player', async () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'get-sporty', unlockAt: now - DAY_MS })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+    H.player = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null, bingoCount: 0, squaresMarked: 0, firstBingoAt: null, blackout: false } as unknown as PlayerDoc;
+    const marked = dealt().map((c, i) =>
+      [0, 1, 2, 3, 4].includes(i)
+        ? { ...c, marked: true, markedAt: (i + 1) * 10 }
+        : i === 6
+          ? { ...c, marked: true, markedAt: 999 }
+          : c,
+    );
+    H.setMark.mockResolvedValue({ cells: marked, bingo: true, blackout: false, bingoTransition: true, blackoutTransition: false });
+
+    render(<Board />);
+    // Unmarking is instant (no sheet) — but here we tap an UNMARKED cell in
+    // honor mode and take the pledge path? Simpler: tap a MARKED cell to
+    // trigger doMark directly; the mocked setMark returns the transition.
+    const cells = document.querySelectorAll('.grid .cell');
+    fireEvent.click(cells[12]); // free cell — no-op sanity
+    // Tap the pledge path: cell 3 is unmarked → sheet opens → pledge marks.
+    fireEvent.click(cells[3]);
+    fireEvent.click(screen.getByText(/Cross My Heart/));
+    await act(async () => {});
+
+    expect(H.pinDayFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.pinDayFirstBingo.mock.calls[0][0]).toBe(0); // the VIEWED Day
+    expect(H.pinDayFirstBingo.mock.calls[0][1]).toMatchObject({ uid: 'u1', displayName: 'Deck Daddy' });
+    expect(H.pinDayFirstBingo.mock.calls[0][2]).toBe(50);
+  });
+
+  it('pins tutorial Day honors for finale data while the daybar keeps them hidden', async () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'welcome-aboard', unlockAt: now - DAY_MS, tutorial: true, pool: 'embark' })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+    H.player = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null, bingoCount: 0, squaresMarked: 0, firstBingoAt: null, blackout: false } as unknown as PlayerDoc;
+    const marked = dealt().map((c, i) => (i === 3 ? { ...c, marked: true, markedAt: 1 } : c));
+    H.setMark.mockResolvedValue({ cells: marked, bingo: true, blackout: false, bingoTransition: true, blackoutTransition: false });
+
+    render(<Board />);
+    const cells = document.querySelectorAll('.grid .cell');
+    fireEvent.click(cells[3]);
+    fireEvent.click(screen.getByText(/Cross My Heart/));
+    await act(async () => {});
+
+    expect(H.pinDayFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.pinDayFirstBingo.mock.calls[0][0]).toBe(0);
+    expect(H.enqueueHeldHonorPin).not.toHaveBeenCalled();
+  });
+
+  it('renders the daybar honor line for a pinned non-tutorial Day, and keeps the port on tutorial Days', () => {
+    const now = Date.now();
+    H.dayMeta = { firstBingo: { uid: 'u9', displayName: 'Theo', at: Date.UTC(2026, 6, 18, 11, 2) } };
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+
+    render(<Board />);
+    const meta = document.querySelector('.daybar-meta');
+    expect(meta?.textContent).toContain('First to BINGO: Theo, 11:02');
+  });
+
+  it('falls back to the port line when a pinned honor carries an invalid timestamp', () => {
+    const now = Date.now();
+    H.dayMeta = { firstBingo: { uid: 'u9', displayName: 'Theo', at: 8.64e15 + 1 } };
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+
+    render(<Board />);
+
+    expect(document.querySelector('.daybar-meta')?.textContent).toContain('Port 0');
+  });
+
+  it('does not publish a held pin when the saved Day board no longer has BINGO', async () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS }),
+        day({ index: 1, theme: 'get-sporty', unlockAt: now - DAY_MS }),
+      ],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+    H.player = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null, bingoCount: 0, squaresMarked: 0, firstBingoAt: null } as unknown as PlayerDoc;
+    H.takeHeldHonorPins.mockReturnValue([{ uid: 'u1', dayIndex: 1, at: now }]);
+    H.getDoc.mockResolvedValue({ exists: () => true, data: () => ({ cells: dealt('held') }) });
+
+    render(<Board />);
+    await act(async () => {});
+
+    expect(H.getDoc).toHaveBeenCalledTimes(1);
+    expect(H.pinDayFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('requeues a held pin when saved-Day validation cannot read the board', async () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS }),
+        day({ index: 1, theme: 'get-sporty', unlockAt: now - DAY_MS }),
+      ],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+    H.player = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null, bingoCount: 0, squaresMarked: 0, firstBingoAt: null } as unknown as PlayerDoc;
+    H.takeHeldHonorPins.mockReturnValue([{ uid: 'u1', dayIndex: 1, at: now }]);
+    H.getDoc.mockRejectedValue(new Error('offline'));
+
+    render(<Board />);
+    await act(async () => {});
+
+    expect(H.pinDayFirstBingo).not.toHaveBeenCalled();
+    expect(H.enqueueHeldHonorPin).toHaveBeenCalledWith('u1', 1, now);
+  });
+
+  it('keeps the port in the daybar when the Day has no pinned honor', () => {
+    const now = Date.now();
+    H.dayMeta = null;
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [day({ index: 0, theme: 'glamiators', unlockAt: now - DAY_MS })],
+    } as unknown as EventDoc;
+    H.board = { uid: 'u1', dayIndex: 0, seed: 1, createdAt: 0, cells: dealt() };
+
+    render(<Board />);
+    expect(document.querySelector('.daybar-meta')?.textContent).toContain('Port 0');
   });
 });

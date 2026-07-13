@@ -331,8 +331,9 @@ async function readFinaleRoster(
   return snap.docs
     .map((d) => {
       const data = (d.data() ?? {}) as Partial<FinalePlayer>;
+      const uid = typeof data.uid === 'string' && data.uid ? data.uid : d.id;
       return {
-        uid: typeof data.uid === 'string' ? data.uid : '',
+        uid,
         displayName: typeof data.displayName === 'string' && data.displayName ? data.displayName : 'Anonymous',
         bingoCount: typeof data.bingoCount === 'number' ? data.bingoCount : 0,
         squaresMarked: typeof data.squaresMarked === 'number' ? data.squaresMarked : 0,
@@ -361,6 +362,17 @@ async function readDayHonors(
     }),
   );
   return honors.filter((h): h is FinaleDayHonorDoc => h !== null);
+}
+
+function filterDayHonorsByBan(
+  honors: readonly FinaleDayHonorDoc[],
+  bannedUids: readonly string[],
+): FinaleDayHonorDoc[] {
+  if (bannedUids.length === 0) return [...honors];
+  return honors.filter((h) => {
+    const uid = h.firstBingo?.uid;
+    return !uid || !bannedUids.includes(uid);
+  });
 }
 
 // --- Snapshot stamping ----------------------------------------------------------
@@ -467,7 +479,17 @@ export async function runFinaleBeats(db: AdminFirestore, eventId: string, deps: 
       let extra: Record<string, unknown> | undefined;
       try {
         const roster = await readFinaleRoster(db, eventId, event.bannedUids ?? []);
-        extra = { line: lastCallStandingsCopy(roster) };
+        extra = {
+          line: lastCallStandingsCopy(roster),
+          lastCall: {
+            players: roster.map((p) => ({
+              uid: p.uid,
+              displayName: p.displayName,
+              bingoCount: p.bingoCount,
+              squaresMarked: p.squaresMarked,
+            })),
+          },
+        };
       } catch (err) {
         console.error('runFinaleBeats: last_call content build failed', eventId, err);
       }
@@ -500,7 +522,13 @@ export async function runFinaleBeats(db: AdminFirestore, eventId: string, deps: 
           readFinaleRoster(db, eventId, event.bannedUids ?? []),
           readDayHonors(db, eventId, days),
         ]);
-        extra = { podium: buildPodiumPayload(roster, days, honors) as unknown as Record<string, unknown> };
+        extra = {
+          podium: buildPodiumPayload(
+            roster,
+            days,
+            filterDayHonorsByBan(honors, event.bannedUids ?? []),
+          ) as unknown as Record<string, unknown>,
+        };
       } catch (err) {
         console.error('runFinaleBeats: podium content build failed', eventId, err);
       }

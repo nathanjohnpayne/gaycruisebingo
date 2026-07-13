@@ -12,6 +12,7 @@ import {
   comparePlayers,
   CENTER,
   type DealItem,
+  standingsFrozen,
 } from './logic';
 
 const pool: DealItem[] = Array.from({ length: 32 }, (_, i) => ({
@@ -231,5 +232,26 @@ describe('bingoLineEdge (#176: the celebration re-fires on each NEW line)', () =
 
   it('a line falling away (count decreasing) never fires', () => {
     expect(bingoLineEdge(boardWithRows([0]), 2)).toEqual({ lines: 1, gained: false });
+  });
+});
+
+describe('standingsFrozen (#265; Codex P2 on #278 — the stale-cache belt)', () => {
+  const days = [
+    { index: 0, date: '2026-07-15', port: 'Trieste', portEmoji: '', theme: 'welcome-aboard', pool: 'embark', tutorial: true, unlockAt: 0 },
+    { index: 9, date: '2026-07-24', port: 'Barcelona', portEmoji: '', theme: 'so-long-farewell', pool: 'farewell', tutorial: true, unlockAt: 1000 },
+  ] as import('../types').DayDef[];
+
+  it('frozen once the scheduler stamp is present, regardless of the clock', () => {
+    expect(standingsFrozen({ frozenAt: 500, days }, 0)).toBe(true);
+  });
+
+  it('frozen by the CLOCK once the farewell unlock passes — a stale cache with no stamp still fails closed', () => {
+    expect(standingsFrozen({ days }, 999)).toBe(false);
+    expect(standingsFrozen({ days }, 1000)).toBe(true);
+  });
+
+  it('never frozen on a legacy event (no schedule) or a null event', () => {
+    expect(standingsFrozen({ days: [] }, Number.MAX_SAFE_INTEGER)).toBe(false);
+    expect(standingsFrozen(null, Number.MAX_SAFE_INTEGER)).toBe(false);
   });
 });

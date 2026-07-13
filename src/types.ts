@@ -332,7 +332,12 @@ export interface MomentDoc {
   // Day-10 freeze payload. Both optional: an older minimal beat (or a
   // content-build failure) renders the generic line.
   line?: string;
+  lastCall?: LastCallMomentPayload;
   podium?: PodiumMomentPayload;
+}
+
+export interface LastCallMomentPayload {
+  players: { uid: string; displayName: string; bingoCount: number; squaresMarked: number }[];
 }
 
 // The podium Moment's payload (#266) — the shape

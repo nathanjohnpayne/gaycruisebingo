@@ -450,6 +450,32 @@ describe('runFinaleBeats — the beats carry their CONTENT (#266)', () => {
     const lastCall = db.moments().find((m) => m.kind === 'last_call')!;
     // The banned leader never headlines; Jess leads Rex by 2 bingos.
     expect(lastCall.line).toBe('Jess leads by 2 bingos—standings freeze at 8 a.m.');
+    expect(lastCall.lastCall).toMatchObject({
+      players: [
+        { uid: 'jess', displayName: 'Jess', bingoCount: 3, squaresMarked: 40 },
+        { uid: 'rex', displayName: 'Rex', bingoCount: 1, squaresMarked: 44 },
+      ],
+    });
+  });
+
+  it('uses the player document id as the canonical finale roster uid when the field is missing', async () => {
+    const db = makeDb({
+      eventId: 'e',
+      event: { days: mainDays() },
+      players: [
+        { id: 'jess', displayName: 'Jess', bingoCount: 3, squaresMarked: 40, firstBingoAt: 10 },
+        { id: 'rex', displayName: 'Rex', bingoCount: 1, squaresMarked: 44, firstBingoAt: 20 },
+      ],
+    });
+    await runFinaleBeats(db, 'e', { now: () => D9_UNLOCK + 13 * 60 * 60 * 1000 });
+    const lastCall = db.moments().find((m) => m.kind === 'last_call')!;
+    expect(lastCall.line).toBe('Jess leads by 2 bingos—standings freeze at 8 a.m.');
+    expect(lastCall.lastCall).toMatchObject({
+      players: [
+        { uid: 'jess', displayName: 'Jess' },
+        { uid: 'rex', displayName: 'Rex' },
+      ],
+    });
   });
 
   it('the podium Moment carries champion + cruise First-to-BINGO + the pinned daily honors', async () => {
@@ -475,6 +501,32 @@ describe('runFinaleBeats — the beats carry their CONTENT (#266)', () => {
     expect(podium.podium?.champion?.displayName).toBe('Jess');
     expect(podium.podium?.firstBingo?.displayName).toBe('Jess');
     expect(podium.podium?.dailyHonors).toHaveLength(1);
+  });
+
+  it('filters banned daily honors before posting the podium Moment', async () => {
+    const db = makeDb({
+      eventId: 'e',
+      event: { days: mainDays(), bannedUids: ['muted'] },
+      players: [
+        {
+          uid: 'jess',
+          displayName: 'Jess',
+          bingoCount: 3,
+          squaresMarked: 40,
+          firstBingoAt: 10,
+          dayStats: { 8: { bingoCount: 3, squaresMarked: 40, firstBingoAt: 10 } },
+        },
+      ],
+      dayHonors: {
+        8: { firstBingo: { uid: 'muted', displayName: 'Muted', at: 1 } },
+        9: { firstBingo: { uid: 'jess', displayName: 'Jess', at: 10 } },
+      },
+    });
+    await runFinaleBeats(db, 'e', { now: () => D10_UNLOCK + 1000 });
+    const podium = db.moments().find((m) => m.kind === 'podium')! as Record<string, unknown> & {
+      podium?: { dailyHonors?: Array<{ uid: string; displayName: string }> };
+    };
+    expect(podium.podium?.dailyHonors).toEqual([{ dayIndex: 9, uid: 'jess', displayName: 'Jess', at: 10 }]);
   });
 
   it('a roster read failure still posts the minimal beat (content is best-effort)', async () => {

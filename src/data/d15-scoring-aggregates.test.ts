@@ -37,7 +37,13 @@ vi.mock('firebase/firestore', async (importOriginal) => {
 });
 
 import { setMark } from './api';
-import { pinDayFirstBingo } from './dayMeta';
+import {
+  pinDayFirstBingo,
+  enqueueHeldHonorPin,
+  takeHeldHonorPins,
+  dropHeldHonorPins,
+  __resetHeldHonorPinsForTests,
+} from './dayMeta';
 import { broadcastBlackout } from './moments';
 
 const EVENT_ID = 'med-2026';
@@ -115,10 +121,97 @@ describe('setMark folds into dayStats[dayIndex] and derives the cruise-wide root
       0: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null },
     });
   });
+
+  it('excludes the CEREMONIAL (farewell) bucket from the summed root totals while still writing its per-Day bucket (#265)', async () => {
+    // Cached Board is the farewell Day (9); the Player already has real Day-2 play.
+    getDocFromCacheSpy
+      .mockResolvedValueOnce(snap({ cells: dealt(), dayIndex: 9 })) // board read
+      .mockResolvedValueOnce(
+        snap({
+          firstBingoAt: 500,
+          displayName: 'Marker',
+          dayStats: { 2: { bingoCount: 1, squaresMarked: 5, firstBingoAt: 500 } },
+        }),
+      ); // player read
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 3,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      tutorialDayIndexes: [0, 9],
+      ceremonialDayIndexes: [9],
+    });
+
+    const playerWrite = setSpy.mock.calls[1][1] as {
+      dayStats: Record<number, unknown>;
+      bingoCount: number;
+      squaresMarked: number;
+    };
+    // The farewell bucket records (its daily honor still renders)…
+    expect(playerWrite.dayStats).toEqual({
+      9: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null },
+    });
+    // …but the ROOT sums exclude it: only Day 2's real play counts.
+    expect(playerWrite.bingoCount).toBe(1);
+    expect(playerWrite.squaresMarked).toBe(5);
+  });
+
+  it('frozen + CEREMONIAL day: narrows to the bucket-only player write — the farewell honor record survives, the roots never move (#265; Codex P2s on #278)', async () => {
+    getDocFromCacheSpy
+      .mockResolvedValueOnce(snap({ cells: dealt(), dayIndex: 9 })) // board read (the farewell card)
+      .mockResolvedValueOnce(snap({ firstBingoAt: null, displayName: 'Marker' })); // player read
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 3,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      statsFrozen: true,
+      ceremonialDayIndexes: [9],
+    });
+
+    const playerCall = setSpy.mock.calls.find((c) => (c[0] as { path: string }).path.includes('/players/'));
+    expect(playerCall).toBeTruthy();
+    const write = playerCall![1] as Record<string, unknown>;
+    // ONLY the per-Day bucket — no root aggregates, no blackout flag.
+    expect(Object.keys(write)).toEqual(['dayStats']);
+    expect(write.dayStats).toEqual({ 9: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null } });
+    const paths = setSpy.mock.calls.map((c) => (c[0] as { path: string }).path);
+    expect(paths.some((p) => p.includes('/tally/'))).toBe(true);
+  });
+
+  it('frozen + MAIN day: writes NO player stats at all — a post-freeze mark cannot drift the settled daily honors (Codex P2 on #278 round 2)', async () => {
+    getDocFromCacheSpy
+      .mockResolvedValueOnce(snap({ cells: dealt(), dayIndex: 4 })) // board read (a main day)
+      .mockResolvedValueOnce(snap({ firstBingoAt: null, displayName: 'Marker' })); // player read
+
+    await setMark({
+      uid: 'u1',
+      cells: dealt(),
+      index: 3,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      statsFrozen: true,
+      ceremonialDayIndexes: [9],
+    });
+
+    const paths = setSpy.mock.calls.map((c) => (c[0] as { path: string }).path);
+    expect(paths.some((p) => p.includes('/players/'))).toBe(false);
+    expect(paths.some((p) => p.includes('/tally/'))).toBe(true); // the card stays honest
+  });
 });
 
 describe('dayMeta.pinDayFirstBingo (write-once per-Day honor)', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetHeldHonorPinsForTests();
+  });
 
   it('creates the day-meta doc with the attributed firstBingo payload on a cache miss', async () => {
     await pinDayFirstBingo(4, { uid: 'u1', displayName: 'Alice', photoURL: null }, 1234);
@@ -133,6 +226,18 @@ describe('dayMeta.pinDayFirstBingo (write-once per-Day honor)', () => {
     getDocFromCacheSpy.mockResolvedValueOnce(snap({ firstBingo: { uid: 'x', displayName: 'X', at: 1 } }));
     await pinDayFirstBingo(4, { uid: 'u1', displayName: 'Alice', photoURL: null }, 1234);
     expect(setDocSpy).not.toHaveBeenCalled();
+  });
+
+  it('drains only the requested held Day and can drop a fallen held honor', () => {
+    enqueueHeldHonorPin('u1', 1, 111);
+    enqueueHeldHonorPin('u1', 2, 222);
+    enqueueHeldHonorPin('u2', 1, 333);
+
+    expect(takeHeldHonorPins('u1', 1)).toEqual([{ uid: 'u1', dayIndex: 1, at: 111 }]);
+    dropHeldHonorPins('u1', 2);
+
+    expect(takeHeldHonorPins('u1')).toEqual([]);
+    expect(takeHeldHonorPins('u2')).toEqual([{ uid: 'u2', dayIndex: 1, at: 333 }]);
   });
 });
 

@@ -2,7 +2,7 @@
 // overlay (#214, specs/d15-coach-overlay.md). Once-per-Event scrim decoding
 // the Board's badge notation (Tally count, 👀 Doubt, ＋ add proof, free
 // space), shown over the Player's first dealt card, dismissible, and
-// replayable on demand from More → How to play — where it always renders
+// replayable on demand from More → How to play → Show the badge legend —
 // regardless of the stored per-Event dismissal.
 import { test, expect } from '@playwright/test';
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
@@ -73,6 +73,10 @@ test.describe('coach overlay', () => {
 
     await page.getByRole('link', { name: 'More' }).click();
     await page.getByRole('button', { name: /How to play/ }).click();
+    // #270: the row opens the Welcome Aboard walkthrough panel first; the
+    // badge-legend replay is one tap further.
+    await expect(page.getByText('How this works')).toBeVisible();
+    await page.getByRole('button', { name: /Show the badge legend/ }).click();
 
     const replay = page.locator('.coach-overlay');
     await expect(replay).toBeVisible();

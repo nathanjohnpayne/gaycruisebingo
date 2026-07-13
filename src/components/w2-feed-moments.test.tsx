@@ -32,6 +32,7 @@ const H = vi.hoisted(() => ({
   players: [] as PlayerDoc[],
   rosterConfirmed: true,
   feedEntries: [] as FeedEntry[],
+  bannedUids: [] as string[],
   // EVERY claim tap opens ProofSheet now (issue #181): in 'honor' the mocked
   // sheet's pledge trigger completes the bare doMark; 'proof_required' uses its
   // submit trigger so the proofed completion path (PR #110 round 2 finding 1)
@@ -54,10 +55,14 @@ vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user, loading: false }) }));
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
   useDayBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
-  useEventDoc: () => ({ data: { claimMode: H.claimMode }, loading: false }),
+  useEventDoc: () => ({ data: { claimMode: H.claimMode, bannedUids: H.bannedUids }, loading: false }),
   useItems: () => ({ items: [], loading: false, hasServerData: true }),
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
   useLeaderboard: () => ({ players: H.players, loading: false, hasServerData: H.rosterConfirmed }),
@@ -204,6 +209,7 @@ beforeEach(() => {
   H.players = [];
   H.rosterConfirmed = true;
   H.feedEntries = [];
+  H.bannedUids = [];
   H.claimMode = 'honor';
   H.proofAttachResult = null;
   H.setMark.mockResolvedValue({ cells: [], ...NO_WIN });
@@ -1057,6 +1063,63 @@ describe('ProofFeed — the merged Feed (specs/w2-feed-moments.md)', () => {
 
     const moment = document.querySelector('.moment') as HTMLElement;
     expect(moment.querySelector('.moment-day-chip')).toBeNull();
+  });
+
+  it('recomputes a structured last-call finale line after filtering currently banned players', () => {
+    H.bannedUids = ['bad'];
+    H.feedEntries = [
+      momentEntry('last_call', 1, 'last_call', {
+        line: 'Bad Blair leads by 7 bingos—standings freeze at 8 a.m.',
+        lastCall: {
+          players: [
+            { uid: 'bad', displayName: 'Bad Blair', bingoCount: 9, squaresMarked: 90 },
+            { uid: 'good', displayName: 'Good Gail', bingoCount: 2, squaresMarked: 24 },
+          ],
+        },
+      }),
+    ];
+    render(<ProofFeed />);
+
+    const moment = document.querySelector('.moment') as HTMLElement;
+    expect(moment).not.toHaveTextContent('Bad Blair');
+    expect(moment).toHaveTextContent('Good Gail has the board to themselves');
+  });
+
+  it('fails closed for legacy string-only last-call finale lines when a ban is active', () => {
+    H.bannedUids = ['bad'];
+    H.feedEntries = [
+      momentEntry('last_call', 1, 'last_call', {
+        line: 'Bad Blair leads by 7 bingos—standings freeze at 8 a.m.',
+      }),
+    ];
+    render(<ProofFeed />);
+
+    const moment = document.querySelector('.moment') as HTMLElement;
+    expect(moment).not.toHaveTextContent('Bad Blair');
+    expect(moment).toHaveTextContent('posted the final-night standings');
+  });
+
+  it('filters currently banned players out of embedded podium finale names', () => {
+    H.bannedUids = ['bad'];
+    H.feedEntries = [
+      momentEntry('podium', 1, 'podium', {
+        podium: {
+          champion: { uid: 'bad', displayName: 'Bad Blair', bingoCount: 9, squaresMarked: 90 },
+          firstBingo: { uid: 'good', displayName: 'Good Gail', at: 20 },
+          dailyHonors: [
+            { dayIndex: 0, uid: 'bad', displayName: 'Bad Blair', at: 10 },
+            { dayIndex: 1, uid: 'good', displayName: 'Good Gail', at: 20 },
+          ],
+        },
+      }),
+    ];
+    render(<ProofFeed />);
+
+    const moment = document.querySelector('.moment') as HTMLElement;
+    expect(moment).not.toHaveTextContent('Bad Blair');
+    expect(moment).not.toHaveTextContent('Cruise champion');
+    expect(moment).toHaveTextContent('First to BINGO: Good Gail');
+    expect(moment).toHaveTextContent('D2 Good Gail');
   });
 
   it('a Proof keeps its report and owner-delete affordances in the Feed', () => {

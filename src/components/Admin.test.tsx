@@ -14,6 +14,8 @@ import type { DayDef, EventDoc, ItemDoc } from '../types';
 // and Approve all invokes bulkApproveItems with every listed row.
 
 const H = vi.hoisted(() => ({
+  adminAddItem: vi.fn((..._a: unknown[]) => Promise.resolve()),
+  adminUpdateItemText: vi.fn((..._a: unknown[]) => Promise.resolve()),
   user: { uid: 'admin-uid' } as { uid: string } | null,
   event: {
     admins: ['admin-uid'],
@@ -92,6 +94,8 @@ vi.mock('../data/admin', () => ({
   rejectItem: (...a: unknown[]) => H.rejectItem(...a),
   bulkApproveItems: (...a: unknown[]) => H.bulkApproveItems(...a),
   setItemSpicy: (...a: unknown[]) => H.setItemSpicy(...a),
+  adminAddItem: (...a: unknown[]) => H.adminAddItem(...a),
+  adminUpdateItemText: (...a: unknown[]) => H.adminUpdateItemText(...a),
   setClaimMode: (...a: unknown[]) => H.setClaimMode(...a),
   setEventTheme: (...a: unknown[]) => H.setEventTheme(...a),
   setDayTheme: (...a: unknown[]) => H.setDayTheme(...a),
@@ -309,14 +313,17 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
     } as unknown as EventDoc;
     H.claims = [{ id: 'c1', displayName: 'Alice', itemText: 'Do a thing' } as never];
     render(<Admin />);
-    expect(within(row('Claim mode')).getByRole('button', { name: 'Proof req.' })).toHaveClass('on');
+    expect(within(row('Claim mode')).getByRole('button', { name: 'Proof-to-mark' })).toHaveClass('on');
     expect(within(row('Claim mode')).getByText('A friction knob, not a trust level.')).toBeInTheDocument();
     expect(within(row('Photo proof source')).getByRole('button', { name: 'Camera only' })).toHaveClass('on');
     expect((within(row('Strip location data')).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
     expect((within(row('AI image screen')).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
-    expect(row('AI image screen').textContent).toMatch(/presentational/i);
+    // #268: the setting is live now — the old 'presentational' caveat is gone.
+    expect(row('AI image screen').textContent).toMatch(/live setting/i);
     expect(within(row('Auto-hide after reports')).getByText('6')).toBeInTheDocument();
-    expect(within(row('Pending claims')).getByText('1')).toBeInTheDocument();
+    // #269 (the wireframes' caption): the Pending-claims row is admin_confirmed-
+    // mode-only — absent here (proof_required).
+    expect(within(panel()).queryByText('Pending claims')).toBeNull();
     expect(panel().textContent).not.toMatch(/verified/i);
   });
 
@@ -362,6 +369,8 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
   });
 
   it("the Pending claims row's count matches usePendingClaims() and its jump link targets #admin-pending-claims", () => {
+    // #269: the row renders in admin_confirmed mode only.
+    H.event = { ...H.event, claimMode: 'admin_confirmed' } as unknown as EventDoc;
     H.claims = [
       { id: 'c1', displayName: 'Alice', itemText: 'Do a thing' } as never,
       { id: 'c2', displayName: 'Bob', itemText: 'Do another thing' } as never,
@@ -373,5 +382,49 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
       'href',
       '#admin-pending-claims',
     );
+  });
+});
+
+describe('Admin curated pools (#269)', () => {
+  it('the add form writes an active prompt into the chosen pool via adminAddItem', async () => {
+    render(<Admin />);
+    const input = screen.getByLabelText('New prompt text') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Final soft-serve encore' } });
+    fireEvent.change(screen.getByLabelText('Pool'), { target: { value: 'farewell' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await Promise.resolve();
+    expect(H.adminAddItem).toHaveBeenCalledWith('admin-uid', 'Final soft-serve encore', false, 'farewell');
+  });
+
+  it('forces embark/farewell prompt additions to stay tame even after 🔞 was checked on main', async () => {
+    render(<Admin />);
+    const input = screen.getByLabelText('New prompt text') as HTMLInputElement;
+    const spicy = screen.getByRole('checkbox', { name: /🔞/ }) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'Embark icebreaker' } });
+    fireEvent.click(spicy);
+    expect(spicy.checked).toBe(true);
+
+    fireEvent.change(screen.getByLabelText('Pool'), { target: { value: 'embark' } });
+    expect(spicy.checked).toBe(false);
+    expect(spicy.disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+    await Promise.resolve();
+    expect(H.adminAddItem).toHaveBeenCalledWith('admin-uid', 'Embark icebreaker', false, 'embark');
+  });
+
+  it('the inline edit saves via adminUpdateItemText and shows the pool pill', async () => {
+    H.items = [
+      { id: 'i1', text: 'Original wording', createdBy: 'u1', createdAt: 1, isFreeSpace: false, status: 'active', reportCount: 0, spicy: false, pool: 'embark' } as unknown as ItemDoc,
+    ];
+    render(<Admin />);
+    // The row's sub line names its pool — the curated pools are visible.
+    expect(screen.getByText(/active · embark/)).toBeInTheDocument();
+    fireEvent.click(screen.getAllByTitle('Edit text')[0]);
+    const edit = screen.getByLabelText('Edit prompt text') as HTMLInputElement;
+    fireEvent.change(edit, { target: { value: 'Sharper wording' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await Promise.resolve();
+    expect(H.adminUpdateItemText).toHaveBeenCalledWith(expect.any(String), 'Sharper wording');
   });
 });

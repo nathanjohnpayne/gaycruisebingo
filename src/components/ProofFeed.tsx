@@ -7,9 +7,18 @@ import { reportProof, deleteProof } from '../data/proofs';
 import { track } from '../analytics';
 import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
-import { tutorialDayIndexSet } from '../game/logic';
+import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
 import { THEMES } from '../theme/themes';
-import type { BoardDoc, DayDef, MomentDoc, MomentKind, ProofDoc, TallyCard as TallyCardData } from '../types';
+import type {
+  BoardDoc,
+  DayDef,
+  LastCallMomentPayload,
+  MomentDoc,
+  MomentKind,
+  PodiumMomentPayload,
+  ProofDoc,
+  TallyCard as TallyCardData,
+} from '../types';
 
 // The Feed Day chip label (#211): "Day 2 · Get Sporty" — a 1-based Day number
 // plus the Day's theme label from EventDoc.days[dayIndex] → THEMES, degrading to
@@ -48,6 +57,56 @@ const MOMENT_COPY: Record<MomentKind, { icon: string; line: string }> = {
   podium: { icon: '🏆', line: 'took the podium!' },
 };
 
+function isBannedUid(uid: string | undefined, bannedUids: readonly string[]): boolean {
+  return !!uid && bannedUids.includes(uid);
+}
+
+function lastCallLineFromPlayers(players: LastCallMomentPayload['players']): string {
+  const ranked = [...players].sort((a, b) => {
+    if (b.bingoCount !== a.bingoCount) return b.bingoCount - a.bingoCount;
+    if (b.squaresMarked !== a.squaresMarked) return b.squaresMarked - a.squaresMarked;
+    return a.displayName.localeCompare(b.displayName);
+  });
+  const leader = ranked[0];
+  const freeze = 'standings freeze at 8 a.m.';
+
+  if (!leader || (leader.bingoCount === 0 && leader.squaresMarked === 0)) {
+    return `The board's wide open going into the final night—${freeze}.`;
+  }
+  const runnerUp = ranked[1];
+  if (!runnerUp) {
+    return `${leader.displayName} has the board to themselves going into the final night—${freeze}.`;
+  }
+  const bingoMargin = leader.bingoCount - runnerUp.bingoCount;
+  if (bingoMargin > 0) {
+    return `${leader.displayName} leads by ${bingoMargin} bingo${bingoMargin === 1 ? '' : 's'}—${freeze}.`;
+  }
+  const squareMargin = leader.squaresMarked - runnerUp.squaresMarked;
+  if (squareMargin > 0) {
+    return `${leader.displayName} leads by ${squareMargin} square${squareMargin === 1 ? '' : 's'}—${freeze}.`;
+  }
+  return `It's neck and neck at the top going into the final night—${freeze}.`;
+}
+
+function visibleLastCallLine(moment: MomentDoc, bannedUids: readonly string[]): string | undefined {
+  if (moment.kind !== 'last_call') return undefined;
+  if (moment.lastCall?.players) {
+    return lastCallLineFromPlayers(moment.lastCall.players.filter((p) => !isBannedUid(p.uid, bannedUids)));
+  }
+  // Legacy last-call Moments only carry a pre-rendered string, so a later ban
+  // cannot be applied safely. Fail closed when any ban is active.
+  return bannedUids.length > 0 ? undefined : moment.line;
+}
+
+function visiblePodium(podium: PodiumMomentPayload | undefined, bannedUids: readonly string[]): PodiumMomentPayload | undefined {
+  if (!podium) return undefined;
+  return {
+    champion: isBannedUid(podium.champion?.uid, bannedUids) ? null : podium.champion,
+    firstBingo: isBannedUid(podium.firstBingo?.uid, bannedUids) ? null : podium.firstBingo,
+    dailyHonors: podium.dailyHonors.filter((h) => !isBannedUid(h.uid, bannedUids)),
+  };
+}
+
 /**
  * A Proof card — the existing Feed entry (report ⚑, owner-delete 🗑, a "flagged
  * for review" badge, and the captured media by type). The media URL is
@@ -55,7 +114,7 @@ const MOMENT_COPY: Record<MomentKind, { icon: string; line: string }> = {
  * js/xss-through-dom #1): mediaURL is resolved from a Firestore doc, so a forged
  * non-media scheme (javascript:, …) is dropped rather than rendered.
  */
-function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: string | undefined; days: DayDef[] | undefined }) {
+function ProofCard({ proof, viewerUid, days, isStandingsFrozen }: { proof: ProofDoc; viewerUid: string | undefined; days: DayDef[] | undefined; isStandingsFrozen: () => boolean }) {
   const media = safeMediaUrl(proof.mediaURL);
   return (
     <div className="proof">
@@ -94,6 +153,15 @@ function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: str
               deleteProof(proof.id, proof.storagePath, {
                 daily: !!days?.length,
                 tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
+                // #265: symmetric with the mark path — the farewell bucket never
+                // sums, and a post-freeze deletion never unfolds frozen stats.
+                // Evaluated at CLICK time (Codex P2 on #278 round 2): a Feed
+                // left open across the freeze boundary must not act on a
+                // render-time false.
+                ceremonialDayIndexes: days ? [...ceremonialDayIndexSet(days)] : undefined,
+                // The GETTER itself (Codex P2 round 4): deleteProof re-checks
+                // inside its transaction, after any await.
+                statsFrozen: isStandingsFrozen,
               }).catch(console.error)
             }
           >
@@ -120,14 +188,14 @@ function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: str
  * Day chip a Proof/Tally Card renders, degrading to nothing on a pre-`dayIndex`
  * blackout Moment or a legacy (non-daily) Event with no `days[]`.
  */
-function MomentCard({ moment, days }: { moment: MomentDoc; days: DayDef[] | undefined }) {
+function MomentCard({ moment, days, bannedUids }: { moment: MomentDoc; days: DayDef[] | undefined; bannedUids: readonly string[] }) {
   const copy = MOMENT_COPY[moment.kind] ?? { icon: '🎉', line: 'made a Moment!' };
   // #266: the finale beats carry their real content when the scheduler built
   // it — the last-call standings line, and the podium's structured payload.
   // Older minimal beats keep the generic line.
   const isFinale = moment.kind === 'last_call' || moment.kind === 'podium';
-  const finaleLine = moment.kind === 'last_call' ? moment.line : undefined;
-  const podium = moment.kind === 'podium' ? moment.podium : undefined;
+  const finaleLine = visibleLastCallLine(moment, bannedUids);
+  const podium = moment.kind === 'podium' ? visiblePodium(moment.podium, bannedUids) : undefined;
   return (
     <div className={`moment moment-${moment.kind}`}>
       <div className="row" style={{ border: 'none', background: 'none', padding: 0 }}>
@@ -460,7 +528,14 @@ export default function ProofFeed() {
     <div className="list">
       {entries.map((entry) => {
         if (entry.feedKind === 'moment') {
-          return <MomentCard key={`moment-${entry.moment.id}`} moment={entry.moment} days={event?.days} />;
+          return (
+            <MomentCard
+              key={`moment-${entry.moment.id}`}
+              moment={entry.moment}
+              days={event?.days}
+              bannedUids={event?.bannedUids ?? []}
+            />
+          );
         }
         if (entry.feedKind === 'tallyCard') {
           const card = entry.card;
@@ -477,7 +552,7 @@ export default function ProofFeed() {
             />
           );
         }
-        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} />;
+        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} isStandingsFrozen={() => standingsFrozen(event)} />;
       })}
       {whoListCard && <FeedWhoListSheet card={whoListCard} onClose={() => setWhoListCard(null)} />}
     </div>

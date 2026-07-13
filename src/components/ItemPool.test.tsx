@@ -20,6 +20,10 @@ const H = vi.hoisted(() => ({
 
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user }) }));
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useItems: () => ({ items: H.items, loading: false }),
   useMyPendingItems: () => ({ items: H.myPending, loading: false }),
 }));

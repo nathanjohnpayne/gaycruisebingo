@@ -81,6 +81,27 @@ function FarewellBanner() {
   );
 }
 
+/**
+ * The Welcome Aboard walkthrough as reusable content (#270): More → "How to
+ * play" replays THIS (the game's narrative) above its badge-legend replay
+ * button — the spec's How-to-play row names the walkthrough banner, and the
+ * coach overlay only decodes the notation. Same beats/caption constants as
+ * the embark banner, no dismiss chrome.
+ */
+export function WalkthroughContent() {
+  return (
+    <div className="walkthrough-content">
+      <p className="tutorial-banner-title">How this works</p>
+      <ol className="tutorial-banner-beats">
+        {EMBARK_BEATS.map((beat) => (
+          <li key={beat}>{beat}</li>
+        ))}
+      </ol>
+      <p className="tutorial-banner-caption">{EMBARK_CAPTION}</p>
+    </div>
+  );
+}
+
 export default function TutorialBanner({ day }: { day: DayDef }) {
   // Owned here (not in EmbarkBanner) so the dismissal survives the Day
   // switcher moving away from and back to the Welcome Aboard Day within

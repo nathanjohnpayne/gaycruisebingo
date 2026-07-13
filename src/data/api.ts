@@ -711,6 +711,16 @@ export async function setMark(params: {
   // Optional: absent (legacy / no schedule) excludes nothing — the Leaderboard
   // and day-meta surfaces apply the exclusion at render time regardless.
   tutorialDayIndexes?: number[];
+  // The CEREMONIAL (farewell) Day indexes (#265): those buckets never enter the
+  // summed root totals — the farewell card unlocks at the freeze and its marks
+  // must never move the standings, while its per-Day bucket (daily honor) still
+  // records. Optional: absent excludes nothing.
+  ceremonialDayIndexes?: number[];
+  // #265, spec § "Scoring": once the event's `frozenAt` has passed, marks stop
+  // moving the standings entirely — the board cells and the Tally marker still
+  // write (past Days stay markable all cruise), but the player-stats fold is
+  // skipped. Client-side per the ADR 0001 client-authoritative stats model.
+  statsFrozen?: boolean;
   // Daily-cards mode gate (#246): when the Event carries a `days[]` schedule the
   // Mark writes the DAY-SCOPED board at events/{eventId}/days/{dayIndex}/boards/{uid}
   // — one board per Player per Day — instead of the single legacy
@@ -756,6 +766,10 @@ async function runSetMark(
     displayName?: string;
     dayIndex?: number;
     tutorialDayIndexes?: number[];
+    // #265: ceremonial-bucket exclusion + the standings-freeze gate — see
+    // setMark's params above (this inner runner receives them verbatim).
+    ceremonialDayIndexes?: number[];
+    statsFrozen?: boolean;
     daily?: boolean;
   },
   database: Firestore,
@@ -845,11 +859,28 @@ async function runSetMark(
     isTutorialDay: params.tutorialDayIndexes
       ? (i: number) => params.tutorialDayIndexes!.includes(i)
       : undefined,
+    isCeremonialDay: params.ceremonialDayIndexes
+      ? (i: number) => params.ceremonialDayIndexes!.includes(i)
+      : undefined,
   });
 
   const batch = writeBatch(database);
   batch.set(boardRef, { cells }, { merge: true });
-  batch.set(playerRef, playerWrite, { merge: true });
+  // The standings freeze (#265): post-freeze marks keep the card honest, and
+  // ONLY the ceremonial (farewell) Day still records its PER-DAY bucket — the
+  // farewell card unlocks AT the freeze and its daily honor reads
+  // dayStats[farewell] (Codex P2 on #278 round 1) — while a post-freeze mark
+  // on any OTHER Day writes no player stats at all: main-day buckets feed the
+  // podium's daily honors and the pins' derived fallback, so letting them
+  // drift post-freeze would still move the settled honors (Codex P2 on #278
+  // round 2). The ROOT aggregates never move once frozen either way.
+  if (params.statsFrozen) {
+    if (params.ceremonialDayIndexes?.includes(dayIndex)) {
+      batch.set(playerRef, { dayStats: playerWrite.dayStats }, { merge: true });
+    }
+  } else {
+    batch.set(playerRef, playerWrite, { merge: true });
+  }
 
   // Per-Prompt Tally (ADR 0002, the embarkation-critical differentiator): every
   // Mark — proofed or not — self-publishes an ATTRIBUTED entry to its Prompt's
