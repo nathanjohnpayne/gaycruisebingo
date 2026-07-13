@@ -1187,15 +1187,14 @@ export default function Board() {
     clearOpenSquare();
   }, [openSquareIntent, hasDays, viewedIndex, cells, cellsAttributable]);
 
-  // Release held day-honor pins once the identity resolves (#280 round 2) —
-  // only the CURRENT account's holds (round 3); another account's stay queued
-  // for its return (module state, so a hold made just before an unmount still
-  // drains on the next mount — round 4), mirroring the pending-Moment queue.
+  // Release held day-honor pins once the identity resolves (#280 round 2).
+  // Holds are uid-keyed, so another account's stay queued for its return. Drain
+  // every held Day for this account: the winning Day may no longer be rendered
+  // when the saved row finally resolves, and fall observers already drop held
+  // pins whose bingo no longer stands.
   useEffect(() => {
-    const currentDay = feedCtx.current.boardDayIndex;
-    if (!identityKnown || !uid || currentDay === undefined) return;
-    if (!hasBingo(feedCtx.current.cells)) return;
-    const mine = takeHeldHonorPins(uid, currentDay);
+    if (!identityKnown || !uid) return;
+    const mine = takeHeldHonorPins(uid);
     for (const h of mine) {
       void pinDayFirstBingo(h.dayIndex, {
         uid,
@@ -1204,7 +1203,7 @@ export default function Board() {
       }, h.at);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [identityKnown, uid, viewedIndex, cells]);
+  }, [identityKnown, uid]);
 
   if (!uid) return null;
 
@@ -1522,12 +1521,7 @@ export default function Board() {
     // gated like a Doubt raise: a permanent public honor must never stamp
     // 'Anonymous' — an unknown-identity win skips the pin (the honors strip's
     // roster-derived fallback still names them once their row resolves).
-    if (
-      res.bingoTransition &&
-      hasDays &&
-      actedDay !== undefined &&
-      !(tutorialDayIndexes ?? []).includes(actedDay)
-    ) {
+    if (res.bingoTransition && hasDays && actedDay !== undefined) {
       // Re-read the LIVE gate through feedCtx (#280 round 3): this verdict can
       // run after an await (a proofed win's upload), and the render-closure
       // `identityKnown` may be stale — the row can have resolved mid-flight,

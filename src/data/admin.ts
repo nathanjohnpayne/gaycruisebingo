@@ -241,8 +241,7 @@ async function resolve(
       daily &&
       status === 'confirmed' &&
       bingoTransition &&
-      typeof firstBingoAt === 'number' &&
-      !(isTutorialDay?.(c.dayIndex as number) ?? false);
+      typeof firstBingoAt === 'number';
     const metaRef = shouldPinDayHonor ? dayMeta(c.dayIndex as number) : null;
     const metaSnap = metaRef ? await tx.get(metaRef) : null;
 

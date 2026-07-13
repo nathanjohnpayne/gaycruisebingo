@@ -449,7 +449,7 @@ describe('per-Day First to BINGO (#264)', () => {
     expect(H.pinDayFirstBingo.mock.calls[0][1]).toMatchObject({ uid: 'u1', displayName: 'Deck Daddy' });
   });
 
-  it('does not pin a tutorial Day honor on a bingo transition', async () => {
+  it('pins tutorial Day honors for finale data while the daybar keeps them hidden', async () => {
     const now = Date.now();
     H.event = {
       claimMode: 'honor',
@@ -467,7 +467,8 @@ describe('per-Day First to BINGO (#264)', () => {
     fireEvent.click(screen.getByText(/Cross My Heart/));
     await act(async () => {});
 
-    expect(H.pinDayFirstBingo).not.toHaveBeenCalled();
+    expect(H.pinDayFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.pinDayFirstBingo.mock.calls[0][0]).toBe(0);
     expect(H.enqueueHeldHonorPin).not.toHaveBeenCalled();
   });
 
