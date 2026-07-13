@@ -402,17 +402,24 @@ function TallySheet({
                     </>
                   )}
                   {isMe && <span className="pill you-pill">you</span>}
-                  {!isMe && status !== 'open' && status !== 'satisfied' && (
+                  {/* The raise affordance suppresses only for the VIEWER's own
+                      involvement — self rows and rows they already doubted
+                      (their deterministic slot is spent; the state above says
+                      so). Someone ELSE's open/satisfied Doubt never blocks an
+                      additional doubter: the slot is per (doubter, target,
+                      Prompt), so Alice's raise stays valid on a row Bob
+                      doubted (Codex P2 on #276). */}
+                  {!isMe && !iAlreadyDoubted && (
                     <button
                       className="btn doubt-btn"
                       title="pics or it didn't happen"
                       // !identityKnown: never let a public, permanent accusation
                       // publish while the accuser's saved name is still unknown
                       // (round 2 finding 3) — the gate opens when the row loads.
-                      disabled={iAlreadyDoubted || isPending || !identityKnown}
+                      disabled={isPending || !identityKnown}
                       onClick={() => doDoubt(m)}
                     >
-                      {iAlreadyDoubted ? 'Doubted' : isPending ? 'Doubting…' : '🤨 Pics or it didn’t happen'}
+                      {isPending ? 'Doubting…' : '🤨 Pics or it didn’t happen'}
                     </button>
                   )}
                 </div>

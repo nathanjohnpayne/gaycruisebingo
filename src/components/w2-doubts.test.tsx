@@ -246,13 +246,35 @@ describe('Board Doubts wiring (specs/w2-doubts.md)', () => {
     // The header summary is the Prompt-wide total (unlike the per-target Square
     // badge) — Carol's is the only Doubt still open.
     expect(container.querySelector('.doubt-summary')!.textContent).toContain('1 open doubt');
-    // #263 (wireframe): a doubted/answered row shows its right-aligned STATE in
-    // place of the raise affordance — no button on either row (my own row never
-    // offers one either). The once-only slot is moot on a stateful row: there is
-    // nothing left to raise there.
+    // #263 (wireframe) + Codex P2 on #276: a doubted/answered row shows its
+    // right-aligned STATE, and the raise affordance suppresses only for the
+    // VIEWER's own involvement. I already doubted BOTH rows here (my slot is
+    // spent), so neither offers a button — but that follows from
+    // iAlreadyDoubted, never from someone else's state (pinned separately
+    // below).
     expect(container.querySelectorAll('.doubt-btn').length).toBe(0);
     expect(open!.textContent).toContain('Doubted · waiting');
     expect(satisfied!.textContent).toContain('✓ Answered');
+  });
+
+  it("keeps the raise affordance for an ADDITIONAL doubter — someone else's open Doubt never blocks my own slot (Codex P2 on #276)", () => {
+    H.markers = [
+      { uid: 'u1', displayName: 'Me', markedAt: 1 },
+      { uid: 'bob', displayName: 'Bob', markedAt: 2 },
+    ];
+    // Carol (not me) doubted Bob: Bob's row reads OPEN, but MY deterministic
+    // slot (u1_bob_p0) is untouched — the button must still offer my raise.
+    H.doubts = [mkDoubt({ id: 'd1', fromUid: 'carol', targetUid: 'bob', createdAt: 100 })];
+
+    const { container } = render(<Board />);
+    fireEvent.click(container.querySelector('.tally-badge')!);
+
+    expect(container.querySelector('.doubt-open')).not.toBeNull(); // the state renders…
+    const btn = container.querySelector('.doubt-btn') as HTMLButtonElement;
+    expect(btn).not.toBeNull(); // …and so does my own raise affordance
+    expect(btn.disabled).toBe(false);
+    fireEvent.click(btn);
+    expect(H.raiseDoubt).toHaveBeenCalledTimes(1);
   });
 
   // ---- PR #106 finding 1: a rapid double-tap must not mint duplicate Doubts ----
