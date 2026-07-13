@@ -1223,6 +1223,12 @@ a {
    specs/a11y-badge-contrast.md. */
 /* Who-list rows (#263, wireframe): right-aligned state text, the answered
    row's proof-media chip, the viewer's own "you" pill, and the footer note. */
+/* Who-list rows may wrap their right-side cluster (state + an additional
+   doubter's compact affordance) onto a second line on narrow sheets, instead
+   of pushing the action off-screen at 320px (Codex P2 on #276). */
+.wholist-row {
+  flex-wrap: wrap;
+}
 .wholist-state {
   font-size: 11px;
   color: var(--dim);

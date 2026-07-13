@@ -378,8 +378,9 @@ function TallySheet({
                     : answeredProof?.type === 'text'
                       ? '✍️'
                       : null;
+              const rowHasState = status === 'open' || status === 'satisfied';
               return (
-                <div className="row" key={m.uid}>
+                <div className="row wholist-row" key={m.uid}>
                   <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
                   <div className="grow">
                     <div className="name">{m.displayName}</div>
@@ -419,7 +420,10 @@ function TallySheet({
                       disabled={isPending || !identityKnown}
                       onClick={() => doDoubt(m)}
                     >
-                      {isPending ? 'Doubting…' : '🤨 Pics or it didn’t happen'}
+                      {/* Compact label on a row already carrying a state so the
+                          320px sheet row never overflows (Codex P2 on #276);
+                          the full wireframe phrase stays on stateless rows. */}
+                      {isPending ? 'Doubting…' : rowHasState ? '🤨 Doubt too' : '🤨 Pics or it didn’t happen'}
                     </button>
                   )}
                 </div>
