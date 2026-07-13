@@ -669,7 +669,7 @@ function ProofClaimsPanel({
       <div className="row">
         <div className="grow">
           <div className="name">AI image screen</div>
-          <div className="sub">Flags proofs for review via the existing moderation function. Presentational for now — the deployed function still gates on its own deploy-time flag, not this setting.</div>
+          <div className="sub">Flags proofs for review via the existing moderation function. Live setting (#268): a deployed scanner consults it per upload — no redeploy needed. The deploy-time env flag remains the master kill-switch for whether the scanner exists at all.</div>
         </div>
         <label style={{ fontSize: 12 }}>
           <input type="checkbox" checked={visionGate} onChange={(e) => setVisionGate(e.target.checked)} /> On
