@@ -106,8 +106,14 @@ function ProofCard({ proof, viewerUid, days }: { proof: ProofDoc; viewerUid: str
  * A Moment card — a broadcast social beat (ADR 0002). No media, no report/delete:
  * a Moment carries no evidence to dispute, it just marks that something happened.
  * Rendered distinctly from a Proof (the `.moment` chrome + a per-kind line).
+ *
+ * A blackout Moment additionally NAMES the Day it happened on (daily-cards-spec
+ * § "Scoring and social surfaces": "a per-card blackout posts a Moment naming
+ * the day", e.g. "blacked out Day 4 · Glamiators") — the same `dayChipLabel`
+ * Day chip a Proof/Tally Card renders, degrading to nothing on a pre-`dayIndex`
+ * blackout Moment or a legacy (non-daily) Event with no `days[]`.
  */
-function MomentCard({ moment }: { moment: MomentDoc }) {
+function MomentCard({ moment, days }: { moment: MomentDoc; days: DayDef[] | undefined }) {
   const copy = MOMENT_COPY[moment.kind] ?? { icon: '🎉', line: 'made a Moment!' };
   return (
     <div className={`moment moment-${moment.kind}`}>
@@ -117,6 +123,12 @@ function MomentCard({ moment }: { moment: MomentDoc }) {
           <div className="name" style={{ fontSize: 14 }}>
             {moment.displayName}{' '}
             <span className="moment-line">{copy.line}</span>
+            {moment.kind === 'blackout' && typeof moment.dayIndex === 'number' && (
+              <>
+                {' '}
+                <span className="moment-day-chip proof-day-chip">{dayChipLabel(moment.dayIndex, days)}</span>
+              </>
+            )}
           </div>
           <div className="sub">{ago(moment.createdAt)}</div>
         </div>
@@ -256,7 +268,7 @@ export default function ProofFeed() {
     <div className="list">
       {entries.map((entry) => {
         if (entry.feedKind === 'moment') {
-          return <MomentCard key={`moment-${entry.moment.id}`} moment={entry.moment} />;
+          return <MomentCard key={`moment-${entry.moment.id}`} moment={entry.moment} days={event?.days} />;
         }
         if (entry.feedKind === 'tallyCard') {
           const card = entry.card;

@@ -116,6 +116,7 @@ export default function ConfirmWinMoments() {
     identityKnown: boolean;
     cells: Cell[];
     boardOwned: boolean;
+    dayIndex: number | undefined;
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -125,6 +126,7 @@ export default function ConfirmWinMoments() {
     identityKnown: false,
     cells: [],
     boardOwned: false,
+    dayIndex: undefined,
   });
   ctx.current = {
     uid,
@@ -135,6 +137,12 @@ export default function ConfirmWinMoments() {
     identityKnown,
     cells: board?.cells ?? [],
     boardOwned: board != null && board.uid === uid,
+    // The confirmed Claim's own Day (daily-cards-spec § "Scoring and social
+    // surfaces"), so a blackout that materializes on the confirm path names the
+    // same Day the live-mark path would have. `BoardDoc.dayIndex` is a required
+    // field (defaults to 0 for a legacy single-Board Event), so this is always
+    // defined once `board` has loaded.
+    dayIndex: board?.dayIndex,
   };
 
   // Self-reference so the async settle continuation can loop the drain until the
@@ -190,7 +198,7 @@ export default function ConfirmWinMoments() {
               hasPriorBingo: witnessed,
             });
             if (plan.bingo) broadcastBingo(actor);
-            if (plan.blackout) broadcastBlackout(actor);
+            if (plan.blackout) broadcastBlackout(actor, cc.dayIndex);
             if (plan.firstBingo) broadcastFirstBingo(actor);
             else if (plan.firstBingoHeld) st2.heldCeremony = actor;
             nowReflected.forEach(([id]) => st2.awaiting.delete(id));

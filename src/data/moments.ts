@@ -293,10 +293,14 @@ export function resetPendingMoments(): void {
  * and no `proofId` ever reach a Moment. `displayName` is bounded through the
  * shared `markerDisplayName` helper to the rules' non-empty ≤100-char contract so
  * a broadcast can never be rejected for a malformed name (the auth-fallback name
- * `resolveDisplayName` yields is not itself length-capped).
+ * `resolveDisplayName` yields is not itself length-capped). `dayIndex` is
+ * optional and, when supplied, is stamped onto the payload — the per-card
+ * Blackout is the one caller that passes it today (daily-cards-spec § "Scoring
+ * and social surfaces": "a per-card blackout posts a Moment naming the day",
+ * e.g. "blacked out Day 4 · Glamiators"), so the Feed can render the Day chip.
  */
-function broadcast(id: string, kind: MomentKind, who: MomentActor): void {
-  void writeMomentOnce(id, kind, who);
+function broadcast(id: string, kind: MomentKind, who: MomentActor, dayIndex?: number): void {
+  void writeMomentOnce(id, kind, who, dayIndex);
 }
 
 /**
@@ -313,9 +317,16 @@ function broadcast(id: string, kind: MomentKind, who: MomentActor): void {
  * cache miss (fresh device / cold cache) the write proceeds: a duplicate from a
  * cold cache still resolves server-side via the create-only rule, and the
  * visible-flash window only exists when the doc IS cached — exactly the case
- * this pre-check catches.
+ * this pre-check catches. `dayIndex` (optional) is threaded straight through to
+ * the payload builder, which omits the field entirely rather than writing an
+ * explicit `undefined` — Firestore's `setDoc` rejects that outright.
  */
-async function writeMomentOnce(id: string, kind: MomentKind, who: MomentActor): Promise<void> {
+async function writeMomentOnce(
+  id: string,
+  kind: MomentKind,
+  who: MomentActor,
+  dayIndex?: number,
+): Promise<void> {
   const ref = rawMoment(id);
   try {
     const cached = await getDocFromCache(ref);
@@ -336,6 +347,9 @@ async function writeMomentOnce(id: string, kind: MomentKind, who: MomentActor): 
     displayName: markerDisplayName(who.displayName, undefined),
     photoURL: who.photoURL,
     createdAt: Date.now(),
+    // Included only when the caller supplied one — never an explicit `undefined`
+    // (Firestore's setDoc rejects that field value outright).
+    ...(dayIndex !== undefined ? { dayIndex } : {}),
   };
   await setDoc(ref, payload).catch((err: unknown) => {
     // Not the offline case: offline the write PENDS in the persistent cache and
@@ -383,9 +397,15 @@ export function broadcastBingo(who: MomentActor): void {
   broadcast(`${who.uid}-bingo`, 'bingo', who);
 }
 
-/** A Player's Blackout — the whole card (once per Player). */
-export function broadcastBlackout(who: MomentActor): void {
-  broadcast(`${who.uid}-blackout`, 'blackout', who);
+/**
+ * A Player's Blackout — the whole card (once per Player). `dayIndex` (optional)
+ * NAMES the Day the blackout happened on (daily-cards-spec § "Scoring and
+ * social surfaces": "a per-card blackout posts a Moment naming the day", e.g.
+ * "blacked out Day 4 · Glamiators") — callers on a daily-cards Event pass the
+ * Board's own `dayIndex`; a legacy single-Board caller omits it.
+ */
+export function broadcastBlackout(who: MomentActor, dayIndex?: number): void {
+  broadcast(`${who.uid}-blackout`, 'blackout', who, dayIndex);
 }
 
 /**

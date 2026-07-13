@@ -796,6 +796,7 @@ export default function Board() {
     identityKnown: boolean;
     rosterConfirmed: boolean;
     cells: Cell[];
+    dayIndex: number | undefined;
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -804,6 +805,7 @@ export default function Board() {
     identityKnown: false,
     rosterConfirmed: false,
     cells: [],
+    dayIndex: undefined,
   });
   feedCtx.current = {
     uid,
@@ -821,6 +823,11 @@ export default function Board() {
     identityKnown,
     rosterConfirmed,
     cells: cellsAttributable ? cells : [],
+    // The SAME Day the completing Mark stamps (doMark, below): the viewed Day in
+    // daily-cards mode, else the dealt Board's own dayIndex (legacy). This is what
+    // lets the per-card blackout Moment NAME its Day (daily-cards-spec § "Scoring
+    // and social surfaces").
+    dayIndex: hasDays ? viewedIndex : board?.dayIndex,
   };
 
   // Write-time twin of `tallySourceLive` for the Doubt raise (Codex P2, PR #106
@@ -884,6 +891,7 @@ export default function Board() {
       identityKnown: idKnown,
       rosterConfirmed: rosterOk,
       cells: cellsRendered,
+      dayIndex: dayIndexNow,
     } = feedCtx.current;
     if (!cUid || !idKnown) return; // identity gate: hold every kind
     const pending = peekPendingMoments(cUid);
@@ -898,7 +906,7 @@ export default function Board() {
       clearPendingMoment(cUid, 'bingo');
     }
     if (pending.blackout && blackoutNow) {
-      broadcastBlackout(actor);
+      broadcastBlackout(actor, dayIndexNow);
       clearPendingMoment(cUid, 'blackout');
     }
     // Ceremonial decision — fully SYNCHRONOUS at publish time (PR #110 round 3
