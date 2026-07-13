@@ -27,6 +27,10 @@ const H = vi.hoisted(() => ({
 }));
 
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   useDayBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   useMyPlayer: () => ({ data: H.player, loading: false, hasServerData: true }),
@@ -42,6 +46,9 @@ vi.mock('../hooks/useData', () => ({
 // module also keeps the prod ../firebase singleton out of this suite — the same
 // isolation w2-proof-capture.test.tsx documents.
 vi.mock('../data/moments', () => ({
+  // #267: the per-card blackout queue reads — inert stubs (empty queue).
+  pendingBlackoutDayIndexes: vi.fn(() => []),
+  removePendingBlackoutDay: vi.fn(),
   broadcastBingo: vi.fn(),
   broadcastBlackout: vi.fn(),
   broadcastFirstBingo: vi.fn(),

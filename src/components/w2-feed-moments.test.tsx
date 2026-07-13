@@ -54,6 +54,10 @@ vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
 
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user, loading: false }) }));
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   useBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
   useDayBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
@@ -289,15 +293,14 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     // carries no `days[]`, so `hasDays` is false and the enqueue passes no
     // dayIndex (fix/d15-blackout-day-naming, Codex finding 1): a legacy Event
     // has no Day schedule to render a chip from, so `board.dayIndex`'s default
-    // of 0 must NOT leak in as a misleading "Day 1". The daily-cards case (a
-    // real dayIndex threaded through) is unit-tested directly at the
+    // of 0 must NOT leak in as a misleading "Day 1". The drain's legacy branch
+    // (#267: an EMPTY pending-day set) broadcasts day-less — single-arg call,
+    // keeping the once-per-Player `${uid}-blackout` id. The daily-cards case
+    // (real dayIndexes threaded through) is unit-tested directly at the
     // pending-queue layer — src/data/w2-feed-moments.test.ts's
-    // `pendingBlackoutDayIndex` suite — since this fixture's mocks don't model
-    // a Day schedule.
-    expect(H.broadcastBlackout).toHaveBeenCalledWith(
-      { uid: 'u1', displayName: 'Deck Daddy', photoURL: null },
-      undefined,
-    );
+    // `pendingBlackoutDayIndexes` suite — since this fixture's mocks don't
+    // model a Day schedule.
+    expect(H.broadcastBlackout).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null });
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1); // not re-announced (bingoTransition false)
   });
 

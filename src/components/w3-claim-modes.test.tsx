@@ -48,6 +48,10 @@ vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user, loading: false }) }));
 vi.mock('../hooks/useData', () => ({
+  // #264: day-meta honor reads — inert stubs (no pinned honors).
+  useDayMeta: () => ({ data: null, loading: false, hasServerData: true }),
+  useDayMetas: () => new Map(),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   // ConfirmWinMoments
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
@@ -74,6 +78,8 @@ vi.mock('../hooks/useData', () => ({
 // Keep planConfirmBroadcasts + MomentActor real (the decision under test); stub the
 // three writers + the durable-witness read.
 vi.mock('../data/moments', async (importOriginal) => {
+  // #267: spreads the real module, so the per-card blackout queue reads come
+  // through genuinely — no stub needed.
   const actual = await importOriginal<typeof import('../data/moments')>();
   return {
     ...actual,
