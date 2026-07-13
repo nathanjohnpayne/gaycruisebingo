@@ -821,6 +821,56 @@ describe('ConfirmWinMoments — daily-cards events adjudicate against the Claim�
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
   });
 
+  it('the drain excludes TUTORIAL Days from the prior-win witness read (Codex P1 on #288)', async () => {
+    H.event = {
+      days: [{ index: 0, tutorial: true }, { index: 1 }, { index: 2 }],
+    } as unknown as Partial<EventDoc>;
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [claim({ status: 'confirmed', dayIndex: 1 })];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    // The witness read carries the schedule's tutorial set, so an admin-approved
+    // warm-up bingo (which wrote the once-per-Player `${uid}-bingo` doc) can
+    // never disqualify the first MAIN-GAME confirm from the ceremony.
+    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: new Set([0]) });
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
+  });
+
+  it('a BATCH crossing bingos on TWO main-game Days claims the event singleton ONCE — lowest Day (Codex P2 on #288)', async () => {
+    H.dayBoards = new Map([
+      [1, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
+      [2, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
+    ]);
+    H.claims = [
+      claim({ id: 'c-d1', status: 'pending', resolvedBy: null, dayIndex: 1 }),
+      claim({ id: 'c-d2', status: 'pending', resolvedBy: null, dayIndex: 2 }),
+    ];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+
+    H.claims = [
+      claim({ id: 'c-d1', status: 'confirmed', dayIndex: 1 }),
+      claim({ id: 'c-d2', status: 'confirmed', dayIndex: 2 }),
+    ];
+    H.dayBoards = new Map([
+      [1, boardDoc(cellsWith(ROW0))],
+      [2, boardDoc(cellsWith(ROW0))],
+    ]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+
+    // BOTH days' plain bingos post (per-card beats)…
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 1);
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 2);
+    // …but the event-singleton ceremony fires exactly ONCE, for the lowest Day.
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
+  });
+
   it('a POST-FREEZE confirm posts its plain bingo but never mints the ceremony (Codex P1 on #287, mirrors the live verdict-time gate)', async () => {
     // The finale freeze has been stamped: a late admin approval of a main-Day
     // claim must not rewrite the settled headline honor.

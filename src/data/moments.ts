@@ -498,10 +498,29 @@ async function writeMomentOnce(
  * rejects; the caller then falls back to the roster check, an accepted narrowed
  * residual documented in specs/w2-feed-moments.md.
  */
-export async function hasPriorBingoWitness(uid: string): Promise<boolean> {
+export async function hasPriorBingoWitness(
+  uid: string,
+  // Day-aware exclusion (Codex P1 on #288): the `${uid}-bingo` doc is
+  // once-per-Player and a TUTORIAL Day's bingo writes it too — but the
+  // cruise-wide First to BINGO is anchored to MAIN-GAME Days only (spec §
+  // "Scoring and social surfaces"), so a warm-up win must not read as a
+  // "prior win" that permanently disqualifies the player's first REAL bingo
+  // from the ceremony. A witness whose payload Day is in `excludeDayIndexes`
+  // resolves false. A day-LESS witness on a daily Event (pre-#286 data) stays
+  // a witness — conservative: the roster gate (already main-game-aware via
+  // the tutorial-excluded firstBingoAt fold) remains the fallback.
+  opts?: { excludeDayIndexes?: ReadonlySet<number> },
+): Promise<boolean> {
   try {
     const snap = await getDocFromCache(rawMoment(`${uid}-bingo`));
-    return snap.exists();
+    if (!snap.exists()) return false;
+    if (opts?.excludeDayIndexes) {
+      const witnessedDay = (snap.data() as { dayIndex?: number } | undefined)?.dayIndex;
+      if (typeof witnessedDay === 'number' && opts.excludeDayIndexes.has(witnessedDay)) {
+        return false; // a tutorial-Day win is not a prior MAIN-GAME win
+      }
+    }
+    return true;
   } catch {
     return false; // not in the local cache — no witness on this device
   }

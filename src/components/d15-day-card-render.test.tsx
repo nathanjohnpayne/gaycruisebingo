@@ -99,6 +99,7 @@ import * as momentsModule from '../data/moments';
 const momentsMocks = momentsModule as unknown as {
   enqueueWinMoments: ReturnType<typeof vi.fn>;
   enqueueFirstBingoMoment: ReturnType<typeof vi.fn>;
+  hasPriorBingoWitness: ReturnType<typeof vi.fn>;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -219,6 +220,9 @@ describe('Board daily-cards wiring (#246)', () => {
     await markSquare('D1 Prompt 1');
     expect(momentsMocks.enqueueWinMoments).toHaveBeenCalledWith(expect.objectContaining({ bingoTransition: true, dayIndex: 1 }));
     expect(momentsMocks.enqueueFirstBingoMoment).toHaveBeenCalledTimes(1);
+    // The prior-win witness excludes tutorial Days (Codex P1 on #288): a
+    // warm-up bingo's `${uid}-bingo` doc must not disqualify this candidate.
+    expect(momentsMocks.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: new Set([0]) });
 
     // Switch to the embark tutorial Day: a bingo verdict there enqueues the
     // plain win Moment(s) but NEVER the ceremonial event singleton.

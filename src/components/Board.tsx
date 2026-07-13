@@ -1673,7 +1673,13 @@ export default function Board() {
       hasDays && actedDay !== undefined && (tutorialDayIndexes?.includes(actedDay) ?? false);
     if (res.bingoTransition && !isStatsFrozen() && !actedTutorialDay) {
       const generation = pendingActionGeneration(uid);
-      const witnessed = await hasPriorBingoWitness(uid);
+      // Tutorial-Day wins are excluded from the prior-win witness (Codex P1 on
+      // #288): the once-per-Player `${uid}-bingo` doc is written by warm-up
+      // wins too, and reading one as a prior win would permanently disqualify
+      // everyone who played the embark card from the headline honor.
+      const witnessed = await hasPriorBingoWitness(uid, {
+        excludeDayIndexes: hasDays ? new Set(tutorialDayIndexes) : undefined,
+      });
       if (!witnessed && revalidateAfterAwait(uid, generation).generationUnchanged) {
         // The candidate carries its OWN Day (#262; Codex P3 on #286 round 2):
         // a snapshot drain can fire the plain bingo — day included — while the

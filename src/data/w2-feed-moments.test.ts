@@ -217,6 +217,24 @@ describe('hasPriorBingoWitness — the durable prior-win witness (PR #99 round 2
     getDocFromCacheSpy.mockRejectedValue(new Error('unavailable'));
     await expect(hasPriorBingoWitness('u1')).resolves.toBe(false);
   });
+
+  it('a TUTORIAL-Day witness is NOT a prior main-game win (Codex P1 on #288)', async () => {
+    // The `${uid}-bingo` doc is once-per-Player and a warm-up win writes it too;
+    // without the exclusion, everyone who bingoed the embark card would be
+    // permanently disqualified from the cruise-wide First to BINGO.
+    getDocFromCacheSpy.mockResolvedValue({ exists: () => true, data: () => ({ dayIndex: 0 }) });
+    await expect(hasPriorBingoWitness('u1', { excludeDayIndexes: new Set([0, 9]) })).resolves.toBe(false);
+  });
+
+  it('a MAIN-GAME-Day witness stays a prior win under the same exclusion set', async () => {
+    getDocFromCacheSpy.mockResolvedValue({ exists: () => true, data: () => ({ dayIndex: 3 }) });
+    await expect(hasPriorBingoWitness('u1', { excludeDayIndexes: new Set([0, 9]) })).resolves.toBe(true);
+  });
+
+  it('a day-LESS witness (pre-#286 data) stays a witness — conservative default', async () => {
+    getDocFromCacheSpy.mockResolvedValue({ exists: () => true, data: () => ({}) });
+    await expect(hasPriorBingoWitness('u1', { excludeDayIndexes: new Set([0]) })).resolves.toBe(true);
+  });
 });
 
 describe('the pending-Moment queue — module state that survives Board unmounts (issue #104)', () => {

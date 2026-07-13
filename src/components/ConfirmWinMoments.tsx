@@ -196,7 +196,12 @@ export default function ConfirmWinMoments() {
     if (!anyReflected) return;
     const actedUid = c.uid;
     st.inFlight = true;
-    void hasPriorBingoWitness(actedUid)
+    // Tutorial-Day wins are excluded from the prior-win witness (Codex P1 on
+    // #288, mirroring the live path): an admin-approved warm-up bingo writes
+    // the once-per-Player `${uid}-bingo` doc too, and reading it as a prior
+    // win would permanently disqualify the player's first MAIN-GAME confirm
+    // from the ceremony.
+    void hasPriorBingoWitness(actedUid, { excludeDayIndexes: c.tutorialDays })
       .then((witnessed) => {
         const st2 = getConfirmState(actedUid);
         st2.inFlight = false;
@@ -234,7 +239,18 @@ export default function ConfirmWinMoments() {
             }
           }
           const actor: MomentActor = { uid: actedUid, displayName: cc.displayName, photoURL: cc.photoURL };
-          for (const [dayKey, entries] of groups) {
+          // ONE ceremonial decision per batch (Codex P2 on #288): first_bingo
+          // is the event singleton, so when two Day groups both cross an
+          // eligible bingo in the same batch, only ONE may fire or park it —
+          // deterministically the lowest Day (legacy day-less group first);
+          // the true cross-player race still resolves at the create-once doc
+          // id. A ceremony already parked from an earlier batch keeps its
+          // slot (never overwritten by a later group).
+          let ceremonyOpen = st2.heldCeremony == null;
+          const orderedGroups = [...groups.entries()].sort(
+            ([a], [b]) => (a ?? -1) - (b ?? -1),
+          );
+          for (const [dayKey, entries] of orderedGroups) {
             const cells = cellsForDayRef.current(cc, dayKey);
             if (cells == null) continue;
             const plan = planConfirmBroadcasts({
@@ -265,11 +281,14 @@ export default function ConfirmWinMoments() {
             // parks a held candidate. The plain bingo/blackout above (and
             // confirmClaim's own per-Day honor pin) still land.
             const ceremonyEligible =
-              (dayKey == null || !cc.tutorialDays.has(dayKey)) && !standingsFrozen(cc.event);
-            if (plan.firstBingo && ceremonyEligible) broadcastFirstBingo(actor, day);
-            else if (plan.firstBingoHeld && ceremonyEligible) {
+              (dayKey == null || !cc.tutorialDays.has(dayKey)) && !standingsFrozen(cc.event) && ceremonyOpen;
+            if (plan.firstBingo && ceremonyEligible) {
+              broadcastFirstBingo(actor, day);
+              ceremonyOpen = false;
+            } else if (plan.firstBingoHeld && ceremonyEligible) {
               st2.heldCeremony = actor;
               st2.heldCeremonyDay = dayKey;
+              ceremonyOpen = false;
             }
             entries.forEach(([id]) => st2.awaiting.delete(id));
           }
