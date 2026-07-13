@@ -383,6 +383,10 @@ a {
   background: color-mix(in srgb, var(--primary) 22%, var(--cell));
   color: var(--ink);
 }
+/* Locked future chips are dashed (#260 — the wireframes' `.chip.lock`). */
+.day-chip-locked {
+  border-style: dashed;
+}
 .day-chip-glyph {
   font-size: 10px;
 }
@@ -392,37 +396,78 @@ a {
    boundary. */
 .board-area {
 }
-.day-locked-chrome {
-  text-align: center;
+/* The daybar (#260, wireframes' day gallery): "Day N · Theme" + tag on the
+   left, port on the right, dress-code description underneath. Shared by the
+   dealt Board and the locked preview via `DayBar` (Board.tsx). */
+.daybar-block {
   margin-bottom: 8px;
 }
-.day-locked-title {
-  font-weight: 700;
+.daybar {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+.daybar-name {
+  font-weight: 800;
+  font-size: 14px;
   color: var(--ink);
 }
-.day-locked-desc {
+.daybar-meta {
+  font-size: 12px;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.daybar-desc {
   color: var(--dim);
   font-size: 12px;
-  margin: 4px 0 0;
+  line-height: 1.35;
+  margin: 2px 0 0;
 }
+/* Blank locked squares are dashed (#260 — the wireframes' `.cell.blank`),
+   not merely dimmed; the populated free space keeps its solid chrome. */
 .cell.locked-cell {
   opacity: 0.55;
+  border-style: dashed;
+  background: var(--panel);
 }
 .cell.locked-cell.free {
   opacity: 1;
+  border-style: solid;
 }
+/* Lock badge (#260): a circled Lucide lock over the unlock-time pill,
+   centered — the wireframes' `.lockbadge` column. */
 .day-lock-badge {
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
   margin-top: 10px;
   color: var(--ink);
   font-size: 13px;
   font-weight: 600;
 }
+.day-lock-icon-circle {
+  width: 44px;
+  height: 44px;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  background: var(--panel);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
 .day-lock-icon {
-  width: 14px;
-  height: 14px;
+  width: 20px;
+  height: 20px;
   stroke-width: 2;
-  vertical-align: -2px;
+}
+.day-lock-text {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 3px 10px;
+  font-weight: 700;
 }
 .day-lock-caption {
   text-align: center;
