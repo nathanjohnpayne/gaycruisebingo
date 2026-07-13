@@ -68,6 +68,7 @@ vi.mock('../hooks/useData', () => ({
   useLeaderboard: () => ({ players: H.players, loading: false, hasServerData: H.rosterConfirmed }),
   useFeed: () => ({ entries: H.feedEntries, loading: false }),
   useMyDayBoards: () => new Map(),
+  useAllDoubts: () => ({ doubts: [], loading: false, hasServerData: true }),
   // Board subscribes the per-Square Doubt count + the Feed's Proofs for the #33
   // satisfied derivation. These Moment-edge fixtures never open the Tally sheet or
   // assert a Doubt count, so empty streams keep them focused on the edge machinery.

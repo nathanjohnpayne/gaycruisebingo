@@ -54,7 +54,9 @@ describe('ProofSheet photo body — two affordances (#190)', () => {
       const { container, unmount } = render(<ProofSheet {...baseProps()} claimMode={claimMode} />);
       await user.click(screen.getByRole('button', { name: /photo/i }));
       expect(screen.getByText(/Take photo/i)).toBeInTheDocument();
-      expect(screen.getByText(/Library/i)).toBeInTheDocument();
+      expect(screen.getByText(/Library$/)).toBeInTheDocument();
+      // The #190 transparency note (#262) rides exactly with the affordance.
+      expect(screen.getByText(/Library picks wear a 🖼️ badge on the Feed/)).toBeInTheDocument();
       // 📷 keeps capture="environment"; 🖼️ has NO capture attribute.
       const [cam, lib] = fileInputs(container);
       expect(cam.getAttribute('capture')).toBe('environment');

@@ -53,6 +53,7 @@ vi.mock('../hooks/useData', () => ({
   // only the media sinks, so an empty event (no days[]) suffices.
   useEventDoc: () => ({ data: null, loading: false }),
   useMyDayBoards: () => new Map(),
+  useAllDoubts: () => ({ doubts: [], loading: false, hasServerData: true }),
 }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
 
@@ -213,7 +214,7 @@ describe('ProofFeed — text Proof is inert; media schemes are guarded', () => {
     H.proofs = [proof({ id: 'a', createdAt: 1, type: 'audio', mediaURL: 'https://x/a.webm' })];
     render(<ProofFeed />);
 
-    const audio = document.querySelector('audio.proof-media') as HTMLAudioElement;
+    const audio = document.querySelector('.proof-audio audio') as HTMLAudioElement;
     expect(audio).toBeInTheDocument();
     expect(audio.getAttribute('src')).toBe('https://x/a.webm');
   });

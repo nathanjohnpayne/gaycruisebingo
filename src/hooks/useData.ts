@@ -791,6 +791,24 @@ export function useReportedProofs() {
  * for both the per-Square DoubtBadge and the TallySheet). It makes the target-side
  * ban filter VIEWER-AWARE (see below).
  */
+/**
+ * EVERY Doubt in the event (#262 — the Feed's "👀 cleared N doubts" pill needs
+ * cross-Prompt visibility, and the doubts collection is event-flat, so ONE
+ * subscription serves every proof card). Same ban semantics as `useDoubts`:
+ * a banned accuser's Doubts vanish for everyone; Doubts against a banned
+ * target hide except from the target themselves.
+ */
+export function useAllDoubts(viewerUid?: string | null) {
+  const { bannedUids } = useEventModeration();
+  const { data, loading, hasServerData } = useColSub<DoubtDoc>(doubtsCol(), 'doubts:all');
+  const doubts = data.filter(
+    (d) =>
+      !isBanned(d.fromUid, bannedUids) &&
+      (!isBanned(d.targetUid, bannedUids) || d.targetUid === viewerUid),
+  );
+  return { doubts, loading, hasServerData };
+}
+
 export function useDoubts(itemId: string | null | undefined, viewerUid?: string | null) {
   const { bannedUids } = useEventModeration(!!itemId);
   const { data, loading, hasServerData } = useColSub<DoubtDoc>(

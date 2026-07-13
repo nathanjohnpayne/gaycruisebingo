@@ -17,6 +17,7 @@ import {
   peekPendingMoments,
   pendingBlackoutDayIndexes,
   removePendingBlackoutDay,
+  pendingBingoDayIndex,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -1051,8 +1052,14 @@ export default function Board() {
     const bingoNow = hasBingo(cellsNow);
     const blackoutNow = isBlackout(cellsNow);
     const actor = { uid: cUid, displayName: cName, photoURL: cPhoto };
+    // #262: captured ONCE before the plain-bingo clear below resets it — the
+    // ceremonial first_bingo further down rides the SAME Day.
+    const bingoDay = pendingBingoDayIndex(cUid);
     if (pending.bingo && bingoNow) {
-      broadcastBingo(actor);
+      // Single-arg on a legacy (day-less) queue — the call contract mirrors
+      // broadcastBlackout's legacy form.
+      if (bingoDay === undefined) broadcastBingo(actor);
+      else broadcastBingo(actor, bingoDay);
       clearPendingMoment(cUid, 'bingo');
     }
     if (pending.blackout && blackoutNow) {
@@ -1113,7 +1120,10 @@ export default function Board() {
         // consumed-but-unpublished candidate, and HOLD paths (identity, roster,
         // board, standing-ness) never consume.
         const othersBingoed = roster.some((p) => p.uid !== cUid && p.firstBingoAt != null);
-        if (!othersBingoed) broadcastFirstBingo(actor);
+        if (!othersBingoed) {
+          if (bingoDay === undefined) broadcastFirstBingo(actor);
+          else broadcastFirstBingo(actor, bingoDay);
+        }
         clearPendingMoment(cUid, 'firstBingo');
       }
     }

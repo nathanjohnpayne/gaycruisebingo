@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useFeed, useEventDoc, useMyDayBoards } from '../hooks/useData';
+import { Play, Pause } from 'lucide-react';
+import { useFeed, useEventDoc, useMyDayBoards, useAllDoubts } from '../hooks/useData';
 import { requestOpenSquare } from '../hooks/useOpenSquare';
 import { useAuth } from '../auth/AuthContext';
 import { reportProof, deleteProof } from '../data/proofs';
@@ -8,10 +9,12 @@ import { track } from '../analytics';
 import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
 import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
+import { isDoubtSatisfied } from '../data/doubts';
 import { THEMES } from '../theme/themes';
 import type {
   BoardDoc,
   DayDef,
+  DoubtDoc,
   LastCallMomentPayload,
   MomentDoc,
   MomentKind,
@@ -20,13 +23,45 @@ import type {
   TallyCard as TallyCardData,
 } from '../types';
 
-// The Feed Day chip label (#211): "Day 2 · Get Sporty" — a 1-based Day number
-// plus the Day's theme label from EventDoc.days[dayIndex] → THEMES, degrading to
-// a bare "Day N" when the Day or its theme can't be resolved.
+// The Feed Day chip label (#211, emoji per #262): "Day 3 · ✈️ Duty Free" — a
+// 1-based Day number plus the Day's theme emoji + label from
+// EventDoc.days[dayIndex] → THEMES, degrading to a bare "Day N" when the Day
+// or its theme can't be resolved.
 function dayChipLabel(dayIndex: number, days: DayDef[] | undefined): string {
   const day = days?.[dayIndex];
   const theme = day ? THEMES.find((t) => t.id === day.theme) : undefined;
-  return theme ? `Day ${dayIndex + 1} · ${theme.label}` : `Day ${dayIndex + 1}`;
+  return theme ? `Day ${dayIndex + 1} · ${theme.emoji} ${theme.label}` : `Day ${dayIndex + 1}`;
+}
+
+// "3:47p" — the wireframes' compact clock on proof cards (#262), in the event
+// timezone so the Feed reads as the ship's diary. Falls back to the host zone
+// on a malformed timezone.
+function clockLabel(ts: number, timezone: string | undefined): string {
+  const opts = { hour: 'numeric', minute: '2-digit', hour12: true } as const;
+  let parts: string;
+  try {
+    parts = new Intl.DateTimeFormat('en-US', { ...opts, timeZone: timezone || undefined }).format(new Date(ts));
+  } catch {
+    parts = new Intl.DateTimeFormat('en-US', opts).format(new Date(ts));
+  }
+  return parts.replace(/\s?(A|P)M$/i, (_m, ap: string) => ap.toLowerCase());
+}
+
+// How many Doubts THIS Proof answered (#262 — the wireframes' "👀 cleared 2
+// doubts" pill): Doubts against the prover on the same Prompt whose window
+// this Proof satisfies. Doubts carry itemId; the Feed's own tally entries
+// provide the itemId → itemText mapping (a doubted Mark implies a marker).
+export function doubtsClearedByProof(
+  proof: Pick<ProofDoc, 'uid' | 'itemText' | 'createdAt'>,
+  doubts: readonly DoubtDoc[],
+  itemTextById: ReadonlyMap<string, string>,
+): number {
+  return doubts.filter(
+    (d) =>
+      d.targetUid === proof.uid &&
+      itemTextById.get(d.itemId) === proof.itemText &&
+      isDoubtSatisfied(d, proof.itemText, [proof]),
+  ).length;
 }
 
 function ago(ts: number): string {
@@ -114,29 +149,41 @@ function visiblePodium(podium: PodiumMomentPayload | undefined, bannedUids: read
  * js/xss-through-dom #1): mediaURL is resolved from a Firestore doc, so a forged
  * non-media scheme (javascript:, …) is dropped rather than rendered.
  */
-function ProofCard({ proof, viewerUid, days, isStandingsFrozen }: { proof: ProofDoc; viewerUid: string | undefined; days: DayDef[] | undefined; isStandingsFrozen: () => boolean }) {
+function ProofCard({
+  proof,
+  viewerUid,
+  days,
+  timezone,
+  isStandingsFrozen,
+  clearedDoubts = 0,
+  tallyCount = 0,
+}: {
+  proof: ProofDoc;
+  viewerUid: string | undefined;
+  days: DayDef[] | undefined;
+  timezone?: string;
+  isStandingsFrozen: () => boolean;
+  // #262 — the wireframes' footer pills: how many Doubts this Proof answered,
+  // and the Prompt's live tally. Zero hides the pill.
+  clearedDoubts?: number;
+  tallyCount?: number;
+}) {
   const media = safeMediaUrl(proof.mediaURL);
   return (
     <div className="proof">
       <div className="row" style={{ border: 'none', background: 'none', padding: 0 }}>
         <Avatar name={proof.displayName} src={proof.photoURL} size={30} />
         <div className="grow">
-          <div className="name" style={{ fontSize: 14 }}>
-            {proof.displayName}{' '}
-            <span className="muted" style={{ fontWeight: 400 }}>marked “{proof.itemText}”</span>
-            {/* 🖼️ badge for a library pick (#190): stamped from ProofDoc.source,
-                next to nothing for a camera/audio/text Proof (source absent). */}
-            {proof.source === 'library' && (
-              <span className="proof-source-badge" title="From the photo library" aria-label="From the photo library">{' '}🖼️</span>
-            )}
-          </div>
+          <div className="name" style={{ fontSize: 14 }}>{proof.displayName}</div>
           <div className="sub">
-            {ago(proof.createdAt)}
-            {/* Day chip (#211): "Day 2 · Get Sporty" from the Proof's dayIndex, so
-                the Feed reads as a cruise diary. Absent on pre-dayIndex Proofs. */}
+            {/* The wireframes' .who line (#262): day chip (theme emoji
+                included) + the compact event-tz clock. Absent halves degrade
+                gracefully on legacy docs. */}
             {typeof proof.dayIndex === 'number' && (
               <span className="proof-day-chip">{dayChipLabel(proof.dayIndex, days)}</span>
             )}
+            {' '}
+            {clockLabel(proof.createdAt, timezone)}
           </div>
         </div>
         <button className="iconbtn" title="Report" onClick={() => { reportProof(proof.id).catch(console.error); track('report_item'); }}>
@@ -169,10 +216,79 @@ function ProofCard({ proof, viewerUid, days, isStandingsFrozen }: { proof: Proof
           </button>
         )}
       </div>
-      {proof.type === 'photo' && media && <img className="proof-media" src={media} alt="proof" loading="lazy" />}
-      {proof.type === 'audio' && media && <audio className="proof-media" controls src={media} />}
-      {proof.type === 'text' && proof.text && <blockquote className="proof-quote">“{proof.text}”</blockquote>}
-      {proof.status === 'flagged' && <div className="badge" style={{ color: '#ff6b6b' }}>flagged for review</div>}
+      {/* The claimed square, quoted in the wireframes' outlined pill (#262). */}
+      <div className="proof-quote-pill">“{proof.itemText}”</div>
+      {proof.type === 'photo' && media && (
+        <div className="proof-media-wrap">
+          <img className="proof-media" src={media} alt="proof" loading="lazy" />
+          {/* The transparency overlay (#190/#262): 📷 live for a camera
+              capture, 🖼️ library for a picker choice; absent on legacy docs
+              with no source stamp. */}
+          {proof.source === 'camera' && <span className="proof-src-badge">📷 live</span>}
+          {proof.source === 'library' && <span className="proof-src-badge">🖼️ library</span>}
+        </div>
+      )}
+      {proof.type === 'audio' && media && <AudioProof src={media} />}
+      {proof.type === 'text' && proof.text && (
+        <blockquote className="proof-quote">
+          <span aria-hidden="true">✍️</span> “{proof.text}”
+        </blockquote>
+      )}
+      {(clearedDoubts > 0 || tallyCount > 0 || proof.status === 'flagged') && (
+        <div className="proof-foot">
+          {clearedDoubts > 0 && (
+            <span className="pill">
+              👀 cleared {clearedDoubts} doubt{clearedDoubts === 1 ? '' : 's'}
+            </span>
+          )}
+          {tallyCount > 0 && <span className="pill">tally {tallyCount}</span>}
+          {proof.status === 'flagged' && <span className="badge" style={{ color: '#ff6b6b' }}>flagged for review</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The wireframes' audio proof treatment (#262): a Lucide play/pause button, a
+ * decorative waveform bar, and the clip duration — replacing the bare native
+ * controls. The <audio> element stays (hidden) as the actual player; duration
+ * resolves from loadedmetadata (blank until then — jsdom-safe).
+ */
+function AudioProof({ src }: { src: string }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [duration, setDuration] = useState<string | null>(null);
+  const toggle = () => {
+    const el = audioRef.current;
+    if (!el) return;
+    if (playing) el.pause();
+    else void el.play().catch(() => {});
+  };
+  return (
+    <div className="proof-audio">
+      <button
+        type="button"
+        className="proof-audio-play"
+        aria-label={playing ? 'Pause proof audio' : 'Play proof audio'}
+        onClick={toggle}
+      >
+        {playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
+      </button>
+      <span className="proof-audio-wave" aria-hidden="true" />
+      {duration && <span className="proof-audio-time">{duration}</span>}
+      <audio
+        ref={audioRef}
+        src={src}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onLoadedMetadata={(e) => {
+          const d = (e.target as HTMLAudioElement).duration;
+          if (Number.isFinite(d)) setDuration(`${Math.floor(d / 60)}:${String(Math.floor(d % 60)).padStart(2, '0')}`);
+        }}
+      />
     </div>
   );
 }
@@ -204,7 +320,11 @@ function MomentCard({ moment, days, bannedUids }: { moment: MomentDoc; days: Day
           <div className="name" style={{ fontSize: 14 }}>
             {!isFinale && <>{moment.displayName}{' '}</>}
             <span className="moment-line">{finaleLine ?? (podium ? 'The podium is in!' : `${isFinale ? '' : ''}${copy.line}`)}</span>
-            {moment.kind === 'blackout' && typeof moment.dayIndex === 'number' && (
+            {/* Every Moment kind wears the day chip when it carries a Day
+                (#262) — bingo/first_bingo payloads gained dayIndex, the finale
+                beats carry it from the scheduler — so the Feed reads as a
+                cruise diary. */}
+            {typeof moment.dayIndex === 'number' && (
               <>
                 {' '}
                 <span className="moment-day-chip proof-day-chip">{dayChipLabel(moment.dayIndex, days)}</span>
@@ -498,6 +618,10 @@ export default function ProofFeed() {
   // (#211/#216). Read-only; absent while loading or on a pre-days[] event, in
   // which case dayChipLabel falls back to a bare "Day N".
   const { data: event } = useEventDoc();
+  // ONE flat Doubts subscription for the whole Feed (#262): the doubts
+  // collection is event-flat, so a single unfiltered read powers every proof
+  // card's "👀 cleared N doubts" pill. Ban semantics ride useAllDoubts.
+  const { doubts } = useAllDoubts(user?.uid);
   // The viewer's own dealt Day Cards (#261): the per-card button gating —
   // ＋ Proof on a Prompt they marked, 🙋 Got it too on one sitting unmarked on
   // one of their unlocked cards, nothing otherwise — reads these Boards
@@ -523,6 +647,16 @@ export default function ProofFeed() {
     requestOpenSquare({ dayIndex: target.dayIndex, itemId: target.itemId });
     navigate('/');
   };
+
+  // The Feed's own tally entries give (a) itemId → itemText for the doubt
+  // derivation and (b) itemText → live count for the "tally N" pill (#262).
+  const itemTextById = new Map<string, string>();
+  const tallyByText = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.feedKind !== 'tallyCard') continue;
+    itemTextById.set(entry.card.itemId, entry.card.itemText);
+    tallyByText.set(entry.card.itemText, (tallyByText.get(entry.card.itemText) ?? 0) + entry.card.count);
+  }
 
   return (
     <div className="list">
@@ -552,7 +686,18 @@ export default function ProofFeed() {
             />
           );
         }
-        return <ProofCard key={`proof-${entry.proof.id}`} proof={entry.proof} viewerUid={user?.uid} days={event?.days} isStandingsFrozen={() => standingsFrozen(event)} />;
+        return (
+          <ProofCard
+            key={`proof-${entry.proof.id}`}
+            proof={entry.proof}
+            viewerUid={user?.uid}
+            days={event?.days}
+            timezone={event?.timezone}
+            isStandingsFrozen={() => standingsFrozen(event)}
+            clearedDoubts={doubtsClearedByProof(entry.proof, doubts, itemTextById)}
+            tallyCount={tallyByText.get(entry.proof.itemText) ?? 0}
+          />
+        );
       })}
       {whoListCard && <FeedWhoListSheet card={whoListCard} onClose={() => setWhoListCard(null)} />}
     </div>

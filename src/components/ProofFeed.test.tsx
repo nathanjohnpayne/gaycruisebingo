@@ -39,7 +39,7 @@ vi.mock('react-router-dom', () => ({ useNavigate: () => H.navigate }));
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
 
-import ProofFeed, { TallyCard, tallyCardAction, tallyActionTarget } from './ProofFeed';
+import ProofFeed, { TallyCard, tallyCardAction, tallyActionTarget, doubtsClearedByProof } from './ProofFeed';
 import { useOpenSquareIntent, __resetOpenSquareForTests } from '../hooks/useOpenSquare';
 import type { BoardDoc } from '../types';
 
@@ -149,11 +149,14 @@ function captureOnNext(): {
   fire: (tally: unknown, proofs?: unknown, moments?: unknown, event?: unknown) => void;
   fireBoard: (dayIndex: number, board: BoardDoc | null) => void;
 } {
-  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; event: ((s: unknown) => void) | null; tally: ((s: unknown) => void) | null; boards: Record<number, (s: unknown) => void> } = {
+  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; events: ((s: unknown) => void)[]; tally: ((s: unknown) => void) | null; doubtsAll: ((s: unknown) => void) | null; boards: Record<number, (s: unknown) => void> } = {
     proofs: null,
     moments: null,
-    event: null,
+    // EVERY event-doc subscription (#262: useAllDoubts' moderation read opens
+    // a second one) — fire() feeds them all so none starves.
+    events: [],
     tally: null,
+    doubtsAll: null,
     boards: {},
   };
   H.onSnapshot.mockImplementation((target: unknown, optionsOrNext: unknown, maybeNext?: (s: unknown) => void) => {
@@ -164,8 +167,11 @@ function captureOnNext(): {
     const args = target && typeof target === 'object' ? ((target as { args?: unknown[] }).args ?? []) : [];
     if (target && typeof target === 'object' && 'query' in (target as object)) captured.proofs = onNext;
     else if (kind === 'doc' && args[3] === 'days') captured.boards[Number(args[4])] = onNext;
-    else if (kind === 'doc') captured.event = onNext;
+    else if (kind === 'doc') captured.events.push(onNext);
     else if (kind === 'collectionGroup') captured.tally = onNext;
+    // #262: the Feed also opens the flat doubts subscription; route it by its
+    // own path segment so it can't clobber the moments capture.
+    else if (kind === 'collection' && args[3] === 'doubts') captured.doubtsAll = onNext;
     else captured.moments = onNext;
     return () => {};
   });
@@ -174,8 +180,9 @@ function captureOnNext(): {
       act(() => {
         captured.proofs?.(proofs);
         captured.moments?.(moments);
-        captured.event?.(event);
+        captured.events.forEach((fn) => fn(event));
         captured.tally?.(tally);
+        captured.doubtsAll?.(emptyColSnap);
       });
     },
     fireBoard: (dayIndex: number, board: BoardDoc | null) => {
@@ -332,5 +339,28 @@ describe('ProofFeed — Tally Card actions wired to the Board sheet (#261)', () 
     sub.fireBoard(0, boardWith([{ itemId: 'other' }], 0));
     expect(screen.queryByTitle('Add a proof')).toBeNull();
     expect(screen.queryByText(/Got it too/)).toBeNull();
+  });
+});
+
+describe('doubtsClearedByProof — the wireframes\' "👀 cleared N doubts" pill (#262)', () => {
+  const mapping = new Map([['item-1', 'Lost passport']]);
+  const doubt = (over: Record<string, unknown>) => ({
+    id: 'd', itemId: 'item-1', cellIndex: 0, fromUid: 'f', fromDisplayName: 'F',
+    targetUid: 'bob', targetDisplayName: 'Bob', createdAt: 1000, ...over,
+  }) as import('../types').DoubtDoc;
+  const proof = { uid: 'bob', itemText: 'Lost passport', createdAt: 2000 };
+
+  it('counts only doubts against the prover, on the same Prompt, satisfied by THIS proof', () => {
+    const doubts = [
+      doubt({ id: 'd1' }), // cleared
+      doubt({ id: 'd2', createdAt: 1500 }), // cleared
+      doubt({ id: 'd3', targetUid: 'carol' }), // wrong target
+      doubt({ id: 'd4', itemId: 'other-item' }), // wrong prompt
+    ];
+    expect(doubtsClearedByProof(proof, doubts, mapping)).toBe(2);
+  });
+
+  it('zero when nothing matches (no pill renders)', () => {
+    expect(doubtsClearedByProof(proof, [], mapping)).toBe(0);
   });
 });
