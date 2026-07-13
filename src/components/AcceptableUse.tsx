@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ShieldAlert } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { useMyUser } from '../hooks/useData';
 
 /** Elements the Tab-trap below will cycle between while the dialog is open. */
 const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
@@ -29,14 +28,14 @@ function attestedLabel(at: number | undefined | null): string | null {
   return `Attested ${m} ${d.getDate()}`;
 }
 
-export default function AcceptableUse({ variant = 'floating' }: { variant?: 'floating' | 'row' }) {
+export default function AcceptableUse({
+  variant = 'floating',
+  attestedAdultAt,
+}: {
+  variant?: 'floating' | 'row';
+  attestedAdultAt?: number | null;
+}) {
   const { user } = useAuth();
-  // The viewer's own 18+ attestation stamp (users/{uid}.attestedAdultAt),
-  // surfaced on the More row (#270). The subscription opens for the ROW
-  // variant only (a conditional ARG, never a conditional hook) — the floating
-  // variant renders no attestation line, and its otherwise-hermetic suites
-  // must not touch Firestore (Codex P2 on #281 round 2).
-  const { data: myUser } = useMyUser(variant === 'row' ? user?.uid : undefined);
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
@@ -84,7 +83,7 @@ export default function AcceptableUse({ variant = 'floating' }: { variant?: 'flo
 
   // ADR 0005: no public unauthenticated surface — nothing renders signed out.
   if (!user) return null;
-  const attested = attestedLabel(myUser?.attestedAdultAt);
+  const attested = attestedLabel(attestedAdultAt);
 
   return (
     <>

@@ -35,6 +35,7 @@ vi.mock('../auth/AuthContext', () => ({
 }));
 vi.mock('../hooks/useData', () => ({
   useEventDoc: () => ({ data: H.event, loading: false }),
+  useMyUser: () => ({ data: null, loading: false, hasServerData: true }),
   usePendingItemCount: (enabled: boolean) => ({ count: enabled ? H.pendingCount : 0, loading: false }),
 }));
 vi.mock('../hooks/useInstallPrompt', () => ({

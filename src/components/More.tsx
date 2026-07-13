@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogOut, ChevronRight, ALargeSmall } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { useEventDoc, usePendingItemCount } from '../hooks/useData';
+import { useEventDoc, useMyUser, usePendingItemCount } from '../hooks/useData';
 import { useInstallPrompt } from '../hooks/useInstallPrompt';
 import { useTextSize, type TextSize } from '../hooks/useTextSize';
 import { THEMES } from '../theme/themes';
@@ -35,6 +35,10 @@ import { WalkthroughContent } from './TutorialBanner';
 export default function More() {
   const { user, signOutUser } = useAuth();
   const { data: event } = useEventDoc();
+  // The More tab already owns Firebase-backed data hooks; keep AcceptableUse's
+  // default/floating import path hermetic by passing the row-only attestation
+  // stamp in as presentation data (Codex P1 on #281).
+  const { data: myUser } = useMyUser(user?.uid);
   const isAdmin = !!(user && event?.admins?.includes(user.uid));
   const { count: pendingCount } = usePendingItemCount(isAdmin);
   const { standalone, deferred, showIOSHint, install } = useInstallPrompt();
@@ -119,7 +123,7 @@ export default function More() {
         <h3>Support</h3>
         <div className="more-rows">
           <BugReport variant="row" />
-          <AcceptableUse variant="row" />
+          <AcceptableUse variant="row" attestedAdultAt={myUser?.attestedAdultAt ?? null} />
         </div>
       </div>
 
@@ -382,4 +386,3 @@ function ScheduleList({ event }: { event: { days: import('../types').DayDef[]; t
     </div>
   );
 }
-
