@@ -72,7 +72,8 @@ test.describe('tutorial days', () => {
     await expect(farewell).toContainText('Last one');
     // Ceremonial, not a tutorial to dismiss: no dismiss affordance.
     await expect(farewell.getByRole('button')).toHaveCount(0);
-    await expect(page.getByRole('tab').nth(FAREWELL_INDEX)).toHaveAttribute('aria-label', /Warm-up/i);
+    // #260: the farewell chip wears the "Goodbye" tag, not "Warm-up".
+    await expect(page.getByRole('tab').nth(FAREWELL_INDEX)).toHaveAttribute('aria-label', /Goodbye/i);
     await page.screenshot({ path: `${SHOTS}/tutorial-farewell.png`, fullPage: true });
   });
 });

@@ -398,8 +398,14 @@ a {
 }
 /* The daybar (#260, wireframes' day gallery): "Day N · Theme" + tag on the
    left, port on the right, dress-code description underneath. Shared by the
-   dealt Board and the locked preview via `DayBar` (Board.tsx). */
-.daybar-block {
+   dealt Board and the locked preview via `DayBar` (Board.tsx). The root also
+   wears `.board-header` (the pre-#260 tag mount point's contract) — that
+   class's own flex-center row layout must NOT leak in, hence the combined
+   selector below, which out-specifies `.board-header` regardless of source
+   order (Codex P2 on #272). */
+.daybar-block,
+.board-header.daybar-block {
+  display: block;
   margin-bottom: 8px;
 }
 .daybar {
