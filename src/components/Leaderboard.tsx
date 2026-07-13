@@ -162,14 +162,20 @@ export default function Leaderboard() {
   const honors = (event?.days ?? []).map((d) => {
     const pinned = dayMetas.get(d.index)?.firstBingo;
     const derived = derivedHonors.find((h) => h.dayIndex === d.index);
+    // THE PIN WINS when present (#280 round 4): the write-once, rules-
+    // timestamped day-meta doc is the honor's source of truth. Derived
+    // dayStats timestamps are NOT reliable tiebreakers — the mark folds can
+    // seed a later day's bucket from the cruise-wide root firstBingoAt, so an
+    // "earlier" derived stamp may be another day's time entirely. The derived
+    // roster is the fallback for UNPINNED days, and the pre-pin shape for a
+    // banned pin (only an earlier-stamped derived honoree, never a later
+    // promotion). The unknown-identity-winner residual the old earliest-wins
+    // rule chased is now covered by the module-state held-pin queue (which
+    // survives unmounts and fires on identity resolve); what remains —
+    // a reload before the row resolves — is accepted and documented.
     let winner: { displayName: string } | null;
     if (pinned && isBanned(pinned.uid, bannedUids)) {
-      // A banned pin hides — and only an EARLIER derived winner may show in
-      // its place (their honor predates the banned pin; #280 round 2). A
-      // LATER derived name is never promoted into a banned player's slot.
       winner = derived && derived.firstBingoAt < pinned.at ? derived : null;
-    } else if (pinned && derived && derived.firstBingoAt < pinned.at) {
-      winner = derived;
     } else {
       winner = pinned ?? derived ?? null;
     }

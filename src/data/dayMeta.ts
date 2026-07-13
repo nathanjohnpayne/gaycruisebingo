@@ -71,3 +71,37 @@ export async function pinDayFirstBingo(
     console.error('[dayMeta] first-bingo pin rejected', { dayIndex, uid: who.uid }, err);
   });
 }
+
+// --- Held honor pins (#264/#280) -------------------------------------------------
+//
+// A bingo landing while the winner's saved identity is still resolving cannot
+// pin (a permanent public honor must never stamp 'Anonymous'), so the pin is
+// HELD and released the moment that account's identity resolves. MODULE state
+// — not a component ref — for the same reason the pending-Moment queue is
+// (specs/w2-feed-moments.md, issue #104): the hold must survive Board
+// unmounts and route changes. Keyed to the acted account; in-memory only (a
+// reload loses it — the honors strip's derived fallback covers the residual).
+
+interface HeldHonorPin {
+  uid: string;
+  dayIndex: number;
+  at: number;
+}
+
+let heldHonorPins: HeldHonorPin[] = [];
+
+export function enqueueHeldHonorPin(uid: string, dayIndex: number, at: number): void {
+  heldHonorPins.push({ uid, dayIndex, at });
+}
+
+/** Drain and return the given account's holds (other accounts' stay queued). */
+export function takeHeldHonorPins(uid: string): HeldHonorPin[] {
+  const mine = heldHonorPins.filter((h) => h.uid === uid);
+  heldHonorPins = heldHonorPins.filter((h) => h.uid !== uid);
+  return mine;
+}
+
+/** Test-only. */
+export function __resetHeldHonorPinsForTests(): void {
+  heldHonorPins = [];
+}

@@ -37,7 +37,7 @@ import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
 import TutorialBanner, { TutorialTag } from './TutorialBanner';
 import FarewellPodium from './FarewellPodium';
 import { farewellPinIndex } from '../data/finale';
-import { pinDayFirstBingo } from '../data/dayMeta';
+import { pinDayFirstBingo, enqueueHeldHonorPin, takeHeldHonorPins } from '../data/dayMeta';
 import CoachOverlay from './CoachOverlay';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
@@ -681,10 +681,7 @@ export default function Board() {
   // A Feed Tally Card's pending "open this Prompt's sheet" request (#261),
   // consumed by the intent effect below once the right Day's board renders.
   const openSquareIntent = useOpenSquareIntent();
-  // Day-honor pins held while the viewer's identity was still resolving
-  // (#280 round 2) — keyed to the acted account (round 3) and released by the
-  // effect below the moment that account's identity resolves.
-  const heldHonorPins = useRef<{ uid: string; dayIndex: number; at: number }[]>([]);
+
   // The open Claim sheet's social heat line (#211): reuse the SAME per-Prompt
   // Tally subscription the TallyBadge uses — no new read — for the Square the
   // sheet is open on. useTally accepts a null id (no proofTarget → no sub).
@@ -1106,12 +1103,11 @@ export default function Board() {
 
   // Release held day-honor pins once the identity resolves (#280 round 2) —
   // only the CURRENT account's holds (round 3); another account's stay queued
-  // for its return, mirroring the pending-Moment queue's uid keying.
+  // for its return (module state, so a hold made just before an unmount still
+  // drains on the next mount — round 4), mirroring the pending-Moment queue.
   useEffect(() => {
-    if (!identityKnown || !uid || heldHonorPins.current.length === 0) return;
-    const mine = heldHonorPins.current.filter((h) => h.uid === uid);
-    if (mine.length === 0) return;
-    heldHonorPins.current = heldHonorPins.current.filter((h) => h.uid !== uid);
+    if (!identityKnown || !uid) return;
+    const mine = takeHeldHonorPins(uid);
     for (const h of mine) {
       void pinDayFirstBingo(h.dayIndex, {
         uid,
@@ -1395,10 +1391,15 @@ export default function Board() {
     bingoTransition: boolean;
     blackoutTransition: boolean;
   }) => {
-    // The verdict's own clock, captured before any await below (#280 round 3):
-    // the honor pin stamps THIS, so a slow upload preceding the verdict never
-    // displays the honor minutes late.
-    const actedAt = Date.now();
+    // The WIN's own time (#280 round 4): the completing Mark's `markedAt` from
+    // the folded cells — the same clock the stats fold persisted — falling
+    // back to the verdict clock when no cell stamp is readable. A slow upload
+    // preceding the verdict can then never skew the displayed honor time.
+    const latestMark = res.cells.reduce<number>(
+      (max, c) => (c.marked && typeof c.markedAt === 'number' && c.markedAt > max ? c.markedAt : max),
+      0,
+    );
+    const actedAt = latestMark > 0 ? latestMark : Date.now();
     enqueueWinMoments({
       uid,
       bingoTransition: res.bingoTransition,
@@ -1435,14 +1436,13 @@ export default function Board() {
           photoURL: live.photoURL,
         }, actedAt);
       } else {
-        // Identity still resolving (#280 round 2): hold the pin in-memory —
-        // KEYED TO THE ACTED ACCOUNT (round 3), so an account switch can
-        // never release another player's honor — and fire it once the saved
-        // row loads. `at` is the verdict's own clock, so a slow upload never
-        // shifts the pinned honor minutes late. Reload loses the hold
-        // (in-memory), an accepted residual the strip's earliest-wins
-        // derived fallback covers.
-        heldHonorPins.current.push({ uid, dayIndex: viewedIndex, at: actedAt });
+        // Identity still resolving (#280 round 2): hold the pin — MODULE
+        // state keyed to the acted account (rounds 3-4), so it survives Board
+        // unmounts/route changes and a switch never releases another player's
+        // honor. `at` is the WIN's own time. Reload loses the hold
+        // (in-memory), an accepted residual the strip's derived fallback
+        // covers.
+        enqueueHeldHonorPin(uid, viewedIndex, actedAt);
       }
     }
     // The BIRTH-TIME witness (round 2 finding D; made the SOLE witness site by

@@ -80,7 +80,11 @@ vi.mock('../data/api', () => ({
       : (fallback ?? 'Anonymous'),
 }));
 vi.mock('../data/proofs', () => ({ attachProof: H.attachProof }));
-vi.mock('../data/dayMeta', () => ({ pinDayFirstBingo: H.pinDayFirstBingo }));
+vi.mock('../data/dayMeta', () => ({
+  pinDayFirstBingo: H.pinDayFirstBingo,
+  enqueueHeldHonorPin: vi.fn(),
+  takeHeldHonorPins: vi.fn(() => []),
+}));
 vi.mock('../analytics', () => ({ track: H.track }));
 vi.mock('../auth/AuthContext', () => ({
   useAuth: () => ({ user: H.user, loading: false, signIn: vi.fn(), signOutUser: vi.fn() }),
