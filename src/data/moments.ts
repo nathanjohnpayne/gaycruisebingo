@@ -682,13 +682,18 @@ export interface ConfirmListenerState {
   // re-enqueues one.
   handled: Set<string>;
   // Enqueued confirms whose board flip has not yet been adjudicated: claimId → the
-  // Claim's cellIndex + proofId. The proofId makes board reflection claim-SPECIFIC
-  // (Codex #116 R4 finding 2): `confirmClaim` resolves the cell by proofId, so a
-  // DIFFERENT claim's confirm at the same index must not count as this one's.
-  awaiting: Map<string, { cellIndex: number; proofId: string | null }>;
+  // Claim's cellIndex + proofId + its Day (#274 — a daily Claim adjudicates
+  // against ITS day-scoped board; `null` = a legacy single-board Claim). The
+  // proofId makes board reflection claim-SPECIFIC (Codex #116 R4 finding 2):
+  // `confirmClaim` resolves the cell by proofId, so a DIFFERENT claim's
+  // confirm at the same index must not count as this one's.
+  awaiting: Map<string, { cellIndex: number; proofId: string | null; dayIndex: number | null }>;
   // A first_bingo candidate parked at the roster gate, with its winner actor
   // captured; its prior-win eligibility was fixed at detection (never re-read).
+  // `heldCeremonyDay` (#274) is the Day the held win stood on — the fall-clear
+  // re-check reads THAT board, and the eventual publish names it.
   heldCeremony: MomentActor | null;
+  heldCeremonyDay?: number | null;
   // A witness read is in flight — serializes the async decision and drives the
   // drain-until-empty loop (Codex #116 finding 2).
   inFlight: boolean;
