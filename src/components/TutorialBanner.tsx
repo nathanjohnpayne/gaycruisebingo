@@ -98,18 +98,24 @@ export default function TutorialBanner({ day }: { day: DayDef }) {
 }
 
 /**
- * The "Warm-up" tag (daily-cards-spec § "Embark (tutorial) view": "Tutorial
+ * The tutorial-Day tag (daily-cards-spec § "Embark (tutorial) view": "Tutorial
  * days show a 'Warm-up' tag on the day chip and board header in place of
- * daily-honor competitiveness"). One shared bit of markup for both mount
- * points (DaySwitcher's chip, Board's header) so the two never drift. #212
+ * daily-honor competitiveness"; the farewell Day wears "Goodbye" per the
+ * wireframes' Day-10 frame, #260). One shared bit of markup for both mount
+ * points (DaySwitcher's chip, Board's daybar) so the two never drift. #212
  * owns the daily-honor pin the eight main Days show in this same slot —
  * this component only renders on the two tutorial Days, so it structurally
  * cannot collide with that pin (mutually exclusive on `tutorial`).
  */
-export function WarmUpTag({ className }: { className?: string }) {
+export function tutorialTagLabel(pool: DayDef['pool']): string {
+  return pool === 'farewell' ? 'Goodbye' : 'Warm-up';
+}
+
+export function TutorialTag({ pool, className }: { pool: DayDef['pool']; className?: string }) {
+  const label = tutorialTagLabel(pool);
   return (
-    <span className={`warm-up-tag${className ? ` ${className}` : ''}`} aria-label="Warm-up day">
-      Warm-up
+    <span className={`warm-up-tag${className ? ` ${className}` : ''}`} aria-label={`${label} day`}>
+      {label}
     </span>
   );
 }

@@ -33,7 +33,7 @@ import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 import LoadingState from './LoadingState';
 import DaySwitcher, { defaultViewedIndex } from './DaySwitcher';
-import TutorialBanner, { WarmUpTag } from './TutorialBanner';
+import TutorialBanner, { TutorialTag } from './TutorialBanner';
 import FarewellPodium from './FarewellPodium';
 import { farewellPinIndex } from '../data/finale';
 import CoachOverlay from './CoachOverlay';
@@ -431,8 +431,10 @@ function themeDescription(themeId: string): string {
   return THEMES.find((t) => t.id === themeId)?.description ?? '';
 }
 
-/** "Unlocks 8:00 AM · Wed Jul 22" — event-timezone formatted, falling back
- * to UTC if the Event doc hasn't resolved yet. */
+/** "Unlocks 8:00 a.m. · Wed Jul 22" — event-timezone formatted, falling back
+ * to UTC if the Event doc hasn't resolved yet. The meridiem is lowercased
+ * with periods ("a.m."), matching the spec's locked-preview copy (#260)
+ * rather than Intl's "AM". */
 function formatUnlockAt(unlockAt: number, timezone: string | undefined): string {
   const tz = timezone || 'UTC';
   const when = new Date(unlockAt);
@@ -440,7 +442,9 @@ function formatUnlockAt(unlockAt: number, timezone: string | undefined): string 
     hour: 'numeric',
     minute: '2-digit',
     timeZone: tz,
-  }).format(when);
+  })
+    .format(when)
+    .replace(/\s?([AP])M\b/, (_m, p: string) => ` ${p.toLowerCase()}.m.`);
   const date = new Intl.DateTimeFormat('en-US', {
     weekday: 'short',
     month: 'short',
@@ -448,6 +452,33 @@ function formatUnlockAt(unlockAt: number, timezone: string | undefined): string 
     timeZone: tz,
   }).format(when);
   return `${time} · ${date}`;
+}
+
+/**
+ * The viewed Day's board header (#260 — the wireframes' daybar, rendered on
+ * BOTH the dealt Board and the locked preview so the two can't drift):
+ * "Day N · Theme label" plus the tutorial tag on the left, the port on the
+ * right, and the Theme's dress-code description underneath. The root keeps
+ * the `.board-header` class — the pre-#260 tutorial-tag mount point — so
+ * that contract (and the e2e selector on it) survives the daybar absorbing
+ * it; #212's daily-honor pin will extend the meta slot on main Days.
+ */
+export function DayBar({ day }: { day: DayDef }) {
+  const description = themeDescription(day.theme);
+  return (
+    <div className="board-header daybar-block">
+      <div className="daybar">
+        <div className="daybar-name">
+          Day {day.index + 1} · {themeLabel(day.theme)}
+          {day.tutorial && <TutorialTag pool={day.pool} className="daybar-tag" />}
+        </div>
+        <div className="daybar-meta">
+          <span aria-hidden="true">{day.portEmoji}</span> {day.port}
+        </div>
+      </div>
+      {description && <p className="daybar-desc">{description}</p>}
+    </div>
+  );
 }
 
 /**
@@ -471,17 +502,10 @@ function LockedDayPreview({
   // instead of "unlocks at" (the date is in the past, so the unlock copy misreads).
   waking?: boolean;
 }) {
-  const description = themeDescription(day.theme);
   const freeText = day.freeText ?? FREE_TEXT;
   return (
     <div className="board-area day-locked" data-theme={day.theme}>
-      <div className="day-locked-chrome">
-        <div className="day-locked-title">
-          <span aria-hidden="true">{day.portEmoji}</span> {day.port} · {themeLabel(day.theme)}
-          {day.tutorial && <WarmUpTag className="day-locked-warm-up" />}
-        </div>
-        {description && <p className="day-locked-desc">{description}</p>}
-      </div>
+      <DayBar day={day} />
       <div className="bingo-head" aria-hidden="true">
         {['B', 'I', 'N', 'G', 'O'].map((l) => (
           <span key={l}>{l}</span>
@@ -505,8 +529,12 @@ function LockedDayPreview({
         ))}
       </div>
       <div className="day-lock-badge">
-        <Lock className="day-lock-icon" aria-hidden="true" />{' '}
-        {waking ? 'Waking up—dealing today’s squares' : `Unlocks ${formatUnlockAt(day.unlockAt, timezone)}`}
+        <span className="day-lock-icon-circle" aria-hidden="true">
+          <Lock className="day-lock-icon" />
+        </span>
+        <span className="day-lock-text">
+          {waking ? 'Waking up—dealing today’s squares' : `Unlocks ${formatUnlockAt(day.unlockAt, timezone)}`}
+        </span>
       </div>
       <p className="day-lock-caption muted">
         {waking
@@ -1373,18 +1401,11 @@ export default function Board() {
           on a not-yet-migrated Event (`hasDays` false), so the pre-Phase-1.5
           single-Board rendering is byte-identical to before. */}
       <div className="board-area" data-theme={viewedDay?.theme}>
-        {/* The tutorial banner slot (daily-cards-spec §§ "Embark (tutorial)
-            view" / "Farewell view"): mounts above the grid, gated on the
-            viewed Day's `tutorial` flag — a structural no-op (renders
-            nothing) for any of the eight main Days. The board-header slot
-            carries the "Warm-up" tag in place of #212's daily-honor pin
-            (mutually exclusive on `tutorial`, so the two can never collide
-            on this DOM position independently of each other). */}
-        {viewedDay?.tutorial && (
-          <div className="board-header">
-            <WarmUpTag />
-          </div>
-        )}
+        {/* The daybar (#260 — wireframes' day gallery): "Day N · Theme" +
+            tutorial tag, port, and the dress-code description, on every
+            viewed Day. Absorbs the pre-#260 tutorial-only board-header
+            (the tag now renders inside the daybar's name line). */}
+        {viewedDay && <DayBar day={viewedDay} />}
         {/* The farewell podium (#217, daily-cards-spec § "Farewell view"):
             shown on the farewell Day once the standings freeze (`frozenAt`
             set), ABOVE the goodbye banner below — this ticket owns the

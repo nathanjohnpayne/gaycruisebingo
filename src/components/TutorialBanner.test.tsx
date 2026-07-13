@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import type { DayDef } from '../types';
-import TutorialBanner, { WarmUpTag } from './TutorialBanner';
+import TutorialBanner, { TutorialTag } from './TutorialBanner';
 
 // Covers specs/d15-tutorial-banners.md: the embark "How this works" banner,
 // the farewell goodbye banner, and the "Warm-up" tag (daily-cards-spec §§
@@ -103,9 +103,14 @@ describe('TutorialBanner — farewell banner', () => {
   });
 });
 
-describe('WarmUpTag', () => {
-  it('renders the "Warm-up" label', () => {
-    render(<WarmUpTag />);
+describe('TutorialTag', () => {
+  it('renders "Warm-up" for the embark pool', () => {
+    render(<TutorialTag pool="embark" />);
     expect(screen.getByText('Warm-up')).toBeInTheDocument();
+  });
+
+  it('renders "Goodbye" for the farewell pool (#260 — the wireframes Day-10 tag)', () => {
+    render(<TutorialTag pool="farewell" />);
+    expect(screen.getByText('Goodbye')).toBeInTheDocument();
   });
 });
