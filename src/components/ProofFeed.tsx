@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useFeed, useEventDoc } from '../hooks/useData';
 import { useAuth } from '../auth/AuthContext';
 import { reportProof, deleteProof } from '../data/proofs';
@@ -25,6 +25,10 @@ function ago(ts: number): string {
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
 }
+
+// Focus-trap query (mirrors ProfileEditor.tsx's FOCUSABLE_SELECTOR) — every
+// element type `FeedWhoListSheet`'s Tab trap below needs to cycle between.
+const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
 
 // A Moment's celebratory line by kind (ADR 0002): it announces *that* a beat
 // happened — no media, no evidence. The fallback keeps a malformed/forward-compat
@@ -257,12 +261,65 @@ export function TallyCard({
  * markedAt), not the viewer's own Board/Doubt context `TallySheet` needs to
  * raise one; that scope is deliberately left to the existing Board-side sheet
  * (spec: "the Feed who-list can be view-only to stay scoped").
+ *
+ * Keyboard-operable dialog (CodeRabbit finding, PR #251): `role="dialog"` +
+ * `aria-modal` + `aria-labelledby` the "Who marked" title, focus moved into
+ * the sheet on open (the title itself, `tabIndex={-1}`, since a read-only
+ * sheet has no natural first control), Tab/Shift+Tab trapped inside via a
+ * document `keydown` listener, and focus restored to whatever was focused
+ * before open (captured once at mount — the sheet is a sibling of many
+ * `TallyCard` triggers in the Feed, not a fixed one, so there's no single
+ * `triggerRef` to hold like `ProfileEditor`/`BugReport` do) on close. Mirrors
+ * `ProfileEditor.tsx`'s `Editor` focus-trap effect.
  */
 function FeedWhoListSheet({ card, onClose }: { card: TallyCardData; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    titleRef.current?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      if (!focusable || focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === titleRef.current)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      previouslyFocused?.focus();
+    };
+  }, [onClose]);
+
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-title">Who marked “{card.itemText}”</div>
+      <div
+        ref={dialogRef}
+        className="sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="feed-wholist-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sheet-title" id="feed-wholist-title" ref={titleRef} tabIndex={-1}>
+          Who marked “{card.itemText}”
+        </div>
         {card.markers.length === 0 ? (
           <p className="muted tally-empty">No one has marked this yet.</p>
         ) : (
