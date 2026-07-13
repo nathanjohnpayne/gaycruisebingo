@@ -90,9 +90,11 @@ function pinnedOrDerivedDailyHonors(
 ): DayHonor[] {
   const derivedHonors = perDayHonors(players);
   if (!days?.length || !dayMetas) return derivedHonors;
+  const visibleUids = new Set(players.map((p) => p.uid));
   return days.flatMap((day) => {
     const pinned = dayMetas.get(day.index)?.firstBingo;
     if (pinned) {
+      if (!visibleUids.has(pinned.uid)) return [];
       return [
         {
           dayIndex: day.index,
