@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useAuth } from '../auth/AuthContext';
-import { useBoard, useMyPlayer, useLeaderboard, useMyClaims } from '../hooks/useData';
+import { useBoard, useEventDoc, useMyDayBoards, useMyPlayer, useLeaderboard, useMyClaims } from '../hooks/useData';
 import { resolveDisplayName } from '../data/api';
 import {
   broadcastBingo,
@@ -11,8 +11,8 @@ import {
   getConfirmState,
   type MomentActor,
 } from '../data/moments';
-import { hasBingo } from '../game/logic';
-import type { Cell, PlayerDoc } from '../types';
+import { hasBingo, standingsFrozen, tutorialDayIndexSet } from '../game/logic';
+import type { BoardDoc, Cell, EventDoc, PlayerDoc } from '../types';
 
 /** A confirm awaiting its board write: the Claim's cell AND the proof it resolves on. */
 interface AwaitingConfirm {
@@ -22,6 +22,14 @@ interface AwaitingConfirm {
   // THIS proofId — the claim-specific match below. `null` = a legacy Claim with no
   // proofId, which resolves by index (the historical fallback).
   proofId: string | null;
+  // The Claim's Day (#274): a daily Claim adjudicates against ITS day-scoped
+  // board and its Moments name that Day. `null` = a legacy single-board Claim.
+  dayIndex: number | null;
+  // The Claim's creation time — the batch's ceremony ORDER (Codex P3 on #288
+  // round 3): when two Day groups cross eligible bingos in one drain, the
+  // event singleton goes to the group whose claim was raised FIRST (the claim
+  // precedes its win), not to the lowest day number.
+  createdAt: number;
 }
 
 /**
@@ -95,6 +103,14 @@ export default function ConfirmWinMoments() {
   const { user } = useAuth();
   const uid = user?.uid;
   const { data: board } = useBoard(uid);
+  // Daily-cards mode (#274): a confirmed Claim's board write lands on the
+  // DAY-SCOPED board for the Claim's own dayIndex — subscribe the viewer's
+  // dealt Day Cards (bounded by the schedule length) so the drain can
+  // adjudicate each Claim against ITS board. Legacy events keep the single
+  // `useBoard` above; the two paths never mix (a Claim either carries a
+  // dayIndex or it does not).
+  const { data: event } = useEventDoc(!!uid);
+  const dayBoards = useMyDayBoards(uid, event?.days?.length ?? 0);
   const { data: player, loading: playerLoading, hasServerData: playerConfirmed } = useMyPlayer(uid);
   const { players, hasServerData: rosterConfirmed } = useLeaderboard();
   const { claims, fromCache: claimsFromCache } = useMyClaims(uid);
@@ -116,6 +132,9 @@ export default function ConfirmWinMoments() {
     identityKnown: boolean;
     cells: Cell[];
     boardOwned: boolean;
+    dayBoards: ReadonlyMap<number, BoardDoc>;
+    event: EventDoc | null;
+    tutorialDays: ReadonlySet<number>;
   }>({
     uid: undefined,
     displayName: 'Anonymous',
@@ -125,6 +144,9 @@ export default function ConfirmWinMoments() {
     identityKnown: false,
     cells: [],
     boardOwned: false,
+    dayBoards: new Map(),
+    event: null,
+    tutorialDays: new Set(),
   });
   ctx.current = {
     uid,
@@ -135,7 +157,25 @@ export default function ConfirmWinMoments() {
     identityKnown,
     cells: board?.cells ?? [],
     boardOwned: board != null && board.uid === uid,
+    dayBoards,
+    event: event ?? null,
+    tutorialDays: tutorialDayIndexSet(event?.days),
   };
+
+  // The cells a Day's confirms adjudicate against (#274): that Day's own board
+  // in daily mode (owned by construction — useMyDayBoards subscribes only the
+  // viewer's docs, and a foreign uid is re-checked), the attributable legacy
+  // board when the Claim carried no Day. `null` = that board isn't available
+  // yet (hold; a later snapshot retries).
+  const cellsForDay = (c: typeof ctx.current, dayIndex: number | null): Cell[] | null => {
+    if (dayIndex != null) {
+      const dayBoard = c.dayBoards.get(dayIndex);
+      return dayBoard && dayBoard.uid === c.uid && dayBoard.cells.length > 0 ? dayBoard.cells : null;
+    }
+    return c.boardOwned && c.cells.length > 0 ? c.cells : null;
+  };
+  const cellsForDayRef = useRef(cellsForDay);
+  cellsForDayRef.current = cellsForDay;
 
   // Self-reference so the async settle continuation can loop the drain until the
   // queue is empty (finding 2) without capturing a stale callback.
@@ -146,25 +186,37 @@ export default function ConfirmWinMoments() {
   // the confirmed cells crossed, broadcasts, and parks a still-unconfirmed ceremony.
   const drain = useCallback(() => {
     const c = ctx.current;
-    if (!c.uid || !c.identityKnown || !c.boardOwned || c.cells.length === 0) return;
+    if (!c.uid || !c.identityKnown) return;
     const st = getConfirmState(c.uid);
     if (st.inFlight || st.awaiting.size === 0) return;
     // A confirm is "reflected" only once the resolve() board write has LANDED for its
     // OWN cell — marked + status 'confirmed' + matching proofId (cellReflectsConfirm,
-    // Codex #116 R3 finding 3 + R4 finding 2). Only spend a witness read if at least
-    // one awaiting confirm is reflected.
-    if (![...st.awaiting.values()].some((e) => cellReflectsConfirm(c.cells, e))) return;
+    // Codex #116 R3 finding 3 + R4 finding 2) — on the board the CLAIM belongs
+    // to (#274: the day-scoped board in daily mode). Only spend a witness read
+    // if at least one awaiting confirm is reflected on its own board.
+    const anyReflected = [...st.awaiting.values()].some((e) => {
+      const cells = cellsForDayRef.current(c, e.dayIndex);
+      return cells != null && cellReflectsConfirm(cells, e);
+    });
+    if (!anyReflected) return;
     const actedUid = c.uid;
     st.inFlight = true;
-    void hasPriorBingoWitness(actedUid)
+    // Tutorial-Day wins are excluded from the prior-win witness (Codex P1 on
+    // #288, mirroring the live path): an admin-approved warm-up bingo writes
+    // the once-per-Player `${uid}-bingo` doc too, and reading it as a prior
+    // win would permanently disqualify the player's first MAIN-GAME confirm
+    // from the ceremony.
+    void hasPriorBingoWitness(actedUid, { excludeDayIndexes: c.tutorialDays })
       .then((witnessed) => {
         const st2 = getConfirmState(actedUid);
         st2.inFlight = false;
         const cc = ctx.current;
         // Account switched away mid-read (finding 4): leave the awaiting entries in
         // the uid-keyed state so a switch-BACK resumes them; never emit with the
-        // wrong actor or against another account's board.
-        if (cc.uid === actedUid && cc.boardOwned && cc.cells.length > 0) {
+        // wrong actor or against another account's board. The board-availability
+        // check is per-entry now (#274) — cellsFor holds an entry whose board
+        // isn't attributable/present.
+        if (cc.uid === actedUid) {
           // Recompute reflected from the CURRENT post-await state, NOT a pre-await
           // snapshot (Codex #116 R4 finding 1): a sibling confirm that landed while the
           // witness read was in flight is now in `st2.awaiting` and its cell is on
@@ -176,36 +228,87 @@ export default function ConfirmWinMoments() {
           // already-standing win. Concurrent multi-confirm is then deterministic: the
           // batch emits exactly the kinds it crossed, once each (deterministic-id
           // dedup besides), and the winner-attributed Moment is never lost or doubled.
-          const nowReflected = [...st2.awaiting.entries()].filter(([, e]) =>
-            cellReflectsConfirm(cc.cells, e),
+          // #274: adjudicate PER BOARD — group the reflected confirms by the
+          // Day they belong to (null = the legacy single board). Each group's
+          // transition is measured against ITS OWN board with its own siblings
+          // forced back to pending, exactly as before; groups on different
+          // boards are independent wins by construction (one card each).
+          const groups = new Map<number | null, Array<[string, AwaitingConfirm]>>();
+          for (const [id, e] of st2.awaiting.entries()) {
+            const cells = cellsForDayRef.current(cc, e.dayIndex);
+            if (cells != null && cellReflectsConfirm(cells, e)) {
+              const key = e.dayIndex;
+              const list = groups.get(key) ?? [];
+              list.push([id, e]);
+              groups.set(key, list);
+            }
+          }
+          const actor: MomentActor = { uid: actedUid, displayName: cc.displayName, photoURL: cc.photoURL };
+          // ONE ceremonial decision per batch (Codex P2 on #288): first_bingo
+          // is the event singleton, so when two Day groups both cross an
+          // eligible bingo in the same batch, only ONE may fire or park it —
+          // the group whose claim was raised EARLIEST (round 3 P3: the claim
+          // precedes its win, so claim age approximates which bingo crossed
+          // first far better than day number; day index breaks ties). The
+          // true cross-player race still resolves at the create-once doc id.
+          // A ceremony already parked from an earlier batch keeps its slot
+          // (never overwritten by a later group).
+          let ceremonyOpen = st2.heldCeremony == null;
+          let plainBingoOpen = true;
+          const groupAge = (entries: Array<[string, AwaitingConfirm]>) =>
+            Math.min(...entries.map(([, e]) => e.createdAt));
+          const orderedGroups = [...groups.entries()].sort(
+            ([a, ea], [b, eb]) => groupAge(ea) - groupAge(eb) || (a ?? -1) - (b ?? -1),
           );
-          if (nowReflected.length > 0) {
-            const actor: MomentActor = { uid: actedUid, displayName: cc.displayName, photoURL: cc.photoURL };
+          for (const [dayKey, entries] of orderedGroups) {
+            const cells = cellsForDayRef.current(cc, dayKey);
+            if (cells == null) continue;
             const plan = planConfirmBroadcasts({
-              cells: cc.cells,
-              confirmedIndexes: nowReflected.map(([, e]) => e.cellIndex),
+              cells,
+              confirmedIndexes: entries.map(([, e]) => e.cellIndex),
               uid: actedUid,
               roster: cc.players,
               rosterConfirmed: cc.rosterConfirmed,
               hasPriorBingo: witnessed,
             });
-            if (plan.bingo) broadcastBingo(actor);
-            // No dayIndex here (Codex finding 3, fix/d15-blackout-day-naming):
-            // `board` above is `useBoard(uid)`, the LEGACY single-Board hook —
-            // `dealDayCard` never writes that path in daily-cards mode (api.ts),
-            // so `boardOwned` (and therefore this whole drain) can only be true
-            // on a legacy, non-daily Event, where a blackout Moment stays
-            // day-less (mirrors Board.tsx's live-mark path, Codex finding 1).
-            // The confirmed Claim DOES carry its own `dayIndex` in daily-cards
-            // mode, but this component has no day-scoped board/claim wiring to
-            // safely attribute a batch confirm's blackout to ONE Claim's Day —
-            // making the confirm path daily-aware is a separate, out-of-scope
-            // ticket (this component's `admin_confirmed`-mode Moments are
-            // already inert for daily Events today via the `boardOwned` gate).
-            if (plan.blackout) broadcastBlackout(actor);
-            if (plan.firstBingo) broadcastFirstBingo(actor);
-            else if (plan.firstBingoHeld) st2.heldCeremony = actor;
-            nowReflected.forEach(([id]) => st2.awaiting.delete(id));
+            // The Day rides every broadcast (#274): the per-card blackout id
+            // (#267), and the bingo/first_bingo payload chips (#262). A legacy
+            // (null-day) group keeps the day-less calls. NO day-honor pin here
+            // (Codex P3 on #287): `confirmClaim` already pins the per-Day First
+            // to BINGO inside the ADMIN's resolve transaction (src/data/admin.ts,
+            // the isAdmin arm of the day-meta create rule), so a winner-side pin
+            // would only re-create an existing write-once doc — denied noise.
+            const day = dayKey ?? undefined;
+            // The plain bingo Moment is once-per-Player (`${uid}-bingo`), so a
+            // batch crossing bingos on TWO Day boards fires it once — for the
+            // earliest-claimed group (Codex P2 on #288 round 4): a second
+            // same-tick call could only churn the local cache before the
+            // server denies it. Blackouts stay per-group (per-card ids, #267).
+            if (plan.bingo && plainBingoOpen) {
+              broadcastBingo(actor, day);
+              plainBingoOpen = false;
+            }
+            if (plan.blackout) broadcastBlackout(actor, day);
+            // The ceremonial event singleton is anchored to MAIN-GAME Days only
+            // (Codex P1 on #287; daily-cards-spec § "Scoring and social
+            // surfaces": the embark card is live pre-cruise and trivially easy
+            // by design) and never minted POST-FREEZE (the second P1; mirrors
+            // the live path's verdict-time gate, Codex P2 on #278) — a late
+            // admin approval must not rewrite the settled headline honor. Both
+            // gates are decision-time: an ineligible group neither fires NOR
+            // parks a held candidate. The plain bingo/blackout above (and
+            // confirmClaim's own per-Day honor pin) still land.
+            const ceremonyEligible =
+              (dayKey == null || !cc.tutorialDays.has(dayKey)) && !standingsFrozen(cc.event) && ceremonyOpen;
+            if (plan.firstBingo && ceremonyEligible) {
+              broadcastFirstBingo(actor, day);
+              ceremonyOpen = false;
+            } else if (plan.firstBingoHeld && ceremonyEligible) {
+              st2.heldCeremony = actor;
+              st2.heldCeremonyDay = dayKey;
+              ceremonyOpen = false;
+            }
+            entries.forEach(([id]) => st2.awaiting.delete(id));
           }
           // Drain-until-empty: any confirm still awaiting (its board write not yet
           // landed) is retried on the next board snapshot; re-run in case one became
@@ -239,19 +342,35 @@ export default function ConfirmWinMoments() {
     const st = getConfirmState(c.uid);
     const actor = st.heldCeremony;
     if (!actor || actor.uid !== c.uid) return;
+    // Fall-clear against the board the held win STOOD on (#274): its own Day
+    // Card when the win carried a Day, the legacy board otherwise.
+    const heldDay = st.heldCeremonyDay ?? null;
+    const cells = cellsForDayRef.current(c, heldDay);
     // A missing / non-attributable board is NOT an observed fall — hold.
-    if (!c.boardOwned || c.cells.length === 0) return;
+    if (cells == null) return;
     // Attributable board with no standing bingo → the held win fell: drop it, even
     // while the roster is still unconfirmed.
-    if (!hasBingo(c.cells)) {
+    if (!hasBingo(cells)) {
       st.heldCeremony = null;
+      st.heldCeremonyDay = null;
+      return;
+    }
+    // The freeze can land while the candidate is parked (Codex P2 on #288
+    // round 3): admin approvals are arbitrarily delayed, so re-check at
+    // RELEASE time and VOID a candidate the finale has overtaken — the
+    // headline honor is settled with the podium and a late roster
+    // confirmation must not rewrite it.
+    if (standingsFrozen(c.event)) {
+      st.heldCeremony = null;
+      st.heldCeremonyDay = null;
       return;
     }
     // The win still stands — publish only once the identity + roster gates open.
     if (!c.identityKnown || !c.rosterConfirmed) return; // still held
     const othersBingoed = c.players.some((p) => p.uid !== c.uid && p.firstBingoAt != null);
-    if (!othersBingoed) broadcastFirstBingo(actor);
+    if (!othersBingoed) broadcastFirstBingo(actor, heldDay ?? undefined);
     st.heldCeremony = null;
+    st.heldCeremonyDay = null;
   }, []);
 
   // Detect fresh confirms. A Claim seen PENDING is remembered; a Claim seen
@@ -290,7 +409,13 @@ export default function ConfirmWinMoments() {
         st.handled.add(c.id);
         // Carry the proofId so reflection is claim-SPECIFIC (R4 finding 2): a
         // different claim's confirm at the same square must not count as this one's.
-        st.awaiting.set(c.id, { cellIndex: c.cellIndex, proofId: c.proofId ?? null });
+        // And the Claim's Day (#274) so the drain adjudicates against ITS board.
+        st.awaiting.set(c.id, {
+          cellIndex: c.cellIndex,
+          proofId: c.proofId ?? null,
+          dayIndex: typeof c.dayIndex === 'number' ? c.dayIndex : null,
+          createdAt: c.createdAt,
+        });
         added = true;
       }
     }
@@ -300,9 +425,15 @@ export default function ConfirmWinMoments() {
   // Re-attempt on a board snapshot (the confirm's board write can lag its claim) or
   // when a gate opens (identity resolves / the roster becomes server-confirmed).
   useEffect(() => {
-    drain();
+    // Fall-clear FIRST (Codex P2 on #288 round 4): a parked candidate whose
+    // win has fallen must free the ceremony slot before the drain adjudicates
+    // new confirms from the same snapshot — the reverse order let a stale
+    // held candidate block a fresh eligible win from parking (the fresh
+    // confirm was consumed ceremony-less, then the stale candidate voided,
+    // and the later roster confirmation emitted nothing).
     resolveHeldCeremony();
-  }, [board, identityKnown, rosterConfirmed, drain, resolveHeldCeremony]);
+    drain();
+  }, [board, dayBoards, identityKnown, rosterConfirmed, drain, resolveHeldCeremony]);
 
   return null;
 }

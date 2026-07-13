@@ -498,10 +498,42 @@ async function writeMomentOnce(
  * rejects; the caller then falls back to the roster check, an accepted narrowed
  * residual documented in specs/w2-feed-moments.md.
  */
-export async function hasPriorBingoWitness(uid: string): Promise<boolean> {
+export async function hasPriorBingoWitness(
+  uid: string,
+  // Day-aware exclusion (Codex P1 on #288): the `${uid}-bingo` doc is
+  // once-per-Player and a TUTORIAL Day's bingo writes it too — but the
+  // cruise-wide First to BINGO is anchored to MAIN-GAME Days only (spec §
+  // "Scoring and social surfaces"), so a warm-up win must not read as a
+  // "prior win" that permanently disqualifies the player's first REAL bingo
+  // from the ceremony. A witness whose payload Day is in `excludeDayIndexes`
+  // resolves false. A day-LESS witness on a daily Event (pre-#286 data) stays
+  // a witness — conservative: the roster gate (already main-game-aware via
+  // the tutorial-excluded firstBingoAt fold) remains the fallback.
+  opts?: { excludeDayIndexes?: ReadonlySet<number> },
+): Promise<boolean> {
   try {
     const snap = await getDocFromCache(rawMoment(`${uid}-bingo`));
-    return snap.exists();
+    if (!snap.exists()) return false;
+    if (opts?.excludeDayIndexes) {
+      const witnessedDay = (snap.data() as { dayIndex?: number } | undefined)?.dayIndex;
+      if (typeof witnessedDay === 'number' && opts.excludeDayIndexes.has(witnessedDay)) {
+        // A tutorial-Day win is not a prior MAIN-GAME win — but the shared
+        // `${uid}-bingo` id means a later main-game win could never write its
+        // own witness, so before treating the player as witness-clean consult
+        // the first_bingo SINGLETON itself (cache-only, Codex P1 on #288
+        // round 5): if the headline honor is already claimed — by this player
+        // (their earlier main-game ceremony; a lost-and-regained line must
+        // stay suppressed) or by anyone else (a candidate is pointless) — the
+        // ceremony gate reads as witnessed. Absent → genuinely witness-clean.
+        try {
+          const singleton = await getDocFromCache(rawMoment(FIRST_BINGO_MOMENT_ID));
+          return singleton.exists();
+        } catch {
+          return false; // singleton not cached — witness-clean, roster gate decides
+        }
+      }
+    }
+    return true;
   } catch {
     return false; // not in the local cache — no witness on this device
   }
@@ -682,13 +714,21 @@ export interface ConfirmListenerState {
   // re-enqueues one.
   handled: Set<string>;
   // Enqueued confirms whose board flip has not yet been adjudicated: claimId → the
-  // Claim's cellIndex + proofId. The proofId makes board reflection claim-SPECIFIC
-  // (Codex #116 R4 finding 2): `confirmClaim` resolves the cell by proofId, so a
-  // DIFFERENT claim's confirm at the same index must not count as this one's.
-  awaiting: Map<string, { cellIndex: number; proofId: string | null }>;
+  // Claim's cellIndex + proofId + its Day (#274 — a daily Claim adjudicates
+  // against ITS day-scoped board; `null` = a legacy single-board Claim). The
+  // proofId makes board reflection claim-SPECIFIC (Codex #116 R4 finding 2):
+  // `confirmClaim` resolves the cell by proofId, so a DIFFERENT claim's
+  // confirm at the same index must not count as this one's.
+  awaiting: Map<
+    string,
+    { cellIndex: number; proofId: string | null; dayIndex: number | null; createdAt: number }
+  >;
   // A first_bingo candidate parked at the roster gate, with its winner actor
   // captured; its prior-win eligibility was fixed at detection (never re-read).
+  // `heldCeremonyDay` (#274) is the Day the held win stood on — the fall-clear
+  // re-check reads THAT board, and the eventual publish names it.
   heldCeremony: MomentActor | null;
+  heldCeremonyDay?: number | null;
   // A witness read is in flight — serializes the async decision and drives the
   // drain-until-empty loop (Codex #116 finding 2).
   inFlight: boolean;

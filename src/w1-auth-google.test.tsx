@@ -34,6 +34,7 @@ vi.mock('./hooks/useData', () => ({
   // The always-mounted ConfirmWinMoments (#41) subscribes to these; inert stubs
   // keep it a silent no-op under the App shell so this deal-error test stays focused.
   useBoard: () => ({ data: null, loading: false, hasServerData: false }),
+  useMyDayBoards: () => new Map(),
   useMyPlayer: () => ({ data: null, loading: false, hasServerData: false }),
   useLeaderboard: () => ({ players: [], loading: false, hasServerData: false }),
   useMyClaims: () => ({ claims: [], loading: false, hasServerData: false }),

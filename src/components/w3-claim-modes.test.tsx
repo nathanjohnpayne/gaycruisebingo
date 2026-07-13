@@ -28,6 +28,9 @@ const H = vi.hoisted(() => ({
   rosterConfirmed: true,
   claims: [] as ClaimDoc[],
   claimsConfirmed: true,
+  // Daily-cards inputs (#274): the Event schedule (read via useEventDoc) and the
+  // viewer's day-scoped boards keyed by dayIndex (useMyDayBoards).
+  dayBoards: new Map<number, BoardDoc>(),
   // Per-snapshot origin of the claims sub (Codex #116 R2 finding 2): false =
   // server-backed (may seed the freshness witness), true = cache-only (must not).
   claimsFromCache: false,
@@ -54,6 +57,7 @@ vi.mock('../hooks/useData', () => ({
   useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
   // ConfirmWinMoments
   useBoard: () => ({ data: H.board, loading: false, hasServerData: true }),
+  useMyDayBoards: () => H.dayBoards,
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
   useLeaderboard: () => ({ players: H.players, loading: false, hasServerData: H.rosterConfirmed }),
   useMyClaims: () => ({
@@ -184,6 +188,8 @@ beforeEach(() => {
   H.rosterConfirmed = true;
   H.claims = [];
   H.claimsConfirmed = true;
+  H.event = null;
+  H.dayBoards = new Map();
   H.claimsFromCache = false; // default: server-backed observations
   H.hasPriorBingoWitness.mockResolvedValue(false);
 });
@@ -248,9 +254,10 @@ describe('ConfirmWinMoments — the confirm-path Moment emitter (issue #41)', ()
     // The Moment is attributed to the WINNER (the claim owner / signed-in Player),
     // never the confirming Admin, and fires exactly once.
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
-    expect(H.broadcastBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null });
+    // Legacy single-board event: no Day rides the broadcast (#274).
+    expect(H.broadcastBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null }, undefined);
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
-    expect(H.broadcastFirstBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null });
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null }, undefined);
   });
 
   it('NO false singleton: a confirm racing another Player’s live first-BINGO posts the bingo but not the ceremony', async () => {
@@ -614,5 +621,368 @@ describe('ConfirmWinMoments — the confirm-path Moment emitter (issue #41)', ()
     await flushAsync();
     expect(H.broadcastBingo).not.toHaveBeenCalled();
     expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConfirmWinMoments — daily-cards events adjudicate against the Claim’s own Day board (#274)', () => {
+  // A 3-Day schedule; only days.length matters to the component (it bounds the
+  // useMyDayBoards subscription in the real hook — here the mock returns H.dayBoards).
+  const DAYS = Array.from({ length: 3 }, (_, index) => ({ index })) as unknown as EventDoc['days'];
+  const ACTOR = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null };
+
+  beforeEach(() => {
+    H.event = { days: DAYS } as Partial<EventDoc>;
+    H.board = null; // dealDayCard never writes the legacy path in daily mode
+  });
+
+  it('a confirmed daily Claim adjudicates against ITS day board and the Day rides every broadcast + the honor pin', async () => {
+    // Day 1's card has row 0 all-but-cell-4; the claim carries dayIndex 1.
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled();
+
+    // The Admin confirms; the DAY-SCOPED board write reflects it (the legacy board
+    // stays null the whole time — pre-#274 this exact flow emitted NOTHING).
+    H.claims = [claim({ status: 'confirmed', dayIndex: 1 })];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
+  });
+
+  it('a daily blackout confirm broadcasts with its Day (the per-card id contract, #267)', async () => {
+    // All 24 squares stand except cell 4, which is pending under the claim.
+    const ALL = Array.from({ length: 25 }, (_, index) => index).filter((index) => index !== 12);
+    H.dayBoards = new Map([[2, boardDoc(cellsWith(ALL.filter((index) => index !== 4), [4]))]]);
+    // A bingo already stood on this card pre-confirm, so ONLY the blackout crosses.
+    H.hasPriorBingoWitness.mockResolvedValue(true);
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 2 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+
+    H.claims = [claim({ status: 'confirmed', dayIndex: 2 })];
+    H.dayBoards = new Map([[2, boardDoc(cellsWith(ALL))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+
+    expect(H.broadcastBlackout).toHaveBeenCalledTimes(1);
+    expect(H.broadcastBlackout).toHaveBeenCalledWith(ACTOR, 2);
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('a BATCH of confirms across two Days adjudicates each against its OWN board — never a merged mask', async () => {
+    // Day 0: cell 4 completes row 0. Day 1: cell 10 completes NO line. Were the
+    // groups merged onto one board, the day-1 confirm would ride day-0's transition.
+    H.dayBoards = new Map([
+      [0, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
+      [1, boardDoc(cellsWith([0, 1], [10]))],
+    ]);
+    H.claims = [
+      claim({ id: 'c-d0', status: 'pending', resolvedBy: null, cellIndex: 4, dayIndex: 0 }),
+      claim({ id: 'c-d1', status: 'pending', resolvedBy: null, cellIndex: 10, dayIndex: 1 }),
+    ];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+
+    H.claims = [
+      claim({ id: 'c-d0', status: 'confirmed', cellIndex: 4, dayIndex: 0 }),
+      claim({ id: 'c-d1', status: 'confirmed', cellIndex: 10, dayIndex: 1 }),
+    ];
+    H.dayBoards = new Map([
+      [0, boardDoc(cellsWith(ROW0))],
+      [1, boardDoc(cellsWith([0, 1, 10]))],
+    ]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+
+    // Exactly ONE bingo — day 0's — stamped with ITS day; day 1's non-completing
+    // confirm emits nothing.
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 0);
+  });
+
+  it('a confirm whose Day board has not arrived HOLDS, then fires when that board loads', async () => {
+    // The claim is observed pending, confirmed — but day 1's board is still absent
+    // (a fresh device: the claims sub answered before the board sub).
+    H.dayBoards = new Map();
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [claim({ status: 'confirmed', dayIndex: 1 })];
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastBingo).not.toHaveBeenCalled(); // held — no board to adjudicate against
+
+    // The day board arrives already reflecting the confirm → the held entry drains.
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 1);
+  });
+
+  it('a roster-HELD daily ceremony publishes with its Day — and fall-clears against that Day’s board', async () => {
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+
+    H.claims = [claim({ status: 'confirmed', dayIndex: 1 })];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 1);
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // held at the roster gate
+
+    // Roster confirms → the ceremony publishes carrying the HELD win's Day.
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
+  });
+
+  it('a held daily ceremony whose win FALLS on its own Day board is voided — a later regain never fires it', async () => {
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [claim({ status: 'confirmed', dayIndex: 1 })];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+
+    // The win falls on DAY 1's board (an unmark) while the roster is still pending.
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3]))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+
+    // Roster confirms afterwards: the voided candidate must not fire.
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('a LEGACY Claim (no dayIndex) on the same session still adjudicates the single event board', async () => {
+    // Mixed shape safety: an event mid-migration (or a stale claim doc) with no
+    // dayIndex keeps the legacy board path, gated on attribution as before.
+    H.board = boardDoc(cellsWith([0, 1, 2, 3], [4]));
+    H.claims = [claim({ status: 'pending', resolvedBy: null })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+
+    H.claims = [claim({ status: 'confirmed' })];
+    H.board = boardDoc(cellsWith(ROW0));
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, undefined);
+  });
+
+  it('a TUTORIAL-Day confirm posts its plain bingo but NEVER the cruise-wide first_bingo — fired or parked (Codex P1 on #287)', async () => {
+    // Day 0 is the embark tutorial (live pre-cruise, trivially easy by design):
+    // spec § "Scoring and social surfaces" anchors the headline honor to
+    // main-game Days only.
+    H.event = {
+      days: [{ index: 0, tutorial: true }, { index: 1 }, { index: 2 }],
+    } as unknown as Partial<EventDoc>;
+    H.rosterConfirmed = false; // would-be-HELD path: the gate must not even park
+    H.players = [];
+    H.dayBoards = new Map([[0, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 0 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+
+    H.claims = [claim({ status: 'confirmed', dayIndex: 0 })];
+    H.dayBoards = new Map([[0, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 0); // the plain beat still posts
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+
+    // The roster confirming later must not release a parked tutorial ceremony —
+    // nothing was parked.
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('the drain excludes TUTORIAL Days from the prior-win witness read (Codex P1 on #288)', async () => {
+    H.event = {
+      days: [{ index: 0, tutorial: true }, { index: 1 }, { index: 2 }],
+    } as unknown as Partial<EventDoc>;
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [claim({ status: 'confirmed', dayIndex: 1 })];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    // The witness read carries the schedule's tutorial set, so an admin-approved
+    // warm-up bingo (which wrote the once-per-Player `${uid}-bingo` doc) can
+    // never disqualify the first MAIN-GAME confirm from the ceremony.
+    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: new Set([0]) });
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
+  });
+
+  it('a BATCH crossing bingos on TWO main-game Days claims the event singleton ONCE — lowest Day (Codex P2 on #288)', async () => {
+    H.dayBoards = new Map([
+      [1, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
+      [2, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
+    ]);
+    H.claims = [
+      claim({ id: 'c-d1', status: 'pending', resolvedBy: null, dayIndex: 1 }),
+      claim({ id: 'c-d2', status: 'pending', resolvedBy: null, dayIndex: 2 }),
+    ];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+
+    H.claims = [
+      claim({ id: 'c-d1', status: 'confirmed', dayIndex: 1 }),
+      claim({ id: 'c-d2', status: 'confirmed', dayIndex: 2 }),
+    ];
+    H.dayBoards = new Map([
+      [1, boardDoc(cellsWith(ROW0))],
+      [2, boardDoc(cellsWith(ROW0))],
+    ]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+
+    // The plain bingo Moment is once-per-Player, so the batch fires it ONCE —
+    // for the earliest-claimed group (equal createdAt here → day tiebreak)…
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 1);
+    // …and the event-singleton ceremony likewise fires exactly ONCE.
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
+  });
+
+  it('the batch singleton goes to the EARLIEST-claimed win, not the lowest Day (Codex P3 on #288 round 3)', async () => {
+    // The Day-3 claim was raised BEFORE the Day-1 claim: its win crossed
+    // first, so the event singleton wears Day 3.
+    H.event = { days: [{ index: 0 }, { index: 1 }, { index: 2 }, { index: 3 }] } as unknown as Partial<EventDoc>;
+    H.dayBoards = new Map([
+      [1, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
+      [3, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
+    ]);
+    H.claims = [
+      claim({ id: 'c-d3', status: 'pending', resolvedBy: null, dayIndex: 3, createdAt: 100 }),
+      claim({ id: 'c-d1', status: 'pending', resolvedBy: null, dayIndex: 1, createdAt: 200 }),
+    ];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [
+      claim({ id: 'c-d3', status: 'confirmed', dayIndex: 3, createdAt: 100 }),
+      claim({ id: 'c-d1', status: 'confirmed', dayIndex: 1, createdAt: 200 }),
+    ];
+    H.dayBoards = new Map([
+      [1, boardDoc(cellsWith(ROW0))],
+      [3, boardDoc(cellsWith(ROW0))],
+    ]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 3);
+  });
+
+  it('a held daily ceremony is VOIDED when the freeze lands before the roster gate opens (Codex P2 on #288 round 3)', async () => {
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [claim({ status: 'confirmed', dayIndex: 1 })];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 1);
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // parked at the roster gate
+
+    // The finale freeze stamps while the candidate is parked; the roster then
+    // confirms — the settled headline honor must NOT be rewritten.
+    H.event = { days: DAYS, frozenAt: 1 } as unknown as Partial<EventDoc>;
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled();
+  });
+
+  it('a STALE parked ceremony frees the slot for a fresh win arriving in the same snapshot (Codex P2 on #288 round 4)', async () => {
+    // Day-1 ceremony parks at the roster gate; its win then FALLS while a
+    // Day-2 confirm becomes reflected in the SAME render. The fall-clear must
+    // run before the drain so the fresh win can park — the reverse order
+    // consumed the Day-2 confirm ceremony-less and later emitted nothing.
+    H.rosterConfirmed = false;
+    H.players = [];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ id: 'c-d1', status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [claim({ id: 'c-d1', status: 'confirmed', dayIndex: 1 })];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // day-1 parked
+
+    // Same snapshot: day-1's win falls AND day-2's confirm reflects.
+    H.claims = [
+      claim({ id: 'c-d1', status: 'confirmed', dayIndex: 1 }),
+      claim({ id: 'c-d2', status: 'pending', resolvedBy: null, cellIndex: 4, dayIndex: 2 }),
+    ];
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    H.claims = [
+      claim({ id: 'c-d1', status: 'confirmed', dayIndex: 1 }),
+      claim({ id: 'c-d2', status: 'confirmed', cellIndex: 4, dayIndex: 2 }),
+    ];
+    H.dayBoards = new Map([
+      [1, boardDoc(cellsWith([0, 1, 2, 3]))], // day-1 win FELL
+      [2, boardDoc(cellsWith(ROW0))], // day-2 win reflected
+    ]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+
+    // Roster confirms: the FRESH (day-2) candidate publishes; the stale day-1
+    // one was voided, never fired.
+    H.rosterConfirmed = true;
+    H.players = [{ uid: 'u1', firstBingoAt: null } as unknown as PlayerDoc];
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
+    expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 2);
+  });
+
+  it('a POST-FREEZE confirm posts its plain bingo but never mints the ceremony (Codex P1 on #287, mirrors the live verdict-time gate)', async () => {
+    // The finale freeze has been stamped: a late admin approval of a main-Day
+    // claim must not rewrite the settled headline honor.
+    H.event = { days: DAYS, frozenAt: 1 } as unknown as Partial<EventDoc>;
+    H.dayBoards = new Map([[1, boardDoc(cellsWith([0, 1, 2, 3], [4]))]]);
+    H.claims = [claim({ status: 'pending', resolvedBy: null, dayIndex: 1 })];
+    const { rerender } = render(<ConfirmWinMoments />);
+    await flushAsync();
+
+    H.claims = [claim({ status: 'confirmed', dayIndex: 1 })];
+    H.dayBoards = new Map([[1, boardDoc(cellsWith(ROW0))]]);
+    rerender(<ConfirmWinMoments />);
+    await flushAsync();
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 1); // celebrates, day chip intact
+    expect(H.broadcastFirstBingo).not.toHaveBeenCalled(); // the headline honor is settled
   });
 });
