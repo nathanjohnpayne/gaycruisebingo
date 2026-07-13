@@ -1082,7 +1082,8 @@ describe('ProofFeed — the merged Feed (specs/w2-feed-moments.md)', () => {
 
     const moment = document.querySelector('.moment') as HTMLElement;
     expect(moment).not.toHaveTextContent('Bad Blair');
-    expect(moment).toHaveTextContent('Good Gail has the board to themselves');
+    expect(moment).toHaveTextContent('Good Gail has the board to themselves going into the final night—standings freeze at 8 a.m.');
+    expect(moment).not.toHaveTextContent('a.m..');
   });
 
   it('fails closed for legacy string-only last-call finale lines when a ban is active', () => {

@@ -68,7 +68,7 @@ function lastCallLineFromPlayers(players: LastCallMomentPayload['players']): str
     return a.displayName.localeCompare(b.displayName);
   });
   const leader = ranked[0];
-  const freeze = 'standings freeze at 8 a.m.';
+  const freeze = 'standings freeze at 8 a.m';
 
   if (!leader || (leader.bingoCount === 0 && leader.squaresMarked === 0)) {
     return `The board's wide open going into the final night—${freeze}.`;

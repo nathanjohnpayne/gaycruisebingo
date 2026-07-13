@@ -55,6 +55,7 @@ import {
   buildPodiumPayload,
   type FinalePlayer,
   type FinaleDay,
+  type FinaleDayStat,
   type FinaleDayHonorDoc,
 } from './finaleContent';
 
@@ -320,28 +321,55 @@ async function postFinaleMoment(
   });
 }
 
-/** The ban-filtered roster as `FinalePlayer[]` (#266) — the same shape the
- *  content builders and the client-side podium consume. */
+function finiteNumber(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function sanitizeDayStats(value: unknown): Record<number, FinaleDayStat> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<number, FinaleDayStat> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const dayIndex = Number(key);
+    if (!Number.isInteger(dayIndex) || !raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const stat = raw as Record<string, unknown>;
+    if (typeof stat.bingoCount !== 'number' || !Number.isFinite(stat.bingoCount)) continue;
+    if (typeof stat.squaresMarked !== 'number' || !Number.isFinite(stat.squaresMarked)) continue;
+    out[dayIndex] = {
+      bingoCount: stat.bingoCount,
+      squaresMarked: stat.squaresMarked,
+      firstBingoAt: typeof stat.firstBingoAt === 'number' && Number.isFinite(stat.firstBingoAt) ? stat.firstBingoAt : null,
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/** The canonical roster as `FinalePlayer[]` (#266) — the same shape the content
+ *  builders and client-side podium consume. Ban filtering is applied only to the
+ *  rendered view/copy, so reversible bans do not permanently erase finale data. */
 async function readFinaleRoster(
   db: AdminFirestore,
   eventId: string,
-  bannedUids: readonly string[],
 ): Promise<FinalePlayer[]> {
   const snap = await db.collection(`events/${eventId}/players`).get();
   return snap.docs
     .map((d) => {
       const data = (d.data() ?? {}) as Partial<FinalePlayer>;
-      const uid = typeof data.uid === 'string' && data.uid ? data.uid : d.id;
+      const uid = d.id || (typeof data.uid === 'string' && data.uid ? data.uid : '');
       return {
         uid,
         displayName: typeof data.displayName === 'string' && data.displayName ? data.displayName : 'Anonymous',
-        bingoCount: typeof data.bingoCount === 'number' ? data.bingoCount : 0,
-        squaresMarked: typeof data.squaresMarked === 'number' ? data.squaresMarked : 0,
-        firstBingoAt: typeof data.firstBingoAt === 'number' ? data.firstBingoAt : null,
-        dayStats: data.dayStats,
+        bingoCount: finiteNumber(data.bingoCount, 0),
+        squaresMarked: finiteNumber(data.squaresMarked, 0),
+        firstBingoAt: typeof data.firstBingoAt === 'number' && Number.isFinite(data.firstBingoAt) ? data.firstBingoAt : null,
+        dayStats: sanitizeDayStats(data.dayStats),
       };
     })
-    .filter((p) => p.uid !== '' && !bannedUids.includes(p.uid));
+    .filter((p) => p.uid !== '');
+}
+
+function visibleFinaleRoster(roster: readonly FinalePlayer[], bannedUids: readonly string[]): FinalePlayer[] {
+  if (bannedUids.length === 0) return [...roster];
+  return roster.filter((p) => !bannedUids.includes(p.uid));
 }
 
 /** Every pinned per-Day honor doc (#266) — days/{i}/meta/{i}, present ones only. */
@@ -362,17 +390,6 @@ async function readDayHonors(
     }),
   );
   return honors.filter((h): h is FinaleDayHonorDoc => h !== null);
-}
-
-function filterDayHonorsByBan(
-  honors: readonly FinaleDayHonorDoc[],
-  bannedUids: readonly string[],
-): FinaleDayHonorDoc[] {
-  if (bannedUids.length === 0) return [...honors];
-  return honors.filter((h) => {
-    const uid = h.firstBingo?.uid;
-    return !uid || !bannedUids.includes(uid);
-  });
 }
 
 // --- Snapshot stamping ----------------------------------------------------------
@@ -478,9 +495,9 @@ export async function runFinaleBeats(db: AdminFirestore, eventId: string, deps: 
       // minimal beat rather than skipping it.
       let extra: Record<string, unknown> | undefined;
       try {
-        const roster = await readFinaleRoster(db, eventId, event.bannedUids ?? []);
+        const roster = await readFinaleRoster(db, eventId);
         extra = {
-          line: lastCallStandingsCopy(roster),
+          line: lastCallStandingsCopy(visibleFinaleRoster(roster, event.bannedUids ?? [])),
           lastCall: {
             players: roster.map((p) => ({
               uid: p.uid,
@@ -519,16 +536,10 @@ export async function runFinaleBeats(db: AdminFirestore, eventId: string, deps: 
       try {
         const days = (Array.isArray(event.days) ? event.days : []) as FinaleDay[];
         const [roster, honors] = await Promise.all([
-          readFinaleRoster(db, eventId, event.bannedUids ?? []),
+          readFinaleRoster(db, eventId),
           readDayHonors(db, eventId, days),
         ]);
-        extra = {
-          podium: buildPodiumPayload(
-            roster,
-            days,
-            filterDayHonorsByBan(honors, event.bannedUids ?? []),
-          ) as unknown as Record<string, unknown>,
-        };
+        extra = { podium: buildPodiumPayload(roster, days, honors) as unknown as Record<string, unknown> };
       } catch (err) {
         console.error('runFinaleBeats: podium content build failed', eventId, err);
       }
