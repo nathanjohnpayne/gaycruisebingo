@@ -123,7 +123,12 @@ test('structural parity — every screen against the wireframes', async ({ page 
 
   await test.step('claim sheet: pledge, segments, photo affordances, EXIF-safe library note, heat line', async () => {
     const cellTexts = await readDealtDayGrid(page);
-    const targetIndex = cellTexts.findIndex((t, i) => i !== 12 && t.trim().length > 0);
+    // Never the shared-Tally Prompt (Codex P2 on #316): it already carries the
+    // two fixture markers, so the heat line would read "4 others" whenever the
+    // random deal put it first.
+    const targetIndex = cellTexts.findIndex(
+      (t, i) => i !== 12 && t.trim().length > 0 && t !== SHARED_ITEM_TEXT,
+    );
     const target = cellTexts[targetIndex];
     // Two seeded "others" on THIS Prompt (today's Day) light the heat line.
     const itemId = seedItemDocId(target);
@@ -162,6 +167,17 @@ test('structural parity — every screen against the wireframes', async ({ page 
     // Cancel out — the walk must not mark anything here.
     await sheet.getByRole('button', { name: 'Cancel' }).click();
     await expect(sheet).not.toBeVisible();
+    // Drop the heat markers again (Codex P2 on #316): they were written for a
+    // RANDOM dealt Prompt, and the visual-baseline test reuses this fixture —
+    // a leftover "Heat One/Two" tally on a colliding square would repaint the
+    // deterministic screenshots nondeterministically.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const { deleteDoc } = await import('firebase/firestore');
+      const db = ctx.firestore();
+      for (const heatUid of ['fixture-heat-1', 'fixture-heat-2']) {
+        await deleteDoc(doc(db, 'events', EVENT_ID, 'tally', itemId, 'markers', heatUid));
+      }
+    });
   });
 
   await test.step('feed: tally card dedupe line, day chips, loaded photo + 🖼️ badge, audio chrome, callout, moment', async () => {
@@ -206,7 +222,9 @@ test('structural parity — every screen against the wireframes', async ({ page 
 
   await test.step('ranks: honors strip, fixture rows, player-voice footnote', async () => {
     await page.locator('nav.tabs a', { hasText: 'Ranks' }).click();
-    await expect(page.getByText(PLAYER_A.displayName).first()).toBeVisible();
+    // Leaderboard sits behind a loading gate; late in a full-suite run the
+    // players subscription can take well past the 5s default to deliver.
+    await expect(page.getByText(PLAYER_A.displayName).first()).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText(PLAYER_B.displayName).first()).toBeVisible();
     // The footnote is player copy (#298/#302), not the wireframe annotation.
     await expect(page.locator('.lb-footnote')).toContainText('Every Day Card counts here');
@@ -298,6 +316,12 @@ function volatileMasks(page: Page) {
 }
 
 test.describe('visual baselines (393×852, emulator fixture)', () => {
+  // The committed expected images are `*-chromium-darwin.png` — this layer is
+  // local-only (docs/agents/testing-requirements.md) and darwin-rendered; a
+  // Linux checkout would look for `-linux` baselines that do not exist
+  // (Codex P2 on #316), so it self-skips off darwin instead of failing.
+  test.skip(process.platform !== 'darwin', 'visual baselines are darwin-only (local e2e layer)');
+
   test('card, locked preview, claim sheet, feed, more, admin', async ({ page }) => {
     await page.clock.install({ time: PARITY_NOW });
     await joinViaSharedLink(page);
@@ -306,8 +330,14 @@ test.describe('visual baselines (393×852, emulator fixture)', () => {
     await dismissCoach(page);
     const cellTexts = await writeDeterministicBoard(testEnv, uid);
     await page.reload();
-    await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible({ timeout: 15000 });
+    await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible({ timeout: 30_000 });
     await dismissCoach(page);
+    // The persistent Firestore cache can replay the PREVIOUS random deal on
+    // reload (Codex P2 on #316) — wait until the grid shows the deterministic
+    // board's own first cell, not merely any fully-dealt grid.
+    await expect
+      .poll(async () => (await page.locator('.grid .cell').allTextContents())[0], { timeout: 20_000 })
+      .toContain(cellTexts[0]);
     await readDealtDayGrid(page);
     await page.evaluate(() => document.fonts.ready);
 

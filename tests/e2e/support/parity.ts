@@ -146,8 +146,11 @@ export async function seedParityFixture(): Promise<ParityFixture> {
       });
     }
 
-    // The pinned per-Day honor (#264) behind the Ranks honors strip.
-    await setDoc(doc(db, 'events', EVENT_ID, 'days', String(PARITY_TODAY_INDEX), 'meta', 'meta'), {
+    // The pinned per-Day honor (#264) behind the Ranks honors strip. The doc
+    // id IS the dayIndex (src/data/paths.ts dayMetaRef) — a `meta/meta` id
+    // would never be read and Ranks would silently fall back to the
+    // roster-derived honor (Codex P2 on #316).
+    await setDoc(doc(db, 'events', EVENT_ID, 'days', String(PARITY_TODAY_INDEX), 'meta', String(PARITY_TODAY_INDEX)), {
       firstBingo: { uid: PLAYER_A.uid, displayName: PLAYER_A.displayName, at: now - 4 * HOUR },
     });
 
