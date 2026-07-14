@@ -18,17 +18,37 @@ function day(partial: Partial<DayDef> & Pick<DayDef, 'index' | 'unlockAt' | 'the
 }
 
 describe('todaysDayTheme (specs/d15-more-menu.md § Theme — Auto)', () => {
-  it('returns null with no days configured', () => {
+  it('returns null with no days configured (event default is the right degraded fallback)', () => {
     expect(todaysDayTheme({ days: [] }, 1000)).toBeNull();
+  });
+
+  it('returns null when the Event has not loaded yet', () => {
     expect(todaysDayTheme(undefined, 1000)).toBeNull();
     expect(todaysDayTheme(null, 1000)).toBeNull();
   });
 
-  it('returns null before the first Day unlocks (pre-cruise)', () => {
+  it('resolves the FIRST Day\'s theme before any Day unlocks (pre-cruise, #299)', () => {
+    // Mirrors defaultViewedIndex's Day-0 fallback: the app already presents
+    // the embark Day pre-cruise, so Auto must match it — never the event
+    // default (the #299 Neon Playground regression).
     const event: Pick<EventDoc, 'days'> = {
-      days: [day({ index: 0, unlockAt: 1000, theme: 'neon-playground' })],
+      days: [
+        day({ index: 0, unlockAt: 1000, theme: 'welcome-aboard' }),
+        day({ index: 1, unlockAt: 2000, theme: 'get-sporty' }),
+      ],
     };
-    expect(todaysDayTheme(event, 500)).toBeNull();
+    expect(todaysDayTheme(event, 500)).toBe('welcome-aboard');
+  });
+
+  it('pre-cruise fallback is order-independent and tie-broken by lowest index', () => {
+    const event: Pick<EventDoc, 'days'> = {
+      days: [
+        day({ index: 2, unlockAt: 3000, theme: 'seriously-pink' }),
+        day({ index: 1, unlockAt: 1000, theme: 'get-sporty' }),
+        day({ index: 0, unlockAt: 1000, theme: 'welcome-aboard' }),
+      ],
+    };
+    expect(todaysDayTheme(event, 500)).toBe('welcome-aboard');
   });
 
   it('is a Day\'s theme from its own unlockAt through the next Day\'s unlockAt', () => {
@@ -52,6 +72,21 @@ describe('todaysDayTheme (specs/d15-more-menu.md § Theme — Auto)', () => {
       ],
     };
     expect(todaysDayTheme(event, 5000)).toBe('seriously-pink');
+  });
+
+  it('breaks unlockAt ties among UNLOCKED Days by lowest index, matching the pre-unlock fallback', () => {
+    // Codex P2 on #303: with a tied, unsorted pair, the pre-unlock fallback
+    // resolves index 0 — so the unlocked resolution must land on the same Day
+    // the instant the shared unlockAt passes, or Auto flips at the boundary.
+    const event: Pick<EventDoc, 'days'> = {
+      days: [
+        day({ index: 1, unlockAt: 1000, theme: 'get-sporty' }),
+        day({ index: 0, unlockAt: 1000, theme: 'welcome-aboard' }),
+      ],
+    };
+    expect(todaysDayTheme(event, 999)).toBe('welcome-aboard'); // pre-unlock fallback
+    expect(todaysDayTheme(event, 1000)).toBe('welcome-aboard'); // no flip at the boundary
+    expect(todaysDayTheme(event, 5000)).toBe('welcome-aboard'); // stable thereafter
   });
 
   it('does not depend on days[] being sorted', () => {
