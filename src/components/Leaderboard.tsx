@@ -342,8 +342,8 @@ export default function Leaderboard() {
       )}
       {/* The wireframes' explanatory footnote (#264), re-voiced as player copy (#298). */}
       <p className="muted lb-footnote">
-        Every Day Card counts here. ⭐ marks the cruise-wide First to BINGO—main days only. Tap a
-        proof chip for the receipts in the Feed.
+        Every Day Card counts here—except the farewell, which is pure ceremony. ⭐ marks the
+        cruise-wide First to BINGO—main days only. Tap a proof chip for the receipts in the Feed.
       </p>
       <div className="lb-actions">
         <button
