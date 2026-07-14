@@ -35,8 +35,12 @@ test.describe('coach overlay', () => {
     const overlay = page.locator('.coach-overlay');
     await expect(overlay).toBeVisible();
     await expect(overlay.getByText('How to read your card')).toBeVisible();
+    // #312: the 👀/＋ notation moved out of the labels into the leading
+    // SAMPLE CHIPS (the wireframes' lgdchip treatment) — assert both halves.
     const legendLabels = await overlay.locator('.coach-overlay-label').allTextContents();
-    expect(legendLabels).toEqual(['Tally count', '👀 Doubt badge', '＋ Add proof', 'Free space']);
+    expect(legendLabels).toEqual(['Tally count', 'Doubt badge', 'Add proof', 'Free space']);
+    const legendChips = await overlay.locator('.coach-overlay-chip').allTextContents();
+    expect(legendChips).toEqual(['4', '👀 2', '＋', 'FREE']);
     await page.screenshot({ path: `${SHOTS}/coach-overlay-first-open.png`, fullPage: true });
 
     // Dismiss via the CTA — the SAME "Got it—deal me in" pledge #246's own
