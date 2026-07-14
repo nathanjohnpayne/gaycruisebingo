@@ -29,11 +29,14 @@ function markDismissed(eventId: string): void {
   }
 }
 
-const LEGEND: readonly { label: string; copy: string }[] = [
-  { label: 'Tally count', copy: 'The number on a marked square is how many players got it too—tap it to see who.' },
-  { label: '👀 Doubt badge', copy: "Means someone wants proof. Attach a photo to clear it—a Doubt never unmarks your square, it's never a gate." },
-  { label: '＋ Add proof', copy: 'Tap the plus on any marked square to attach a pic and back it up.' },
-  { label: 'Free space', copy: 'The center square is free—already marked for everyone.' },
+// Each row leads with a SAMPLE chip drawn in the badge's own board styling
+// (the wireframes' `lgdchip` treatment) — the legend teaches the notation by
+// showing it, not just naming it.
+const LEGEND: readonly { chip: string; chipVariant: 'badge' | 'plus' | 'free'; label: string; copy: string }[] = [
+  { chip: '4', chipVariant: 'badge', label: 'Tally count', copy: 'The number on a marked square is how many players got it too—tap it to see who.' },
+  { chip: '👀 2', chipVariant: 'badge', label: 'Doubt badge', copy: "Means someone wants proof. Attach a photo to clear it—a Doubt never unmarks your square, it's never a gate." },
+  { chip: '＋', chipVariant: 'plus', label: 'Add proof', copy: 'Tap the plus on any marked square to attach a pic and back it up.' },
+  { chip: 'FREE', chipVariant: 'free', label: 'Free space', copy: 'The center square is free—already marked for everyone.' },
 ];
 
 export type CoachOverlayProps = {
@@ -65,8 +68,13 @@ export default function CoachOverlay({ eventId = EVENT_ID, forceOpen = false, on
         <ul className="coach-overlay-legend">
           {LEGEND.map((row) => (
             <li key={row.label} className="coach-overlay-row">
-              <span className="coach-overlay-label">{row.label}</span>
-              <span className="coach-overlay-copy">{row.copy}</span>
+              <span className={`coach-overlay-chip coach-overlay-chip-${row.chipVariant}`} aria-hidden="true">
+                {row.chip}
+              </span>
+              <span className="coach-overlay-text">
+                <span className="coach-overlay-label">{row.label}</span>
+                <span className="coach-overlay-copy">{row.copy}</span>
+              </span>
             </li>
           ))}
         </ul>
