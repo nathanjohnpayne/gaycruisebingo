@@ -9,10 +9,15 @@ import type { EventDoc, ThemeId } from '../types';
  * "Today's Day" is the last Day whose `unlockAt` has passed relative to
  * `now` — a Day is "current" from its own unlock moment (which may be mid-
  * morning) until the NEXT Day's unlock, not by calendar date alone. Before
- * the first Day's `unlockAt` (pre-cruise) or with no `days` configured,
- * there is no "today" yet: returns `null` so the caller (ThemeContext's
- * `autoThemeId` prop) falls back to the event/player default instead of
- * guessing.
+ * the first Day's `unlockAt` (pre-cruise), the FIRST Day — earliest
+ * `unlockAt`, ties broken by lowest `index` — is already what the whole app
+ * presents (the Board's `defaultViewedIndex` falls back to Day 0, the header
+ * reads the embark Day), so Auto resolves to that first Day's theme rather
+ * than the event default (#299: Auto painted Neon Playground while every
+ * other surface said Welcome Aboard). Only with no `days` configured (or no
+ * Event yet) is there genuinely nothing to match: returns `null` so the
+ * caller (ThemeContext's `autoThemeId` prop) falls back to the event/player
+ * default instead of guessing.
  *
  * Pure and Firestore-free (like the rest of `theme/`) so it is unit-testable
  * without mounting a component or opening a subscription; `main.tsx` is the
@@ -32,5 +37,19 @@ export function todaysDayTheme(
       currentUnlockAt = day.unlockAt;
     }
   }
-  return current;
+  if (current !== null) return current;
+  // Pre-cruise: Days are configured but none has unlocked yet. Mirror
+  // `defaultViewedIndex`'s Day-0 fallback — resolve the first Day to unlock
+  // (order-independent, like the loop above) instead of the event default.
+  let first: ThemeId | null = null;
+  let firstUnlockAt = Infinity;
+  let firstIndex = Infinity;
+  for (const day of days) {
+    if (day.unlockAt < firstUnlockAt || (day.unlockAt === firstUnlockAt && day.index < firstIndex)) {
+      first = day.theme;
+      firstUnlockAt = day.unlockAt;
+      firstIndex = day.index;
+    }
+  }
+  return first;
 }
