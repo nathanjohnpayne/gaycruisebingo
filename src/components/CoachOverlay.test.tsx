@@ -35,6 +35,16 @@ describe('CoachOverlay', () => {
     expect(screen.getByRole('button', { name: 'Got it—deal me in.' })).toBeInTheDocument();
   });
 
+  it('each legend row leads with its sample chip (the wireframes\' lgdchip treatment)', () => {
+    render(<CoachOverlay eventId="cruise-a" />);
+    // The four chips, in board notation: tally count, doubt badge, add-proof
+    // plus, and the FREE center — decorative (aria-hidden) but present.
+    const chips = document.querySelectorAll('.coach-overlay-chip');
+    expect([...chips].map((c) => c.textContent)).toEqual(['4', '👀 2', '＋', 'FREE']);
+    expect(chips[2].classList.contains('coach-overlay-chip-plus')).toBe(true);
+    expect(chips[3].classList.contains('coach-overlay-chip-free')).toBe(true);
+  });
+
   it('tapping the CTA dismisses the overlay and writes the per-Event localStorage key', () => {
     render(<CoachOverlay eventId="cruise-a" />);
     fireEvent.click(screen.getByRole('button', { name: 'Got it—deal me in.' }));

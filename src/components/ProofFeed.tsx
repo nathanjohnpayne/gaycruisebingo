@@ -498,12 +498,19 @@ export function TallyCard({
             {tallyNames(card.markers)}{' '}
             <span className="muted" style={{ fontWeight: 400 }}>got “{card.itemText}”</span>
             {' '}
-            <span className="tally-day-chip proof-day-chip">{dayChipLabel(card.dayIndex, days)}</span>
+            {/* The wireframes' `.who` treatment: the Day reference is PLAIN dim
+                text ("Day 3 · 1:12p"), never the Feed's bordered pill — an
+                inline pill inside this wrapping name line paints its background
+                band across adjacent line boxes and reads as a glitchy
+                strikethrough when the card copy wraps. */}
+            <span className="tally-day sub" style={{ fontWeight: 400 }}>
+              {dayChipLabel(card.dayIndex, days)}
+            </span>
             {' '}
             {/* The wireframes' sub-line: "bumped just now · tap for who" — the
                 tap affordance is visible copy, not only a title attribute. */}
             <span className="sub" style={{ fontWeight: 400 }}>
-              bumped {ago(card.displayBump)} · tap for who
+              · bumped {ago(card.displayBump)} · tap for who
             </span>
           </span>
         </button>

@@ -692,6 +692,35 @@ a {
 }
 .coach-overlay-row {
   display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+/* The sample chip leading each legend row (the wireframes' `lgdchip`): the
+   badge variant wears the board's own tally/doubt badge treatment
+   (.tally-badge's black pill) so the legend SHOWS the notation it decodes. */
+.coach-overlay-chip {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  border-radius: 20px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  white-space: nowrap;
+}
+.coach-overlay-chip-plus {
+  background: var(--primary);
+  color: var(--on-gradient, #000);
+}
+.coach-overlay-chip-free {
+  background: var(--panel);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+}
+.coach-overlay-text {
+  display: flex;
   flex-direction: column;
   gap: 2px;
 }
