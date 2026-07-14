@@ -5,7 +5,6 @@ import { useAuth } from '../auth/AuthContext';
 import { useBoard, useDayBoard, useDayMeta, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, useDayMetasStatus, isBanned } from '../hooks/useData';
 import { setMark, dealDayCard, resolveDisplayName } from '../data/api';
 import { dayBoardRef } from '../data/paths';
-import { eventTitle } from '../format';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
   broadcastBingo,
@@ -1333,13 +1332,6 @@ export default function Board() {
   // inside the transaction (Codex P2 on #278 round 3).
   const statsFrozen = standingsFrozen(event, now);
   const isStatsFrozen = () => standingsFrozen(event);
-  const cardMeta = (
-    <div className="card-meta">
-      <span>
-        {event?.name ? eventTitle(event.name, event.sailStart, event.sailEnd) : 'This cruise'}
-      </span>
-    </div>
-  );
 
   // A `locked` (future) or `waking` (unlocked-by-clock, snapshot not yet stamped)
   // viewed Day has no Board to deal or show — render the themed preview and deal
@@ -1353,7 +1345,6 @@ export default function Board() {
   if (viewedDay && (viewedState === 'locked' || viewedState === 'waking')) {
     return (
       <>
-        {cardMeta}
         {daySwitcher}
         <LockedDayPreview
           day={viewedDay}
@@ -1372,7 +1363,6 @@ export default function Board() {
     if (hasDays && dayDealError === viewedIndex) {
       return (
         <>
-          {cardMeta}
           {daySwitcher}
           <div className="center muted" role="alert">
             <p>We couldn’t deal this day’s card.</p>
@@ -1722,11 +1712,9 @@ export default function Board() {
 
   return (
     <>
-      {/* Just the cruise name here — the claim-mode label used to share this row
-          and force the title to wrap on mobile (#150). The mode still governs
-          behavior via `claimMode` above (proof-required opens the proof sheet on
-          tap); it just no longer competes with the title for the line. */}
-      {cardMeta}
+      {/* No itinerary line here (#300) — per the wireframe the header carries
+          brand + today's port/theme and the day bar carries day name/port/
+          description, so the Card chrome opens straight with the Day strip. */}
       {daySwitcher}
       {/* First-open coach overlay (specs/d15-coach-overlay.md, #214): mounted
           whenever Board has cells — whichever Board is the Player's first

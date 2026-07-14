@@ -3,11 +3,12 @@ import { THEMES } from '../theme/themes';
 import { TutorialTag, tutorialTagLabel } from './TutorialBanner';
 
 /**
- * Day switcher strip (daily-cards-spec § "Day switcher"): a horizontally
- * scrolling row of ten Day chips — weekday + port emoji + theme emoji —
- * above the board area. Chip state is derived from `unlockAt` vs `now`
- * rather than tracked separately, so Board and this component share one
- * notion of "today" without either owning a clock subscription.
+ * Day switcher strip (daily-cards-spec § "Day switcher"): a one-row,
+ * horizontally scrolling strip of ten compact Day pills — state glyph +
+ * weekday + port emoji + theme emoji on a single line (#293) — above the
+ * board area. Chip state is derived from `unlockAt` vs `now` rather than
+ * tracked separately, so Board and this component share one notion of
+ * "today" without either owning a clock subscription.
  */
 export type DayChipState = 'past' | 'today' | 'locked';
 
@@ -92,6 +93,13 @@ export default function DaySwitcher({ days, viewedIndex, onSelect, now = Date.no
             className={`day-chip day-chip-${state}${selected ? ' selected' : ''}`}
             onClick={() => onSelect(i)}
           >
+            {/* The state glyph PREFIXES the single-line pill (#293 — the
+                wireframes' "✓ Wed 🇮🇹 ⚽" reading); today carries none. */}
+            {state !== 'today' && (
+              <span className="day-chip-glyph" aria-hidden="true">
+                {GLYPH[state]}
+              </span>
+            )}
             <span className="day-chip-weekday">{weekday(d.date)}</span>
             <span className="day-chip-port" aria-hidden="true">
               {d.portEmoji}
@@ -104,11 +112,6 @@ export default function DaySwitcher({ days, viewedIndex, onSelect, now = Date.no
                 tutorial Days only; #212 owns the honor pin the eight main
                 Days show here. */}
             {d.tutorial && <TutorialTag pool={d.pool} className="day-chip-warm-up" />}
-            {state !== 'today' && (
-              <span className="day-chip-glyph" aria-hidden="true">
-                {GLYPH[state]}
-              </span>
-            )}
           </button>
         );
       })}
