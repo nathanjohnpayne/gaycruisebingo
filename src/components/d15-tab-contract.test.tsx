@@ -35,12 +35,22 @@ describe('d15 More tab icon = player avatar, ellipsis fallback signed-out', () =
     const withPhoto = render('https://example.com/photo.jpg');
     expect(withPhoto).toContain('<img');
     expect(withPhoto).toContain('src="https://example.com/photo.jpg"');
-    expect(withPhoto).toContain('alt="More"');
     const signedOut = render(null);
     expect(signedOut).not.toContain('<img');
     // specs/d15-icons-lucide.md: the fallback is now the lucide-react
     // `Ellipsis` icon (className `tab-ellipsis`), not a literal '⋯' character.
     expect(signedOut).toContain('tab-ellipsis');
     expect(signedOut).not.toContain('⋯');
+  });
+
+  it('captions the avatar/ellipsis with a visible "More" label, no duplicate announcement (#297)', () => {
+    // The visible label is the accessible name, same as Card/Feed/Ranks — so
+    // the avatar's alt is empty and the NavLink carries no aria-label that
+    // would double-announce "More" to screen readers.
+    for (const markup of [render('https://example.com/photo.jpg'), render(null)]) {
+      expect(markup).toContain('>More</a>');
+      expect(markup).not.toContain('aria-label="More"');
+    }
+    expect(render('https://example.com/photo.jpg')).toContain('alt=""');
   });
 });

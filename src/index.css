@@ -200,6 +200,13 @@ a {
   height: 20px;
   stroke-width: 1.8;
 }
+/* The More tab's avatar glyph sits above its "More" caption (#297); size it
+   to the same 20px footprint as the Lucide icons so all four tabs stay level.
+   Scoped under .tab to outrank the base .avatar 38px sizing further down. */
+.tab .tab-avatar {
+  width: 20px;
+  height: 20px;
+}
 
 /* ---------- card ---------- */
 .card-meta {

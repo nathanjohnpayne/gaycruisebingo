@@ -23,7 +23,9 @@ const TAB_ICONS: Partial<Record<TabId, typeof Grid3x3>> = {
  *
  * The More tab wears the Player's avatar as its icon (spec § "Iconography"):
  * when `morePhotoURL` is set it renders the photo; signed-out it falls back to
- * an ellipsis glyph. Every other tab renders its plain-text label.
+ * an ellipsis glyph. Every tab renders its plain-text label beneath its glyph,
+ * so the accessible name is the visible label on all four — the avatar's `alt`
+ * stays empty to keep screen readers from announcing "More" twice (#297).
  */
 export default function TabBar({ morePhotoURL = null }: { morePhotoURL?: string | null }) {
   return (
@@ -31,25 +33,17 @@ export default function TabBar({ morePhotoURL = null }: { morePhotoURL?: string 
       {visibleTabs().map((tab) => {
         const Icon = TAB_ICONS[tab.id];
         return (
-          <NavLink
-            key={tab.id}
-            to={tab.path}
-            end={tab.end}
-            className={cls}
-            aria-label={tab.id === 'more' ? tab.label : undefined}
-          >
+          <NavLink key={tab.id} to={tab.path} end={tab.end} className={cls}>
             {tab.id === 'more' ? (
               morePhotoURL ? (
-                <img className="avatar tab-avatar" src={morePhotoURL} alt={tab.label} referrerPolicy="no-referrer" />
+                <img className="avatar tab-avatar" src={morePhotoURL} alt="" referrerPolicy="no-referrer" />
               ) : (
                 <Ellipsis className="tab-ellipsis" aria-hidden="true" />
               )
             ) : (
-              <>
-                {Icon && <Icon className="tab-icon" aria-hidden="true" />}
-                {tab.label}
-              </>
+              Icon && <Icon className="tab-icon" aria-hidden="true" />
             )}
+            {tab.label}
           </NavLink>
         );
       })}
