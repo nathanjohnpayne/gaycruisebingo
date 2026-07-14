@@ -39,8 +39,8 @@ const idsOf = (items: SeedItem[]): string[] => items.map((it) => seedItemDocId(i
  * with the four reachable Day states stamped. Optionally freezes the standings
  * (`frozenAt`) for the farewell-podium path.
  */
-export async function seedDailyEvent(opts: { frozenAt?: number } = {}): Promise<SeededDays> {
-  const testEnv = await seedEmulatorEvent();
+export async function seedDailyEvent(opts: { frozenAt?: number; withStorage?: boolean } = {}): Promise<SeededDays> {
+  const testEnv = await seedEmulatorEvent({ withStorage: opts.withStorage });
   const now = Date.now();
   const mainSnapshotIds = idsOf(ITEMS as SeedItem[]);
   const embarkSnapshotIds = idsOf(EMBARK_ITEMS as SeedItem[]);

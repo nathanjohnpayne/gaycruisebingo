@@ -11,6 +11,7 @@ import { initializeTestEnvironment, type RulesTestEnvironment } from '@firebase/
 import { doc, deleteField, getDoc, writeBatch } from 'firebase/firestore';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { STORAGE_PORT } from './env';
 // @ts-expect-error — scripts/seed.mjs is a plain-JS node script with no type
 // declarations (tsconfig sets no allowJs, and only includes src/ besides).
 // It is side-effect-free to import: seeding only runs when the script is the
@@ -20,6 +21,7 @@ import { EVENT_SEED, ITEMS, adminRoster, eventWritePayload, seedItemDocId } from
 import { EVENT_ID, FIRESTORE_HOST, FIRESTORE_PORT, PROJECT_ID } from './env';
 
 const RULES_PATH = fileURLToPath(new URL('../../../firestore.rules', import.meta.url));
+const STORAGE_RULES_PATH = fileURLToPath(new URL('../../../storage.rules', import.meta.url));
 
 /**
  * A dense pool needs >= MIN_POOL (24, src/game/logic.ts) active, non-free
@@ -36,7 +38,12 @@ export const SEEDED_ACTIVE_PROMPT_COUNT = ITEMS.length;
  * disabled — the same rules-bypassing posture `scripts/seed.mjs` gets from
  * the Admin SDK. Caller owns `testEnv.cleanup()`.
  */
-export async function seedEmulatorEvent(): Promise<RulesTestEnvironment> {
+export async function seedEmulatorEvent(
+  // `withStorage` additionally wires the Storage emulator into the returned test
+  // env so a fixture can upload real proof media bytes (d15-mockup-parity);
+  // default off — the existing suites neither need nor touch Storage.
+  opts: { withStorage?: boolean } = {},
+): Promise<RulesTestEnvironment> {
   const testEnv = await initializeTestEnvironment({
     projectId: PROJECT_ID,
     firestore: {
@@ -44,6 +51,15 @@ export async function seedEmulatorEvent(): Promise<RulesTestEnvironment> {
       port: FIRESTORE_PORT,
       rules: readFileSync(RULES_PATH, 'utf8'),
     },
+    ...(opts.withStorage
+      ? {
+          storage: {
+            host: FIRESTORE_HOST,
+            port: STORAGE_PORT,
+            rules: readFileSync(STORAGE_RULES_PATH, 'utf8'),
+          },
+        }
+      : {}),
   });
 
   // Every attempt starts from a clean slate (Codex P2 on PR #114 round 2; the
