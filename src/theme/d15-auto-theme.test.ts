@@ -74,6 +74,21 @@ describe('todaysDayTheme (specs/d15-more-menu.md § Theme — Auto)', () => {
     expect(todaysDayTheme(event, 5000)).toBe('seriously-pink');
   });
 
+  it('breaks unlockAt ties among UNLOCKED Days by lowest index, matching the pre-unlock fallback', () => {
+    // Codex P2 on #303: with a tied, unsorted pair, the pre-unlock fallback
+    // resolves index 0 — so the unlocked resolution must land on the same Day
+    // the instant the shared unlockAt passes, or Auto flips at the boundary.
+    const event: Pick<EventDoc, 'days'> = {
+      days: [
+        day({ index: 1, unlockAt: 1000, theme: 'get-sporty' }),
+        day({ index: 0, unlockAt: 1000, theme: 'welcome-aboard' }),
+      ],
+    };
+    expect(todaysDayTheme(event, 999)).toBe('welcome-aboard'); // pre-unlock fallback
+    expect(todaysDayTheme(event, 1000)).toBe('welcome-aboard'); // no flip at the boundary
+    expect(todaysDayTheme(event, 5000)).toBe('welcome-aboard'); // stable thereafter
+  });
+
   it('does not depend on days[] being sorted', () => {
     const event: Pick<EventDoc, 'days'> = {
       days: [

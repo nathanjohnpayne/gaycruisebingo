@@ -8,7 +8,10 @@ import type { EventDoc, ThemeId } from '../types';
  *
  * "Today's Day" is the last Day whose `unlockAt` has passed relative to
  * `now` — a Day is "current" from its own unlock moment (which may be mid-
- * morning) until the NEXT Day's unlock, not by calendar date alone. Before
+ * morning) until the NEXT Day's unlock, not by calendar date alone. Ties on
+ * `unlockAt` break to the lowest `index`, the SAME tie-break as the
+ * pre-unlock fallback below, so the resolved theme cannot flip at the
+ * boundary the moment a tied pair unlocks (Codex P2 on #303). Before
  * the first Day's `unlockAt` (pre-cruise), the FIRST Day — earliest
  * `unlockAt`, ties broken by lowest `index` — is already what the whole app
  * presents (the Board's `defaultViewedIndex` falls back to Day 0, the header
@@ -31,10 +34,16 @@ export function todaysDayTheme(
   if (!days || days.length === 0) return null;
   let current: ThemeId | null = null;
   let currentUnlockAt = -Infinity;
+  let currentIndex = Infinity;
   for (const day of days) {
-    if (day.unlockAt <= now && day.unlockAt > currentUnlockAt) {
+    if (
+      day.unlockAt <= now &&
+      (day.unlockAt > currentUnlockAt ||
+        (day.unlockAt === currentUnlockAt && day.index < currentIndex))
+    ) {
       current = day.theme;
       currentUnlockAt = day.unlockAt;
+      currentIndex = day.index;
     }
   }
   if (current !== null) return current;
