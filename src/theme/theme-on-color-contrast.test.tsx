@@ -247,6 +247,89 @@ describe('body gradient tints: --ink vs the composited backdrop (specs/theme-on-
 });
 
 // ---------------------------------------------------------------------------
+// Scope C (issues #301 / #296): the `.board-area[data-theme]` retint scope
+// paints its OWN themed surface. Before the fix, Board.tsx's data-theme
+// re-scoped the CSS variables but `.board-area` painted no background, so the
+// viewed Day's text tokens floated over the PAGE theme's backdrop — a
+// cross-theme (viewed x page) contrast matrix the per-theme contract above
+// never covered: a dark Day over a dark page changed almost nothing visible
+// (#301), and summer-white's near-black --ink went dark-on-dark (#296).
+// The structural pin below asserts the rule paints a FLAT `var(--bg)` (no
+// gradient/color-mix/transparent), which is what collapses that matrix back
+// to per-theme self-consistency: every board-area text token sits on its own
+// theme's --bg / --cell, independent of the page theme. The flatness is
+// load-bearing — summer-white's --dim (the dress-code description, at the
+// top of the box where a body-style radial tint would be hottest) has no
+// tint headroom at all (under 4.5:1 vs even an 18% --primary mix), so the
+// Day's-world glow lives in box-shadow (painted outside the surface), never
+// under the box's own text.
+// ---------------------------------------------------------------------------
+
+describe('.board-area[data-theme] paints its own flat themed surface (specs/theme-on-color-contrast.md, #301/#296)', () => {
+  const boardAreaBody = stripComments(ruleBlock(indexCss, '.board-area[data-theme]'));
+
+  it('backgrounds with a flat var(--bg) — no gradient, color-mix, or transparent stop', () => {
+    expect(boardAreaBody).toMatch(/background:\s*var\(--bg\)\s*;/);
+    expect(boardAreaBody).not.toMatch(/gradient|color-mix|transparent/);
+  });
+
+  it('keeps the glow outside the surface (box-shadow), never as a backdrop under text', () => {
+    expect(boardAreaBody).toMatch(/box-shadow:[^;]*var\(--shadow\)/);
+  });
+
+  // With the surface painted, the viewed-Day tokens that render as text
+  // inside .board-area reduce to their own theme's pairs regardless of the
+  // page theme: --ink on --bg (Day header, B-I-N-G-O letters) and --dim on
+  // --bg (dress-code description, daybar meta, lock captions). Restated
+  // explicitly here (rather than only inherited from w1-themes.test.tsx's
+  // TEXT_PAIRS) because they are THE pairs this fix's structural reduction
+  // bottoms out on — same treatment the .signin h1 section above gives its
+  // inherited pair.
+  for (const t of THEMES) {
+    const vars = themeBlocks[t.id] ?? {};
+    it(`${t.id}: --ink and --dim meet ${TEXT_MIN}:1 against the board-area's own painted --bg`, () => {
+      expect(contrastRatio(hexToRgb(vars.ink), hexToRgb(vars.bg))).toBeGreaterThanOrEqual(TEXT_MIN);
+      expect(contrastRatio(hexToRgb(vars.dim), hexToRgb(vars.bg))).toBeGreaterThanOrEqual(TEXT_MIN);
+    });
+  }
+
+  it('documents the pre-fix regression: summer-white --ink floated over every dark page theme fails 4.5:1', () => {
+    // The #296 gap in one assertion: with no painted surface, the one light
+    // theme's near-black --ink rendered directly over whichever theme the
+    // PAGE was wearing. Against every other (dark-bg) theme that pairing is
+    // catastrophically under the floor — which no per-theme check could see.
+    const ink = hexToRgb(themeBlocks['summer-white']!.ink);
+    for (const t of THEMES) {
+      if (t.id === 'summer-white') continue;
+      const pageBg = hexToRgb(themeBlocks[t.id]!.bg);
+      expect(
+        contrastRatio(ink, pageBg),
+        `summer-white --ink over ${t.id} --bg should document the pre-fix failure`,
+      ).toBeLessThan(TEXT_MIN);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #291: the themed wash spans the viewport. Scope B's checks assume body's
+// gradient-tinted background IS the page surface, but the old
+// `html, body, #root { min-height: 100% }` chain resolved every percentage
+// against an auto-height parent, so on sparse screens body stopped at
+// content height and index.html's flat pre-hydration shell color showed
+// below it as a black band. Pinned structurally: the chain must use
+// viewport units (dvh) so the surface Scope B polices actually covers the
+// window.
+// ---------------------------------------------------------------------------
+
+describe('html/body/#root span the viewport (specs/theme-on-color-contrast.md, #291)', () => {
+  it('the root sizing chain min-heights in dvh, not a percentage', () => {
+    const rootChain = stripComments(ruleBlock(indexCss, '#root'));
+    expect(rootChain).toMatch(/min-height:\s*100dvh\s*;/);
+    expect(rootChain).not.toMatch(/min-height:\s*100%\s*;/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Bonus fix (same defect class, same file): .share-card-bhead span mirrors
 // .bingo-head span inside the off-screen Share Card renderer
 // (src/components/ShareCard.tsx) — its own background layers a 30%

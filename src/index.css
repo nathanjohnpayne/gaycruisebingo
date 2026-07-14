@@ -5,7 +5,19 @@ html,
 body,
 #root {
   margin: 0;
-  min-height: 100%;
+  /* 100dvh, not 100%: a percentage min-height resolves against the parent's
+     *definite* height, and `html`'s is auto, so the old `100%` chain
+     collapsed to content height. On sparse screens (most visibly the
+     "Checking your cruise pass..." loader) body's themed radial wash then
+     stopped at content height, exposing index.html's flat pre-hydration
+     shell color below it as a black band (#291). Viewport units resolve
+     without a parent, so every link in the chain actually spans the window;
+     dvh (already this file's posture — see `min(90dvh, 760px)` below)
+     tracks the mobile dynamic viewport, and `min-height` (not `height`)
+     keeps tall screens scrolling exactly as before, with the fixed .tabs
+     bar clearance (.app's bottom padding) untouched. */
+  min-height: 100vh; /* fallback for engines without dvh */
+  min-height: 100dvh;
 }
 /* ---------- text size (specs/d15-text-size.md) ----------
    `--text-scale` is the multiplier the S/M/L pick (More menu § "Text size")
@@ -408,10 +420,35 @@ a {
   font-size: 10px;
 }
 /* The retint scope: `data-theme` set here (Board.tsx) cascades the
-   themes.css token set to just the board's own chrome, not `<html>`. No
-   properties of its own — the selector exists purely as the CSS variable
-   boundary. */
+   themes.css token set to just the board's own chrome, not `<html>`. The
+   bare class stays property-free — on a not-yet-migrated Event (no Day
+   schedule) the attribute is absent and the pre-Phase-1.5 single Board
+   must render exactly as before. */
 .board-area {
+}
+/* #301/#296: the retint scope paints its OWN themed surface. Re-scoping the
+   CSS variables alone only recolored text/accents floating over the PAGE
+   theme's background — near-invisible for a dark viewed Day over a dark
+   page theme (#301), and dark-on-dark for Summer White's near-black --ink
+   (Day header, dress-code description, B-I-N-G-O letters) over any dark
+   page theme (#296). Painting the Day's own --bg here puts every descendant
+   on its own Theme's surface, collapsing the viewed-theme x page-theme
+   contrast matrix back to the per-theme pairs specs/w1-themes.md already
+   holds to the 4.5:1 floor — pinned structurally in
+   src/theme/theme-on-color-contrast.test.tsx. Deliberately FLAT --bg, not
+   body's radial-glow tints: --dim text (the dress-code description) sits at
+   the top of this box where a tint would be hottest, and summer-white's
+   --dim has no tint headroom at all (under 4.5:1 vs even an 18% --primary
+   mix — verified with the same math the contrast suite uses). The Day's-
+   world glow comes from the box-shadow instead: var(--shadow) paints
+   OUTSIDE the surface, over the page, never under this box's own text. */
+.board-area[data-theme] {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 0 24px var(--shadow);
+  padding: 12px 10px 14px;
+  margin: 6px 0 14px;
 }
 /* The daybar (#260, wireframes' day gallery): "Day N · Theme" + tag on the
    left, port on the right, dress-code description underneath. Shared by the
