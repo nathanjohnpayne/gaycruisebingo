@@ -41,6 +41,7 @@ vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' 
 
 import ProofFeed, { TallyCard, tallyCardAction, tallyActionTarget, doubtsClearedByProof } from './ProofFeed';
 import { useOpenSquareIntent, __resetOpenSquareForTests } from '../hooks/useOpenSquare';
+import { EVENT_ID } from '../firebase'; // the mock above: 'test-event'
 import type { BoardDoc } from '../types';
 
 // specs/d15-tally-cards.md — the Feed's Tally Card renderer + its per-viewer
@@ -141,7 +142,10 @@ const emptyDocSnap = { exists: () => false, data: () => undefined, metadata: { f
 function markerDoc(itemId: string, entry: TallyEntry) {
   return {
     data: () => entry,
-    ref: { parent: { parent: { id: itemId, parent: { id: 'tally' } } } },
+    // The full ancestor chain useTallyCards guards on:
+    // events/{EVENT_ID}/tally/{itemId}/markers/{uid} — including the event id
+    // (a sibling event's markers are filtered out, never merged into a card).
+    ref: { parent: { parent: { id: itemId, parent: { id: 'tally', parent: { id: EVENT_ID } } } } },
   };
 }
 
