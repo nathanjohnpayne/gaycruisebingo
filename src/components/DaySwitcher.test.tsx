@@ -5,7 +5,8 @@ import DaySwitcher, { dayStates, defaultViewedIndex } from './DaySwitcher';
 
 // specs/d15-day-switcher.md: the ten-chip Day strip (daily-cards-spec §
 // "Day switcher"). Covers chip ORDER and STATE (past ✓ / today filled /
-// locked 🔒), the today-index derivation used to default the viewed Day,
+// locked 🔒) — the glyph PREFIXES the chip's single-line pill content
+// (#293) — the today-index derivation used to default the viewed Day,
 // and that a tap — including a tap on a locked chip — only reports the
 // index via `onSelect`, never writes anything (the "open the preview"
 // behavior belongs entirely to the caller, Board).
@@ -74,6 +75,10 @@ describe('<DaySwitcher />', () => {
     expect(chips[0].textContent).toContain('✓');
     expect(chips[3].textContent).not.toContain('✓');
     expect(chips[3].textContent).not.toContain('🔒');
+    // #293: the state glyph PREFIXES the pill content — "✓ Wed 🇭🇷 ⚽" /
+    // "🔒 Fri 🇭🇷 ⚽" — rather than trailing it.
+    expect(chips[0].textContent?.startsWith('✓')).toBe(true);
+    expect(chips[9].textContent?.startsWith('🔒')).toBe(true);
   });
 
   it('tapping a locked chip only reports its index — it never marks or deals anything', () => {

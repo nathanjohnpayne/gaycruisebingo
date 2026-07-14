@@ -202,22 +202,6 @@ a {
 }
 
 /* ---------- card ---------- */
-.card-meta {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-  color: var(--dim);
-  /* Title + sail dates on ONE centered line at phone widths: shrink the type
-     to fit the ~296–406px content column (the .app column minus its 12px
-     padding on a 320–430px phone) and never wrap. Capped at 12px so it holds
-     the original size on wider screens. */
-  font-size: clamp(9px, 2.7vw, 12px);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  text-align: center;
-  white-space: nowrap;
-  margin: 4px 2px 8px;
-}
 .bingo-head {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -369,23 +353,34 @@ a {
 }
 /* ---------- Day switcher + locked-Day preview (daily-cards-spec §§ "Day
    switcher" / "Locked Day preview") ---------- */
+/* One row of compact pills (#293 — the wireframes' chip strip): the strip
+   never wraps, shows a few Days at a time, and scrolls sideways. The
+   right-edge mask fade is the scroll affordance — pure CSS, no chevron
+   chrome to manage. It fades toward (never to) transparent so the last
+   chip stays legible when the strip is scrolled all the way to the end. */
 .day-switcher {
   display: flex;
   gap: 6px;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
   padding: 2px 2px 8px;
   margin-bottom: 4px;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), rgb(0 0 0 / 0.25));
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), rgb(0 0 0 / 0.25));
 }
+/* Chip content — glyph, weekday, port emoji, theme emoji — sits on ONE
+   line per the wireframe (a horizontal "Wed 🇮🇹 🚢" pill), not stacked. */
 .day-chip {
   flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
+  display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 6px 9px;
+  gap: 5px;
+  white-space: nowrap;
+  scroll-snap-align: start;
+  padding: 6px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 999px;
   background: var(--cell);
   color: var(--dim);
   font-size: 11px;
