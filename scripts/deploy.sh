@@ -216,6 +216,13 @@ echo ">> Deploying via op-firebase-deploy"
 op-firebase-deploy ${DEPLOY_ARGS[@]+"${DEPLOY_ARGS[@]}"}
 
 # Step 3: Cloudflare cache purge (optional)
+# CF_ZONE_ID is per-repo by design (DEPLOYMENT.md § Cloudflare cache purge:
+# one shared token covers all domains, each domain has its own zone), so the
+# gaycruisebingo.com zone id is the repo-level default here. Zone ids are not
+# secrets; the env override stays for staging/alternate zones. Without this
+# default a routine deploy silently skipped the purge (2026-07-14), leaving
+# Cloudflare serving the previous bundle at the proxied apex.
+CF_ZONE_ID="${CF_ZONE_ID:-8066dd2b105ad564c45bb8c898859343}"
 if [[ "$CF_PURGE_SKIP" == "true" ]]; then
   echo ">> Cloudflare cache purge skipped (--skip-cf-purge)"
 elif [[ -z "${CF_API_TOKEN:-}" || -z "${CF_ZONE_ID:-}" ]]; then
