@@ -117,12 +117,17 @@ export async function seedParityFixture(): Promise<ParityFixture> {
     // "Unlocks 8:00 a.m. · …" copy must render identically on every run, and
     // the frozen PAGE clock (not the server) decides their locked state, so
     // they stay locked previews even when the real date passes them.
-    const realNow = Date.now();
+    // Anchor the unlocked stamps at whichever clock is EARLIER (Codex P2 on
+    // #316 round 2): they must be ≤ the real server clock (the rules gate) AND
+    // ≤ the frozen page clock (chip/deal state) — `realNow - 6h` alone drifts
+    // ABOVE PARITY_NOW once real time passes the frozen window, reclassifying
+    // "today" as locked and rotting the suite after 2026-07-17.
+    const unlockAnchor = Math.min(Date.now(), PARITY_NOW);
     await updateDoc(doc(db, 'events', EVENT_ID), {
       days: [
-        { index: 0, date: '2026-07-15', port: 'Trieste', portEmoji: '🇮🇹', theme: 'welcome-aboard', pool: 'embark', tutorial: true, unlockAt: realNow - 50 * HOUR, snapshotItemIds: embarkIds, freeText: 'You made it aboard' },
-        { index: 1, date: '2026-07-16', port: 'Split', portEmoji: '🇭🇷', theme: 'get-sporty', pool: 'main', tutorial: false, unlockAt: realNow - 26 * HOUR, snapshotItemIds: mainIds },
-        { index: 2, date: '2026-07-17', port: 'Valletta', portEmoji: '🇲🇹', theme: 'duty-free', pool: 'main', tutorial: false, unlockAt: realNow - 6 * HOUR, snapshotItemIds: mainIds },
+        { index: 0, date: '2026-07-15', port: 'Trieste', portEmoji: '🇮🇹', theme: 'welcome-aboard', pool: 'embark', tutorial: true, unlockAt: unlockAnchor - 50 * HOUR, snapshotItemIds: embarkIds, freeText: 'You made it aboard' },
+        { index: 1, date: '2026-07-16', port: 'Split', portEmoji: '🇭🇷', theme: 'get-sporty', pool: 'main', tutorial: false, unlockAt: unlockAnchor - 26 * HOUR, snapshotItemIds: mainIds },
+        { index: 2, date: '2026-07-17', port: 'Valletta', portEmoji: '🇲🇹', theme: 'duty-free', pool: 'main', tutorial: false, unlockAt: unlockAnchor - 6 * HOUR, snapshotItemIds: mainIds },
         { index: 3, date: '2026-07-18', port: 'Palermo', portEmoji: '🇮🇹', theme: 'glamiators', pool: 'main', tutorial: false, unlockAt: unlockAt('2026-07-18') },
         { index: 4, date: '2026-07-24', port: 'Barcelona', portEmoji: '🇪🇸', theme: 'so-long-farewell', pool: 'farewell', tutorial: true, unlockAt: unlockAt('2026-07-24'), freeText: 'We had the best damn time' },
       ],
