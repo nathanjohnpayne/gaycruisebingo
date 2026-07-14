@@ -30,6 +30,7 @@ import {
   PARITY_FAREWELL_INDEX,
 } from './support/parity';
 import { readDealtDayGrid, dismissCoach } from './support/daily';
+import { userAttested } from './support/seed';
 import { joinViaSharedLink, signedInUid } from './support/join';
 import { EVENT_ID } from './support/env';
 import { dealBoard, type DealItem } from '../../src/game/logic';
@@ -329,6 +330,10 @@ test.describe('visual baselines (393×852, emulator fixture)', () => {
     await expect(page.locator('.grid')).toHaveAttribute('data-server-confirmed', 'true', { timeout: 20_000 });
     await dismissCoach(page);
     const cellTexts = await writeDeterministicBoard(testEnv, uid);
+    // The 18+ attestation persists via a Firestore TRANSACTION that starts
+    // after the signed-in shell renders — reloading before it commits lands
+    // on the re-attestation gate (the same race d15-coach-overlay documents).
+    await expect.poll(async () => userAttested(testEnv, uid), { timeout: 15_000 }).toBe(true);
     await page.reload();
     await expect(page.getByRole('navigation', { name: 'Primary' })).toBeVisible({ timeout: 30_000 });
     await dismissCoach(page);
