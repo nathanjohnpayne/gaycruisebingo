@@ -99,6 +99,10 @@ describe('TabBar (specs/d15-icons-lucide.md)', () => {
     const ellipsisIcon = moreLink.querySelector('svg.tab-ellipsis');
     expect(ellipsisIcon).toBeTruthy();
     expect(moreLink.textContent).not.toContain('⋯');
+    // #297: the accessible name comes from the visible "More" caption under
+    // the glyph — same shape as Card/Feed/Ranks — not from an aria-label.
+    expect(moreLink.textContent).toContain('More');
+    expect(moreLink.getAttribute('aria-label')).toBeNull();
   });
 });
 
