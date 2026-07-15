@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import UpdatePrompt from './UpdatePrompt';
+import UpdatePrompt, { FLOOR_RECHECK_INTERVAL_MS } from './UpdatePrompt';
 import { __resetToastStackForTests, __resetClaimSheetOpenForTests, setClaimSheetOpen } from '../hooks/useToastStack';
 
 // Covers specs/app-update-reload-prompt.md: the needRefresh-driven reload banner
@@ -58,6 +58,16 @@ describe('UpdatePrompt', () => {
     // Shared module singletons (#219) — reset between tests.
     __resetToastStackForTests();
     __resetClaimSheetOpenForTests();
+    // Inert floor by default (#342): the banner holds until the first
+    // /build-floor.json read settles, so every banner test needs a floor
+    // response. Individual tests re-stub for stale-floor scenarios.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ floor: '1970-01-01T00:00:00.000Z' }),
+      } as unknown as Response),
+    );
   });
 
   afterEach(() => {
@@ -78,25 +88,27 @@ describe('UpdatePrompt', () => {
     swState.initialNeedRefresh = true;
     const user = userEvent.setup();
     render(<UpdatePrompt />);
-    expect(screen.getByRole('status')).toHaveTextContent(/fresh build just docked/i);
+    // findByRole: the banner now waits for the first /build-floor.json read
+    // (#342) before offering; the inert-floor stub settles it immediately.
+    expect(await screen.findByRole('status')).toHaveTextContent(/fresh build just docked/i);
     await user.click(screen.getByRole('button', { name: /reload/i }));
     expect(swState.updateServiceWorker).toHaveBeenCalledWith(true);
   });
 
-  it('defers while a claim sheet is open, and shows once it closes (#219)', () => {
+  it('defers while a claim sheet is open, and shows once it closes (#219)', async () => {
     swState.initialNeedRefresh = true;
     act(() => setClaimSheetOpen(true));
     render(<UpdatePrompt />);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     act(() => setClaimSheetOpen(false));
-    expect(screen.getByRole('status')).toHaveTextContent(/fresh build just docked/i);
+    expect(await screen.findByRole('status')).toHaveTextContent(/fresh build just docked/i);
   });
 
   it('"Not now" dismisses the banner for the session without touching the waiting worker', async () => {
     swState.initialNeedRefresh = true;
     const user = userEvent.setup();
     render(<UpdatePrompt />);
-    await user.click(screen.getByRole('button', { name: /not now/i }));
+    await user.click(await screen.findByRole('button', { name: /not now/i }));
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     expect(swState.updateServiceWorker).not.toHaveBeenCalled();
   });
@@ -105,6 +117,7 @@ describe('UpdatePrompt', () => {
     swState.initialNeedRefresh = true;
     const user = userEvent.setup();
     render(<UpdatePrompt />);
+    await screen.findByRole('status');
     expect(document.body.classList.contains(VISIBLE_CLASS)).toBe(true);
     await user.click(screen.getByRole('button', { name: /not now/i }));
     expect(document.body.classList.contains(VISIBLE_CLASS)).toBe(false);
@@ -158,7 +171,78 @@ describe('UpdatePrompt', () => {
     const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
     render(<UpdatePrompt />);
     swState.capturedOptions?.onRegisteredSW?.('/sw.js', undefined);
-    expect(setIntervalSpy).not.toHaveBeenCalled();
+    // The SW-update poll (60s cadence) must not arm without a registration.
+    // The component's OWN floor-recheck interval (#342) is expected and
+    // registration-independent, so the assertion pins the cadence, not "any".
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 60_000);
     setIntervalSpy.mockRestore();
+  });
+
+  it('force-activates a waiting SW without offering the banner when the running build is below the served floor (#342)', async () => {
+    swState.initialNeedRefresh = true;
+    // Served floor far in the future ⇒ the test build's __BUILD_STAMP__ is below it.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ floor: '2999-01-01T00:00:00.000Z' }),
+      } as unknown as Response),
+    );
+    render(<UpdatePrompt />);
+    await waitFor(() => expect(swState.updateServiceWorker).toHaveBeenCalledWith(true));
+    // No offer, no body class — the stale client reloads instead of being asked.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(document.body.classList.contains(VISIBLE_CLASS)).toBe(false);
+  });
+
+  it('keeps the normal offer when the served floor is inert (older than the build) (#342)', async () => {
+    swState.initialNeedRefresh = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ floor: '1970-01-01T00:00:00.000Z' }),
+      } as unknown as Response),
+    );
+    render(<UpdatePrompt />);
+    expect(await screen.findByRole('status')).toHaveTextContent(/fresh build just docked/i);
+    expect(swState.updateServiceWorker).not.toHaveBeenCalled();
+  });
+
+  it('a floor bump observed AFTER "Not now" still forces the reload — dismissal cannot defeat the floor (#342)', async () => {
+    swState.initialNeedRefresh = true;
+    vi.useFakeTimers();
+    // First read: inert (normal offer). Every later read: bumped above the build.
+    let reads = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => {
+        reads += 1;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              floor: reads === 1 ? '1970-01-01T00:00:00.000Z' : '2999-01-01T00:00:00.000Z',
+            }),
+        } as unknown as Response);
+      }),
+    );
+    render(<UpdatePrompt />);
+    // Settle the first floor read (microtasks only — no timers involved).
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    fireEvent.click(screen.getByRole('button', { name: /not now/i }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(swState.updateServiceWorker).not.toHaveBeenCalled();
+    // The operator bumps the floor; the periodic re-read observes it and the
+    // force fires off the waiting-SW latch, dismissal notwithstanding.
+    await act(async () => {
+      vi.advanceTimersByTime(FLOOR_RECHECK_INTERVAL_MS);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(swState.updateServiceWorker).toHaveBeenCalledWith(true);
   });
 });

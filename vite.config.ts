@@ -46,7 +46,14 @@ export default defineConfig(({ command, mode }) => {
   }
 
   return {
-    define: { __APP_VERSION__: JSON.stringify(appVersion()) },
+    define: {
+      __APP_VERSION__: JSON.stringify(appVersion()),
+      // Ordered build stamp for the remote force-reload floor (#342): git SHAs
+      // (__APP_VERSION__) identify a build but cannot answer "older than X?",
+      // so the floor check compares this ISO timestamp against
+      // public/build-floor.json instead.
+      __BUILD_STAMP__: JSON.stringify(new Date().toISOString()),
+    },
     plugins: [
       react(),
       VitePWA({

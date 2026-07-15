@@ -19,3 +19,7 @@ interface ImportMeta {
 }
 
 declare const __APP_VERSION__: string;
+// Build-time ISO timestamp (vite.config.ts define) — the ordered counterpart to
+// __APP_VERSION__'s git SHA, compared against public/build-floor.json by the
+// stale-build force-reload watchdog (src/buildFloor.ts).
+declare const __BUILD_STAMP__: string;
