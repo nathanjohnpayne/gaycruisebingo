@@ -181,6 +181,13 @@ export const DAYS: DayDef[] = [
     theme: 'welcome-aboard',
     pool: 'embark',
     tutorial: true,
+    // The 0 sentinel MEANS "live from event open" (spec § Unlock mechanics) and
+    // is load-bearing: the scheduler treats a non-positive cutoff as NO cutoff
+    // (#289 — activeSnapshotIds fails open), so an always-open Day snapshots
+    // its full pool whenever the seed ran. A positive historical constant here
+    // would resurrect the empty-snapshot starvation for any FRESH seed run
+    // after that constant, because seeded items carry `createdAt: Date.now()`
+    // (Codex P1 on the #289 fix). Do not "fix" this back to a real timestamp.
     unlockAt: 0,
     freeText: 'You made it aboard',
   },

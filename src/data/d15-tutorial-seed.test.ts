@@ -93,7 +93,12 @@ describe('DAYS — the ten-Day itinerary mapping', () => {
     });
   });
 
-  it('unlocks index 0 (embark) immediately and every other Day at 08:00 Europe/Rome on its date', () => {
+  it('unlocks index 0 (embark) via the event-open sentinel and every other Day at 08:00 Europe/Rome on its date', () => {
+    // #289: the 0 sentinel is DELIBERATE ("live from event open") and the
+    // scheduler fails open on a non-positive cutoff. A positive historical
+    // constant would re-starve any fresh seed run after it — seeded items
+    // carry `createdAt: Date.now()`, all later than a fixed past instant
+    // (Codex P1 on the #289 fix).
     expect(DAYS[0].unlockAt).toBe(0);
     for (let i = 1; i < DAYS.length; i++) {
       const day = DAYS[i];

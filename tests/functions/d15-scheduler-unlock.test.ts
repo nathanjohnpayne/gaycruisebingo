@@ -228,6 +228,28 @@ describe('activeSnapshotIds — the frozen pool mirrors the live deal pool', () 
       'approved-before',
     ]);
   });
+
+  it('a NON-POSITIVE cutoff applies no cutoff at all — an always-unlocked Day snapshots its full pool (#289)', () => {
+    // The `unlockAt: 0` "live pre-cruise" sentinel used to feed cutoff=0 into the
+    // entered-after exclusion: every item's createdAt > 0, so the ENTIRE pool was
+    // dropped and the Day stamped an empty snapshot — which isDueForSnapshot then
+    // treats as already-stamped (the no-forever-wait rule), permanently starving
+    // the deal (the 2026-07-14 embark incident). Non-positive now means fail open.
+    const items = [
+      { id: 'a', pool: 'embark', createdAt: 100 },
+      { id: 'b', pool: 'embark', createdAt: 300, approvedAt: 400 },
+      { id: 'other-pool', pool: 'main', createdAt: 100 },
+    ];
+    expect(activeSnapshotIds(items, { pool: 'embark', cutoff: 0 })).toEqual(['a', 'b']);
+    expect(activeSnapshotIds(items, { pool: 'embark', cutoff: -1 })).toEqual(['a', 'b']);
+    // The other predicates still apply under the open cutoff.
+    expect(
+      activeSnapshotIds(
+        [...items, { id: 'banned', pool: 'embark', createdAt: 100, createdBy: 'villain' }],
+        { pool: 'embark', cutoff: 0, bannedUids: ['villain'] },
+      ),
+    ).toEqual(['a', 'b']);
+  });
 });
 
 describe('stampDaySnapshot — the snapshot at unlock (AC 1)', () => {

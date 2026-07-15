@@ -72,6 +72,10 @@ export const EVENT_SEED = {
       theme: 'welcome-aboard',
       pool: 'embark',
       tutorial: true,
+      // 0 = "live from event open", and the scheduler fails OPEN on a
+      // non-positive cutoff (#289) — a positive historical constant would
+      // re-starve any FRESH seed run after it (seeded items carry
+      // `createdAt: Date.now()`; Codex P1). Mirrors src/data/seed.ts.
       unlockAt: 0,
       freeText: 'You made it aboard',
     },
