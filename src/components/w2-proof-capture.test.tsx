@@ -314,6 +314,42 @@ describe('ProofSheet — each capture type produces a valid submit and closes', 
     expect(H.attachProof).toHaveBeenCalledTimes(2);
   });
 
+  it('re-selecting a photo revokes the previous object URL (no blob: leak on retake / Take photo ↔ Library switch — mirrors the audio re-record revoke)', async () => {
+    // The e2e runner would exercise the real upload end-to-end, but it is
+    // emulator-backed (Java) and not runnable here; this component regression
+    // covers the fixed failure path — onPhoto used to createObjectURL on every
+    // pick without ever revoking the prior URL, orphaning it for the page's
+    // lifetime. Distinct URLs per createObjectURL so we can assert the FIRST is
+    // revoked when the second is picked.
+    const user = userEvent.setup();
+    const origCreate = globalThis.URL.createObjectURL;
+    let n = 0;
+    (globalThis.URL as unknown as { createObjectURL: (b: Blob) => string }).createObjectURL = () =>
+      `blob:mock-${n++}`;
+    const revokeSpy = globalThis.URL.revokeObjectURL as unknown as ReturnType<typeof vi.fn>;
+    try {
+      const props = baseProps();
+      const { container } = render(<ProofSheet {...props} />);
+
+      await user.click(screen.getByRole('button', { name: /photo/i }));
+      const input = () => container.querySelector('input[type="file"]') as HTMLInputElement;
+
+      // First pick mints blob:mock-0 — nothing to revoke yet.
+      await user.upload(input(), new File(['a'], 'a.jpg', { type: 'image/jpeg' }));
+      expect(revokeSpy).not.toHaveBeenCalled();
+      expect(container.querySelector('img.preview')).toHaveAttribute('src', 'blob:mock-0');
+
+      // Second pick (a retake / Library switch) must revoke the first URL and
+      // show the new one — no orphaned blob: URL.
+      await user.upload(input(), new File(['b'], 'b.jpg', { type: 'image/jpeg' }));
+      expect(revokeSpy).toHaveBeenCalledWith('blob:mock-0');
+      expect(revokeSpy).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('img.preview')).toHaveAttribute('src', 'blob:mock-1');
+    } finally {
+      globalThis.URL.createObjectURL = origCreate;
+    }
+  });
+
   it('never frames the Proof as required for credit (flavour, not enforcement — ADR 0001)', () => {
     render(<ProofSheet {...baseProps()} />);
     expect(screen.queryByText(/required for credit/i)).toBeNull();

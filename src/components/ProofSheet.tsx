@@ -106,7 +106,14 @@ export default function ProofSheet(props: Props) {
     const f = e.target.files?.[0];
     if (!f) return;
     setPhoto(f);
-    setPhotoUrl(URL.createObjectURL(f));
+    // Revoke the prior object URL before minting the next one, mirroring the
+    // audio path's re-record revoke (#295): retaking a photo, or switching
+    // 📷 Take photo ↔ 🖼️ Library, otherwise orphans the previous blob: URL for
+    // the page's lifetime — a real leak of full-size image blobs on mobile.
+    setPhotoUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(f);
+    });
     setPhotoSource(source);
   };
 
