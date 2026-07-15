@@ -603,5 +603,20 @@ service cloud.firestore {
         allow delete: if isAdmin(eventId) || isOwner(resource.data.uid);
       }
     }
+
+    // Collection-group READ for the Feed's Tally Cards (#216/#294): the client
+    // subscribes `collectionGroup('markers')` to fold every Prompt's markers
+    // into per-(Prompt, Day) cards, and Firestore evaluates a collection-group
+    // query ONLY against a `{path=**}` rule — the nested
+    // events/{eventId}/tally/{itemId}/markers rule above never matches it, so
+    // without this rule the subscription is permission-denied and the Feed
+    // shows only the viewer's own latency-compensated markers (the #294
+    // "bare marks intermittently miss the Feed" symptom). The only `markers`
+    // subcollections in this schema live under events/*/tally/* (ADR 0002
+    // public attribution), so signed-in read mirrors the direct-path rule.
+    // Writes stay path-scoped — this grants no create/update/delete.
+    match /{path=**}/markers/{markerUid} {
+      allow read: if signedIn();
+    }
   }
 }

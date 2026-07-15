@@ -52,6 +52,22 @@ describe('deriveTallyCards — per-(itemId, dayIndex) aggregation (specs/d15-tal
     expect(cards[0].markers.map((m) => m.uid)).toEqual(['alice', 'bob']);
   });
 
+  it('dedupes markers by uid within a card — a stray duplicate row never repeats a name', () => {
+    // The write path is uid-keyed (tally/{itemId}/markers/{uid}), so a duplicate
+    // row is always an anomaly (an unscoped subscription, a legacy overlap) —
+    // the render fold must still never produce "Nathan Payne, Nathan Payne".
+    const { cards } = deriveTallyCards([
+      row({ uid: 'nathan', displayName: 'Nathan Payne', itemId: 'p1', markedAt: T0 + 5000 }),
+      row({ uid: 'nathan', displayName: 'Nathan Payne', itemId: 'p1', markedAt: T0 }),
+      row({ uid: 'sterling', displayName: 'Sterling Tadlock', itemId: 'p1', markedAt: T0 + 1000 }),
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].count).toBe(2);
+    // Earliest row per uid wins, so the chronological names line is stable.
+    expect(cards[0].markers.map((m) => m.uid)).toEqual(['nathan', 'sterling']);
+    expect(cards[0].markers[0].markedAt).toBe(T0);
+  });
+
   it('the SAME Prompt on two different Days is two independent cards, each with its day', () => {
     const { cards } = deriveTallyCards([
       row({ uid: 'alice', itemId: 'p1', dayIndex: 2 }),

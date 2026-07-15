@@ -14,7 +14,7 @@ Feature: bare Marks reach the Feed. Today a Mark with no Proof broadcasts nothin
 
 ## Resolved decisions (defaults chosen here)
 
-- **Day-scope by marker FIELD, not a forked path.** The issue floated a day-scoped tally doc or a composite key. Instead the marker stays at the unchanged per-Prompt path `tally/{itemId}/markers/{uid}` and carries `dayIndex` as a field; the Feed groups by `(itemId, dayIndex)`. Rationale: no-repeat exclusion is per-Player, so one Player never marks the same Prompt on two Days — no self-overwrite in the shared `markers/{uid}` slot — while two Players marking it on different Days still split into two cards by their stamped `dayIndex`. This avoids forking the Square-badge (`useTally`) and Doubt `exists()` read paths (a cross-cutting `firestore.rules` change) for no functional gain, and needs NO rules change (the additive fields pass the existing marker create rule).
+- **Day-scope by marker FIELD, not a forked path.** The issue floated a day-scoped tally doc or a composite key. Instead the marker stays at the unchanged per-Prompt path `tally/{itemId}/markers/{uid}` and carries `dayIndex` as a field; the Feed groups by `(itemId, dayIndex)`. Rationale: no-repeat exclusion is per-Player, so one Player never marks the same Prompt on two Days — no self-overwrite in the shared `markers/{uid}` slot — while two Players marking it on different Days still split into two cards by their stamped `dayIndex`. This avoids forking the Square-badge (`useTally`) and Doubt `exists()` read paths for no functional gain. The one required rules change is read-only and query-shape-specific: the Feed's `collectionGroup('markers')` subscription needs a signed-in `{path=**}/markers/{markerUid}` read rule because Firestore collection-group queries do not match the nested `events/{eventId}/tally/{itemId}/markers/{uid}` rule; writes stay guarded by the original path rule.
 - **`lastMarkedAt` is DERIVED, not written.** The parent `tally/{itemId}` doc is admin-only-write, so a client Mark cannot stamp it. The Feed derives the re-sort time as `max(marker.markedAt)` over the group — the same "count is the marker set" model the Square badge already uses. No admin-maintained aggregate doc.
 
 ## Acceptance criteria
@@ -30,7 +30,7 @@ Feature: bare Marks reach the Feed. Today a Mark with no Proof broadcasts nothin
 - `src/game/d15-tally-cards.test.ts` — `nextDisplayBumpTime`: first-appearance adopt, within-window hold (debounce), at/after-window bump, monotonicity, custom window.
 - `src/hooks/d15-tally-cards.test.ts` — `deriveTallyCards` grouping, two-Days-two-cards, drop-empty, legacy-marker skip, live-count-with-held-bump debounce; `mergeFeed` 3-way newest-first ordering, zero-count exclusion, backward-compat.
 - `src/components/ProofFeed.test.tsx` — `TallyCard` renders "first two + N", Prompt text, and day chip, opens the who-list on tap; `tallyCardAction` gates `＋ Proof` / `🙋 Got it too` / informational per viewer state.
-- `tests/rules/d15-tally-cards.test.ts` — the day-scoped (additive-field) marker is still self-writable, attributed, publicly readable, and forged-attribution/shape denials still hold — confirming no `firestore.rules` change is required.
+- `tests/rules/d15-tally-cards.test.ts` — the day-scoped (additive-field) marker is still self-writable, attributed, publicly readable, and forged-attribution/shape denials still hold, plus the Feed's collection-group marker query is allowed for signed-in Players, denied when signed out, and grants no writes.
 
 ## Out of scope (follow-up)
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { collectionGroup, onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
-import { db } from '../firebase';
+import { db, EVENT_ID } from '../firebase';
 import { eventRef, itemsCol, boardRef, dayBoardRef, dayMetaRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol } from '../data/paths';
 import { isReportHidden, isBanned, isSystemAuthor } from '../data/moderation';
 import { sortPlayers, dayDealState, type DayDealState, nextDisplayBumpTime, BUMP_DEBOUNCE_MS } from '../game/logic';
@@ -565,7 +565,17 @@ export function deriveTallyCards(
   const displayed: Record<string, number> = {};
   const cards: TallyCard[] = [];
   for (const [key, members] of groups) {
-    const markers = [...members].sort((a, b) => a.markedAt - b.markedAt);
+    // One row per Player per card: the marker write path is uid-keyed
+    // (tally/{itemId}/markers/{uid}), but this render fold is the last line of
+    // defense — a stray second row for the same uid (an unscoped source, a
+    // legacy overlap) must never read "Nathan Payne, Nathan Payne got …".
+    // Earliest markedAt wins so the chronological names line is stable.
+    const byUid = new Map<string, TallyMarkerRow>();
+    for (const m of members) {
+      const seen = byUid.get(m.uid);
+      if (!seen || m.markedAt < seen.markedAt) byUid.set(m.uid, m);
+    }
+    const markers = [...byUid.values()].sort((a, b) => a.markedAt - b.markedAt);
     const lastMarkedAt = markers.reduce((m, x) => Math.max(m, x.markedAt), 0);
     const displayBump = nextDisplayBumpTime(prevDisplayed[key], lastMarkedAt, windowMs);
     displayed[key] = displayBump;
@@ -605,10 +615,13 @@ export function useTallyCards() {
       (snap) => {
         const rows: TallyMarkerRow[] = [];
         for (const d of snap.docs) {
-          // Guard the collection group to the Tally's markers only:
-          // events/{eventId}/tally/{itemId}/markers/{uid}.
+          // Guard the collection group to THIS Event's Tally markers only:
+          // events/{EVENT_ID}/tally/{itemId}/markers/{uid}. The parent.id check
+          // alone would admit a sibling event's markers (a test event in the
+          // same project), merging two events' marks into one card.
           const tallyDoc = d.ref.parent.parent;
           if (!tallyDoc || tallyDoc.parent.id !== 'tally') continue;
+          if (tallyDoc.parent.parent?.id !== EVENT_ID) continue;
           const data = d.data() as TallyEntry;
           if (isBanned(data.uid, bannedUids)) continue;
           rows.push({ ...data, itemId: tallyDoc.id });

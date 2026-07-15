@@ -9,8 +9,7 @@ import {
 } from '@firebase/rules-unit-testing';
 import { deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 
-// specs/d15-tally-cards.md — day-scoped Tally Cards (#216) ride the EXISTING
-// per-Prompt Tally marker rules with NO firestore.rules change. A Mark stamps the
+// specs/d15-tally-cards.md — day-scoped Tally Cards (#216). A Mark stamps the
 // viewed `dayIndex` and the Prompt `itemText` as ADDITIVE fields on the same
 // `tally/{itemId}/markers/{uid}` doc (the marker create rule validates
 // uid/displayName/markedAt but not the full key set), so the Feed groups markers
@@ -18,6 +17,9 @@ import { deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 // Doubt `exists()` gate keep reading the unchanged path. This suite pins that the
 // day-scoped marker is still self-writable + attributed + publicly readable, and
 // that the forged-attribution and shape denials still hold with the extra fields.
+// The Feed's stream additionally needs the `{path=**}/markers` collection-group
+// READ rule (#294): a CG query never matches the nested path rule, so without it
+// useTallyCards is permission-denied and bare Marks silently miss the Feed.
 // The PERMISSION_DENIED lines the SDK logs are the expected assertFails denials.
 
 const RULES_PATH = fileURLToPath(new URL('../../firestore.rules', import.meta.url));
@@ -91,5 +93,24 @@ describe('firestore.rules — day-scoped Tally Card markers (specs/d15-tally-car
 
   it('day-scoped markers are publicly readable — the Feed builds Tally Cards for everyone (no anonymity)', async () => {
     await assertSucceeds(getDoc(doc(db(BOB), markerPath(ITEM, CAROL))));
+  });
+
+  it('the collectionGroup(markers) subscription reads for any signed-in Player (#294 — the Feed stream)', async () => {
+    // Firestore evaluates a collection-group query ONLY against a {path=**}
+    // rule; without one the Feed's useTallyCards listen is permission-denied
+    // and other Players' bare Marks never surface as Tally Cards.
+    const { collectionGroup, getDocs } = await import('firebase/firestore');
+    await assertSucceeds(getDocs(collectionGroup(db(BOB), 'markers')));
+  });
+
+  it('a signed-out reader gets NO collection-group markers access', async () => {
+    const { collectionGroup, getDocs } = await import('firebase/firestore');
+    await assertFails(getDocs(collectionGroup(testEnv.unauthenticatedContext().firestore(), 'markers')));
+  });
+
+  it('the collection-group rule grants READ only — writes stay path-scoped and owner-bound', async () => {
+    // A cross-event forged write must still be denied: the CG rule has no
+    // create/update/delete arm, and the path rule binds the doc id to the uid.
+    await assertFails(setDoc(doc(db(ALICE), markerPath(ITEM, BOB)), marker(BOB)));
   });
 });
