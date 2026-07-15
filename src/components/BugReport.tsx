@@ -81,6 +81,10 @@ export function BugReportProvider({ children }: { children: ReactNode }) {
   const capture = useCallback(async () => {
     const attempt = ++captureAttemptRef.current;
     const hadScreenshot = screenshot !== null;
+    // Snapshot the route NOW: captureAppSurface() clones the DOM as it runs,
+    // and the tab bar stays usable during a pick-mode capture, so reading the
+    // pathname after the await could label the image with a later tab.
+    const routeAtCapture = window.location.pathname;
     setCaptureState('capturing');
     setCaptureError(null);
     setError(null);
@@ -88,7 +92,7 @@ export function BugReportProvider({ children }: { children: ReactNode }) {
       const image = await captureAppSurface();
       if (captureAttemptRef.current !== attempt) return;
       setScreenshot(image);
-      setCaptureRoute(window.location.pathname);
+      setCaptureRoute(routeAtCapture);
       setCaptureState('ready');
     } catch (captureFailure) {
       if (captureAttemptRef.current !== attempt) return;
