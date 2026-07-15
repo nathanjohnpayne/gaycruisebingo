@@ -1686,21 +1686,31 @@ a {
 .install-prompt,
 .update-prompt {
   /* Sized for the tallest single-slot toast (#281 round 3): title + body
-     lines plus the 44px-minimum ✕ dismiss and vertical padding — the old
-     54px slot let the taller install toast poke under its neighbor. */
-  --toast-slot-height: 68px;
+     lines plus the 44px-minimum ✕ dismiss, vertical padding, and (since
+     #308) the contained card's border + 8px inter-card gap. */
+  --toast-slot-height: 76px;
   position: fixed;
-  bottom: calc((var(--toast-count, 1) - 1 - var(--toast-index, 0)) * var(--toast-slot-height));
-  left: 0;
-  right: 0;
+  bottom: calc(env(safe-area-inset-bottom) + 8px + ((var(--toast-count, 1) - 1 - var(--toast-index, 0)) * var(--toast-slot-height)));
+  /* #308 — the wireframes' `.systoast` treatment: a contained, rounded card
+     floating above the tab bar (side margins, all-around themed border,
+     drop shadow), not a full-bleed edge-to-edge bar. */
+  left: 10px;
+  right: 10px;
   z-index: 55;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--bg) 92%, transparent);
-  backdrop-filter: blur(6px);
-  border-top: 1px solid var(--border);
+  gap: 9px;
+  padding: 9px 12px;
+  background: var(--panel);
+  border: 1px solid var(--primary);
+  border-radius: 13px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+/* The emoji lead-in (🚢 update / 📲 install) — the wireframes' toast icon. */
+.toast-icon {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
 }
 .install-prompt p,
 .update-prompt p {
@@ -1715,6 +1725,19 @@ a {
   flex: none;
   padding: 8px 14px;
   font-size: 11px;
+  /* #308 — sentence-case toast actions (the global .btn uppercase stays for
+     other surfaces; #309 owns the wider button-system rework). */
+  text-transform: none;
+  letter-spacing: normal;
+}
+/* #308 — the wireframes' filled accent primary (`.btn.ok`): Reload / Install /
+   Show me render solid, leaving Not now and the unselected action outlined. */
+.install-prompt .btn.primary,
+.update-prompt .btn.primary {
+  background: var(--primary);
+  color: var(--on-gradient, #000);
+  border-color: var(--primary);
+  box-shadow: none;
 }
 /* Stack above .tabs (75px = its own height) instead of hiding it — see specs/w1-pwa.md.
    Was 61px before the Lucide icon row (#220) stacked a 20px icon + 2px gap above the
@@ -1723,7 +1746,8 @@ a {
    this base so stacked toasts (#219) sit above one another. */
 body:has(.tabs) .install-prompt,
 body:has(.tabs) .update-prompt {
-  bottom: calc(75px + env(safe-area-inset-bottom) + ((var(--toast-count, 1) - 1 - var(--toast-index, 0)) * var(--toast-slot-height)));
+  /* 75px tab bar + the card's 8px float gap (#308). */
+  bottom: calc(83px + env(safe-area-inset-bottom) + ((var(--toast-count, 1) - 1 - var(--toast-index, 0)) * var(--toast-slot-height)));
 }
 /* Reserve extra .app bottom clearance while a toast is up, ~64px/toast — see
    specs/w1-pwa.md for the (unverified, jsdom-has-no-layout) estimate rationale.

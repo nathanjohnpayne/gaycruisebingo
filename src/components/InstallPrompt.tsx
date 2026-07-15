@@ -66,6 +66,11 @@ export default function InstallPrompt() {
       role="note"
       style={{ '--toast-index': stackIndex, '--toast-count': visibleCount } as CSSProperties}
     >
+      {/* The wireframes' toast lead-in (#308) — emoji, per the spec's
+          iconography rule ("toast lead-ins stay emoji"). */}
+      <span className="toast-icon" aria-hidden="true">
+        📲
+      </span>
       {/* The wireframes' toast shape (#270): a title over the cruise-benefit
           line, the platform action (one-tap Install on Android/Chromium;
           "Show me" expanding the Share walkthrough on iOS Safari), and an ✕
