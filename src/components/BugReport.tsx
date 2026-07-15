@@ -80,10 +80,10 @@ export function BugReportProvider({ children }: { children: ReactNode }) {
 
   const capture = useCallback(async () => {
     const attempt = ++captureAttemptRef.current;
+    const hadScreenshot = screenshot !== null;
     setCaptureState('capturing');
     setCaptureError(null);
-    setScreenshot(null);
-    setCaptureRoute(null);
+    setError(null);
     try {
       const image = await captureAppSurface();
       if (captureAttemptRef.current !== attempt) return;
@@ -93,10 +93,15 @@ export function BugReportProvider({ children }: { children: ReactNode }) {
     } catch (captureFailure) {
       if (captureAttemptRef.current !== attempt) return;
       const message = captureFailure instanceof Error ? captureFailure.message.slice(0, 200) : 'Capture unavailable';
+      if (hadScreenshot) {
+        setError('Could not capture this screen. Keeping the previous screenshot.');
+        setCaptureState('ready');
+        return;
+      }
       setCaptureError(message);
       setCaptureState('failed');
     }
-  }, []);
+  }, [screenshot]);
 
   const open = useCallback(
     (trigger: HTMLElement | null) => {

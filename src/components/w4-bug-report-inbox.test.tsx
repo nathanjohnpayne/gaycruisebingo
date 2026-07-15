@@ -197,6 +197,34 @@ describe('W4 pick-a-screen capture (#324)', () => {
     expect(screen.queryByRole('dialog', { name: 'Report a bug' })).not.toBeInTheDocument();
   });
 
+  it('keeps the prior capture when picking a replacement screen fails', async () => {
+    const moreBlob = new Blob(['more'], { type: 'image/png' });
+    captureSpy.mockResolvedValueOnce(moreBlob).mockRejectedValueOnce(new Error('Canvas unavailable'));
+    blobToDataUrlSpy.mockResolvedValue('data:image/png;base64,more');
+    submitSpy.mockResolvedValue({ reportId: 'report-kept' });
+    window.history.replaceState({}, '', '/more');
+    renderFlow();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Report a bug' }));
+    await screen.findByAltText('Screenshot that will be submitted with this bug report');
+    fireEvent.change(screen.getByLabelText('What happened?'), { target: { value: 'The selected screen would not capture.' } });
+    window.history.replaceState({}, '', '/');
+    fireEvent.click(screen.getByRole('button', { name: 'Capture a different screen' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Capture this screen' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Keeping the previous screenshot');
+    expect(screen.getByAltText('Screenshot that will be submitted with this bug report')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Send report' }));
+    await waitFor(() => expect(submitSpy).toHaveBeenCalledTimes(1));
+    expect(blobToDataUrlSpy).toHaveBeenCalledWith(moreBlob);
+    expect(buildInputSpy).toHaveBeenCalledWith({
+      description: 'The selected screen would not capture.',
+      screenshotDataUrl: 'data:image/png;base64,more',
+      captureError: null,
+      route: '/more',
+    });
+  });
+
   it('survives the launcher unmounting mid-pick and submits the picked screen with its draft (#324 regression)', async () => {
     // The live regression: the only launcher lives on /more, so leaving it to
     // reach the buggy screen unmounts the trigger. The flow must keep going.

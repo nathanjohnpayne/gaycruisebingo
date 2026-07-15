@@ -16,7 +16,7 @@ An operator manually runs `npm run bugs:pull` to atomically materialize new immu
 
 ## Testing
 
-- `src/components/w4-bug-report-inbox.test.tsx` covers accessible placement, capture preview/fallback, submission metadata, retry, and success/error states, plus the pick-a-screen flow (#324): parking/reopening the sheet, Escape stepping back before closing, launcher-unmount survival with the draft intact, and capture-route submission.
+- `src/components/w4-bug-report-inbox.test.tsx` covers accessible placement, capture preview/fallback, submission metadata, retry, and success/error states, plus the pick-a-screen flow (#324): parking/reopening the sheet, Escape stepping back before closing, replacement-capture failure preserving the prior screenshot, launcher-unmount survival with the draft intact, and capture-route submission.
 - `tests/e2e/d15-tab-more-menu.spec.ts` (the local-only Playwright layer) drives the real pick flow end-to-end: open from More, park, navigate to Card past the unmounted launcher, capture with real html-to-image, and confirm the reopened sheet keeps the draft.
 - `tests/functions/bug-reports.test.ts` covers server validation, PNG verification, and rate-limit boundaries.
 - `src/data/w4-bug-report-export.test.ts` covers atomic export, idempotency, malformed screenshots, and archive receipts.
