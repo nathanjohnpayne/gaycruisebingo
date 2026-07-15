@@ -181,7 +181,12 @@ export const DAYS: DayDef[] = [
     theme: 'welcome-aboard',
     pool: 'embark',
     tutorial: true,
-    unlockAt: 0,
+    // "Live pre-cruise" is a REAL past instant, not the 0 sentinel: the epoch
+    // sentinel fed activeSnapshotIds a cutoff older than every item and
+    // stamped an empty, unretryable embark snapshot (#289, the 2026-07-14
+    // incident). The scheduler now also fails open on a non-positive cutoff,
+    // but the canonical seed should not lean on that backstop.
+    unlockAt: Date.parse('2026-07-01T08:00:00+02:00'),
     freeText: 'You made it aboard',
   },
   {

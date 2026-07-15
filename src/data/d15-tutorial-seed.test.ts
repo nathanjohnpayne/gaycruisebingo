@@ -93,8 +93,12 @@ describe('DAYS — the ten-Day itinerary mapping', () => {
     });
   });
 
-  it('unlocks index 0 (embark) immediately and every other Day at 08:00 Europe/Rome on its date', () => {
-    expect(DAYS[0].unlockAt).toBe(0);
+  it('unlocks index 0 (embark) at a REAL pre-cruise instant and every other Day at 08:00 Europe/Rome on its date', () => {
+    // #289: "live pre-cruise" is a positive past timestamp, never the 0
+    // sentinel — an epoch cutoff starved activeSnapshotIds and stamped an
+    // empty, unretryable embark snapshot.
+    expect(DAYS[0].unlockAt).toBeGreaterThan(0);
+    expect(DAYS[0].unlockAt).toBeLessThan(Date.parse(`${DAYS[0].date}T00:00:00+02:00`)); // strictly pre-cruise
     for (let i = 1; i < DAYS.length; i++) {
       const day = DAYS[i];
       expect(day.unlockAt).toBe(Date.parse(`${day.date}T08:00:00+02:00`));

@@ -72,7 +72,10 @@ export const EVENT_SEED = {
       theme: 'welcome-aboard',
       pool: 'embark',
       tutorial: true,
-      unlockAt: 0,
+      // "Live pre-cruise" as a REAL past instant, not the 0 sentinel — the
+      // epoch sentinel starved the snapshot cutoff and stamped an empty,
+      // unretryable embark snapshot (#289). Mirrors src/data/seed.ts.
+      unlockAt: Date.parse('2026-07-01T08:00:00+02:00'),
       freeText: 'You made it aboard',
     },
     {

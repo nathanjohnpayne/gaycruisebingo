@@ -141,16 +141,26 @@ function isBanned(uid: string | undefined, bannedUids: readonly string[] | undef
  *     is the active pool AS OF the unlock moment, even when the run is delayed. An
  *     item's pool-entry time is `approvedAt` (Phase 1.5 approval flow) falling back to
  *     `createdAt` (legacy items created directly `active`); a doc missing both is kept
- *     (fail open), matching the moderation predicates' open-failure posture.
+ *     (fail open), matching the moderation predicates' open-failure posture. A
+ *     NON-POSITIVE cutoff (the `unlockAt: 0` "live pre-cruise" sentinel) applies no
+ *     cutoff at all (#289) — see inside.
  */
 export function activeSnapshotIds(items: SnapshotItem[], filter: SnapshotFilter): string[] {
   const { pool, cutoff, reportHideThreshold, bannedUids } = filter;
+  // A non-positive cutoff is an "always unlocked" sentinel (seeds have used
+  // `unlockAt: 0` for the live-pre-cruise embark Day), NOT a real instant —
+  // treating it as one excludes EVERY item (all `createdAt` > epoch) and stamps
+  // an empty snapshot, which `isDueForSnapshot` then reads as already-stamped,
+  // permanently starving the Day (#289, the 2026-07-14 embark incident). Fail
+  // OPEN: no cutoff, the snapshot is simply the active pool at run time.
+  const cutoffApplies = cutoff > 0;
   return items
     .filter((it) => (it.pool ?? 'main') === pool)
     .filter((it) => !it.isFreeSpace)
     .filter((it) => !isReportHidden(it.reportCount ?? 0, reportHideThreshold))
     .filter((it) => !isBanned(it.createdBy, bannedUids))
     .filter((it) => {
+      if (!cutoffApplies) return true;
       const enteredAt = it.approvedAt ?? it.createdAt;
       return enteredAt == null || enteredAt <= cutoff;
     })
