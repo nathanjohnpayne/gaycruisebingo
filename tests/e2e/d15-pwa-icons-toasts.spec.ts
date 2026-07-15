@@ -15,6 +15,8 @@
 // trigger itself is synthesized.
 import { test, expect, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import { cpSync, renameSync, rmSync } from 'node:fs';
+import path from 'node:path';
 import { seedDailyEvent, dismissCoach, readDealtDayGrid } from './support/daily';
 import { joinViaSharedLink } from './support/join';
 import { claimCellByText, waitForBoardServerConfirmed } from './support/board';
@@ -80,8 +82,9 @@ test.describe('iconography — Lucide chrome, emoji flavor', () => {
     // headers and every navigable row (Cruise schedule, Suggest a square,
     // How to play), while the Theme chips themselves stay emoji-led.
     await page.getByRole('link', { name: 'More' }).click();
-    // Theme's Palette + Text size's ALargeSmall (#281 added the second section;
-    // this count was stale at 1 — part of the #317 union-failure set).
+    // Theme's Palette icon + Text size's ALargeSmall icon (#281 gave the
+    // Text-size section header its own Lucide icon alongside Theme's; this
+    // count was stale at 1 — part of the #317 union-failure set).
     await expect(page.locator('h3 svg.more-section-icon')).toHaveCount(2);
     const rowIcons = page.locator('.more-rows .more-row svg.more-row-icon');
     await expect(rowIcons).toHaveCount(await rowIcons.count()); // sanity: locator resolves
@@ -180,58 +183,79 @@ test.describe('update banner: defers while a claim sheet is open; stacks over th
     // Writes into the SAME `dist/` the running `vite preview` (webServer) is
     // still serving from disk, mirroring a real prod deploy landing under a
     // long-lived tab.
-    const fakeSha = `e2e-forced-update-${Date.now()}`;
-    execFileSync('npx', ['vite', 'build', '--mode', 'e2e'], {
-      cwd: process.cwd(),
-      stdio: 'pipe',
-      env: {
-        ...process.env,
-        GITHUB_SHA: fakeSha,
-        VITE_FIREBASE_API_KEY: 'demo-api-key',
-        VITE_FIREBASE_AUTH_DOMAIN: `${PROJECT_ID}.firebaseapp.com`,
-        VITE_FIREBASE_PROJECT_ID: PROJECT_ID,
-        VITE_FIREBASE_STORAGE_BUCKET: `${PROJECT_ID}.appspot.com`,
-        VITE_FIREBASE_MESSAGING_SENDER_ID: '000000000000',
-        VITE_FIREBASE_APP_ID: '1:000000000000:web:0000000000000000000000',
-        VITE_EVENT_ID: EVENT_ID,
-        VITE_FIREBASE_MEASUREMENT_ID: '',
-        VITE_POSTHOG_KEY: '',
-        VITE_POSTHOG_HOST: '',
-        VITE_RECAPTCHA_SITE_KEY: '',
-      },
-    });
+    //
+    // The ORIGINAL dist/ is snapshotted first and RESTORED byte-for-byte in the
+    // finally below (#317): leaving the forced bundle in place poisoned every
+    // LATER spec in a full-suite run — the still-running `vite preview` served
+    // fresh pages a stale/mixed view of dist (pages booted the ORIGINAL bundle,
+    // per their More-menu version string, while `/sw.js` re-fetches saw the NEW
+    // one), so each subsequent test ran under a spurious "A fresh build just
+    // docked" update toast and, intermittently, wedged subscriptions/routing.
+    // Restoring the exact original bytes puts the server, the precache
+    // manifest, and every later page load back on one consistent build.
+    const distDir = path.join(process.cwd(), 'dist');
+    const distBackup = path.join(process.cwd(), 'dist.e2e-update-test-backup');
+    rmSync(distBackup, { recursive: true, force: true });
+    cpSync(distDir, distBackup, { recursive: true });
+    try {
+      const fakeSha = `e2e-forced-update-${Date.now()}`;
+      execFileSync('npx', ['vite', 'build', '--mode', 'e2e'], {
+        cwd: process.cwd(),
+        stdio: 'pipe',
+        env: {
+          ...process.env,
+          GITHUB_SHA: fakeSha,
+          VITE_FIREBASE_API_KEY: 'demo-api-key',
+          VITE_FIREBASE_AUTH_DOMAIN: `${PROJECT_ID}.firebaseapp.com`,
+          VITE_FIREBASE_PROJECT_ID: PROJECT_ID,
+          VITE_FIREBASE_STORAGE_BUCKET: `${PROJECT_ID}.appspot.com`,
+          VITE_FIREBASE_MESSAGING_SENDER_ID: '000000000000',
+          VITE_FIREBASE_APP_ID: '1:000000000000:web:0000000000000000000000',
+          VITE_EVENT_ID: EVENT_ID,
+          VITE_FIREBASE_MEASUREMENT_ID: '',
+          VITE_POSTHOG_KEY: '',
+          VITE_POSTHOG_HOST: '',
+          VITE_RECAPTCHA_SITE_KEY: '',
+        },
+      });
 
-    // Ask the already-registered SW to re-check `/sw.js` right now (sw.js is
-    // served Cache-Control: no-cache) instead of waiting for the 60s poll.
-    await page.evaluate(async () => {
-      const reg = await navigator.serviceWorker.getRegistration();
-      await reg?.update();
-    });
+      // Ask the already-registered SW to re-check `/sw.js` right now (sw.js is
+      // served Cache-Control: no-cache) instead of waiting for the 60s poll.
+      await page.evaluate(async () => {
+        const reg = await navigator.serviceWorker.getRegistration();
+        await reg?.update();
+      });
 
-    if (sheetOpen) {
-      // Deferred: needRefresh is true internally, but the claim sheet being
-      // open must suppress the banner.
-      await page.waitForTimeout(3_000); // let the SW installed→waiting transition settle
-      await expect(page.locator('.update-prompt')).toHaveCount(0);
-      await page.screenshot({ path: `${SHOTS}/pwa-update-deferred-sheet-open.png`, fullPage: true });
-      await page.getByRole('button', { name: 'Cancel' }).click();
-    } else {
-      console.log('[pwa-update-defer] could not open a claim sheet on the already-marked Square — defer-while-open leg skipped, update-detection + stacking legs still run below.');
+      if (sheetOpen) {
+        // Deferred: needRefresh is true internally, but the claim sheet being
+        // open must suppress the banner.
+        await page.waitForTimeout(3_000); // let the SW installed→waiting transition settle
+        await expect(page.locator('.update-prompt')).toHaveCount(0);
+        await page.screenshot({ path: `${SHOTS}/pwa-update-deferred-sheet-open.png`, fullPage: true });
+        await page.getByRole('button', { name: 'Cancel' }).click();
+      } else {
+        console.log('[pwa-update-defer] could not open a claim sheet on the already-marked Square — defer-while-open leg skipped, update-detection + stacking legs still run below.');
+      }
+
+      // Now visible (sheet closed) — urgent priority banner, real copy/actions.
+      const updateToast = page.locator('.update-prompt');
+      await expect(updateToast).toBeVisible({ timeout: 20_000 });
+      await expect(updateToast).toHaveAttribute('role', 'status');
+      await expect(updateToast.getByRole('button', { name: 'Reload' })).toBeVisible();
+      await expect(updateToast.getByRole('button', { name: 'Not now' })).toBeVisible();
+
+      // Stacking: both toasts visible at once (MAX_VISIBLE_TOASTS=2), update
+      // ranked ABOVE install (urgent outranks invitational — lower --toast-index).
+      await expect(page.locator('.install-prompt')).toBeVisible();
+      const updateIndex = await updateToast.evaluate((el) => getComputedStyle(el).getPropertyValue('--toast-index').trim());
+      const installIndex = await page.locator('.install-prompt').evaluate((el) => getComputedStyle(el).getPropertyValue('--toast-index').trim());
+      expect(Number(updateIndex)).toBeLessThan(Number(installIndex));
+      await page.screenshot({ path: `${SHOTS}/pwa-toasts-stacked.png`, fullPage: true });
+    } finally {
+      // Byte-identical restore of the pre-test build (never a third `vite
+      // build`, whose output could drift) — even when an assertion above threw.
+      rmSync(distDir, { recursive: true, force: true });
+      renameSync(distBackup, distDir);
     }
-
-    // Now visible (sheet closed) — urgent priority banner, real copy/actions.
-    const updateToast = page.locator('.update-prompt');
-    await expect(updateToast).toBeVisible({ timeout: 20_000 });
-    await expect(updateToast).toHaveAttribute('role', 'status');
-    await expect(updateToast.getByRole('button', { name: 'Reload' })).toBeVisible();
-    await expect(updateToast.getByRole('button', { name: 'Not now' })).toBeVisible();
-
-    // Stacking: both toasts visible at once (MAX_VISIBLE_TOASTS=2), update
-    // ranked ABOVE install (urgent outranks invitational — lower --toast-index).
-    await expect(page.locator('.install-prompt')).toBeVisible();
-    const updateIndex = await updateToast.evaluate((el) => getComputedStyle(el).getPropertyValue('--toast-index').trim());
-    const installIndex = await page.locator('.install-prompt').evaluate((el) => getComputedStyle(el).getPropertyValue('--toast-index').trim());
-    expect(Number(updateIndex)).toBeLessThan(Number(installIndex));
-    await page.screenshot({ path: `${SHOTS}/pwa-toasts-stacked.png`, fullPage: true });
   });
 });

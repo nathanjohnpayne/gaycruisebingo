@@ -1,5 +1,8 @@
 # Build artifacts — regenerate through build system
 dist/
+# Transient dist snapshot the e2e PWA update test restores from
+# (tests/e2e/d15-pwa-icons-toasts.spec.ts); only survives a hard crash.
+dist.e2e-update-test-backup/
 build/
 .next/
 .out/

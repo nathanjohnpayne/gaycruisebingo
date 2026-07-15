@@ -10,7 +10,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { doc, getDoc } from 'firebase/firestore';
-import { seedDailyEvent, dismissCoach, readDealtDayGrid, readPlayer } from './support/daily';
+import { seedDailyEvent, dismissCoach, readDealtDayGrid, readPlayer, playerUids } from './support/daily';
 import { joinViaSharedLink, signedInUid } from './support/join';
 import {
   LINE_INDICES_EXCLUDING_CENTER,
@@ -59,15 +59,42 @@ test.describe('x-e2e-happy-path (daily-cards)', () => {
 
     // The leaderboard shows this sole Player, ranked #1 with one bingo and the
     // four completed squares — the day-scoped Marks folded up to the cruise root.
+    //
+    // Ground truth FIRST (#317): exactly one Player doc — this uid — exists
+    // server-side before any UI count is read. beforeAll's clearFirestore
+    // guarantees it, but pinning the roster as DATA means a stray second row
+    // would fail here naming the intruding uid instead of surfacing later as
+    // a bare `.list .row` count mismatch (run-2's undiagnosable 2-row flake).
+    await expect.poll(async () => playerUids(testEnv), { timeout: 15_000 }).toEqual([uid]);
     await page.getByRole('link', { name: 'Ranks' }).click();
+    // Verify the click LANDED on the Ranks view before counting rows (#317):
+    // the tap follows the celebration overlay's teardown, and a tab-bar click
+    // that fires into mid-unmount layout can land on an adjacent tab — the
+    // Feed's card list also matches `.list .row`, so a mis-landed click used
+    // to fail 15s later as a nonsense row count. Re-click until the SPA route
+    // is /leaderboard, then wait out the roster subscription's loading gate
+    // (`.lb-filters` renders only with the roster live).
+    await expect(async () => {
+      if (!new URL(page.url()).pathname.startsWith('/leaderboard')) {
+        await page.getByRole('link', { name: 'Ranks' }).click();
+      }
+      await expect(page.locator('.lb-filters')).toBeVisible({ timeout: 2_000 });
+    }).toPass({ timeout: 15_000 });
     const rows = page.locator('.list .row');
-    // Sole Player (beforeAll clears Firestore) — but the leaderboard subscription
+    // Sole Player (asserted as data above) — but the leaderboard subscription
     // is a cold read on nav, so allow it to settle rather than the 5s default.
     await expect(rows).toHaveCount(1, { timeout: 15_000 });
-    await expect(rows.first().locator('.rank')).toHaveText('1');
-    await expect(rows.first().locator('.sub')).toContainText('1 bingo');
+    await expect(rows.first().locator('.rank')).toHaveText('1', { timeout: 15_000 });
+    // The row existing (above) only proves the Player doc's IDENTITY write
+    // landed — bingoCount/squaresMarked come from setMark's own fold write,
+    // which lands after the marks' batches drain, so this row can render with
+    // "0 bingos" text for a beat after it first mounts. A generous timeout
+    // (not a weaker assertion) lets Playwright's auto-retry keep re-reading
+    // this same live element as later snapshots land.
+    await expect(rows.first().locator('.sub')).toContainText('1 bingo', { timeout: 20_000 });
     await expect(rows.first().locator('.sub')).toContainText(
       `${LINE_INDICES_EXCLUDING_CENTER.length} squares`,
+      { timeout: 20_000 },
     );
 
     // Ground truth: the win folded into TODAY's day bucket, not a legacy root board.

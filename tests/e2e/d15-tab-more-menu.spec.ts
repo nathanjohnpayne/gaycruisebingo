@@ -100,11 +100,12 @@ test.describe('tab bar + More menu', () => {
     await expect(page.getByRole('button', { name: /Suggest a square/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /How to play/ })).toBeVisible();
 
-    // 5. Support — bug report + 18+ / acceptable-use guidelines. (The 18+
-    // row's accessible name is its More-row title, not the floating
-    // variant's "Guidelines" pill label.)
+    // 5. Support — bug report + 18+ / acceptable-use guidelines. AcceptableUse's
+    // `variant="row"` (the only variant More.tsx mounts — see AcceptableUse.tsx)
+    // titles the row "18+ advisory & acceptable use", not the floating variant's
+    // plain "Guidelines" label.
     await expect(page.getByRole('button', { name: 'Report a bug' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /18\+ advisory/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /18\+ advisory & acceptable use/ })).toBeVisible();
 
     // 6. NO Admin row for a non-admin Player.
     await expect(page.getByRole('button', { name: /^Admin/ })).toHaveCount(0);

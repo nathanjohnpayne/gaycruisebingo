@@ -39,10 +39,28 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: 1,
+  // #317: every spec's FIRST step is join.ts's real sign-in round trip through
+  // the Auth Emulator widget, whose handler-wiring waits on an external CDN
+  // fetch (unpkg.com/material-components-web) that alone can take several
+  // seconds under real machine load, worst-cased at up to 40s inside join.ts's
+  // completeEmulatorSignIn — the bare 30s Playwright default left almost no
+  // room for a spec's own work after that (the single largest contributor to
+  // the union suite's mass sign-in-adjacent failures). Individual heavy specs
+  // already opt into much larger budgets (60s–240s) via `test.setTimeout`;
+  // this only raises the floor for the many specs that never needed to
+  // override it before sign-in itself became the tight part of the budget,
+  // leaving them real headroom after a worst-case join.
+  timeout: 60_000,
   reporter: process.env.CI ? 'github' : 'list',
   use: {
     baseURL: BASE_URL,
-    trace: 'on-first-retry',
+    // Failure artifacts (#317): local runs have retries=0, so 'on-first-retry'
+    // never captured anything here — a union-run flake left only the aria
+    // snapshot, not what the page actually looked like or how it got there.
+    // Both settings are free on green tests (screenshot only taken on failure;
+    // the recorded trace is discarded on pass).
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
   },
   webServer: [
     {
