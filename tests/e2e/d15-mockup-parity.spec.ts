@@ -105,13 +105,33 @@ test('structural parity — every screen against the wireframes', async ({ page 
     await expect(chips.nth(PARITY_FAREWELL_INDEX)).toHaveAccessibleName(/Goodbye/i);
   });
 
-  await test.step('locked-day preview: themed retint, lock badge, dress-code tease, caption', async () => {
+  await test.step('tutorial banner + free-space overrides: Welcome Aboard copy and farewell locked centre', async () => {
+    await page.getByRole('tab').nth(0).click();
+    await expect(page.locator('.grid')).toHaveAttribute('data-server-confirmed', 'true', { timeout: 20_000 });
+    const embark = page.locator('.board-area');
+    await expect(embark).toHaveAttribute('data-theme', 'welcome-aboard');
+    await expect(embark.locator('.tutorial-banner-embark')).toContainText('Mark what happens. Tap a square when you see it, do it, or survive it.');
+    await expect(embark.locator('.tutorial-banner-embark')).toContainText("Five in a row is BINGO. The center is free. Blackout the card if you're ambitious.");
+    await expect(embark.locator('.tutorial-banner-embark')).toContainText('The feed is the proof. Attach a pic, doubt a friend, watch the Moments roll in.');
+    await expect(embark.locator('.tutorial-banner-embark')).toContainText("This one's a warm-up—easy squares, all on the ship. The real chaos starts tomorrow at 8.");
+    await expect(embark.locator('.grid .cell').nth(12)).toContainText('You made it aboard');
+
+    await page.getByRole('tab').nth(PARITY_FAREWELL_INDEX).click();
+    const farewell = page.locator('.board-area.day-locked');
+    await expect(farewell).toBeVisible();
+    await expect(farewell).toHaveAttribute('data-theme', 'so-long-farewell');
+    await expect(farewell.locator('.free-prompt')).toHaveText('We had the best damn time');
+    await page.getByRole('tab').nth(PARITY_TODAY_INDEX).click();
+    await readDealtDayGrid(page);
+  });
+
+  await test.step('locked-day preview: themed retint, exact lock badge, dress-code tease, caption', async () => {
     await page.getByRole('tab').nth(PARITY_LOCKED_INDEX).click();
     const locked = page.locator('.board-area.day-locked');
     await expect(locked).toBeVisible();
     // The board area carries the VIEWED Day's theme (#301/#306).
     await expect(locked).toHaveAttribute('data-theme', 'glamiators');
-    await expect(locked.locator('.day-lock-text')).toContainText(/^Unlocks/);
+    await expect(locked.locator('.day-lock-text')).toHaveText('Unlocks 8:00 a.m. · Sat, Jul 18');
     await expect(locked).toContainText('24 fresh squares land at 8. Come back after coffee.');
     // The theme's dress-code description doubles as the party tease.
     await expect(locked).toContainText(/toga-chic|runway excess/i);
@@ -307,7 +327,7 @@ async function writeDeterministicBoard(env: RulesTestEnvironment, uid: string): 
 /** Regions whose content varies run to run — masked out of every baseline. */
 function volatileMasks(page: Page) {
   return [
-    page.locator('.day-lock-text'), // "Unlocks 11:04 p.m. · …" — seeded now-relative
+    page.locator('.day-lock-text'), // structurally pinned above; masked from broad visual diffs
     page.locator('.proof .sub'), // proof-card clock labels
     page.locator('.tally-card .sub'), // "bumped 1h ago · tap for who"
     page.locator('.moment .sub'),
