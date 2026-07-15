@@ -357,8 +357,11 @@ test.describe('Admin — Proof & Claims panel', () => {
       });
       await adminPage.screenshot({ path: `${SHOTS}/admin-claim-rejected.png`, fullPage: true });
     } finally {
-      await ctxAdmin?.close();
-      await ctxPlayer?.close();
+      // Best-effort teardown (CodeRabbit, PR #339): one close throwing must
+      // not skip the other close or env.cleanup() — a surviving signed-in
+      // context is exactly the zombie-listener class this suite fix hunts.
+      await ctxAdmin?.close().catch(() => {});
+      await ctxPlayer?.close().catch(() => {});
       await env.cleanup();
     }
   });

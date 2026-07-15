@@ -3,7 +3,7 @@
 // CONTEXT.md), accept the 18+ acknowledgement, and sign in. Shared by both
 // x-e2e-happy-path cases so the join flow is asserted in exactly one place.
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { expect, type Page, type Route } from '@playwright/test';
 
@@ -58,14 +58,26 @@ async function cacheThroughGapi(route: Route): Promise<void> {
   const key = createHash('sha1').update(url).digest('hex');
   const file = path.join(GAPI_CACHE_DIR, key);
   if (existsSync(file)) {
-    return route.fulfill({ status: 200, contentType: 'text/javascript', body: readFileSync(file) });
+    // An unreadable entry falls through to a fresh fetch (and is removed so
+    // the next run doesn't trip on it again) rather than failing the sign-in.
+    try {
+      return route.fulfill({ status: 200, contentType: 'text/javascript', body: readFileSync(file) });
+    } catch {
+      try { rmSync(file, { force: true }); } catch { /* best-effort */ }
+    }
   }
   const response = await route.fetch(); // real network — first run only
   const body = await response.body();
   if (response.ok()) {
     try {
       mkdirSync(GAPI_CACHE_DIR, { recursive: true });
-      writeFileSync(file, body);
+      // Atomic publish (CodeRabbit, PR #339): write a private temp file and
+      // rename it into place, so an interrupted or concurrent run can never
+      // leave a truncated script that every later sign-in would blindly reuse
+      // (renames within a directory are atomic on POSIX).
+      const tmp = `${file}.tmp-${process.pid}`;
+      writeFileSync(tmp, body);
+      renameSync(tmp, file);
     } catch {
       // Cache write is best-effort — worst case the next run re-fetches.
     }

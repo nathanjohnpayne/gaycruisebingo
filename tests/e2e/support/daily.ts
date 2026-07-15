@@ -95,7 +95,10 @@ export async function seedDailyEvent(
         { index: 1, date: '2026-07-16', port: 'Split', portEmoji: '🇭🇷', theme: 'welcome-aboard', pool: 'main', tutorial: false, unlockAt: now - 50 * HOUR, snapshotItemIds: mainSnapshotIds },
         { index: 2, date: '2026-07-17', port: 'Valletta', portEmoji: '🇲🇹', theme: 'get-sporty', pool: 'main', tutorial: false, unlockAt: now - 10 * HOUR, snapshotItemIds: mainSnapshotIds },
         { index: 3, date: '2026-07-24', port: 'Venice', portEmoji: '🇮🇹', theme: 'so-long-farewell', pool: 'farewell', tutorial: true, unlockAt: farewellUnlockAt, snapshotItemIds: farewellSnapshotIds },
-        { index: 4, date: '2026-07-25', port: 'Corfu', portEmoji: '🇬🇷', theme: 'glamiators', pool: 'main', tutorial: false, unlockAt: now + 24 * HOUR },
+        // +72h, not +24h (CodeRabbit, PR #339): the locked farewell above sits
+        // at +48h, and a later-index Day unlocking EARLIER than its
+        // predecessor is an invalid schedule shape. Still locked either way.
+        { index: 4, date: '2026-07-25', port: 'Corfu', portEmoji: '🇬🇷', theme: 'glamiators', pool: 'main', tutorial: false, unlockAt: now + 72 * HOUR },
       ],
     });
   });
