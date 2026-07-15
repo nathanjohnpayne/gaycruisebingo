@@ -59,6 +59,13 @@ async function captureWithMode(root: HTMLElement, mode: CaptureMode): Promise<Bl
     pixelRatio: mode === 'full' ? Math.min(window.devicePixelRatio || 1, 2) : 1,
     skipFonts: mode === 'compat',
     filter: (node) => !(node instanceof HTMLElement) || !excludedFromCapture(node, mode),
+    // html-to-image inlines COMPUTED styles into its clone, so `.app`'s
+    // `margin: 0 auto` arrives as a concrete pixel margin (~(viewport-640)/2 —
+    // ~487px at a 1615px desktop window) inside a canvas sized to the node's
+    // 640px box: the whole capture shifts right by the live left gutter and
+    // clips (#290). Zero it on the clone; the canvas is the node's own box,
+    // so centering is meaningless there anyway.
+    style: { margin: '0' },
   });
   if (!blob) throw new Error('Screenshot capture returned no image');
   if (blob.size > BUG_REPORT_SCREENSHOT_MAX_BYTES) throw new Error('Screenshot is too large');
