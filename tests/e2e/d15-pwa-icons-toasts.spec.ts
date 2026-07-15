@@ -80,7 +80,9 @@ test.describe('iconography — Lucide chrome, emoji flavor', () => {
     // headers and every navigable row (Cruise schedule, Suggest a square,
     // How to play), while the Theme chips themselves stay emoji-led.
     await page.getByRole('link', { name: 'More' }).click();
-    await expect(page.locator('h3 svg.more-section-icon')).toHaveCount(1); // Theme's Palette icon
+    // Theme's Palette + Text size's ALargeSmall (#281 added the second section;
+    // this count was stale at 1 — part of the #317 union-failure set).
+    await expect(page.locator('h3 svg.more-section-icon')).toHaveCount(2);
     const rowIcons = page.locator('.more-rows .more-row svg.more-row-icon');
     await expect(rowIcons).toHaveCount(await rowIcons.count()); // sanity: locator resolves
     expect(await rowIcons.count()).toBeGreaterThanOrEqual(3); // schedule / suggest / how-to-play
