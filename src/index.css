@@ -30,12 +30,22 @@ body,
    and never scale (daily-cards-spec § "More menu" item 3). */
 :root {
   --text-scale: 1;
+  /* The Square-only multiplier (#325): the S/M/L pick scales the bingo
+     tiles' type through THIS variable, decoupled from --text-scale so the
+     rest of the app's text is untouched by the tile bump. Small has no
+     override — tile text never renders below the Medium baseline (it used
+     to ride --text-scale's 0.9); body copy still shrinks at Small via
+     --text-scale. The auto-fit guard (specs/d15-text-size.md) still has
+     the last word, so a bigger ceiling only enlarges prompts with room —
+     long prompts keep shrinking to fit, never truncating. */
+  --square-scale: 1;
 }
 :root[data-text-size='small'] {
   --text-scale: 0.9;
 }
 :root[data-text-size='large'] {
   --text-scale: 1.15;
+  --square-scale: 1.4;
 }
 body {
   background:
@@ -253,11 +263,12 @@ a {
   justify-content: center;
   text-align: center;
   padding: 4px;
-  /* The S/M/L ceiling (specs/d15-text-size.md) — `--text-scale` never grows
-     this past what the auto-fit guard in Board.tsx then measures against;
-     `.cell-text`'s own inline font-size (set by the guard) is what a Square
-     actually renders at, capped by (never exceeding) this computed value. */
-  font-size: calc(clamp(8px, 2.3vw, 12px) * var(--text-scale, 1));
+  /* The S/M/L ceiling (specs/d15-text-size.md) — `--square-scale` (#325,
+     tile-only: 1 at S/M, 1.4 at L) never grows this past what the auto-fit
+     guard in Board.tsx then measures against; `.cell-text`'s own inline
+     font-size (set by the guard) is what a Square actually renders at,
+     capped by (never exceeding) this computed value. */
+  font-size: calc(clamp(8px, 2.3vw, 12px) * var(--square-scale, 1));
   font-weight: 600;
   line-height: 1.05;
   word-break: break-word;
@@ -331,8 +342,9 @@ a {
      `SquareText`'s auto-fit guard (its text is a fixed, day-scoped string,
      not measured against the cell box), but it still needs to honor the
      Player's text-size pick like every other Square's prompt does — same
-     `--text-scale` multiplier `.cell`'s own font-size ceiling reads. */
-  font-size: calc(clamp(7px, 1.9vw, 10px) * var(--text-scale, 1));
+     `--square-scale` multiplier `.cell`'s own font-size ceiling reads
+     (#325). Its short fixed strings fit the cell at the 1.4 L ceiling. */
+  font-size: calc(clamp(7px, 1.9vw, 10px) * var(--square-scale, 1));
   font-weight: 700;
   line-height: 1.05;
 }
