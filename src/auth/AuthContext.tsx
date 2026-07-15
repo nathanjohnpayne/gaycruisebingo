@@ -10,7 +10,7 @@ import {
   readAdultAttestationFromServer,
 } from '../data/api';
 import { track } from '../analytics';
-import { canonicalRedirectUrl } from '../canonical-redirect';
+import { canonicalRedirectUrl, canonicalOriginAlive, FALLBACK_AUTH_DOMAIN } from '../canonical-redirect';
 import SignIn from '../components/SignIn';
 import ConfirmWinMoments from '../components/ConfirmWinMoments';
 import PoolRecoveryWatcher from '../components/PoolRecoveryWatcher';
@@ -646,13 +646,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // unreliable `navigator.onLine` boot signal is sidestepped (Codex P2 on #165).
     const canonical = canonicalRedirectUrl(window.location);
     if (canonical) {
-      // replace(), not assign(): the alias page is a signed-out throwaway, so it
-      // must not stay the Back target — after the Player authenticates on the
-      // canonical origin, Back would otherwise return to the alias origin, where
-      // Firebase Auth persistence is origin-scoped (they would look signed out and
-      // could bounce back through this redirect). (Codex P2 on #165.)
-      window.location.replace(canonical);
-      return;
+      // #340: only navigate to the canonical origin when it actually answers. The
+      // 2026-07-15 apex outage reset every TLS handshake on gaycruisebingo.com
+      // while the aliases stayed up — the unconditional replace() below was then a
+      // hard dead end (Safari: "the server unexpectedly dropped the connection").
+      if (await canonicalOriginAlive()) {
+        // replace(), not assign(): the alias page is a signed-out throwaway, so it
+        // must not stay the Back target — after the Player authenticates on the
+        // canonical origin, Back would otherwise return to the alias origin, where
+        // Firebase Auth persistence is origin-scoped (they would look signed out and
+        // could bounce back through this redirect). (Codex P2 on #165.)
+        window.location.replace(canonical);
+        return;
+      }
+      // Canonical origin down → sign in HERE, against the Firebase-default handler
+      // (FALLBACK_AUTH_DOMAIN): the configured authDomain is the canonical host
+      // (#161), whose /__/auth/handler is exactly what the outage took down. The
+      // SDK reads auth.config.authDomain when it builds the popup URL, so this
+      // runtime override redirects only the OAuth handler, not the app. It
+      // deliberately reintroduces the #162 cross-origin-handler edge (partitioned
+      // in-app webviews) for the outage window only — strictly better than no
+      // sign-in path at all. Reverts to same-origin canonical auth on the next
+      // sign-in once the apex answers again.
+      auth.config.authDomain = FALLBACK_AUTH_DOMAIN;
     }
     try {
       await signInWithPopup(auth, googleProvider);

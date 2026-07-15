@@ -35,3 +35,39 @@ export function canonicalRedirectUrl(loc: {
   if (!ALIAS_HOSTS.includes(loc.hostname)) return null;
   return `https://${CANONICAL_HOST}${loc.pathname}${loc.search}${loc.hash}`;
 }
+
+// The Firebase-default auth handler origin. Always served by Firebase directly
+// (independent of the custom-domain serving path that took the canonical host
+// down in #340) and present in the auto-created OAuth client's redirect URIs by
+// default, so it works as the emergency handler when the canonical origin is out.
+export const FALLBACK_AUTH_DOMAIN = 'gaycruisebingo.firebaseapp.com';
+
+/**
+ * Whether the canonical origin is actually answering (#340): a cheap no-cors
+ * probe of a static asset. `true` means TCP+TLS+HTTP completed (an opaque
+ * response is enough — we never read it); any network error, reset, or timeout
+ * means the canonical host is NOT safe to send a Player to. The 2026-07-15 apex
+ * outage (#340) made the unconditional sign-in redirect below a hard dead end:
+ * gaycruisebingo.com reset every handshake while the aliases stayed healthy, so
+ * `signIn` on an alias origin navigated Players to a domain that could not even
+ * complete a TLS handshake. Probing at sign-in time keeps the #165 rule (never
+ * gate on `navigator.onLine` at boot) while refusing to navigate INTO an outage.
+ * The cache-busting query + `no-store` keep the service worker and HTTP caches
+ * from answering for a dead origin; the SW has no cross-origin runtime caching
+ * (vite.config.ts precaches same-origin only), so this reaches the network.
+ */
+export async function canonicalOriginAlive(
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 2500,
+): Promise<boolean> {
+  try {
+    await fetchImpl(`https://${CANONICAL_HOST}/favicon.svg?alive=${Date.now()}`, {
+      mode: 'no-cors',
+      cache: 'no-store',
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
