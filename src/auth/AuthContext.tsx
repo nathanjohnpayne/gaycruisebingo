@@ -10,7 +10,7 @@ import {
   readAdultAttestationFromServer,
 } from '../data/api';
 import { track } from '../analytics';
-import { canonicalRedirectUrl } from '../canonical-redirect';
+import { canonicalRedirectUrl, canonicalOriginAlive, FALLBACK_AUTH_DOMAIN } from '../canonical-redirect';
 import SignIn from '../components/SignIn';
 import ConfirmWinMoments from '../components/ConfirmWinMoments';
 import PoolRecoveryWatcher from '../components/PoolRecoveryWatcher';
@@ -31,6 +31,9 @@ function isOnline(): boolean {
 // whole app on its loading screen. Bound that gate and hand failures to the
 // existing retry surface; never fall back to cached authority or render the Board.
 export const AUTH_BOOTSTRAP_TIMEOUT_MS = 10_000;
+export const SIGN_IN_CANONICAL_HEALTH_TTL_MS = 30_000;
+
+type CanonicalOriginHealth = { alive: boolean; checkedAt: number };
 
 function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -66,6 +69,11 @@ interface AuthContextValue {
   // True while a join/deal (initial or retry) or the bootstrap retry that
   // precedes a deferred deal is in flight.
   dealing: boolean;
+  // False only while an alias-origin sign-in is waiting for its pre-click
+  // canonical-origin health decision (#341). Keeping the UI disabled during
+  // that short probe lets the eventual fallback popup open inside the click's
+  // transient user activation.
+  signInReady: boolean;
   signIn: () => Promise<void>;
   signOutUser: () => Promise<void>;
   // Persist the current User's 18+ self-attestation (ADR 0001) and lift the gate.
@@ -85,6 +93,7 @@ const AuthContext = createContext<AuthContextValue>({
   dealError: null,
   dealErrorReason: null,
   dealing: false,
+  signInReady: true,
   signIn: async () => {},
   signOutUser: async () => {},
   attest: async () => {},
@@ -147,6 +156,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // cache but must not deal until online — and the deferred deal has to FIRE on
   // reconnect, which only happens if `online` flipping true re-runs that effect.
   const [online, setOnline] = useState(isOnline());
+  const [signInReady, setSignInReady] = useState(() => canonicalRedirectUrl(window.location) === null);
+  const canonicalOriginHealthRef = useRef<CanonicalOriginHealth | null>(null);
+  const configuredAuthDomainRef = useRef(auth.config?.authDomain);
   // Whether `attested === true` is AUTHORITATIVE (server-settled or a same-session
   // optimistic attest) vs merely PROVISIONAL (the offline cache lift). Distinct
   // from `attested` so the offline cache lift can settle the gate for RENDER —
@@ -197,6 +209,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // uid stays out of this set: the UI is optimistically attested but NO deal fires,
   // so no rows are created for a User whose durable stamp does not exist.
   const attestCommittedUidsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const canonical = canonicalRedirectUrl(window.location);
+    if (!canonical || user !== null) {
+      if (!canonical) canonicalOriginHealthRef.current = null;
+      setSignInReady(true);
+      return;
+    }
+
+    let cancelled = false;
+    canonicalOriginHealthRef.current = null;
+    setSignInReady(false);
+    const refreshCanonicalOriginHealth = () => {
+      void canonicalOriginAlive().then((alive) => {
+        if (cancelled) return;
+        canonicalOriginHealthRef.current = { alive, checkedAt: Date.now() };
+        setSignInReady(true);
+      });
+    };
+
+    refreshCanonicalOriginHealth();
+    const interval = setInterval(refreshCanonicalOriginHealth, SIGN_IN_CANONICAL_HEALTH_TTL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [user]);
 
   // Set / clear `dealError` and its typed reason in LOCKSTEP (#70). Every deal or
   // bootstrap failure routes through `failDeal` (which classifies pool-shortfall vs
@@ -646,13 +686,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // unreliable `navigator.onLine` boot signal is sidestepped (Codex P2 on #165).
     const canonical = canonicalRedirectUrl(window.location);
     if (canonical) {
-      // replace(), not assign(): the alias page is a signed-out throwaway, so it
-      // must not stay the Back target — after the Player authenticates on the
-      // canonical origin, Back would otherwise return to the alias origin, where
-      // Firebase Auth persistence is origin-scoped (they would look signed out and
-      // could bounce back through this redirect). (Codex P2 on #165.)
-      window.location.replace(canonical);
-      return;
+      // #340: only navigate to the canonical origin when it actually answers. The
+      // 2026-07-15 apex outage reset every TLS handshake on gaycruisebingo.com
+      // while the aliases stayed up — the unconditional replace() below was then a
+      // hard dead end (Safari: "the server unexpectedly dropped the connection").
+      const canonicalHealth = canonicalOriginHealthRef.current;
+      const canonicalHealthIsFresh =
+        canonicalHealth?.alive === true && Date.now() - canonicalHealth.checkedAt <= SIGN_IN_CANONICAL_HEALTH_TTL_MS;
+      if (canonicalHealthIsFresh) {
+        // replace(), not assign(): the alias page is a signed-out throwaway, so it
+        // must not stay the Back target — after the Player authenticates on the
+        // canonical origin, Back would otherwise return to the alias origin, where
+        // Firebase Auth persistence is origin-scoped (they would look signed out and
+        // could bounce back through this redirect). (Codex P2 on #165.)
+        window.location.replace(canonical);
+        return;
+      }
+      // Canonical origin down → sign in HERE, against the Firebase-default handler
+      // (FALLBACK_AUTH_DOMAIN): the configured authDomain is the canonical host
+      // (#161), whose /__/auth/handler is exactly what the outage took down. The
+      // SDK reads auth.config.authDomain when it builds the popup URL, so this
+      // runtime override redirects only the OAuth handler, not the app. It
+      // deliberately reintroduces the #162 cross-origin-handler edge (partitioned
+      // in-app webviews) for the outage window only — strictly better than no
+      // sign-in path at all. The SignIn button is disabled until the probe has
+      // settled; direct test/programmatic callers that race it still take this
+      // no-await fallback so signInWithPopup stays inside the click's transient
+      // user activation. Reverts to same-origin canonical auth after a page load
+      // or before any non-fallback popup call. Conditional (Codex P1 on #341): unit
+      // suites stub `auth` as a bare object, and a missing config just means the
+      // popup proceeds with whatever the SDK holds — same as before this branch.
+      if (auth.config) auth.config.authDomain = FALLBACK_AUTH_DOMAIN;
+    } else if (auth.config && configuredAuthDomainRef.current) {
+      auth.config.authDomain = configuredAuthDomainRef.current;
     }
     try {
       await signInWithPopup(auth, googleProvider);
@@ -701,6 +767,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         dealError,
         dealErrorReason,
         dealing,
+        signInReady,
         signIn,
         signOutUser,
         attest,
