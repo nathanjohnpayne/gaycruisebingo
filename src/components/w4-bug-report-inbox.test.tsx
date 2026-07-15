@@ -281,4 +281,39 @@ describe('W4 pick-a-screen capture (#324)', () => {
     expect(screen.getByLabelText('What happened?')).toHaveValue('Draft in progress.');
     expect(captureSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('labels the capture with the route where it STARTED, not where a slow capture resolves', async () => {
+    // The tab bar stays usable while a pick capture is in flight, so a slow
+    // capture followed by a quick tab change must not relabel the image with
+    // the later route (Codex P2 on #328).
+    const cardBlob = new Blob(['card'], { type: 'image/png' });
+    let resolveCapture!: (image: Blob) => void;
+    captureSpy
+      .mockResolvedValueOnce(new Blob(['more'], { type: 'image/png' }))
+      .mockReturnValueOnce(new Promise<Blob>((resolve) => { resolveCapture = resolve; }));
+    blobToDataUrlSpy.mockResolvedValue('data:image/png;base64,card');
+    submitSpy.mockResolvedValue({ reportId: 'report-race' });
+    window.history.replaceState({}, '', '/');
+    renderFlow();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Report a bug' }));
+    await screen.findByAltText('Screenshot that will be submitted with this bug report');
+    fireEvent.change(screen.getByLabelText('What happened?'), { target: { value: 'Slow capture race.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Capture a different screen' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Capture this screen' }));
+    // Capture is in flight on '/'; the reporter switches tabs before it lands.
+    window.history.replaceState({}, '', '/feed');
+    resolveCapture(cardBlob);
+
+    expect(await screen.findByRole('dialog', { name: 'Report a bug' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Send report' }));
+    await waitFor(() => expect(submitSpy).toHaveBeenCalledTimes(1));
+    expect(buildInputSpy).toHaveBeenCalledWith({
+      description: 'Slow capture race.',
+      screenshotDataUrl: 'data:image/png;base64,card',
+      captureError: null,
+      route: '/',
+    });
+    window.history.replaceState({}, '', '/');
+  });
 });
