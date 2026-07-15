@@ -78,18 +78,30 @@ describe('useToastSlot stacking', () => {
   });
 
   it('caps visible toasts at MAX_VISIBLE_TOASTS — a third-comer waits for a slot', async () => {
-    render(
-      <>
-        <SlotProbe id="a" priority="urgent" />
-        <SlotProbe id="b" priority="invitational" />
-        <SlotProbe id="c" priority="invitational" />
-      </>,
-    );
-    await waitFor(() => {
-      expect(screen.getByTestId('a')).toHaveTextContent('0');
-      expect(screen.getByTestId('b')).toHaveTextContent('1');
-      expect(screen.getByTestId('c')).toHaveTextContent('waiting');
-    });
+    // Freeze Date.now() so `b` and `c` (both invitational) register the same
+    // `requestedAt`: a genuine tie the stable sort resolves by insertion order,
+    // so `b` keeps slot 1. Without this, a slow runner can hand `c`'s effect a
+    // strictly later timestamp, and "newest wins ties" (useToastStack.ts) then
+    // promotes `c` over `b` — a flip waitFor can't rescue, since it just retries
+    // the same losing assertion to timeout (flake seen in CI on #249). We assert
+    // the capacity+tie rule, not wall-clock granularity.
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      render(
+        <>
+          <SlotProbe id="a" priority="urgent" />
+          <SlotProbe id="b" priority="invitational" />
+          <SlotProbe id="c" priority="invitational" />
+        </>,
+      );
+      await waitFor(() => {
+        expect(screen.getByTestId('a')).toHaveTextContent('0');
+        expect(screen.getByTestId('b')).toHaveTextContent('1');
+        expect(screen.getByTestId('c')).toHaveTextContent('waiting');
+      });
+    } finally {
+      now.mockRestore();
+    }
   });
 });
 
