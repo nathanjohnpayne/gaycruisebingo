@@ -184,6 +184,7 @@ class FakeMediaRecorder {
 
 beforeAll(() => {
   (globalThis.URL as unknown as { createObjectURL: () => string }).createObjectURL = () => 'blob:mock';
+  (globalThis.URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = vi.fn();
   (globalThis as unknown as { MediaRecorder: unknown }).MediaRecorder = FakeMediaRecorder;
   Object.defineProperty(globalThis.navigator, 'mediaDevices', {
     configurable: true,
@@ -446,6 +447,27 @@ describe('ProofSheet — Sound proof records a Safari-playable format + blocks e
     expect(screen.queryByRole('alert')).toBeNull();
     await user.click(screen.getByRole('button', { name: /mark it/i }));
     await waitFor(() => expect(H.attachProof).toHaveBeenCalledTimes(1));
+  });
+
+  it('empty-clip guard: re-recording retires the prior valid clip before a new empty stop can submit stale audio', async () => {
+    const user = userEvent.setup();
+    const props = baseProps();
+    render(<ProofSheet {...props} />);
+
+    await user.click(screen.getByRole('button', { name: /sound/i }));
+    await user.click(screen.getByRole('button', { name: /record/i }));
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+    expect(screen.getByRole('button', { name: /mark it/i })).toBeEnabled();
+
+    nextStopEmpty = true;
+    await user.click(screen.getByRole('button', { name: /re-record/i }));
+    expect(screen.getByRole('button', { name: /mark it/i })).toBeDisabled();
+
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/came out empty/i);
+    expect(screen.getByRole('button', { name: /mark it/i })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: /mark it/i }));
+    expect(H.attachProof).not.toHaveBeenCalled();
   });
 });
 

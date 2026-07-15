@@ -111,20 +111,27 @@ export default function ProofSheet(props: Props) {
   };
 
   const startRec = async () => {
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       // Ask for a Safari-playable format when the platform can tell us it
       // supports one; `mimeType` also seeds the blob-type fallback below for
       // a MediaRecorder that reports no `.mimeType` of its own.
       const mimeType = pickAudioMimeType();
       const rec = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      const activeStream = stream;
       chunksRef.current = [];
       setAudioError(false);
+      setAudio(null);
+      setAudioUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return null;
+      });
       rec.ondataavailable = (ev) => {
         if (ev.data.size) chunksRef.current.push(ev.data);
       };
       rec.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
+        activeStream.getTracks().forEach((t) => t.stop());
         if (chunksRef.current.length === 0) {
           setAudioError(true);
           setAudio(null);
@@ -151,6 +158,7 @@ export default function ProofSheet(props: Props) {
       rec.start();
       setRecording(true);
     } catch {
+      stream?.getTracks().forEach((t) => t.stop());
       alert('Mic unavailable—try a photo or a callout instead.');
     }
   };
@@ -165,7 +173,7 @@ export default function ProofSheet(props: Props) {
       : type === 'photo'
         ? !!photo
         : type === 'audio'
-          ? !!audio
+          ? !!audio && !recording
           : text.trim().length > 0;
 
   const submit = async () => {
