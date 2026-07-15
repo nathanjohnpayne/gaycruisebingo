@@ -39,7 +39,7 @@ GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcb-sa.json \
 
 Map the JSON fields into `.env.local`: `apiKey`→`VITE_FIREBASE_API_KEY`, `authDomain`→`VITE_FIREBASE_AUTH_DOMAIN` (**do not copy verbatim — override, see below**), `projectId`→`VITE_FIREBASE_PROJECT_ID`, `storageBucket`→`VITE_FIREBASE_STORAGE_BUCKET`, `messagingSenderId`→`VITE_FIREBASE_MESSAGING_SENDER_ID`, `appId`→`VITE_FIREBASE_APP_ID`, `measurementId`→`VITE_FIREBASE_MEASUREMENT_ID`. `VITE_EVENT_ID` defaults to `med-2026`; `VITE_RECAPTCHA_SITE_KEY` is Phase-1 (App Check) — leave it blank for Phase 0.
 
-**`VITE_FIREBASE_AUTH_DOMAIN` must be the origin the app is served from — `gaycruisebingo.com` — NOT the `gaycruisebingo.firebaseapp.com` value the console reports.** Firebase serves the Google OAuth handler at `<authDomain>/__/auth/handler`. When that origin differs from where the app runs, storage-partitioned browsers — iOS/Android in-app webviews (links opened inside iMessage, Instagram, WhatsApp, etc.) and Safari with ITP — can't read the sign-in state written before the redirect, so Google sign-in dies with "Unable to process request due to missing initial state." Real mobile Chrome/Safari tolerate the cross-origin handler, which is why the bug hides in direct testing and only surfaces for users who open a shared link in an in-app browser. `gaycruisebingo.com` already serves the handler (`/__/auth/handler` → 200) and is in the authorized-domains list, so pointing `authDomain` at it is same-origin and drop-in.
+**`VITE_FIREBASE_AUTH_DOMAIN` must be the origin the app is served from — `gaycruisebingo.com` for Firebase Hosting, or `gaycruisebingo.vercel.app` for the production Vercel mirror — NOT the `gaycruisebingo.firebaseapp.com` value the console reports.** Firebase serves the Google OAuth handler at `<authDomain>/__/auth/handler`. When that origin differs from where the app runs, storage-partitioned browsers — iOS/Android in-app webviews (links opened inside iMessage, Instagram, WhatsApp, etc.) and Safari with ITP — can't read the sign-in state written before the redirect, so Google sign-in dies with "Unable to process request due to missing initial state." Real mobile Chrome/Safari tolerate the cross-origin handler, which is why the bug hides in direct testing and only surfaces for users who open a shared link in an in-app browser. `gaycruisebingo.com` serves the handler through Firebase Hosting; the Vercel mirror serves the same namespace through the transparent rewrite described in §7.
 
 ## 3. Install & run
 
@@ -129,7 +129,15 @@ Phase 0 deploys rules/indexes/storage + hosting only. The Phase-1 backend (`func
 
 The console path is `Hosting > Add custom domain`. To do it programmatically: `POST https://firebasehosting.googleapis.com/v1beta1/projects/gaycruisebingo/sites/gaycruisebingo/customDomains?customDomainId=gaycruisebingo.com`, then `GET …/customDomains/gaycruisebingo.com` and read `requiredDnsUpdates.desired[].records` for the exact records above. Sign-in on a custom domain also requires it in the authorized-domains list (`Authentication > Settings`, or Identity Toolkit `admin/v2/projects/gaycruisebingo/config`, field `authorizedDomains`) — already done for `gaycruisebingo.com`.
 
-## 7. Configuration knobs
+## 7. Vercel production mirror
+
+The Vercel project serves the same Vite build at `gaycruisebingo.vercel.app`. Set its Production `VITE_FIREBASE_AUTH_DOMAIN` to `gaycruisebingo.vercel.app`. Do not use `gaycruisebingo.com` (it defeats the mirror during a custom-domain outage) or `gaycruisebingo.firebaseapp.com` (it reintroduces cross-origin auth storage and the intermittent "missing initial state" failure).
+
+`vercel.json` rewrites `/__/auth/:path*` to the equivalent Firebase Hosting path. Vercel performs this as a transparent reverse proxy, so the Firebase helper is served while the browser remains on the Vercel origin; replacing it with a `301`/`302` redirect breaks the same-origin guarantee. Keep `gaycruisebingo.vercel.app` in Firebase Auth's authorized domains and keep `https://gaycruisebingo.vercel.app/__/auth/handler` in the Google OAuth web client's authorized redirect URIs.
+
+This configuration is Vercel-only. Firebase Hosting builds continue to use `VITE_FIREBASE_AUTH_DOMAIN=gaycruisebingo.com`, and both production endpoints remain independently usable.
+
+## 8. Configuration knobs
 
 - **Claim mode** (`events/med-2026.claimMode`): `honor` (default) · `proof_required` · `verified`. The card UI adapts; `verified` marks are `pending` until confirmed (confirmation UI is Phase 1).
 - **Default theme** (`defaultTheme`): any of the 8 theme ids in `src/theme/themes.ts`.
