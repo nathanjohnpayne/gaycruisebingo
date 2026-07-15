@@ -216,6 +216,11 @@ describe('PostHog init guard', () => {
 describe('PostHog init with a key', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    // Guaranteed even when a mid-test assertion fails (CodeRabbit on #342):
+    // several tests stub global fetch for the init probe and assert BEFORE
+    // their inline unstub; without this, one real failure would leak the stub
+    // into later tests and cascade.
+    vi.unstubAllGlobals();
     vi.resetModules();
     vi.clearAllMocks();
   });
@@ -309,6 +314,8 @@ describe('PostHog init with a key', () => {
     mod.phIdentify('sailor-9');
     mod.phReset();
     await initSettled;
+    // Unstub BEFORE asserting (CodeRabbit on #342): an assertion failure here
+    // must not leak the stubbed fetch into later tests and cascade.
     vi.unstubAllGlobals();
     expect(ph.identify).not.toHaveBeenCalled();
   });

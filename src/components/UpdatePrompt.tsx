@@ -70,9 +70,14 @@ export default function UpdatePrompt() {
   // Latches "a newer SW is waiting": vite-pwa's "Not now" clears `needRefresh`,
   // but the waiting worker stays installed — the force must still fire when a
   // floor bump arrives later (Codex P2 on #342), so it keys off this latch,
-  // never the dismissible state.
+  // never the dismissible state. Latched in an effect, not during render
+  // (CodeRabbit on #342): render work can be replayed and discarded without
+  // committing, so a render-phase ref write could leak from work that never
+  // showed. Declared BEFORE the force effect below so the latch commits first.
   const sawWaitingSW = useRef(false);
-  if (needRefresh) sawWaitingSW.current = true;
+  useEffect(() => {
+    if (needRefresh) sawWaitingSW.current = true;
+  }, [needRefresh]);
   useEffect(() => {
     let cancelled = false;
     const check = () => {
