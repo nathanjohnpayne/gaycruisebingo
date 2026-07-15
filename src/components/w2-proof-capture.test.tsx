@@ -144,24 +144,47 @@ const cell = (over: Partial<Cell> = {}): Cell => ({
   ...over,
 });
 
-// jsdom lacks these browser APIs ProofSheet touches. Stub them once.
+// jsdom lacks these browser APIs ProofSheet touches. Stub them once. Three
+// module-level knobs simulate the platform surface #295 exercises:
+//   - `isTypeSupportedMock` — which mimeType candidates the "browser" claims
+//     to support (a Safari-like env: webm variants false, mp4 variants true).
+//   - `reportedMimeType` — what the constructed recorder's OWN `.mimeType`
+//     reports once started, independent of the requested option (a real
+//     recorder can normalize what it was asked for — e.g. drop a codecs
+//     suffix — so ProofSheet must read THIS, not the requested candidate).
+//   - `nextStopEmpty` — makes the next `stop()` fire with NO data chunks, to
+//     exercise the empty-clip guard.
+const isTypeSupportedMock = vi.fn((_type: string) => true);
+let reportedMimeType: string | undefined;
+let nextStopEmpty = false;
+
 class FakeMediaRecorder {
   ondataavailable: ((e: { data: Blob }) => void) | null = null;
   onstop: (() => void) | null = null;
   state = 'inactive';
-  constructor(public stream: unknown) {}
+  mimeType: string;
+  static isTypeSupported = isTypeSupportedMock;
+  constructor(
+    public stream: unknown,
+    options?: { mimeType?: string },
+  ) {
+    this.mimeType = reportedMimeType ?? options?.mimeType ?? '';
+  }
   start() {
     this.state = 'recording';
   }
   stop() {
     this.state = 'inactive';
-    this.ondataavailable?.({ data: new Blob(['audio'], { type: 'audio/webm' }) });
+    if (!nextStopEmpty) {
+      this.ondataavailable?.({ data: new Blob(['audio'], { type: this.mimeType || 'audio/webm' }) });
+    }
     this.onstop?.();
   }
 }
 
 beforeAll(() => {
   (globalThis.URL as unknown as { createObjectURL: () => string }).createObjectURL = () => 'blob:mock';
+  (globalThis.URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = vi.fn();
   (globalThis as unknown as { MediaRecorder: unknown }).MediaRecorder = FakeMediaRecorder;
   Object.defineProperty(globalThis.navigator, 'mediaDevices', {
     configurable: true,
@@ -178,6 +201,13 @@ beforeEach(() => {
   H.setMark.mockResolvedValue({ cells: [], bingo: false, blackout: false });
   H.attachProof.mockResolvedValue(undefined);
   vi.spyOn(window, 'alert').mockImplementation(() => {});
+  // Reset the #295 platform knobs to the "most browsers" default (every
+  // candidate supported) before every test; individual tests below override.
+  (FakeMediaRecorder as unknown as { isTypeSupported?: unknown }).isTypeSupported = isTypeSupportedMock;
+  isTypeSupportedMock.mockReset();
+  isTypeSupportedMock.mockImplementation(() => true);
+  reportedMimeType = undefined;
+  nextStopEmpty = false;
 });
 
 describe('ProofSheet — each capture type produces a valid submit and closes', () => {
@@ -288,6 +318,156 @@ describe('ProofSheet — each capture type produces a valid submit and closes', 
     render(<ProofSheet {...baseProps()} />);
     expect(screen.queryByText(/required for credit/i)).toBeNull();
     expect(screen.queryByText(/must.*(prove|proof)/i)).toBeNull();
+  });
+});
+
+// #295: iOS Safari's MediaRecorder records MP4/AAC, not WebM — the pre-fix
+// code always constructed `new MediaRecorder(stream)` (no mimeType) and then
+// hardcoded the resulting Blob as 'audio/webm' regardless of what was
+// actually recorded, so Safari's preview player couldn't decode it and the
+// same mislabeled/empty clip still uploaded to the Feed. These tests drive
+// the recording knobs (`isTypeSupportedMock`, `reportedMimeType`,
+// `nextStopEmpty`) declared above to simulate that platform surface.
+describe('ProofSheet — Sound proof records a Safari-playable format + blocks empty clips (#295)', () => {
+  const baseProps = () => ({
+    uid: 'u1',
+    displayName: 'Deck Daddy',
+    photoURL: null,
+    cells: dealt(),
+    cell: cell(),
+    claimMode: 'proof_required' as const,
+    currentFirstBingoAt: null,
+    onClose: vi.fn(),
+  });
+
+  it('prefers WebM/Opus when the platform supports it, and the Blob carries the recorder’s ACTUAL reported mimeType', async () => {
+    // Default knob state (set in beforeEach): every candidate "supported" —
+    // the common-browser case. pickAudioMimeType() picks the FIRST candidate
+    // in preference order, so the requested (and here, reported) type is
+    // 'audio/webm;codecs=opus'.
+    const user = userEvent.setup();
+    const props = baseProps();
+    render(<ProofSheet {...props} />);
+
+    await user.click(screen.getByRole('button', { name: /sound/i }));
+    await user.click(screen.getByRole('button', { name: /record/i }));
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+    await user.click(screen.getByRole('button', { name: /mark it/i }));
+
+    await waitFor(() => expect(H.attachProof).toHaveBeenCalledTimes(1));
+    const blob = H.attachProof.mock.calls[0][0].proof.blob as Blob;
+    expect(blob.type).toBe('audio/webm;codecs=opus');
+  });
+
+  it('Safari-like environment: WebM unsupported, MP4 supported — records MP4/AAC and the Blob is typed audio/mp4, not audio/webm', async () => {
+    // isTypeSupported denies every webm candidate and allows every mp4
+    // candidate (Safari's real MediaRecorder behavior); the recorder then
+    // REPORTS a bare 'audio/mp4' once running — normalized down from the
+    // codecs-qualified candidate ProofSheet requested. ProofSheet must read
+    // that ACTUAL `.mimeType`, not assume the requested candidate survived
+    // verbatim, and must never fall back to the old hardcoded 'audio/webm'.
+    isTypeSupportedMock.mockImplementation((type: string) => type.startsWith('audio/mp4'));
+    reportedMimeType = 'audio/mp4';
+
+    const user = userEvent.setup();
+    const props = baseProps();
+    render(<ProofSheet {...props} />);
+
+    await user.click(screen.getByRole('button', { name: /sound/i }));
+    await user.click(screen.getByRole('button', { name: /record/i }));
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+    await user.click(screen.getByRole('button', { name: /mark it/i }));
+
+    await waitFor(() => expect(H.attachProof).toHaveBeenCalledTimes(1));
+    const blob = H.attachProof.mock.calls[0][0].proof.blob as Blob;
+    expect(blob.type).toBe('audio/mp4');
+    expect(blob.type).not.toBe('audio/webm');
+  });
+
+  it('guards `MediaRecorder.isTypeSupported` absence: records with no mimeType option and still produces a playable, non-empty Blob', async () => {
+    // A very old MediaRecorder implementation with no `isTypeSupported` at
+    // all — pickAudioMimeType() must not throw or assume the method exists;
+    // it returns undefined, `new MediaRecorder(stream)` is called with no
+    // options (the pre-#295 call shape), and the recorded Blob still gets a
+    // sane type from the recorder's own (possibly empty) `.mimeType`.
+    delete (FakeMediaRecorder as unknown as { isTypeSupported?: unknown }).isTypeSupported;
+
+    const user = userEvent.setup();
+    const props = baseProps();
+    render(<ProofSheet {...props} />);
+
+    await user.click(screen.getByRole('button', { name: /sound/i }));
+    await user.click(screen.getByRole('button', { name: /record/i }));
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+    await user.click(screen.getByRole('button', { name: /mark it/i }));
+
+    await waitFor(() => expect(H.attachProof).toHaveBeenCalledTimes(1));
+    const blob = H.attachProof.mock.calls[0][0].proof.blob as Blob;
+    expect(blob.type).toBe('audio/webm'); // the documented fallback default
+    expect(blob.size).toBeGreaterThan(0);
+  });
+
+  it('empty-clip guard: a recording that stops with zero data chunks shows an error and blocks "Mark it" (no unplayable Proof reaches attachProof)', async () => {
+    nextStopEmpty = true;
+
+    const user = userEvent.setup();
+    const props = baseProps();
+    render(<ProofSheet {...props} />);
+
+    await user.click(screen.getByRole('button', { name: /sound/i }));
+    await user.click(screen.getByRole('button', { name: /record/i }));
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+
+    // The error state renders, and the audio tab offers no preview to submit.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/came out empty/i);
+    expect(document.querySelector('audio.preview')).toBeNull();
+
+    // "Mark it" stays disabled — the `valid` gate requires a captured audio
+    // Blob for the audio tab, so a submit attempt is a no-op either way.
+    expect(screen.getByRole('button', { name: /mark it/i })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: /mark it/i }));
+    expect(H.attachProof).not.toHaveBeenCalled();
+  });
+
+  it('empty-clip guard: re-recording after an empty clip clears the error and allows a normal submit', async () => {
+    nextStopEmpty = true;
+    const user = userEvent.setup();
+    const props = baseProps();
+    render(<ProofSheet {...props} />);
+
+    await user.click(screen.getByRole('button', { name: /sound/i }));
+    await user.click(screen.getByRole('button', { name: /record/i }));
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+    await screen.findByRole('alert');
+
+    nextStopEmpty = false;
+    await user.click(screen.getByRole('button', { name: /record/i }));
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    await user.click(screen.getByRole('button', { name: /mark it/i }));
+    await waitFor(() => expect(H.attachProof).toHaveBeenCalledTimes(1));
+  });
+
+  it('empty-clip guard: re-recording retires the prior valid clip before a new empty stop can submit stale audio', async () => {
+    const user = userEvent.setup();
+    const props = baseProps();
+    render(<ProofSheet {...props} />);
+
+    await user.click(screen.getByRole('button', { name: /sound/i }));
+    await user.click(screen.getByRole('button', { name: /record/i }));
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+    expect(screen.getByRole('button', { name: /mark it/i })).toBeEnabled();
+
+    nextStopEmpty = true;
+    await user.click(screen.getByRole('button', { name: /re-record/i }));
+    expect(screen.getByRole('button', { name: /mark it/i })).toBeDisabled();
+
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/came out empty/i);
+    expect(screen.getByRole('button', { name: /mark it/i })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: /mark it/i }));
+    expect(H.attachProof).not.toHaveBeenCalled();
   });
 });
 
