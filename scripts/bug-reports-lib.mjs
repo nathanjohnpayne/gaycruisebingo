@@ -60,6 +60,10 @@ function sameReceipt(a, b) {
   return a.reportId === b.reportId && a.issue === b.issue && a.url === b.url && a.importedAt === b.importedAt;
 }
 
+function sameIssueTarget(a, b) {
+  return a.reportId === b.reportId && a.issue === b.issue && a.url === b.url;
+}
+
 /**
  * Parse the committed dedupe ledger into its entries. A missing ledger is an
  * empty list; a malformed or conflicting line fails closed so a corrupt durable
@@ -110,7 +114,7 @@ async function ledgerReportIds(root) {
 async function appendToLedger(root, receipt) {
   const existing = (await readLedger(root)).find((entry) => entry.reportId === receipt.reportId);
   if (existing) {
-    if (sameReceipt(existing, receipt)) return;
+    if (sameIssueTarget(existing, receipt)) return;
     throw new Error(`Ledger has a conflicting receipt for ${receipt.reportId}`);
   }
   const entry = { reportId: receipt.reportId, issue: receipt.issue, url: receipt.url, importedAt: receipt.importedAt };
@@ -164,6 +168,14 @@ export async function exportReports({ reports, downloadScreenshot, root }) {
   const alreadyImported = await ledgerReportIds(root);
   const summary = { exported: [], skipped: [], failed: [] };
   for (const report of reports) {
+    const reportId = report?.id;
+    if (REPORT_ID.test(reportId ?? '')) {
+      const destination = path.join(inbox, reportId);
+      if (await exists(destination) || await exists(path.join(imported, reportId)) || alreadyImported.has(reportId)) {
+        summary.skipped.push(reportId);
+        continue;
+      }
+    }
     let validated;
     try {
       validated = safeReport(report);
@@ -172,10 +184,6 @@ export async function exportReports({ reports, downloadScreenshot, root }) {
       continue;
     }
     const destination = path.join(inbox, report.id);
-    if (await exists(destination) || await exists(path.join(imported, report.id)) || alreadyImported.has(report.id)) {
-      summary.skipped.push(report.id);
-      continue;
-    }
     const staging = path.join(root, `.tmp-${report.id}-${process.pid}`);
     try {
       await rm(staging, { recursive: true, force: true });
@@ -208,20 +216,32 @@ export async function archiveReport({ reportId, issueUrl, root, now = new Date()
     issue: Number(match[1]),
     url: issueUrl,
   };
+  const ledgerReceipt = (await readLedger(root)).find((entry) => entry.reportId === reportId);
   const importedReceiptRaw = await readJson(path.join(destination, 'github-issue.json'));
   if (importedReceiptRaw) {
     const importedReceipt = normalizeReceipt(importedReceiptRaw, `Imported report ${reportId} receipt`);
-    if (importedReceipt.reportId === requested.reportId && importedReceipt.issue === requested.issue && importedReceipt.url === requested.url) {
+    if (sameIssueTarget(importedReceipt, requested)) {
+      if (ledgerReceipt && !sameIssueTarget(ledgerReceipt, importedReceipt)) throw new Error(`Ledger has a conflicting receipt for ${reportId}`);
       await appendToLedger(root, importedReceipt); // self-heal: back-fill a pre-ledger import on re-archive
       return importedReceipt;
     }
     throw new Error(`Imported report ${reportId} has a conflicting receipt`);
   }
-  if (!(await exists(source))) throw new Error(`Inbox report ${reportId} does not exist`);
+  const sourceExists = await exists(source);
   const receiptPath = path.join(source, 'github-issue.json');
-  const existingReceiptRaw = await readJson(receiptPath);
+  const existingReceiptRaw = sourceExists ? await readJson(receiptPath) : null;
   const existingReceipt = existingReceiptRaw ? normalizeReceipt(existingReceiptRaw, `Inbox report ${reportId} receipt`) : null;
-  if (existingReceipt && (existingReceipt.reportId !== requested.reportId || existingReceipt.issue !== requested.issue || existingReceipt.url !== requested.url)) {
+  if (ledgerReceipt) {
+    if (!sameIssueTarget(ledgerReceipt, requested)) throw new Error(`Ledger has a conflicting receipt for ${reportId}`);
+    if (existingReceipt && !sameReceipt(existingReceipt, ledgerReceipt)) throw new Error(`Inbox report ${reportId} has a conflicting receipt`);
+    if (!sourceExists) return ledgerReceipt;
+    if (!existingReceipt) await writeFile(receiptPath, `${JSON.stringify(ledgerReceipt, null, 2)}\n`, { flag: 'wx' });
+    await mkdir(path.dirname(destination), { recursive: true });
+    await rename(source, destination);
+    return ledgerReceipt;
+  }
+  if (!sourceExists) throw new Error(`Inbox report ${reportId} does not exist`);
+  if (existingReceipt && !sameIssueTarget(existingReceipt, requested)) {
     throw new Error(`Inbox report ${reportId} has a conflicting receipt`);
   }
   const receipt = existingReceipt ?? { ...requested, importedAt: now.toISOString() };

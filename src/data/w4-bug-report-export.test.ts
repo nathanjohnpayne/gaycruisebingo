@@ -148,6 +148,17 @@ describe('local bug-report export', () => {
     expect(summary.exported).toEqual([]);
   });
 
+  it('durable dedupe: skips ledgered reports before validating mutable source fields', async () => {
+    await writeFile(
+      path.join(root, LEDGER),
+      `${JSON.stringify({ reportId: 'report_123', issue: 200, url: ISSUE_200, importedAt: '2026-07-10T00:00:00.000Z' })}\n`,
+    );
+    const malformed = { ...report(), status: 'not-new' };
+    const summary = await exportReports({ reports: [malformed], downloadScreenshot: async () => PNG, root });
+    expect(summary.skipped).toEqual(['report_123']);
+    expect(summary.failed).toEqual([]);
+  });
+
   it('fails closed on malformed durable ledger JSON instead of re-exporting duplicates', async () => {
     await writeFile(path.join(root, LEDGER), '{"reportId":"report_123"\n');
     await expect(exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root })).rejects.toThrow('invalid JSON');
@@ -186,6 +197,34 @@ describe('local bug-report export', () => {
 
     await expect(stat(path.join(root, 'inbox/report_123'))).resolves.toBeDefined();
     await expect(stat(path.join(root, 'imported/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects a stale inbox archive when the durable ledger already records a different issue', async () => {
+    await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
+    await writeFile(
+      path.join(root, LEDGER),
+      `${JSON.stringify({ reportId: 'report_123', issue: 200, url: ISSUE_200, importedAt: '2026-07-10T00:00:00.000Z' })}\n`,
+    );
+
+    await expect(archiveReport({
+      reportId: 'report_123',
+      issueUrl: 'https://github.com/nathanjohnpayne/gaycruisebingo/issues/201',
+      root,
+    })).rejects.toThrow('Ledger has a conflicting receipt');
+
+    await expect(stat(path.join(root, 'inbox/report_123'))).resolves.toBeDefined();
+    await expect(stat(path.join(root, 'imported/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('uses the durable ledger receipt to clean up a stale inbox archive for the same issue', async () => {
+    await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
+    const ledgerReceipt = { reportId: 'report_123', issue: 200, url: ISSUE_200, importedAt: '2026-07-10T00:00:00.000Z' };
+    await writeFile(path.join(root, LEDGER), `${JSON.stringify(ledgerReceipt)}\n`);
+
+    const receipt = await archiveReport({ reportId: 'report_123', issueUrl: ISSUE_200, root });
+
+    expect(receipt).toEqual(ledgerReceipt);
+    expect(JSON.parse(await readFile(path.join(root, 'imported/report_123/github-issue.json'), 'utf8'))).toEqual(ledgerReceipt);
   });
 
   it('ledger append is idempotent and self-heals a pre-ledger import on re-archive', async () => {
