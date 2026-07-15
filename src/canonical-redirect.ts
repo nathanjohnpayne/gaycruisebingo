@@ -56,7 +56,9 @@ export const FALLBACK_AUTH_DOMAIN = 'gaycruisebingo.firebaseapp.com';
  * from answering for a dead origin; the SW has no cross-origin runtime caching
  * (vite.config.ts precaches same-origin only), so this reaches the network.
  */
-function canonicalProbeTimeout(timeoutMs: number): { signal?: AbortSignal; cleanup: () => void } {
+// Exported for the other transport probes that need the same budget-bounded
+// signal (posthog.ts ingest fallback, buildFloor.ts floor fetch — #342).
+export function probeTimeoutSignal(timeoutMs: number): { signal?: AbortSignal; cleanup: () => void } {
   // Feature-detected (Codex P2 on #341): older Safari/iOS WebViews lack
   // AbortSignal.timeout, and an unconditional call would throw BEFORE fetch.
   if (typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function') {
@@ -71,6 +73,7 @@ function canonicalProbeTimeout(timeoutMs: number): { signal?: AbortSignal; clean
     cleanup: () => clearTimeout(timer),
   };
 }
+const canonicalProbeTimeout = probeTimeoutSignal;
 
 export async function canonicalOriginAlive(fetchImpl: typeof fetch = fetch, timeoutMs = 1200): Promise<boolean> {
   const { signal, cleanup } = canonicalProbeTimeout(timeoutMs);

@@ -1,7 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { useRegisterSW } from 'virtual:pwa-register/react';
 import { useClaimSheetOpen, useToastSlot } from '../hooks/useToastStack';
+import { buildBelowFloor, fetchBuildFloor } from '../buildFloor';
 
 /** How often a long-lived tab asks the browser to re-check `/sw.js` for a new
  *  deploy (`registration.update()`). 60s matches the poll cadence Nathan's other
@@ -49,7 +50,28 @@ export default function UpdatePrompt() {
   });
   const claimSheetOpen = useClaimSheetOpen();
 
-  const wantsToShow = needRefresh && !claimSheetOpen;
+  // Remote force-reload floor (#342): when the RUNNING build is older than the
+  // served public/build-floor.json, skip the offer and activate+reload as soon
+  // as the new SW is waiting. Gated on `needRefresh` — a genuinely newer build
+  // must exist before any reload — so a misconfigured floor (newer than every
+  // build) can never reload-loop a current client: its update check finds no
+  // new SW, `needRefresh` stays false, nothing fires. Floor fetch failures
+  // resolve null → `buildBelowFloor` is false → normal prompt behavior.
+  const [floorStale, setFloorStale] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void fetchBuildFloor().then((floor) => {
+      if (!cancelled && buildBelowFloor(__BUILD_STAMP__, floor)) setFloorStale(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (floorStale && needRefresh) void updateServiceWorker(true);
+  }, [floorStale, needRefresh, updateServiceWorker]);
+
+  const wantsToShow = needRefresh && !claimSheetOpen && !floorStale;
   const { visible, stackIndex, visibleCount } = useToastSlot(TOAST_ID, 'urgent', wantsToShow);
 
   useEffect(() => {

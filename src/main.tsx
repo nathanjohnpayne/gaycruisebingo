@@ -20,7 +20,7 @@ import './index.css';
 // so dev sessions and Vite HMR errors never pollute production analytics or
 // session replays. All ph* calls guard on init, so skipping this suppresses
 // PostHog entirely for those loads.
-if (!isSyntheticProbe() && !isLocalDevHost(window.location.hostname)) initPostHog();
+if (!isSyntheticProbe() && !isLocalDevHost(window.location.hostname)) void initPostHog();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('root element missing');

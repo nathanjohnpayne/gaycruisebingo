@@ -10,6 +10,9 @@ import posthog from 'posthog-js';
 import {
   POSTHOG_INIT_OPTIONS,
   POSTHOG_PROXY_HOST,
+  POSTHOG_DIRECT_HOST,
+  resolveIngestHost,
+  ingestHostAlive,
   posthogReady,
   phCapture,
   phIdentify,
@@ -245,9 +248,13 @@ describe('PostHog init with a key', () => {
     // Empty out the override (the repo's .env.local sets one for the loader) so
     // this exercises the in-code default: prod ships through the first-party proxy.
     vi.stubEnv('VITE_POSTHOG_HOST', '');
+    // No override → init consults the transport probe (#342); an answering
+    // proxy keeps the #149 default intact.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ type: 'opaque' } as Response));
     const ph = (await import('posthog-js')).default;
     const mod = await import('./posthog');
-    mod.initPostHog();
+    await mod.initPostHog();
+    vi.unstubAllGlobals();
     expect(ph.init).toHaveBeenCalledWith(
       'phc_test',
       expect.objectContaining({
@@ -255,5 +262,48 @@ describe('PostHog init with a key', () => {
         ui_host: 'https://us.posthog.com',
       }),
     );
+  });
+
+  it('falls back to direct PostHog Cloud when the proxy transport is dead (#342)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_test');
+    vi.stubEnv('VITE_POSTHOG_HOST', '');
+    // The #342 incident shape: the proxy's whole registered domain is
+    // SNI-filtered, so the probe's fetch rejects.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Load failed')));
+    const ph = (await import('posthog-js')).default;
+    const mod = await import('./posthog');
+    await mod.initPostHog();
+    vi.unstubAllGlobals();
+    expect(ph.init).toHaveBeenCalledWith(
+      'phc_test',
+      expect.objectContaining({ api_host: 'https://us.i.posthog.com' }),
+    );
+  });
+});
+
+describe('ingest-host fallback (#342 — shipboard SNI filter blocked the proxy)', () => {
+  it('a non-blank VITE_POSTHOG_HOST override always wins, probe result irrelevant', () => {
+    expect(resolveIngestHost('https://eu.example.dev', true)).toBe('https://eu.example.dev');
+    expect(resolveIngestHost('https://eu.example.dev', false)).toBe('https://eu.example.dev');
+  });
+
+  it('blank/whitespace overrides are ignored — proxy when alive, direct PostHog Cloud when not', () => {
+    for (const envHost of [undefined, '', '   ']) {
+      expect(resolveIngestHost(envHost, true)).toBe(POSTHOG_PROXY_HOST);
+      expect(resolveIngestHost(envHost, false)).toBe(POSTHOG_DIRECT_HOST);
+    }
+  });
+
+  it('ingestHostAlive probes the proxy no-cors/no-store and maps resolve→true, reject→false', async () => {
+    const okImpl = vi.fn().mockResolvedValue({ type: 'opaque' } as Response);
+    await expect(ingestHostAlive(okImpl as unknown as typeof fetch)).resolves.toBe(true);
+    const [url, init] = okImpl.mock.calls[0] as [string, RequestInit];
+    expect(url.startsWith(`${POSTHOG_PROXY_HOST}/?alive=`)).toBe(true);
+    expect(init.mode).toBe('no-cors');
+    expect(init.cache).toBe('no-store');
+
+    const deadImpl = vi.fn().mockRejectedValue(new TypeError('Load failed'));
+    await expect(ingestHostAlive(deadImpl as unknown as typeof fetch)).resolves.toBe(false);
   });
 });

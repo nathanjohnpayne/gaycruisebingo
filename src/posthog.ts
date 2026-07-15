@@ -16,6 +16,7 @@
 // long-standing path-only pageview stance. This reverses the #96 privacy lockdown
 // at the owner's request; ConsentNotice.tsx discloses that session replay is used.
 import posthog, { type PostHogConfig, type CaptureResult } from 'posthog-js';
+import { probeTimeoutSignal } from './canonical-redirect';
 
 /** Init options — exported so the capture policy is unit-testable. */
 export const POSTHOG_INIT_OPTIONS: Partial<PostHogConfig> = {
@@ -49,6 +50,53 @@ export const POSTHOG_INIT_OPTIONS: Partial<PostHogConfig> = {
  * this US deployment deliberately keeps `ui_host` region-fixed above.
  */
 export const POSTHOG_PROXY_HOST = 'https://d.gaycruisebingo.com';
+
+/**
+ * Direct PostHog Cloud US ingestion — the fallback when the first-party proxy
+ * is unreachable (#342). The 2026-07-15 shipboard DPI filter blocked the entire
+ * registered domain by SNI, `d.gaycruisebingo.com` included, so every event from
+ * the network the whole player base was on silently died in posthog-js's retry
+ * queue while `us.i.posthog.com` remained reachable. Falling back trades the
+ * proxy's ad-blocker resistance for actually delivering events.
+ */
+export const POSTHOG_DIRECT_HOST = 'https://us.i.posthog.com';
+
+/**
+ * Whether the first-party ingest proxy answers (#342): the same cheap
+ * no-cors/no-store transport probe as canonical-redirect's
+ * `canonicalOriginAlive` — an opaque response proves TCP+TLS+HTTP completed;
+ * rejection (reset / filtered SNI / no DNS) or timeout means events would die.
+ */
+export async function ingestHostAlive(
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 1500,
+): Promise<boolean> {
+  const { signal, cleanup } = probeTimeoutSignal(timeoutMs);
+  try {
+    await fetchImpl(`${POSTHOG_PROXY_HOST}/?alive=${Date.now()}`, {
+      mode: 'no-cors',
+      cache: 'no-store',
+      signal,
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    cleanup();
+  }
+}
+
+/**
+ * Which ingestion host to init with (#342). Pure so the policy is testable:
+ * a non-blank `VITE_POSTHOG_HOST` override always wins (the existing direct-US
+ * bypass contract, probe never consulted); otherwise the proxy when it answers,
+ * else direct PostHog Cloud.
+ */
+export function resolveIngestHost(envHost: string | undefined, proxyAlive: boolean): string {
+  const override = envHost?.trim();
+  if (override) return override;
+  return proxyAlive ? POSTHOG_PROXY_HOST : POSTHOG_DIRECT_HOST;
+}
 
 /**
  * Strip the query string and hash from a URL string, keeping origin + path.
@@ -163,12 +211,17 @@ export function isLocalDevHost(hostname: string): boolean {
  * the GA4 guard in firebase.ts, so dev/test/CI without env vars stay silent. The
  * `phc_` project key is client-safe (public) by design.
  */
-export function initPostHog(): void {
+export async function initPostHog(): Promise<void> {
   if (ready) return;
   const key = import.meta.env.VITE_POSTHOG_KEY as string | undefined;
   if (!key) return;
-  const api_host =
-    (import.meta.env.VITE_POSTHOG_HOST as string | undefined) || POSTHOG_PROXY_HOST;
+  const envHost = import.meta.env.VITE_POSTHOG_HOST as string | undefined;
+  // Probe the proxy only when no env override forces a host (#342): a blocked
+  // proxy (shipboard SNI filter) silently drops every event, so ~1.5s of probe
+  // at boot buys working analytics for the whole session. `track()` calls in
+  // that window no-op via the existing `ready` gate; the initial pageview is
+  // captured by posthog.init itself afterwards, so nothing user-visible waits.
+  const api_host = resolveIngestHost(envHost, envHost?.trim() ? true : await ingestHostAlive());
   try {
     posthog.init(key, { api_host, ...POSTHOG_INIT_OPTIONS });
     ready = true;

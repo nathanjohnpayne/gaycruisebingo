@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import UpdatePrompt from './UpdatePrompt';
@@ -160,5 +160,36 @@ describe('UpdatePrompt', () => {
     swState.capturedOptions?.onRegisteredSW?.('/sw.js', undefined);
     expect(setIntervalSpy).not.toHaveBeenCalled();
     setIntervalSpy.mockRestore();
+  });
+
+  it('force-activates a waiting SW without offering the banner when the running build is below the served floor (#342)', async () => {
+    swState.initialNeedRefresh = true;
+    // Served floor far in the future ⇒ the test build's __BUILD_STAMP__ is below it.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ floor: '2999-01-01T00:00:00.000Z' }),
+      } as unknown as Response),
+    );
+    render(<UpdatePrompt />);
+    await waitFor(() => expect(swState.updateServiceWorker).toHaveBeenCalledWith(true));
+    // No offer, no body class — the stale client reloads instead of being asked.
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(document.body.classList.contains(VISIBLE_CLASS)).toBe(false);
+  });
+
+  it('keeps the normal offer when the served floor is inert (older than the build) (#342)', async () => {
+    swState.initialNeedRefresh = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ floor: '1970-01-01T00:00:00.000Z' }),
+      } as unknown as Response),
+    );
+    render(<UpdatePrompt />);
+    expect(await screen.findByRole('status')).toHaveTextContent(/fresh build just docked/i);
+    expect(swState.updateServiceWorker).not.toHaveBeenCalled();
   });
 });
