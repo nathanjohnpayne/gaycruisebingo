@@ -68,16 +68,27 @@ describe('canonicalOriginAlive (#340 — never navigate INTO an outage/blocked o
     expect(FALLBACK_AUTH_DOMAIN).toBe('gaycruisebingo.firebaseapp.com');
   });
 
-  it('probes without a signal when AbortSignal.timeout is unsupported (older WebViews) instead of failing closed', async () => {
+  it('uses an AbortController timeout when AbortSignal.timeout is unsupported (older WebViews)', async () => {
     const original = AbortSignal.timeout;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simulating a browser without the API
     (AbortSignal as any).timeout = undefined;
+    vi.useFakeTimers();
     try {
-      const fetchImpl = vi.fn().mockResolvedValue({ type: 'opaque' } as Response);
-      await expect(canonicalOriginAlive(fetchImpl as unknown as typeof fetch)).resolves.toBe(true);
+      const fetchImpl = vi.fn(
+        (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () =>
+              reject(init.signal?.reason ?? new DOMException('AbortError', 'AbortError')),
+            );
+          }),
+      );
+      const result = canonicalOriginAlive(fetchImpl as unknown as typeof fetch, 25);
+      await vi.advanceTimersByTimeAsync(25);
+      await expect(result).resolves.toBe(false);
       const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-      expect(init.signal).toBeUndefined();
+      expect(init.signal).toBeInstanceOf(AbortSignal);
     } finally {
+      vi.useRealTimers();
       AbortSignal.timeout = original;
     }
   });

@@ -178,8 +178,9 @@ describe('AuthContext deal-error hardening', () => {
 
     let signIn!: () => Promise<void>;
     function Capture() {
-      ({ signIn } = useAuth());
-      return null;
+      const auth = useAuth();
+      signIn = auth.signIn;
+      return <span data-testid="sign-in-ready">{auth.signInReady ? 'ready' : 'pending'}</span>;
     }
     render(
       <AuthProvider>
@@ -187,6 +188,7 @@ describe('AuthContext deal-error hardening', () => {
       </AuthProvider>,
     );
 
+    await waitFor(() => expect(screen.getByTestId('sign-in-ready')).toHaveTextContent('ready'));
     await signIn();
 
     // Alias origin → send the player to the canonical origin to sign in there,
@@ -218,8 +220,9 @@ describe('AuthContext deal-error hardening', () => {
 
     let signIn!: () => Promise<void>;
     function Capture() {
-      ({ signIn } = useAuth());
-      return null;
+      const auth = useAuth();
+      signIn = auth.signIn;
+      return <span data-testid="sign-in-ready">{auth.signInReady ? 'ready' : 'pending'}</span>;
     }
     render(
       <AuthProvider>
@@ -227,6 +230,7 @@ describe('AuthContext deal-error hardening', () => {
       </AuthProvider>,
     );
 
+    await waitFor(() => expect(screen.getByTestId('sign-in-ready')).toHaveTextContent('ready'));
     await signIn();
 
     // Never navigate the player INTO the outage…
