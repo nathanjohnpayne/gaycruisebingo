@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -148,6 +148,18 @@ describe('local bug-report export', () => {
     expect(summary.exported).toEqual([]);
   });
 
+  it('fails closed on malformed durable ledger JSON instead of re-exporting duplicates', async () => {
+    await writeFile(path.join(root, LEDGER), '{"reportId":"report_123"\n');
+    await expect(exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root })).rejects.toThrow('invalid JSON');
+    await expect(stat(path.join(root, 'inbox/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails closed on incomplete durable ledger entries instead of treating reportId alone as a receipt', async () => {
+    await writeFile(path.join(root, LEDGER), `${JSON.stringify({ reportId: 'report_123' })}\n`);
+    await expect(exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root })).rejects.toThrow('invalid ledger fields');
+    await expect(stat(path.join(root, 'inbox/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('archive records the import in the committed ledger, which then dedupes even after the imported/ tree is wiped', async () => {
     await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
     await archiveReport({ reportId: 'report_123', issueUrl: ISSUE_200, root, now: new Date('2026-07-10T00:00:00Z') });
@@ -159,6 +171,21 @@ describe('local bug-report export', () => {
     await rm(path.join(root, 'imported'), { recursive: true, force: true });
     const rerun = await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
     expect(rerun.skipped).toEqual(['report_123']);
+  });
+
+  it('keeps an archived report retryable in the inbox if the durable ledger append fails', async () => {
+    await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
+    await mkdir(path.join(root, LEDGER));
+
+    await expect(archiveReport({
+      reportId: 'report_123',
+      issueUrl: ISSUE_200,
+      root,
+      now: new Date('2026-07-10T00:00:00Z'),
+    })).rejects.toThrow();
+
+    await expect(stat(path.join(root, 'inbox/report_123'))).resolves.toBeDefined();
+    await expect(stat(path.join(root, 'imported/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('ledger append is idempotent and self-heals a pre-ledger import on re-archive', async () => {
