@@ -1,3 +1,4 @@
+import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -345,6 +346,45 @@ describe('ProofSheet — each capture type produces a valid submit and closes', 
       expect(revokeSpy).toHaveBeenCalledWith('blob:mock-0');
       expect(revokeSpy).toHaveBeenCalledTimes(1);
       expect(container.querySelector('img.preview')).toHaveAttribute('src', 'blob:mock-1');
+    } finally {
+      globalThis.URL.createObjectURL = origCreate;
+    }
+  });
+
+  it('under React.StrictMode, re-selecting a photo leaks no object URL (dev double-invoke of the setter must not orphan a blob: URL — Codex P3, #330)', async () => {
+    // StrictMode double-invokes state updaters in dev, so a createObjectURL
+    // INSIDE the updater would mint a second, unstored URL that never gets
+    // revoked. Track every created vs revoked URL: after a retake, every
+    // created URL must be either revoked OR the one currently shown — nothing
+    // orphaned.
+    const user = userEvent.setup();
+    const origCreate = globalThis.URL.createObjectURL;
+    const created: string[] = [];
+    let n = 0;
+    (globalThis.URL as unknown as { createObjectURL: (b: Blob) => string }).createObjectURL = () => {
+      const u = `blob:mock-${n++}`;
+      created.push(u);
+      return u;
+    };
+    const revokeSpy = globalThis.URL.revokeObjectURL as unknown as ReturnType<typeof vi.fn>;
+    try {
+      const props = baseProps();
+      const { container } = render(
+        <StrictMode>
+          <ProofSheet {...props} />
+        </StrictMode>,
+      );
+
+      await user.click(screen.getByRole('button', { name: /photo/i }));
+      const input = () => container.querySelector('input[type="file"]') as HTMLInputElement;
+
+      await user.upload(input(), new File(['a'], 'a.jpg', { type: 'image/jpeg' }));
+      await user.upload(input(), new File(['b'], 'b.jpg', { type: 'image/jpeg' }));
+
+      const shown = container.querySelector('img.preview')?.getAttribute('src');
+      const revoked = new Set(revokeSpy.mock.calls.map((c) => c[0] as string));
+      const orphaned = created.filter((u) => u !== shown && !revoked.has(u));
+      expect(orphaned).toEqual([]);
     } finally {
       globalThis.URL.createObjectURL = origCreate;
     }

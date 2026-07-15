@@ -106,13 +106,18 @@ export default function ProofSheet(props: Props) {
     const f = e.target.files?.[0];
     if (!f) return;
     setPhoto(f);
-    // Revoke the prior object URL before minting the next one, mirroring the
-    // audio path's re-record revoke (#295): retaking a photo, or switching
-    // 📷 Take photo ↔ 🖼️ Library, otherwise orphans the previous blob: URL for
-    // the page's lifetime — a real leak of full-size image blobs on mobile.
+    // Mint the new object URL OUTSIDE the updater — exactly once — then revoke
+    // the prior one inside it. Same shape as the audio path (#295: create in
+    // onstop, revoke in the setter). Keeping createObjectURL out of the updater
+    // matters under React.StrictMode (src/main.tsx), which double-invokes state
+    // updaters in dev: a create inside would mint a second, unstored blob: URL
+    // that never gets revoked — leaking the very thing this fixes (Codex P3,
+    // PR #330). The revoke stays inside and is idempotent: a StrictMode double
+    // call revokes the same prior URL twice, which is a harmless no-op.
+    const nextUrl = URL.createObjectURL(f);
     setPhotoUrl((prev) => {
       if (prev) URL.revokeObjectURL(prev);
-      return URL.createObjectURL(f);
+      return nextUrl;
     });
     setPhotoSource(source);
   };
