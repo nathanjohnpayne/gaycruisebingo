@@ -1130,7 +1130,14 @@ a {
 }
 .photo-affordance {
   flex: 1;
-  min-width: 120px;
+  /* max-content, not a fixed floor (#292): `flex: 1` resolves to basis 0, so a
+     120px floor let a pill shrink BELOW its one-line label width and the
+     label broke mid-text ("TAKE" / "PHOTO"). A max-content floor keeps each
+     pill at least as wide as its unwrapped label; when the pair genuinely
+     cannot share the row, the container's flex-wrap stacks whole pills
+     instead of wrapping words inside one. */
+  min-width: max-content;
+  white-space: nowrap;
   text-align: center;
   cursor: pointer;
 }
