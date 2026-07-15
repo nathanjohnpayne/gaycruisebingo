@@ -40,6 +40,11 @@ const PROOF = 'proof1';
 // satisfies both Storage and Firestore, not two independently-chosen strings.
 const photoPath = `proofs/${EVENT}/${OWNER}/${PROOF}.jpg`;
 const audioPath = `proofs/${EVENT}/${OWNER}/${PROOF}.webm`;
+// #295: iOS Safari's MediaRecorder records MP4/AAC, not WebM — uploadProofMedia
+// names that clip `.m4a` (Content-Type `audio/mp4`) instead of `.webm`.
+// `okAudio()` gates on contentType alone, so this path exercises the SAME rule
+// under the extension a Safari upload actually produces.
+const audioPathM4a = `proofs/${EVENT}/${OWNER}/${PROOF}.m4a`;
 const avatarPath = (uid: string) => `avatars/${uid}.jpg`;
 
 // A byte payload of an exact size, so request.resource.size hits the rule caps.
@@ -47,6 +52,7 @@ const sized = (mb: number) => new Uint8Array(Math.round(mb * 1024 * 1024));
 const TINY = new Uint8Array(64);
 const IMAGE = { contentType: 'image/jpeg' };
 const AUDIO = { contentType: 'audio/webm' };
+const AUDIO_MP4 = { contentType: 'audio/mp4' };
 
 let testEnv: RulesTestEnvironment;
 
@@ -96,6 +102,16 @@ describe('storage.rules — okImage / okAudio upload caps (ADR 0004)', () => {
     const owner = testEnv.authenticatedContext(OWNER);
     await assertSucceeds(put(owner, audioPath, sized(11), AUDIO));
     await assertFails(put(owner, audioPath, sized(13), AUDIO));
+  });
+
+  it('#295: applies the SAME okAudio() cap to a Safari-recorded .m4a/audio-mp4 clip', async () => {
+    // okAudio() gates on request.resource.contentType.matches('audio/.*'), not
+    // the object's filename — an .m4a object with Content-Type audio/mp4 (what
+    // uploadProofMedia() writes for iOS Safari's MP4/AAC recording) is checked
+    // by the exact same rule as a .webm/audio-webm object, not a separate path.
+    const owner = testEnv.authenticatedContext(OWNER);
+    await assertSucceeds(put(owner, audioPathM4a, sized(11), AUDIO_MP4));
+    await assertFails(put(owner, audioPathM4a, sized(13), AUDIO_MP4));
   });
 
   it('denies an over-cap image CREATE on a brand-new path, not just an update', async () => {
@@ -253,6 +269,20 @@ describe('Storage ↔ Firestore Proof pinning (lockstep)', () => {
       setDoc(
         doc(owner.firestore(), `events/${EVENT}/proofs/${PROOF}`),
         proofDoc('audio', audioPath, mediaURL('webm')),
+      ),
+    );
+  });
+
+  it('#295: accepts the same .m4a audio object (Safari MP4/AAC recording) in Storage and Firestore', async () => {
+    // The SAME lockstep proof as the .webm case above, for the extension
+    // uploadProofMedia() actually names a Safari-recorded clip — proving the
+    // Firestore create rule's audio pin isn't hardcoded to .webm alone.
+    const owner = testEnv.authenticatedContext(OWNER);
+    await assertSucceeds(put(owner, audioPathM4a, TINY, AUDIO_MP4));
+    await assertSucceeds(
+      setDoc(
+        doc(owner.firestore(), `events/${EVENT}/proofs/${PROOF}`),
+        proofDoc('audio', audioPathM4a, mediaURL('m4a')),
       ),
     );
   });

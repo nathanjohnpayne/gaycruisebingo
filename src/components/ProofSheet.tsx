@@ -6,6 +6,31 @@ import { markSquareOccurred } from '../hooks/useToastStack';
 import { safeMediaUrl } from './safeMediaUrl';
 import type { Cell, ClaimMode, ProofType } from '../types';
 
+// iOS Safari's MediaRecorder cannot produce WebM at all — it records MP4/AAC.
+// The pre-#295 code always let the browser pick a default (`new
+// MediaRecorder(stream)`, no mimeType) and then hardcoded the resulting Blob
+// as `'audio/webm'` regardless of what was actually recorded. On Safari that
+// mislabeled an MP4/AAC clip as WebM, so the local preview `<audio>` couldn't
+// decode it (an unplayable "Error" state) — and the SAME mislabeled blob still
+// uploaded to the Feed. Prefer WebM/Opus where the platform genuinely supports
+// it (most browsers), falling through to MP4/AAC for Safari.
+const AUDIO_MIME_CANDIDATES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/mp4;codecs=mp4a.40.2',
+  'audio/mp4',
+];
+
+// `MediaRecorder.isTypeSupported` is guarded (not every implementation has
+// it) — when absent, no mimeType is passed and the browser's own default
+// applies untouched, exactly like the pre-#295 behavior.
+function pickAudioMimeType(): string | undefined {
+  if (typeof MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
+    return undefined;
+  }
+  return AUDIO_MIME_CANDIDATES.find((candidate) => MediaRecorder.isTypeSupported(candidate));
+}
+
 interface Props {
   uid: string;
   displayName: string;
@@ -65,6 +90,12 @@ export default function ProofSheet(props: Props) {
   const [photoSource, setPhotoSource] = useState<'camera' | 'library' | null>(null);
   const [audio, setAudio] = useState<Blob | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  // Empty-clip guard (#295): set when a recording stops with no playable
+  // data — e.g. a near-instant tap, or a platform quirk that never fired
+  // `ondataavailable`. `audio` stays null in that case, so the `valid` gate
+  // below keeps "Mark it" disabled — an empty/unplayable clip never reaches
+  // the Feed.
+  const [audioError, setAudioError] = useState(false);
   const [text, setText] = useState('');
   const [recording, setRecording] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -82,16 +113,39 @@ export default function ProofSheet(props: Props) {
   const startRec = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
+      // Ask for a Safari-playable format when the platform can tell us it
+      // supports one; `mimeType` also seeds the blob-type fallback below for
+      // a MediaRecorder that reports no `.mimeType` of its own.
+      const mimeType = pickAudioMimeType();
+      const rec = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       chunksRef.current = [];
+      setAudioError(false);
       rec.ondataavailable = (ev) => {
         if (ev.data.size) chunksRef.current.push(ev.data);
       };
       rec.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+        stream.getTracks().forEach((t) => t.stop());
+        if (chunksRef.current.length === 0) {
+          setAudioError(true);
+          setAudio(null);
+          setAudioUrl(null);
+          return;
+        }
+        // The recorder's ACTUAL reported mimeType — never a hardcoded
+        // 'audio/webm' — so the Blob's `type` matches what was truly
+        // recorded (Safari reports 'audio/mp4', not 'audio/webm'). Falls
+        // back to the requested candidate, then a generic default, for a
+        // MediaRecorder that reports no mimeType of its own.
+        const blobType = rec.mimeType || mimeType || 'audio/webm';
+        const blob = new Blob(chunksRef.current, { type: blobType });
+        if (blob.size === 0) {
+          setAudioError(true);
+          setAudio(null);
+          setAudioUrl(null);
+          return;
+        }
         setAudio(blob);
         setAudioUrl(URL.createObjectURL(blob));
-        stream.getTracks().forEach((t) => t.stop());
       };
       recRef.current = rec;
       rec.start();
@@ -276,6 +330,14 @@ export default function ProofSheet(props: Props) {
               <button className="btn primary" onClick={stopRec}>
                 ■ Stop
               </button>
+            )}
+            {/* Empty-clip guard (#295): no captured audio survives an error
+                state, so "Mark it" stays disabled via the `valid` gate below —
+                this just tells the Player why and points at the fix. */}
+            {audioError && (
+              <p className="muted audio-error" role="alert">
+                That recording came out empty—tap Record to try again.
+              </p>
             )}
             {safeAudioSrc && <audio className="preview" controls src={safeAudioSrc} />}
           </div>

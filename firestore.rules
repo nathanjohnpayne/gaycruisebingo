@@ -389,16 +389,18 @@ service cloud.firestore {
           && request.resource.data.thumbURL == null
           // Proof media must be the EXACT Storage object named after this proof's
           // OWN doc id — proofs/{eventId}/{uid}/{proofId}.{ext} — which is what
-          // uploadProofMedia() writes (jpg for photo, webm for audio) and what
-          // moderateProof() scans. Pinning to the exact object (not just the
-          // uploader's folder) stops a client from setting storagePath to one
-          // object and mediaURL to a DIFFERENT, unscanned object in their folder
-          // (e.g. an unscanned .png) to bypass the Storage size/content-type rules
-          // and the moderateProof Vision scan. The client-supplied mediaURL must be
-          // the getDownloadURL for that same object. Text proofs carry no media.
-          // Residual gap (not expressible here): rules can't confirm the object
-          // actually exists or that the URL token is valid, and this pins the
-          // standard getDownloadURL host (firebasestorage.googleapis.com); the
+          // uploadProofMedia() writes (jpg for photo; webm OR m4a for audio,
+          // matching whatever the recording browser's MediaRecorder actually
+          // produced — iOS Safari records MP4/AAC, not WebM, #295) and what
+          // moderateProof() scans (photos only). Pinning to the exact object (not
+          // just the uploader's folder) stops a client from setting storagePath to
+          // one object and mediaURL to a DIFFERENT, unscanned object in their
+          // folder (e.g. an unscanned .png) to bypass the Storage size/content-type
+          // rules and the moderateProof Vision scan. The client-supplied mediaURL
+          // must be the getDownloadURL for that same object. Text proofs carry no
+          // media. Residual gap (not expressible here): rules can't confirm the
+          // object actually exists or that the URL token is valid, and this pins
+          // the standard getDownloadURL host (firebasestorage.googleapis.com); the
           // Storage rules + moderation trigger cover the object side.
           && (
                (request.resource.data.type == 'text'
@@ -411,9 +413,18 @@ service cloud.firestore {
                  && request.resource.data.mediaURL.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F' + proofId + '[.]jpg([?].*)?$'))
                ||
                (request.resource.data.type == 'audio'
-                 && request.resource.data.storagePath == 'proofs/' + eventId + '/' + request.auth.uid + '/' + proofId + '.webm'
-                 && request.resource.data.mediaURL is string
-                 && request.resource.data.mediaURL.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F' + proofId + '[.]webm([?].*)?$'))
+                 && (
+                      (request.resource.data.storagePath == 'proofs/' + eventId + '/' + request.auth.uid + '/' + proofId + '.webm'
+                        && request.resource.data.mediaURL is string
+                        && request.resource.data.mediaURL.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F' + proofId + '[.]webm([?].*)?$'))
+                      ||
+                      // #295: iOS Safari's MediaRecorder produces MP4/AAC, so
+                      // uploadProofMedia() names that object `.m4a` — accept the
+                      // SAME exact-pin shape for it, not just `.webm`.
+                      (request.resource.data.storagePath == 'proofs/' + eventId + '/' + request.auth.uid + '/' + proofId + '.m4a'
+                        && request.resource.data.mediaURL is string
+                        && request.resource.data.mediaURL.matches('^https://firebasestorage[.]googleapis[.]com/v0/b/[^/]+/o/proofs%2F' + eventId + '%2F' + request.auth.uid + '%2F' + proofId + '[.]m4a([?].*)?$'))
+                    ))
              );
         // Report = increment reportCount by 1 only (same as /items). `status` is
         // SERVER-AUTHORITATIVE for the community-hide transition (#43, ADR 0004

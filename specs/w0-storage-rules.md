@@ -16,6 +16,7 @@ Every claim below is asserted by `tests/rules/w0-storage-rules.test.ts` (layer: 
 - An owner uploading an 11 MB `audio/*` object to `proofs/{eventId}/{uid}/{proofId}.webm` is ALLOWED (`okAudio()` size cap `< 12 MB`).
 - The same owner uploading a 13 MB `audio/*` object is DENIED (over the 12 MB cap).
 - The 12 MB cap is enforced on the first create of a proof path too: an owner uploading a 13 MB `audio/*` object to a brand-new proof path is DENIED.
+- `okAudio()` gates on `contentType.matches('audio/.*')`, not the object's filename extension — a `.m4a` object with `Content-Type: audio/mp4` (what `uploadProofMedia` writes for a Safari-recorded MP4/AAC clip, #295) is subject to the exact same size cap as a `.webm` object; `storage.rules` needs no change to accept it.
 
 ## avatars/{uid}.jpg — owner-only, filename-pinned
 
@@ -39,7 +40,7 @@ Every claim below is asserted by `tests/rules/w0-storage-rules.test.ts` (layer: 
 
 ## Storage ↔ Firestore Proof pinning (lockstep cross-check)
 
-- For one `(eventId, uid, proofId)` triple, the exact object path the owner is allowed to write in Storage (`proofs/{eventId}/{uid}/{proofId}.jpg` for a photo, `.webm` for audio) is byte-identical to the `storagePath` the Firestore `proofs` create rule pins (`firestore.rules`), and a Firestore proof document carrying that `storagePath` plus its matching `mediaURL` is ALLOWED. Storage `okImage()`/`okAudio()` and the Firestore create regex therefore accept the same Proof object, so `storage.rules` needs no tightening.
+- For one `(eventId, uid, proofId)` triple, the exact object path the owner is allowed to write in Storage (`proofs/{eventId}/{uid}/{proofId}.jpg` for a photo; `.webm` OR `.m4a` for audio, matching whichever `uploadProofMedia` actually names the clip, #295) is byte-identical to one of the `storagePath` shapes the Firestore `proofs` create rule pins (`firestore.rules`), and a Firestore proof document carrying that `storagePath` plus its matching `mediaURL` is ALLOWED. Storage `okImage()`/`okAudio()` and the Firestore create regex therefore accept the same Proof object under either audio extension, so `storage.rules` needs no tightening.
 - A mismatched object — one that satisfies Storage's owner/content-type check but is not named after the target `proofId` (for example `proofs/{eventId}/{uid}/not-{proofId}.jpg`) — is ALLOWED by Storage yet DENIED by the Firestore `proofs` create rule, proving the two rulesets diverge outside the exact pinned path rather than merely agreeing on it.
 
 ## Acceptance criteria

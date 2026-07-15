@@ -23,6 +23,21 @@ export async function downscaleImage(file: Blob, max = 1280, quality = 0.82): Pr
   }
 }
 
+// #295: iOS Safari's MediaRecorder records MP4/AAC, not WebM/Opus — the
+// uploaded object's extension AND Content-Type must match what was ACTUALLY
+// recorded (ProofSheet stamps the real recorder mimeType onto the Blob's own
+// `type`, never assumes one), or the Storage object mislabels a genuinely
+// playable clip and the Feed inherits the same "unplayable audio" bug the
+// local preview had. `storage.rules` already accepts any `audio/.*`
+// contentType (`okAudio()`), so only the extension/contentType MAPPING lives
+// here. Falls back to the pre-#295 webm default for an empty/unrecognized
+// type (an older MediaRecorder that reports no mimeType at all).
+function audioExtAndContentType(blobType: string): { ext: string; contentType: string } {
+  const base = blobType.split(';')[0].trim().toLowerCase();
+  if (base === 'audio/mp4' || base === 'audio/aac') return { ext: 'm4a', contentType: 'audio/mp4' };
+  return { ext: 'webm', contentType: 'audio/webm' };
+}
+
 export async function uploadProofMedia(
   uid: string,
   proofId: string,
@@ -45,8 +60,8 @@ export async function uploadProofMedia(
       throw new Error('uploadProofMedia: could not re-encode photo to strip EXIF/GPS');
     }
   }
-  const ext = kind === 'photo' ? 'jpg' : 'webm';
-  const contentType = kind === 'photo' ? 'image/jpeg' : 'audio/webm';
+  const { ext, contentType } =
+    kind === 'photo' ? { ext: 'jpg', contentType: 'image/jpeg' } : audioExtAndContentType(payload.type);
   const path = `proofs/${EVENT_ID}/${uid}/${proofId}.${ext}`;
   const r = ref(storage, path);
   await uploadBytes(r, payload, { contentType });
