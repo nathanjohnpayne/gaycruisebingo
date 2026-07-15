@@ -7,6 +7,7 @@ import Board from './components/Board';
 import Leaderboard from './components/Leaderboard';
 import ProofFeed from './components/ProofFeed';
 import More from './components/More';
+import { BugReportProvider } from './components/BugReport';
 import { TABS, FALLBACK_PATH, type TabId } from './components/tabs';
 import LoadingState from './components/LoadingState';
 
@@ -47,13 +48,19 @@ export default function App() {
     <div className="app">
       {/* The confirm-path Moment emitter (#41) is mounted in AuthProvider so it
           survives the attestation gate (Codex #116 R3 finding 2), not here. */}
-      <Nav />
-      <Routes>
-        {TABS.map((tab) => (
-          <Route key={tab.id} path={tab.path} element={pages[tab.id]} />
-        ))}
-        <Route path="*" element={<Navigate to={FALLBACK_PATH} replace />} />
-      </Routes>
+      {/* BugReportProvider hosts the report sheet + pick-a-screen bar at the
+          shell so the flow survives tab navigation; More's Support row is just
+          the launcher (#324, specs/w4-bug-report-inbox.md). Inside `.app` so
+          the surface stays under captureAppSurface()'s own exclusion marker. */}
+      <BugReportProvider>
+        <Nav />
+        <Routes>
+          {TABS.map((tab) => (
+            <Route key={tab.id} path={tab.path} element={pages[tab.id]} />
+          ))}
+          <Route path="*" element={<Navigate to={FALLBACK_PATH} replace />} />
+        </Routes>
+      </BugReportProvider>
     </div>
   );
 }

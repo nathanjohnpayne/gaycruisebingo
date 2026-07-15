@@ -51,6 +51,27 @@ describe('bug-report client diagnostics', () => {
     expect(input.route).toBe('/leaderboard');
   });
 
+  it('prefers the capture-time route over the submit-time pathname when one is passed (#324)', () => {
+    // Pick mode can capture one screen and submit from another; the report
+    // must be labeled with the screen the screenshot actually shows.
+    window.history.replaceState({}, '', '/more');
+    const input = buildBugReportInput({
+      description: 'A tile on my card is broken.',
+      screenshotDataUrl: 'data:image/png;base64,abc',
+      captureError: null,
+      route: '/',
+    });
+    expect(input.route).toBe('/');
+    expect(
+      buildBugReportInput({
+        description: 'A tile on my card is broken.',
+        screenshotDataUrl: 'data:image/png;base64,abc',
+        captureError: null,
+        route: `/${'x'.repeat(300)}`,
+      }).route,
+    ).toHaveLength(200);
+  });
+
   it('retries screenshot capture with Safari-safe media filtering after a full capture failure', async () => {
     const root = document.createElement('main');
     root.className = 'app';
