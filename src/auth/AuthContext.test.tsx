@@ -2,6 +2,9 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { AuthProvider, useAuth } from './AuthContext';
+// The mocked module instance (vi.mock below) — the fallback-handler test writes
+// a config slot onto it to observe the #340 authDomain override.
+import { auth as mockedAuth } from '../firebase';
 
 // Mock the Firebase boundary so the real AuthProvider runs under jsdom: the tests
 // drive the auth callback by hand and stub the data-layer deal.
@@ -160,7 +163,7 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.attestAdult).not.toHaveBeenCalled();
   });
 
-  it('redirects to the canonical origin instead of opening the popup when signing in from a Firebase alias origin (#162/#165)', async () => {
+  it('redirects to the canonical origin instead of opening the popup when signing in from a Firebase alias origin AND the canonical origin answers (#162/#165/#340)', async () => {
     const replace = vi.fn();
     vi.stubGlobal('location', {
       hostname: 'gaycruisebingo.web.app',
@@ -169,6 +172,9 @@ describe('AuthContext deal-error hardening', () => {
       hash: '',
       replace,
     });
+    // #340: the redirect is now gated on the canonical origin actually
+    // answering; a resolving no-cors probe is the healthy case.
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ type: 'opaque' } as Response));
 
     let signIn!: () => Promise<void>;
     function Capture() {
@@ -190,6 +196,47 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.signInWithPopup).not.toHaveBeenCalled();
     expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
 
+    vi.unstubAllGlobals();
+  });
+
+  it('signs in on the alias origin against the fallback handler when the canonical origin is unreachable (#340)', async () => {
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+    // The #340 incident shape: the probe's fetch rejects (TLS reset / filtered
+    // SNI / no network to the canonical origin).
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Load failed')));
+    // The mocked module-level `auth` is a bare object; give it the config slot
+    // the fallback branch writes through so the override is observable.
+    const authMock = mockedAuth as { config?: { authDomain?: string } };
+    authMock.config = { authDomain: 'gaycruisebingo.com' };
+
+    let signIn!: () => Promise<void>;
+    function Capture() {
+      ({ signIn } = useAuth());
+      return null;
+    }
+    render(
+      <AuthProvider>
+        <Capture />
+      </AuthProvider>,
+    );
+
+    await signIn();
+
+    // Never navigate the player INTO the outage…
+    expect(replace).not.toHaveBeenCalled();
+    // …instead the popup runs here, with the OAuth handler swapped to the
+    // Firebase-default domain the outage cannot take down.
+    expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
+    expect(authMock.config.authDomain).toBe('gaycruisebingo.firebaseapp.com');
+
+    delete authMock.config;
     vi.unstubAllGlobals();
   });
 });

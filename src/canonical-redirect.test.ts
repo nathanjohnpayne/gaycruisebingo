@@ -67,4 +67,18 @@ describe('canonicalOriginAlive (#340 — never navigate INTO an outage/blocked o
   it('exports the Firebase-default fallback auth domain for the outage sign-in path', () => {
     expect(FALLBACK_AUTH_DOMAIN).toBe('gaycruisebingo.firebaseapp.com');
   });
+
+  it('probes without a signal when AbortSignal.timeout is unsupported (older WebViews) instead of failing closed', async () => {
+    const original = AbortSignal.timeout;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simulating a browser without the API
+    (AbortSignal as any).timeout = undefined;
+    try {
+      const fetchImpl = vi.fn().mockResolvedValue({ type: 'opaque' } as Response);
+      await expect(canonicalOriginAlive(fetchImpl as unknown as typeof fetch)).resolves.toBe(true);
+      const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+      expect(init.signal).toBeUndefined();
+    } finally {
+      AbortSignal.timeout = original;
+    }
+  });
 });

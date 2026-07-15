@@ -667,8 +667,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // deliberately reintroduces the #162 cross-origin-handler edge (partitioned
       // in-app webviews) for the outage window only — strictly better than no
       // sign-in path at all. Reverts to same-origin canonical auth on the next
-      // sign-in once the apex answers again.
-      auth.config.authDomain = FALLBACK_AUTH_DOMAIN;
+      // sign-in once the apex answers again. Conditional (Codex P1 on #341): unit
+      // suites stub `auth` as a bare object, and a missing config just means the
+      // popup proceeds with whatever the SDK holds — same as before this branch.
+      if (auth.config) auth.config.authDomain = FALLBACK_AUTH_DOMAIN;
     }
     try {
       await signInWithPopup(auth, googleProvider);

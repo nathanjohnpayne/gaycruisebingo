@@ -58,13 +58,27 @@ export const FALLBACK_AUTH_DOMAIN = 'gaycruisebingo.firebaseapp.com';
  */
 export async function canonicalOriginAlive(
   fetchImpl: typeof fetch = fetch,
-  timeoutMs = 2500,
+  timeoutMs = 1200,
 ): Promise<boolean> {
+  // Feature-detected (Codex P2 on #341): older Safari/iOS WebViews lack
+  // AbortSignal.timeout, and an unconditional call would throw BEFORE fetch —
+  // the catch below would then misread a healthy canonical origin as down and
+  // push exactly the storage-partitioned webviews (#162's fragile clients)
+  // onto the cross-origin fallback handler. Without timeout support the probe
+  // runs uncapped: the observed failure mode (RST injection) rejects in
+  // milliseconds anyway, and the browser's own network timeout backstops it.
+  const signal = typeof AbortSignal.timeout === 'function' ? AbortSignal.timeout(timeoutMs) : undefined;
   try {
+    // 1200ms cap, not the previous 2500 (Codex P1 on #341): signIn awaits this
+    // probe INSIDE the tap's transient user activation, and a popup opened
+    // after the activation window lapses (~5s Chrome, tighter on Safari) is
+    // silently blocked. The cap bounds probe + popup comfortably inside that
+    // budget; a dead-by-RST origin (the #340 filter) rejects near-instantly,
+    // so the ceiling only bites on silent blackholing.
     await fetchImpl(`https://${CANONICAL_HOST}/favicon.svg?alive=${Date.now()}`, {
       mode: 'no-cors',
       cache: 'no-store',
-      signal: AbortSignal.timeout(timeoutMs),
+      signal,
     });
     return true;
   } catch {
