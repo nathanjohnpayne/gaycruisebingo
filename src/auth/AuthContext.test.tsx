@@ -1,7 +1,7 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AuthProvider, useAuth } from './AuthContext';
+import { AuthProvider, SIGN_IN_CANONICAL_HEALTH_TTL_MS, useAuth } from './AuthContext';
 // The mocked module instance (vi.mock below) — the fallback-handler test writes
 // a config slot onto it to observe the #340 authDomain override.
 import { auth as mockedAuth } from '../firebase';
@@ -241,6 +241,57 @@ describe('AuthContext deal-error hardening', () => {
     expect(authMock.config.authDomain).toBe('gaycruisebingo.firebaseapp.com');
 
     delete authMock.config;
+    vi.unstubAllGlobals();
+  });
+
+  it('refreshes alias-origin health before sign-in so a stale healthy probe cannot redirect into a later outage (#341)', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce({ type: 'opaque' } as Response)
+      .mockRejectedValueOnce(new TypeError('Load failed'));
+    vi.stubGlobal('fetch', fetch);
+    const authMock = mockedAuth as { config?: { authDomain?: string } };
+    authMock.config = { authDomain: 'gaycruisebingo.com' };
+
+    let signIn!: () => Promise<void>;
+    function Capture() {
+      const auth = useAuth();
+      signIn = auth.signIn;
+      return <span data-testid="sign-in-ready">{auth.signInReady ? 'ready' : 'pending'}</span>;
+    }
+    render(
+      <AuthProvider>
+        <Capture />
+      </AuthProvider>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId('sign-in-ready')).toHaveTextContent('ready');
+
+    await vi.advanceTimersByTimeAsync(SIGN_IN_CANONICAL_HEALTH_TTL_MS);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await signIn();
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(replace).not.toHaveBeenCalled();
+    expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
+    expect(authMock.config.authDomain).toBe('gaycruisebingo.firebaseapp.com');
+
+    delete authMock.config;
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 });

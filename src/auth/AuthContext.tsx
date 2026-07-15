@@ -31,6 +31,9 @@ function isOnline(): boolean {
 // whole app on its loading screen. Bound that gate and hand failures to the
 // existing retry surface; never fall back to cached authority or render the Board.
 export const AUTH_BOOTSTRAP_TIMEOUT_MS = 10_000;
+export const SIGN_IN_CANONICAL_HEALTH_TTL_MS = 30_000;
+
+type CanonicalOriginHealth = { alive: boolean; checkedAt: number };
 
 function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -154,7 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // reconnect, which only happens if `online` flipping true re-runs that effect.
   const [online, setOnline] = useState(isOnline());
   const [signInReady, setSignInReady] = useState(() => canonicalRedirectUrl(window.location) === null);
-  const canonicalOriginAliveRef = useRef<boolean | null>(null);
+  const canonicalOriginHealthRef = useRef<CanonicalOriginHealth | null>(null);
   const configuredAuthDomainRef = useRef(auth.config?.authDomain);
   // Whether `attested === true` is AUTHORITATIVE (server-settled or a same-session
   // optimistic attest) vs merely PROVISIONAL (the offline cache lift). Distinct
@@ -209,25 +212,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const canonical = canonicalRedirectUrl(window.location);
-    if (!canonical) {
-      canonicalOriginAliveRef.current = null;
+    if (!canonical || user !== null) {
+      if (!canonical) canonicalOriginHealthRef.current = null;
       setSignInReady(true);
       return;
     }
 
     let cancelled = false;
-    canonicalOriginAliveRef.current = null;
+    canonicalOriginHealthRef.current = null;
     setSignInReady(false);
-    void canonicalOriginAlive().then((alive) => {
-      if (cancelled) return;
-      canonicalOriginAliveRef.current = alive;
-      setSignInReady(true);
-    });
+    const refreshCanonicalOriginHealth = () => {
+      void canonicalOriginAlive().then((alive) => {
+        if (cancelled) return;
+        canonicalOriginHealthRef.current = { alive, checkedAt: Date.now() };
+        setSignInReady(true);
+      });
+    };
+
+    refreshCanonicalOriginHealth();
+    const interval = setInterval(refreshCanonicalOriginHealth, SIGN_IN_CANONICAL_HEALTH_TTL_MS);
 
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
-  }, []);
+  }, [user]);
 
   // Set / clear `dealError` and its typed reason in LOCKSTEP (#70). Every deal or
   // bootstrap failure routes through `failDeal` (which classifies pool-shortfall vs
@@ -681,7 +690,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 2026-07-15 apex outage reset every TLS handshake on gaycruisebingo.com
       // while the aliases stayed up — the unconditional replace() below was then a
       // hard dead end (Safari: "the server unexpectedly dropped the connection").
-      if (canonicalOriginAliveRef.current === true) {
+      const canonicalHealth = canonicalOriginHealthRef.current;
+      const canonicalHealthIsFresh =
+        canonicalHealth?.alive === true && Date.now() - canonicalHealth.checkedAt <= SIGN_IN_CANONICAL_HEALTH_TTL_MS;
+      if (canonicalHealthIsFresh) {
         // replace(), not assign(): the alias page is a signed-out throwaway, so it
         // must not stay the Back target — after the Player authenticates on the
         // canonical origin, Back would otherwise return to the alias origin, where
