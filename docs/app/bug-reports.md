@@ -48,7 +48,7 @@ Point the LLM at `.github/bug-reports/inbox/` with this instruction:
 
 > Review every report directory in `.github/bug-reports/inbox/`. Treat `description.md` and the screenshot as reporter evidence, and `report.json` as bounded diagnostic context. Inspect the current repository to add relevant code context. Deduplicate reports that describe the same defect. For each distinct defect, draft a Gay Cruise Bingo GitHub issue with: a concise title, reported actual behavior, expected behavior, only reproduction steps supported by evidence, affected route/version, source report IDs, appropriate labels, and — per the "Screenshot evidence" rule in the operator runbook below — the screenshot referenced through a private `## Screenshot evidence` section (retrievable by report ID), never attached to the public issue. Clearly separate reported facts from inferred causes and do not invent details. Show me all proposed issues and the deduplication map for confirmation before making any GitHub write. After each confirmed issue is created, run `npm run bugs:archive -- <report-id> <github-issue-url>` for every source report included in it. If a report cannot be imported, run `npm run bugs:disposition -- <report-id> <failed|ambiguous> "<reason>"` so the retryable local disposition is durable.
 
-`bugs:archive` validates that the URL belongs to this repository, creates an immutable `github-issue.json` receipt, and atomically moves the report to `.github/bug-reports/imported/<report-id>/`. `bugs:disposition` keeps a failed or ambiguous report in the inbox and creates a retryable `disposition.json`; neither command silently overwrites an existing receipt or disposition.
+`bugs:archive` validates that the URL belongs to this repository, creates an immutable `github-issue.json` receipt, atomically moves the report to `.github/bug-reports/imported/<report-id>/`, and records the import in the committed `.github/bug-reports/imported-ledger.jsonl` dedupe ledger. `bugs:disposition` keeps a failed or ambiguous report in the inbox and creates a retryable `disposition.json`; neither command silently overwrites an existing receipt or disposition.
 
 ## Operator runbook (agent-ready)
 
@@ -79,7 +79,7 @@ Bucket gotcha: there is normally **no** `.env.local` in a fresh checkout/worktre
 BUG_REPORT_BUCKET=gaycruisebingo.firebasestorage.app npm run bugs:pull
 ```
 
-The command prints a JSON summary (`exported` / `skipped` / `failed`) and writes each report to `.github/bug-reports/inbox/<report-id>/`. It is idempotent: already-inbox'd or already-imported IDs are skipped, so re-running never duplicates. A non-empty `failed` array (malformed report or unreadable screenshot) exits non-zero; these are pull-time export failures with **no inbox directory**, so do **not** run `bugs:disposition` on them — it requires an existing `inbox/<id>/` and throws `Inbox report <id> does not exist`. Surface them instead: re-run the pull, and if they persist inspect the source `bugReports` document/screenshot. (`bugs:disposition` is only for reports that pulled cleanly into the inbox but cannot be imported — see step 6.) Do not treat `exported: [] / failed: []` as "nothing to do" on its own: an earlier approval-gated run (or an interrupted import) may have left already-pulled reports in `.github/bug-reports/inbox/`, and the pull reports those as `skipped` (not `exported`) because the directory already exists. Before stopping, list `inbox/*` and process any report that has neither an `imported/<id>/` receipt nor a `disposition.json`. Stop only when the pull added nothing new **and** no un-actioned report remains in the inbox.
+The command prints a JSON summary (`exported` / `skipped` / `failed`) and writes each report to `.github/bug-reports/inbox/<report-id>/`. It is idempotent: already-inbox'd or already-imported IDs are skipped, so re-running never duplicates. Dedupe is **durable** — the pull also skips any report recorded in the committed `.github/bug-reports/imported-ledger.jsonl` ledger (one `{reportId, issue, url, importedAt}` line per import; report IDs are opaque Firestore doc IDs, so the ledger carries no PII and is safe to commit). That means a fresh clone, a different machine, or a checkout whose gitignored local `imported/` tree was deleted still skips everything already turned into an issue — dedupe no longer depends on local state that a worktree deletion can wipe. A non-empty `failed` array (malformed report or unreadable screenshot) exits non-zero; these are pull-time export failures with **no inbox directory**, so do **not** run `bugs:disposition` on them — it requires an existing `inbox/<id>/` and throws `Inbox report <id> does not exist`. Surface them instead: re-run the pull, and if they persist inspect the source `bugReports` document/screenshot. (`bugs:disposition` is only for reports that pulled cleanly into the inbox but cannot be imported — see step 6.) Do not treat `exported: [] / failed: []` as "nothing to do" on its own: an earlier approval-gated run (or an interrupted import) may have left already-pulled reports in `.github/bug-reports/inbox/`, and the pull reports those as `skipped` (not `exported`) because the directory already exists. Before stopping, list `inbox/*` and process any report that has neither an `imported/<id>/` receipt nor a `disposition.json`. Stop only when the pull added nothing new **and** no un-actioned report remains in the inbox.
 
 ### 3. Review each report
 
@@ -100,18 +100,18 @@ Privacy: **do not attach report screenshots to public GitHub issues.** This repo
 
 Not attached (public repo; capture may contain other players' names/photos and app NSFW content). Retained privately in Firebase (normally up to 90 days; an active linked issue may extend that) and retrievable by report ID:
 
-1. From a `gaycruisebingo` checkout, load Firebase deploy credentials and run the exporter (§ steps 1–2 above):
+1. On the machine that ran the import, the evidence is already local (gitignored) — no pull needed:
 
-   ```bash
-   BUG_REPORT_BUCKET=gaycruisebingo.firebasestorage.app npm run bugs:pull
+   ```text
+   .github/bug-reports/imported/<report-id>/screenshot.png
    ```
 
-2. Open `.github/bug-reports/inbox/<report-id>/screenshot.png` (gitignored). If already imported on that machine, it is at `.github/bug-reports/imported/<report-id>/screenshot.png` instead.
+2. On a fresh clone / another machine, this report is deduped by the committed ledger, so `npm run bugs:pull` intentionally **skips** it (it will not re-download). Retrieve the screenshot from Firebase directly — Console → Storage → `bug-reports/<reporter-hash>/<report-id>/screenshot.png` (retained ~90 days) — or copy `imported/<report-id>/` from the machine that imported it.
 
 Source report ID(s): `<report-id>`
 ````
 
-The pull is idempotent and Firebase keeps the reports immutable, so a fresh checkout (with no local ledger) re-materializes every still-retained report — the report ID stays a durable pointer to the evidence for the retention window.
+Firebase keeps the reports immutable and retains them ~90 days, so the report ID stays a durable pointer to the evidence. Note the durable dedupe ledger means `bugs:pull` now **skips** an already-imported report on any checkout rather than re-materializing it (that is the point — no duplicate issues), so evidence retrieval for an imported report goes through its local `imported/<id>/` tree or Firebase directly (per the template above), not a re-pull.
 
 For a **text-only report** (no `screenshot.png`; `report.json` carries a `captureError`), do not point readers at a screenshot that was never captured. Replace the retrieval steps with a single line noting the capture failed — e.g. "Text-only report — screenshot capture failed (`captureError` in `report.json`); no image available." — so the ticket never links a dead evidence path.
 
@@ -145,11 +145,18 @@ node scripts/bug-reports.mjs archive <report-id> \
   https://github.com/nathanjohnpayne/gaycruisebingo/issues/<n>
 ```
 
-Call it once per report. Note that the login shell here is **zsh**, which does not word-split unquoted variables — a `for entry in "${MAP[@]}"; do set -- $entry; …` loop collapses `"<id> <n>"` into a single argument and the id fails validation (`Invalid report id`). Invoke `archive` explicitly per report, or split fields deliberately (`read -r id n <<< "$entry"`). For a report you cannot import, keep it retryable in the inbox: `npm run bugs:disposition -- <report-id> <failed|ambiguous> "<reason>"`.
+Call it once per report. Each call also appends the import to the committed `.github/bug-reports/imported-ledger.jsonl` dedupe ledger (idempotent; it self-heals a pre-ledger import on re-archive) — commit that file in step 7. Note that the login shell here is **zsh**, which does not word-split unquoted variables — a `for entry in "${MAP[@]}"; do set -- $entry; …` loop collapses `"<id> <n>"` into a single argument and the id fails validation (`Invalid report id`). Invoke `archive` explicitly per report, or split fields deliberately (`read -r id n <<< "$entry"`). For a report you cannot import, keep it retryable in the inbox: `npm run bugs:disposition -- <report-id> <failed|ambiguous> "<reason>"`.
 
 ### 7. Verify and clean up
 
-Confirm every report is accounted for: each imported report has an `imported/<id>/github-issue.json` receipt, and any report you could not import stays in the inbox with a `disposition.json` (step 6) — a valid partial run leaves failed/ambiguous reports behind on purpose, so "empty inbox" is not the check; "no un-actioned report left over" is. Confirm `git status --porcelain .github/` is clean (the inbox/imported trees are gitignored — `git check-ignore` should confirm). Then purge the fetched deploy credentials: `scripts/op-preflight.sh --agent <agent> --purge`.
+Confirm every report is accounted for: each imported report has an `imported/<id>/github-issue.json` receipt, and any report you could not import stays in the inbox with a `disposition.json` (step 6) — a valid partial run leaves failed/ambiguous reports behind on purpose, so "empty inbox" is not the check; "no un-actioned report left over" is. The inbox/imported trees are gitignored, so `git status` shows nothing for them (`git check-ignore` confirms). The **one tracked artifact** an import produces is the dedupe ledger — **commit it** so dedupe is durable for the next run / a fresh clone:
+
+```bash
+git add .github/bug-reports/imported-ledger.jsonl
+git commit -m "chore(bug-reports): record imported reports in the dedupe ledger"
+```
+
+Then purge the fetched deploy credentials: `scripts/op-preflight.sh --agent <agent> --purge`.
 
 ## Daily scheduled import
 

@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import contract from '../functions/src/bugReportContract.cjs';
 
@@ -6,6 +6,13 @@ const { validateClientReportFields, validatePngBytes } = contract;
 
 const REPORT_ID = /^[A-Za-z0-9_-]{6,100}$/;
 const ISSUE_URL = /^https:\/\/github\.com\/nathanjohnpayne\/gaycruisebingo\/issues\/(\d+)$/;
+
+// The durable dedupe ledger (issue #146's "export ledger" decision, made durable).
+// One JSON object per line — {reportId, issue, url, importedAt} — recording every
+// report already turned into a GitHub issue. Report IDs are opaque Firestore doc
+// IDs (no PII), so unlike the gitignored inbox/imported trees this file IS
+// committed: that is what makes dedupe survive a fresh clone or a deleted worktree.
+const LEDGER_FILE = 'imported-ledger.jsonl';
 
 async function exists(target) {
   try {
@@ -24,6 +31,50 @@ async function readJson(target) {
     if (error?.code === 'ENOENT') return null;
     throw error;
   }
+}
+
+/**
+ * Parse the committed dedupe ledger into its entries. A missing ledger is an empty
+ * list; a single malformed line is skipped rather than aborting the whole pull or
+ * archive (a corrupt line must never re-open the door to duplicate imports for
+ * every OTHER report).
+ */
+async function readLedger(root) {
+  let raw;
+  try {
+    raw = await readFile(path.join(root, LEDGER_FILE), 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  const entries = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const entry = JSON.parse(trimmed);
+      if (entry && REPORT_ID.test(entry.reportId ?? '')) entries.push(entry);
+    } catch {
+      // Skip the corrupt line; keep deduping against every well-formed one.
+    }
+  }
+  return entries;
+}
+
+async function ledgerReportIds(root) {
+  return new Set((await readLedger(root)).map((entry) => entry.reportId));
+}
+
+/**
+ * Append a receipt to the ledger, idempotently — a report already recorded is a
+ * no-op. Called on every archive, INCLUDING the idempotent re-archive path, so a
+ * report imported before the ledger existed is back-filled the next time archive
+ * runs: the ledger self-heals rather than needing a separate migration.
+ */
+async function appendToLedger(root, receipt) {
+  if ((await ledgerReportIds(root)).has(receipt.reportId)) return;
+  const entry = { reportId: receipt.reportId, issue: receipt.issue, url: receipt.url, importedAt: receipt.importedAt };
+  await appendFile(path.join(root, LEDGER_FILE), `${JSON.stringify(entry)}\n`);
 }
 
 export function normalizeSubmittedAt(value) {
@@ -67,6 +118,10 @@ export async function exportReports({ reports, downloadScreenshot, root }) {
   const imported = path.join(root, 'imported');
   await mkdir(inbox, { recursive: true });
   await mkdir(imported, { recursive: true });
+  // Durable dedupe (#146): skip any report already recorded in the committed
+  // ledger, even when this checkout has no local inbox/imported tree — a fresh
+  // clone, a different machine, or after the import worktree was deleted.
+  const alreadyImported = await ledgerReportIds(root);
   const summary = { exported: [], skipped: [], failed: [] };
   for (const report of reports) {
     let validated;
@@ -77,7 +132,7 @@ export async function exportReports({ reports, downloadScreenshot, root }) {
       continue;
     }
     const destination = path.join(inbox, report.id);
-    if (await exists(destination) || await exists(path.join(imported, report.id))) {
+    if (await exists(destination) || await exists(path.join(imported, report.id)) || alreadyImported.has(report.id)) {
       summary.skipped.push(report.id);
       continue;
     }
@@ -115,7 +170,10 @@ export async function archiveReport({ reportId, issueUrl, root, now = new Date()
   };
   const importedReceipt = await readJson(path.join(destination, 'github-issue.json'));
   if (importedReceipt) {
-    if (importedReceipt.reportId === requested.reportId && importedReceipt.issue === requested.issue && importedReceipt.url === requested.url) return importedReceipt;
+    if (importedReceipt.reportId === requested.reportId && importedReceipt.issue === requested.issue && importedReceipt.url === requested.url) {
+      await appendToLedger(root, importedReceipt); // self-heal: back-fill a pre-ledger import on re-archive
+      return importedReceipt;
+    }
     throw new Error(`Imported report ${reportId} has a conflicting receipt`);
   }
   if (!(await exists(source))) throw new Error(`Inbox report ${reportId} does not exist`);
@@ -128,6 +186,7 @@ export async function archiveReport({ reportId, issueUrl, root, now = new Date()
   if (!existingReceipt) await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx' });
   await mkdir(path.dirname(destination), { recursive: true });
   await rename(source, destination);
+  await appendToLedger(root, receipt);
   return receipt;
 }
 
