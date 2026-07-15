@@ -12,6 +12,7 @@ import {
   POSTHOG_PROXY_HOST,
   POSTHOG_DIRECT_HOST,
   resolveIngestHost,
+  envHostBypassesProbe,
   ingestHostAlive,
   posthogReady,
   phCapture,
@@ -280,6 +281,37 @@ describe('PostHog init with a key', () => {
       expect.objectContaining({ api_host: 'https://us.i.posthog.com' }),
     );
   });
+
+  it('replays an identify that arrived during the init probe window (#342)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_test');
+    vi.stubEnv('VITE_POSTHOG_HOST', '');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ type: 'opaque' } as Response));
+    const ph = (await import('posthog-js')).default;
+    const mod = await import('./posthog');
+    const initSettled = mod.initPostHog();
+    // Firebase restores a cached signed-in user before the probe settles.
+    mod.phIdentify('sailor-9');
+    expect(ph.identify).not.toHaveBeenCalled();
+    await initSettled;
+    vi.unstubAllGlobals();
+    expect(ph.identify).toHaveBeenCalledWith('sailor-9');
+  });
+
+  it('a sign-out during the probe window clears the pending identity — never resurrected after init (#342)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_test');
+    vi.stubEnv('VITE_POSTHOG_HOST', '');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ type: 'opaque' } as Response));
+    const ph = (await import('posthog-js')).default;
+    const mod = await import('./posthog');
+    const initSettled = mod.initPostHog();
+    mod.phIdentify('sailor-9');
+    mod.phReset();
+    await initSettled;
+    vi.unstubAllGlobals();
+    expect(ph.identify).not.toHaveBeenCalled();
+  });
 });
 
 describe('ingest-host fallback (#342 — shipboard SNI filter blocked the proxy)', () => {
@@ -293,6 +325,16 @@ describe('ingest-host fallback (#342 — shipboard SNI filter blocked the proxy)
       expect(resolveIngestHost(envHost, true)).toBe(POSTHOG_PROXY_HOST);
       expect(resolveIngestHost(envHost, false)).toBe(POSTHOG_DIRECT_HOST);
     }
+  });
+
+  it('an override that merely restates the proxy (.env.example default) does NOT bypass the fallback', () => {
+    for (const envHost of [POSTHOG_PROXY_HOST, `${POSTHOG_PROXY_HOST}/`]) {
+      expect(envHostBypassesProbe(envHost)).toBe(false);
+      expect(resolveIngestHost(envHost, true)).toBe(POSTHOG_PROXY_HOST);
+      expect(resolveIngestHost(envHost, false)).toBe(POSTHOG_DIRECT_HOST);
+    }
+    expect(envHostBypassesProbe('https://eu.example.dev')).toBe(true);
+    expect(envHostBypassesProbe('')).toBe(false);
   });
 
   it('ingestHostAlive probes the proxy no-cors/no-store and maps resolve→true, reject→false', async () => {

@@ -94,8 +94,19 @@ export async function ingestHostAlive(
  */
 export function resolveIngestHost(envHost: string | undefined, proxyAlive: boolean): string {
   const override = envHost?.trim();
-  if (override) return override;
+  // An override that just restates the proxy is NOT a bypass (Codex P2 on
+  // #342): .env.example ships VITE_POSTHOG_HOST=<proxy>, so treating it as an
+  // unconditional winner would silently disable the outage fallback for every
+  // deploy built from a copied example env. Only a genuinely different host
+  // (the direct-US bypass contract) skips the probe.
+  if (override && override.replace(/\/+$/, '') !== POSTHOG_PROXY_HOST) return override;
   return proxyAlive ? POSTHOG_PROXY_HOST : POSTHOG_DIRECT_HOST;
+}
+
+/** True when this env override should skip the transport probe entirely. */
+export function envHostBypassesProbe(envHost: string | undefined): boolean {
+  const override = envHost?.trim();
+  return !!override && override.replace(/\/+$/, '') !== POSTHOG_PROXY_HOST;
 }
 
 /**
@@ -216,17 +227,32 @@ export async function initPostHog(): Promise<void> {
   const key = import.meta.env.VITE_POSTHOG_KEY as string | undefined;
   if (!key) return;
   const envHost = import.meta.env.VITE_POSTHOG_HOST as string | undefined;
-  // Probe the proxy only when no env override forces a host (#342): a blocked
-  // proxy (shipboard SNI filter) silently drops every event, so ~1.5s of probe
-  // at boot buys working analytics for the whole session. `track()` calls in
-  // that window no-op via the existing `ready` gate; the initial pageview is
-  // captured by posthog.init itself afterwards, so nothing user-visible waits.
-  const api_host = resolveIngestHost(envHost, envHost?.trim() ? true : await ingestHostAlive());
+  // Probe the proxy unless an env override forces a genuinely different host
+  // (#342): a blocked proxy (shipboard SNI filter) silently drops every event,
+  // so ~1.5s of probe at boot buys working analytics for the whole session.
+  // `track()` calls in that window no-op via the existing `ready` gate; the
+  // initial pageview is captured by posthog.init itself afterwards, so nothing
+  // user-visible waits.
+  const api_host = resolveIngestHost(
+    envHost,
+    envHostBypassesProbe(envHost) ? true : await ingestHostAlive(),
+  );
   try {
     posthog.init(key, { api_host, ...POSTHOG_INIT_OPTIONS });
     ready = true;
   } catch {
     ready = false;
+    return;
+  }
+  // Replay an identity that arrived while init was still probing (Codex P2 on
+  // #342): Firebase restores a cached signed-in user fast on reload, and a
+  // phIdentify() landing in the probe window used to no-op via the `ready`
+  // gate — leaving the whole session anonymous in analytics. Apply the last
+  // one now that the SDK is live.
+  if (pendingIdentifyUid !== null) {
+    const uid = pendingIdentifyUid;
+    pendingIdentifyUid = null;
+    phIdentify(uid);
   }
 }
 
@@ -242,9 +268,17 @@ export function phCapture(name: string, params?: Record<string, unknown>): void 
   }
 }
 
+// The most recent identify that arrived before init settled (#342) — replayed
+// by initPostHog once the SDK is live, cleared by phReset so a sign-out during
+// the probe window never resurrects the identity afterwards.
+let pendingIdentifyUid: string | null = null;
+
 /** Tie subsequent events to the signed-in User by uid (no PII properties). */
 export function phIdentify(uid: string): void {
-  if (!ready) return;
+  if (!ready) {
+    pendingIdentifyUid = uid;
+    return;
+  }
   try {
     posthog.identify(uid);
   } catch {
@@ -254,6 +288,7 @@ export function phIdentify(uid: string): void {
 
 /** Clear the identity association on sign-out. */
 export function phReset(): void {
+  pendingIdentifyUid = null;
   if (!ready) return;
   try {
     posthog.reset();
