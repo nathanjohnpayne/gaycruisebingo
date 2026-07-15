@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -131,5 +131,115 @@ describe('local bug-report export', () => {
     expect(normalizeSubmittedAt({ toDate: () => new Date('2026-07-09T00:00:00Z') })).toBe('2026-07-09T00:00:00.000Z');
     expect(normalizeSubmittedAt({ toDate: () => { throw new Error('bad timestamp'); } })).toBeNull();
     expect(normalizeSubmittedAt('2026-07-09')).toBeNull();
+  });
+
+  const LEDGER = 'imported-ledger.jsonl';
+  const ISSUE_200 = 'https://github.com/nathanjohnpayne/gaycruisebingo/issues/200';
+
+  it('durable dedupe: skips a report recorded in the committed ledger even with no local inbox/imported tree', async () => {
+    // Simulate a fresh clone or deleted worktree: only the committed ledger
+    // survives, with no local inbox/imported directory for the report.
+    await writeFile(
+      path.join(root, LEDGER),
+      `${JSON.stringify({ reportId: 'report_123', issue: 200, url: ISSUE_200, importedAt: '2026-07-10T00:00:00.000Z' })}\n`,
+    );
+    const summary = await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
+    expect(summary.skipped).toEqual(['report_123']);
+    expect(summary.exported).toEqual([]);
+  });
+
+  it('durable dedupe: skips ledgered reports before validating mutable source fields', async () => {
+    await writeFile(
+      path.join(root, LEDGER),
+      `${JSON.stringify({ reportId: 'report_123', issue: 200, url: ISSUE_200, importedAt: '2026-07-10T00:00:00.000Z' })}\n`,
+    );
+    const malformed = { ...report(), status: 'not-new' };
+    const summary = await exportReports({ reports: [malformed], downloadScreenshot: async () => PNG, root });
+    expect(summary.skipped).toEqual(['report_123']);
+    expect(summary.failed).toEqual([]);
+  });
+
+  it('fails closed on malformed durable ledger JSON instead of re-exporting duplicates', async () => {
+    await writeFile(path.join(root, LEDGER), '{"reportId":"report_123"\n');
+    await expect(exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root })).rejects.toThrow('invalid JSON');
+    await expect(stat(path.join(root, 'inbox/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('fails closed on incomplete durable ledger entries instead of treating reportId alone as a receipt', async () => {
+    await writeFile(path.join(root, LEDGER), `${JSON.stringify({ reportId: 'report_123' })}\n`);
+    await expect(exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root })).rejects.toThrow('invalid ledger fields');
+    await expect(stat(path.join(root, 'inbox/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('archive records the import in the committed ledger, which then dedupes even after the imported/ tree is wiped', async () => {
+    await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
+    await archiveReport({ reportId: 'report_123', issueUrl: ISSUE_200, root, now: new Date('2026-07-10T00:00:00Z') });
+
+    const ledger = (await readFile(path.join(root, LEDGER), 'utf8')).trim().split('\n').map((l) => JSON.parse(l));
+    expect(ledger).toEqual([{ reportId: 'report_123', issue: 200, url: ISSUE_200, importedAt: '2026-07-10T00:00:00.000Z' }]);
+
+    // Durability: blow away the local imported/ tree; the ledger still dedupes.
+    await rm(path.join(root, 'imported'), { recursive: true, force: true });
+    const rerun = await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
+    expect(rerun.skipped).toEqual(['report_123']);
+  });
+
+  it('keeps an archived report retryable in the inbox if the durable ledger append fails', async () => {
+    await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
+    await mkdir(path.join(root, LEDGER));
+
+    await expect(archiveReport({
+      reportId: 'report_123',
+      issueUrl: ISSUE_200,
+      root,
+      now: new Date('2026-07-10T00:00:00Z'),
+    })).rejects.toThrow();
+
+    await expect(stat(path.join(root, 'inbox/report_123'))).resolves.toBeDefined();
+    await expect(stat(path.join(root, 'imported/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects a stale inbox archive when the durable ledger already records a different issue', async () => {
+    await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
+    await writeFile(
+      path.join(root, LEDGER),
+      `${JSON.stringify({ reportId: 'report_123', issue: 200, url: ISSUE_200, importedAt: '2026-07-10T00:00:00.000Z' })}\n`,
+    );
+
+    await expect(archiveReport({
+      reportId: 'report_123',
+      issueUrl: 'https://github.com/nathanjohnpayne/gaycruisebingo/issues/201',
+      root,
+    })).rejects.toThrow('Ledger has a conflicting receipt');
+
+    await expect(stat(path.join(root, 'inbox/report_123'))).resolves.toBeDefined();
+    await expect(stat(path.join(root, 'imported/report_123'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('uses the durable ledger receipt to clean up a stale inbox archive for the same issue', async () => {
+    await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
+    const ledgerReceipt = { reportId: 'report_123', issue: 200, url: ISSUE_200, importedAt: '2026-07-10T00:00:00.000Z' };
+    await writeFile(path.join(root, LEDGER), `${JSON.stringify(ledgerReceipt)}\n`);
+
+    const receipt = await archiveReport({ reportId: 'report_123', issueUrl: ISSUE_200, root });
+
+    expect(receipt).toEqual(ledgerReceipt);
+    expect(JSON.parse(await readFile(path.join(root, 'imported/report_123/github-issue.json'), 'utf8'))).toEqual(ledgerReceipt);
+  });
+
+  it('ledger append is idempotent and self-heals a pre-ledger import on re-archive', async () => {
+    await exportReports({ reports: [report()], downloadScreenshot: async () => PNG, root });
+    await archiveReport({ reportId: 'report_123', issueUrl: ISSUE_200, root, now: new Date('2026-07-10T00:00:00Z') });
+
+    // Simulate an import made before the ledger existed: drop the ledger but keep
+    // the imported/ receipt. Re-archiving (the idempotent receipt path) back-fills
+    // it, and repeating never duplicates the line.
+    await rm(path.join(root, LEDGER), { force: true });
+    await archiveReport({ reportId: 'report_123', issueUrl: ISSUE_200, root });
+    await archiveReport({ reportId: 'report_123', issueUrl: ISSUE_200, root });
+
+    const lines = (await readFile(path.join(root, LEDGER), 'utf8')).trim().split('\n');
+    expect(lines).toHaveLength(1);
+    expect(JSON.parse(lines[0])).toMatchObject({ reportId: 'report_123', issue: 200 });
   });
 });
