@@ -78,11 +78,15 @@ describe('bug-report client diagnostics', () => {
       cacheBust: true,
       pixelRatio: Math.min(window.devicePixelRatio || 1, 2),
       skipFonts: false,
+      // #290: the clone must not inherit `.app`'s computed auto-margins —
+      // at desktop widths they shift the capture right and clip it.
+      style: { margin: '0' },
     }));
     expect(toBlobSpy).toHaveBeenNthCalledWith(2, root, expect.objectContaining({
       cacheBust: true,
       pixelRatio: 1,
       skipFonts: true,
+      style: { margin: '0' },
     }));
     const compatFilter = toBlobSpy.mock.calls[1][1].filter as (node: HTMLElement) => boolean;
     expect(compatFilter(root.querySelector('[data-kind="content"]') as HTMLElement)).toBe(true);
