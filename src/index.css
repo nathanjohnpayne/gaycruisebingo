@@ -1828,6 +1828,50 @@ body:has(.sheet-backdrop) .bug-report-trigger {
 .bug-report-backdrop {
   z-index: 80;
 }
+/* #324 — pick mode's fixed bar, shown while the report sheet is parked and
+   the reporter navigates to the screen they want captured. Sits ABOVE the
+   generic sheet layer (70) so an open claim/proof sheet can itself be
+   captured, but below the report sheet's own backdrop (80). Same bottom
+   anchor as .bug-report-trigger: clear of the 75px tab bar. */
+.bug-report-pick {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  z-index: 75;
+  width: min(420px, calc(100vw - 24px));
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  box-shadow: 0 5px 18px color-mix(in srgb, var(--bg) 62%, transparent);
+  backdrop-filter: blur(8px);
+}
+.bug-report-pick:focus {
+  outline: none;
+}
+.bug-report-pick-hint {
+  margin: 0;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.bug-report-pick-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+/* Mirror the trigger's toast-clearance shifts so a visible install/update
+   toast (#219) never covers the bar. */
+body.install-prompt-visible .bug-report-pick,
+body.update-prompt-visible .bug-report-pick {
+  bottom: calc(140px + env(safe-area-inset-bottom));
+}
+body.install-prompt-visible.update-prompt-visible .bug-report-pick {
+  bottom: calc(140px + env(safe-area-inset-bottom) + 54px);
+}
 .bug-report-sheet {
   max-height: min(90dvh, 760px);
   overflow-y: auto;

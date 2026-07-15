@@ -147,6 +147,10 @@ export function buildBugReportInput(args: {
   description: string;
   screenshotDataUrl: string | null;
   captureError: string | null;
+  /** Pathname the attached screenshot was captured on. Pick mode (#324) can
+   * capture a different screen than the one the sheet is submitted from, so
+   * the caller passes the capture-time path; absent, the current one. */
+  route?: string;
 }): SubmitBugReportInput {
   return {
     schemaVersion: BUG_REPORT_SCHEMA_VERSION,
@@ -155,7 +159,7 @@ export function buildBugReportInput(args: {
     captureError: args.captureError,
     // Query strings can carry invite codes or other secrets. The path is
     // sufficient to identify the affected screen without exporting them.
-    route: window.location.pathname.slice(0, 200),
+    route: (args.route ?? window.location.pathname).slice(0, 200),
     eventId: EVENT_ID,
     appVersion: __APP_VERSION__,
     browser: navigator.userAgent.slice(0, 500),

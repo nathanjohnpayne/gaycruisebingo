@@ -187,8 +187,14 @@ describe('BugReport icon (specs/d15-icons-lucide.md)', () => {
     // the cached stub instead of the real component.
     vi.doUnmock('./BugReport');
     vi.resetModules();
-    const { default: BugReport } = await import('./BugReport');
-    render(<BugReport variant="row" />);
+    // The launcher requires the app-shell provider since #324 (the sheet and
+    // capture flow render from BugReportProvider, not the trigger).
+    const { default: BugReport, BugReportProvider } = await import('./BugReport');
+    render(
+      <BugReportProvider>
+        <BugReport variant="row" />
+      </BugReportProvider>,
+    );
     const trigger = screen.getByRole('button', { name: 'Report a bug' });
     const icon = trigger.querySelector('svg.bug-report-icon');
     expect(icon).toBeTruthy();

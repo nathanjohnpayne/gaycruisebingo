@@ -100,9 +100,11 @@ test.describe('tab bar + More menu', () => {
     await expect(page.getByRole('button', { name: /Suggest a square/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /How to play/ })).toBeVisible();
 
-    // 5. Support — bug report + 18+ / acceptable-use guidelines.
+    // 5. Support — bug report + 18+ / acceptable-use guidelines. (The 18+
+    // row's accessible name is its More-row title, not the floating
+    // variant's "Guidelines" pill label.)
     await expect(page.getByRole('button', { name: 'Report a bug' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Guidelines' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /18\+ advisory/ })).toBeVisible();
 
     // 6. NO Admin row for a non-admin Player.
     await expect(page.getByRole('button', { name: /^Admin/ })).toHaveCount(0);
@@ -113,6 +115,44 @@ test.describe('tab bar + More menu', () => {
     // 8. Version footer.
     await expect(page.locator('.more-version')).toContainText(/^v/);
     await page.screenshot({ path: `${SHOTS}/more-menu.png`, fullPage: true });
+  });
+
+  test('Report a bug can capture a different screen than More (#324)', async ({ page }) => {
+    await joinViaSharedLink(page);
+    await waitForBoardServerConfirmed(page);
+    await dismissCoach(page);
+    await page.getByRole('link', { name: 'More' }).click();
+    await page.getByRole('button', { name: 'Report a bug' }).click();
+
+    const dialog = page.getByRole('dialog', { name: 'Report a bug' });
+    await expect(dialog).toBeVisible();
+    // The on-open capture (of /more) lands, proving real html-to-image works
+    // in this stack before pick mode swaps it out.
+    await expect(
+      dialog.getByRole('img', { name: 'Screenshot that will be submitted with this bug report' }),
+    ).toBeVisible();
+    await dialog.getByLabel('What happened?').fill('A tile on my card is broken.');
+    await dialog.getByRole('button', { name: 'Capture a different screen' }).click();
+    await expect(dialog).toHaveCount(0);
+
+    // The sheet is parked: the tab bar stays usable behind the pick bar, and
+    // leaving /more unmounts the only launcher — the regression #324 fixed.
+    await page.getByRole('link', { name: 'Card' }).click();
+    await expect(page.getByRole('button', { name: 'Report a bug' })).toHaveCount(0);
+    await page.screenshot({ path: `${SHOTS}/bug-report-pick-mode.png`, fullPage: true });
+    await page.getByRole('button', { name: 'Capture this screen' }).click();
+
+    // The sheet reopens over Card with the fresh capture and the draft intact.
+    await expect(page.getByRole('dialog', { name: 'Report a bug' })).toBeVisible();
+    await expect(
+      page.getByRole('img', { name: 'Screenshot that will be submitted with this bug report' }),
+    ).toBeVisible();
+    await expect(page.getByLabel('What happened?')).toHaveValue('A tile on my card is broken.');
+    await page.screenshot({ path: `${SHOTS}/bug-report-pick-captured.png`, fullPage: true });
+    // No submit here: the callable's functions emulator isn't part of this
+    // stack; submission stays covered by the component + functions suites.
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByRole('dialog', { name: 'Report a bug' })).toHaveCount(0);
   });
 
   test('Cruise schedule row opens a read-only list of every seeded Day', async ({ page }) => {
