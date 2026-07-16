@@ -66,11 +66,12 @@ export default defineConfig(({ command, mode }) => {
         includeAssets: ['favicon.svg', 'og-default.png', 'apple-touch-icon.png'],
         manifest: {
           name: 'Gay Cruise Bingo',
-          // Matches `name` on purpose: short_name is the home-screen label, and
-          // launchers truncate it (~12 chars) rather than drop the leading word.
-          // A clipped "Gay Cruise B…" beats a tidy "Cruise Bingo" that loses the
-          // one word the app is named for (#359).
-          short_name: 'Gay Cruise Bingo',
+          // The home-screen label, and Android's only source for it — iOS reads
+          // `apple-mobile-web-app-title` from index.html instead, which is why
+          // the two platforms can differ here (#364). Kept under the ~12-char
+          // truncation point so Android renders it whole; dropping "Cruise"
+          // rather than "Gay" is the deliberate trade (#359).
+          short_name: 'Gay Bingo',
           description: 'Live multiplayer bingo for the high seas.',
           theme_color: '#07060d',
           background_color: '#07060d',
