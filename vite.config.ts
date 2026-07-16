@@ -2,6 +2,12 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { execFileSync } from 'node:child_process';
+import {
+  PROOF_MEDIA_URL_PATTERN,
+  PROOF_MEDIA_CACHE_NAME,
+  PROOF_MEDIA_CACHE_MAX_ENTRIES,
+  PROOF_MEDIA_CACHE_MAX_AGE_SECONDS,
+} from './src/data/proofMediaCache';
 
 function appVersion(): string {
   if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA.slice(0, 40);
@@ -91,7 +97,27 @@ export default defineConfig(({ command, mode }) => {
           // and without this denylist the navigation fallback serves the SPA
           // shell into the popup instead of the OAuth handler, dead-ending
           // sign-in for every SW-controlled signed-out client (#182).
-          navigateFallbackDenylist: [/^\/__\//]
+          navigateFallbackDenylist: [/^\/__\//],
+          // #363: cache proof media (immutable Storage objects — see
+          // src/data/proofMediaCache.ts) so Feed photos stop refetching on
+          // every visit and survive offline revisits. CacheFirst because the
+          // objects never change; statuses [0, 200] because <img> loads are
+          // no-cors and the cross-origin responses are opaque (status 0).
+          runtimeCaching: [
+            {
+              urlPattern: PROOF_MEDIA_URL_PATTERN,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: PROOF_MEDIA_CACHE_NAME,
+                expiration: {
+                  maxEntries: PROOF_MEDIA_CACHE_MAX_ENTRIES,
+                  maxAgeSeconds: PROOF_MEDIA_CACHE_MAX_AGE_SECONDS,
+                  purgeOnQuotaError: true
+                },
+                cacheableResponse: { statuses: [0, 200] }
+              }
+            }
+          ]
         }
       })
     ],

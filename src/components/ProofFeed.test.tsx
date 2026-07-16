@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import type { TallyCard as TallyCardData, TallyEntry } from '../types';
 
 // ProofFeed imports the useData/firebase graph (real getAuth) + auth/proofs/
@@ -109,6 +112,22 @@ describe('TallyCard — Feed rendering (specs/d15-tally-cards.md)', () => {
     render(<TallyCard card={card()} action={null} days={undefined} />);
     expect(screen.queryByTitle('Add a proof')).toBeNull();
     expect(screen.queryByText(/Got it too/)).toBeNull();
+  });
+
+  it('#366: the tappable card body carries an explicit color — the marker names never fall back to UA ButtonText', () => {
+    render(<TallyCard card={card()} action={null} days={undefined} />);
+    const body = screen.getByTitle('See who marked this') as HTMLButtonElement;
+    // Inline `color: inherit` resolves to the surrounding ink (body sets
+    // `color: var(--ink)`; no ancestor between overrides it), so the names in
+    // the .name span render themed on every platform instead of near-black.
+    expect(body.style.color).toBe('inherit');
+  });
+
+  it('#366: the global button reset in index.css also inherits color (jsdom never applies the stylesheet, so pin the rule itself)', () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.css'), 'utf-8');
+    const m = css.match(/(?:^|\n)button\s*\{([^}]*)\}/);
+    if (!m) throw new Error('button reset rule not found in index.css');
+    expect(m[1]).toMatch(/color:\s*inherit/);
   });
 });
 
