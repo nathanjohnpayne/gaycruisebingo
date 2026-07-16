@@ -11,7 +11,7 @@ import { useAuth } from '../auth/AuthContext';
 // Either way the checkbox now drives a PERSISTED write, not just ephemeral local
 // state — an honor-system self-statement, never identity verification (ADR 0001).
 export default function SignIn() {
-  const { user, signIn, attest } = useAuth();
+  const { user, signIn, signInReady, attest } = useAuth();
   const reprompt = user != null;
   const [ack, setAck] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -41,7 +41,7 @@ export default function SignIn() {
           don't post people who didn't consent.
         </span>
       </label>
-      <button className="btn primary block" disabled={!ack || busy} onClick={go}>
+      <button className="btn primary block" disabled={!ack || busy || (!reprompt && !signInReady)} onClick={go}>
         {busy
           ? reprompt
             ? 'Saving…'

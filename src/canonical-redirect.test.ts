@@ -1,27 +1,37 @@
 import { describe, it, expect } from 'vitest';
-import { canonicalRedirectUrl } from './canonical-redirect';
+import { firebaseAuthOriginRedirectUrl } from './canonical-redirect';
 
-describe('canonicalRedirectUrl (#162)', () => {
-  it('redirects gaycruisebingo.web.app to the canonical origin, preserving path/query/hash', () => {
+describe('firebaseAuthOriginRedirectUrl', () => {
+  it('hands gaycruisebingo.web.app to firebaseapp.com, preserving path/query/hash', () => {
     expect(
-      canonicalRedirectUrl({
+      firebaseAuthOriginRedirectUrl({
         hostname: 'gaycruisebingo.web.app',
         pathname: '/card',
         search: '?e=med-2026',
         hash: '#top',
       }),
-    ).toBe('https://gaycruisebingo.com/card?e=med-2026#top');
+    ).toBe('https://gaycruisebingo.firebaseapp.com/card?e=med-2026#top');
   });
 
-  it('redirects the gaycruisebingo.firebaseapp.com alias too', () => {
+  it('does not redirect firebaseapp.com, which is the stable Firebase auth origin', () => {
     expect(
-      canonicalRedirectUrl({ hostname: 'gaycruisebingo.firebaseapp.com', pathname: '/', search: '', hash: '' }),
-    ).toBe('https://gaycruisebingo.com/');
+      firebaseAuthOriginRedirectUrl({
+        hostname: 'gaycruisebingo.firebaseapp.com',
+        pathname: '/',
+        search: '',
+        hash: '',
+      }),
+    ).toBeNull();
   });
 
   it('returns null on the canonical host so there is no redirect loop', () => {
     expect(
-      canonicalRedirectUrl({ hostname: 'gaycruisebingo.com', pathname: '/card', search: '?e=med-2026', hash: '' }),
+      firebaseAuthOriginRedirectUrl({
+        hostname: 'gaycruisebingo.com',
+        pathname: '/card',
+        search: '?e=med-2026',
+        hash: '',
+      }),
     ).toBeNull();
   });
 
@@ -31,7 +41,14 @@ describe('canonicalRedirectUrl (#162)', () => {
       '127.0.0.1',
       'gaycruisebingo--pr-42-ab12cd.web.app', // Firebase preview channel — must not be hijacked to prod
     ]) {
-      expect(canonicalRedirectUrl({ hostname, pathname: '/', search: '', hash: '' })).toBeNull();
+      expect(
+        firebaseAuthOriginRedirectUrl({
+          hostname,
+          pathname: '/',
+          search: '',
+          hash: '',
+        }),
+      ).toBeNull();
     }
   });
 });

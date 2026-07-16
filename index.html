@@ -6,6 +6,12 @@
     <meta name="theme-color" content="#07060d" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- iOS home-screen label. Safari reads this, not the manifest's short_name
+         (which Android uses, and which is deliberately shorter — #364), so the
+         two platforms are set independently. Without this tag iOS would fall
+         back to <title>, which happens to match today; it is set explicitly so
+         retitling the page cannot silently rename the installed icon. -->
+    <meta name="apple-mobile-web-app-title" content="Gay Cruise Bingo" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
 

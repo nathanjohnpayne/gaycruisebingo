@@ -16,6 +16,7 @@
 // long-standing path-only pageview stance. This reverses the #96 privacy lockdown
 // at the owner's request; ConsentNotice.tsx discloses that session replay is used.
 import posthog, { type PostHogConfig, type CaptureResult } from 'posthog-js';
+import { probeTimeoutSignal } from './canonical-redirect';
 
 /** Init options — exported so the capture policy is unit-testable. */
 export const POSTHOG_INIT_OPTIONS: Partial<PostHogConfig> = {
@@ -49,6 +50,91 @@ export const POSTHOG_INIT_OPTIONS: Partial<PostHogConfig> = {
  * this US deployment deliberately keeps `ui_host` region-fixed above.
  */
 export const POSTHOG_PROXY_HOST = 'https://d.gaycruisebingo.com';
+
+/**
+ * Personal-domain reverse proxy — the PRIMARY ingest host (#344). Same
+ * PostHog-managed Cloudflare proxy infrastructure as the gaycruisebingo proxy
+ * (both CNAME to *.cf-prod-us-proxy.proxyhog.com), but on a registered domain
+ * the 2026-07-15 shipboard DPI filter does NOT block. Ordering rationale: the
+ * filter killed the ENTIRE gaycruisebingo.com domain by SNI — subdomains
+ * included — so a same-domain proxy fails exactly when the app's audience (the
+ * ship) needs it; the personal domain keeps proxy-grade ad-blocker resistance
+ * without sharing that fate. Deliberate loose coupling to the owner's personal
+ * domain, accepted by owner decision (#344).
+ */
+export const POSTHOG_PERSONAL_PROXY_HOST = 'https://d.nathanpayne.com';
+
+/**
+ * Direct PostHog Cloud US ingestion — the LAST-RESORT host (#342). Never
+ * probed: when both proxies are down, events are best-effort against the
+ * backend itself (more ad-blocker-visible, but delivery beats silence — the
+ * #342 incident had events dying silently in posthog-js's retry queue).
+ */
+export const POSTHOG_DIRECT_HOST = 'https://us.i.posthog.com';
+
+/**
+ * The priority-ordered ingest chain (#344): personal proxy, then the
+ * first-party gaycruisebingo proxy (#149's default, demoted by #344), then
+ * direct PostHog Cloud. Exported for tests and for the override policy below.
+ */
+export const POSTHOG_INGEST_HOSTS = [
+  POSTHOG_PERSONAL_PROXY_HOST,
+  POSTHOG_PROXY_HOST,
+  POSTHOG_DIRECT_HOST,
+] as const;
+
+/**
+ * Whether `host` answers (#342): the same cheap no-cors/no-store transport
+ * probe used by the other resilient transports — an opaque response proves
+ * TCP+TLS+HTTP completed; rejection (reset / filtered SNI / no DNS) or timeout
+ * means events would die.
+ */
+export async function ingestHostAlive(
+  host: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 1500,
+): Promise<boolean> {
+  const { signal, cleanup } = probeTimeoutSignal(timeoutMs);
+  try {
+    await fetchImpl(`${host}/?alive=${Date.now()}`, {
+      mode: 'no-cors',
+      cache: 'no-store',
+      signal,
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    cleanup();
+  }
+}
+
+/**
+ * Which ingestion host to init with, given the two proxy probes (#344). Pure
+ * so the priority policy is testable: first alive host in chain order, and
+ * direct PostHog Cloud unconditionally last (never probed — see its note).
+ */
+export function pickIngestHost(personalAlive: boolean, gcbProxyAlive: boolean): string {
+  if (personalAlive) return POSTHOG_PERSONAL_PROXY_HOST;
+  if (gcbProxyAlive) return POSTHOG_PROXY_HOST;
+  return POSTHOG_DIRECT_HOST;
+}
+
+/**
+ * True when this env override should skip the transport probes entirely. An
+ * override that merely restates a PROXY chain member is NOT a bypass (Codex
+ * P2 on #342): .env.example ships VITE_POSTHOG_HOST=<gcb proxy>, so treating
+ * it as an unconditional winner would silently disable the outage failover
+ * for every deploy built from a copied example env. The DIRECT host is
+ * different: restating it is the documented "skip the proxies, go straight to
+ * PostHog Cloud" diagnostic bypass, so it wins unconditionally — as does any
+ * host outside the chain.
+ */
+export function envHostBypassesProbe(envHost: string | undefined): boolean {
+  const override = envHost?.trim().replace(/\/+$/, '');
+  if (!override) return false;
+  return override !== POSTHOG_PERSONAL_PROXY_HOST && override !== POSTHOG_PROXY_HOST;
+}
 
 /**
  * Strip the query string and hash from a URL string, keeping origin + path.
@@ -163,17 +249,45 @@ export function isLocalDevHost(hostname: string): boolean {
  * the GA4 guard in firebase.ts, so dev/test/CI without env vars stay silent. The
  * `phc_` project key is client-safe (public) by design.
  */
-export function initPostHog(): void {
+export async function initPostHog(): Promise<void> {
   if (ready) return;
   const key = import.meta.env.VITE_POSTHOG_KEY as string | undefined;
   if (!key) return;
-  const api_host =
-    (import.meta.env.VITE_POSTHOG_HOST as string | undefined) || POSTHOG_PROXY_HOST;
+  const envHost = import.meta.env.VITE_POSTHOG_HOST as string | undefined;
+  // Walk the ingest chain unless an env override forces a host genuinely
+  // outside it (#342/#344): a blocked proxy (shipboard SNI filter) silently
+  // drops every event, so ~1.5s of parallel probes at boot buys working
+  // analytics for the whole session. Both proxies are probed CONCURRENTLY —
+  // the wait is one probe budget, not chain-length × budget. `track()` calls
+  // in that window no-op via the existing `ready` gate; the initial pageview
+  // is captured by posthog.init itself afterwards, so nothing user-visible
+  // waits.
+  let api_host: string;
+  if (envHostBypassesProbe(envHost)) {
+    api_host = envHost!.trim();
+  } else {
+    const [personalAlive, gcbProxyAlive] = await Promise.all([
+      ingestHostAlive(POSTHOG_PERSONAL_PROXY_HOST),
+      ingestHostAlive(POSTHOG_PROXY_HOST),
+    ]);
+    api_host = pickIngestHost(personalAlive, gcbProxyAlive);
+  }
   try {
     posthog.init(key, { api_host, ...POSTHOG_INIT_OPTIONS });
     ready = true;
   } catch {
     ready = false;
+    return;
+  }
+  // Replay an identity that arrived while init was still probing (Codex P2 on
+  // #342): Firebase restores a cached signed-in user fast on reload, and a
+  // phIdentify() landing in the probe window used to no-op via the `ready`
+  // gate — leaving the whole session anonymous in analytics. Apply the last
+  // one now that the SDK is live.
+  if (pendingIdentifyUid !== null) {
+    const uid = pendingIdentifyUid;
+    pendingIdentifyUid = null;
+    phIdentify(uid);
   }
 }
 
@@ -189,9 +303,17 @@ export function phCapture(name: string, params?: Record<string, unknown>): void 
   }
 }
 
+// The most recent identify that arrived before init settled (#342) — replayed
+// by initPostHog once the SDK is live, cleared by phReset so a sign-out during
+// the probe window never resurrects the identity afterwards.
+let pendingIdentifyUid: string | null = null;
+
 /** Tie subsequent events to the signed-in User by uid (no PII properties). */
 export function phIdentify(uid: string): void {
-  if (!ready) return;
+  if (!ready) {
+    pendingIdentifyUid = uid;
+    return;
+  }
   try {
     posthog.identify(uid);
   } catch {
@@ -201,6 +323,7 @@ export function phIdentify(uid: string): void {
 
 /** Clear the identity association on sign-out. */
 export function phReset(): void {
+  pendingIdentifyUid = null;
   if (!ready) return;
   try {
     posthog.reset();

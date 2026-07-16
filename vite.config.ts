@@ -46,7 +46,14 @@ export default defineConfig(({ command, mode }) => {
   }
 
   return {
-    define: { __APP_VERSION__: JSON.stringify(appVersion()) },
+    define: {
+      __APP_VERSION__: JSON.stringify(appVersion()),
+      // Ordered build stamp for the remote force-reload floor (#342): git SHAs
+      // (__APP_VERSION__) identify a build but cannot answer "older than X?",
+      // so the floor check compares this ISO timestamp against
+      // public/build-floor.json instead.
+      __BUILD_STAMP__: JSON.stringify(new Date().toISOString()),
+    },
     plugins: [
       react(),
       VitePWA({
@@ -59,7 +66,12 @@ export default defineConfig(({ command, mode }) => {
         includeAssets: ['favicon.svg', 'og-default.png', 'apple-touch-icon.png'],
         manifest: {
           name: 'Gay Cruise Bingo',
-          short_name: 'Cruise Bingo',
+          // The home-screen label, and Android's only source for it — iOS reads
+          // `apple-mobile-web-app-title` from index.html instead, which is why
+          // the two platforms can differ here (#364). Kept under the ~12-char
+          // truncation point so Android renders it whole; dropping "Cruise"
+          // rather than "Gay" is the deliberate trade (#359).
+          short_name: 'Gay Bingo',
           description: 'Live multiplayer bingo for the high seas.',
           theme_color: '#07060d',
           background_color: '#07060d',

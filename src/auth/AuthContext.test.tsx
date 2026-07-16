@@ -1,13 +1,23 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AuthProvider, useAuth } from './AuthContext';
+import {
+  AuthProvider,
+  PENDING_REDIRECT_ATTESTATION_KEY,
+  WEB_APP_AUTH_SETTLE_TIMEOUT_MS,
+  useAuth,
+} from './AuthContext';
+// The mocked module instance (vi.mock below) — the fallback-handler test writes
+// a config slot onto it to observe the #340 authDomain override.
+import { auth as mockedAuth } from '../firebase';
 
 // Mock the Firebase boundary so the real AuthProvider runs under jsdom: the tests
 // drive the auth callback by hand and stub the data-layer deal.
 const mocks = vi.hoisted(() => ({
   onAuthStateChanged: vi.fn(),
+  getRedirectResult: vi.fn(),
   signInWithPopup: vi.fn(),
+  signInWithRedirect: vi.fn(),
   signOut: vi.fn(),
   ensureUserProfile: vi.fn(),
   attestAdult: vi.fn(),
@@ -19,7 +29,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('firebase/auth', () => ({
   onAuthStateChanged: mocks.onAuthStateChanged,
+  getRedirectResult: mocks.getRedirectResult,
   signInWithPopup: mocks.signInWithPopup,
+  signInWithRedirect: mocks.signInWithRedirect,
   signOut: mocks.signOut,
   GoogleAuthProvider: class {},
 }));
@@ -69,7 +81,12 @@ function deferred<T>() {
   return { promise, settle, fail };
 }
 
-const mount = () => render(<AuthProvider><Harness /></AuthProvider>);
+const mount = () =>
+  render(
+    <AuthProvider>
+      <Harness />
+    </AuthProvider>,
+  );
 const signInUser = () => act(async () => void (await emitAuth(FAKE_USER)));
 
 beforeEach(() => {
@@ -88,7 +105,9 @@ beforeEach(() => {
   mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
   mocks.readAdultAttestation.mockResolvedValue(1);
   mocks.attestAdult.mockResolvedValue(undefined);
+  mocks.getRedirectResult.mockResolvedValue(null);
   mocks.signInWithPopup.mockResolvedValue({});
+  mocks.signInWithRedirect.mockResolvedValue(undefined);
   mocks.signOut.mockResolvedValue(undefined);
 });
 
@@ -127,7 +146,7 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
   });
 
-  it("fires track('login_failed', …) with method/code/message and rethrows when the popup rejects (#163)", async () => {
+  it("fires track('login_failed', …) with a safe code and rethrows when the popup rejects (#163)", async () => {
     const err = Object.assign(new Error('Unable to process request due to missing initial state.'), {
       code: 'auth/missing-initial-state',
     });
@@ -149,26 +168,66 @@ describe('AuthContext deal-error hardening', () => {
     // Rethrow contract: signIn surfaces the original error to its caller.
     await expect(signIn()).rejects.toBe(err);
 
-    // The failure event carries method, the Firebase code, AND the message.
+    // The failure event carries only allowlisted, PII-free fields.
     expect(mocks.track).toHaveBeenCalledWith('login_failed', {
       method: 'google',
       code: 'auth/missing-initial-state',
-      message: 'Unable to process request due to missing initial state.',
     });
     // The success path did not run: no login event, no attestation.
     expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
     expect(mocks.attestAdult).not.toHaveBeenCalled();
   });
 
-  it('redirects to the canonical origin instead of opening the popup when signing in from a Firebase alias origin (#162/#165)', async () => {
-    const replace = vi.fn();
-    vi.stubGlobal('location', {
-      hostname: 'gaycruisebingo.web.app',
-      pathname: '/card',
-      search: '',
-      hash: '',
-      replace,
+  it('uses one top-level redirect instead of a popup on iOS Safari', async () => {
+    vi.stubGlobal('navigator', {
+      ...window.navigator,
+      onLine: true,
+      userAgent:
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 Version/18.5 Mobile/15E148 Safari/604.1',
+      platform: 'iPhone',
+      maxTouchPoints: 5,
     });
+    const authMock = mockedAuth as { config?: { authDomain?: string } };
+    authMock.config = { authDomain: window.location.hostname };
+
+    mount();
+    await userEvent.click(screen.getByText('signin'));
+
+    expect(mocks.signInWithRedirect).toHaveBeenCalledTimes(1);
+    expect(mocks.signInWithRedirect).toHaveBeenCalledWith(mockedAuth, expect.anything());
+    expect(mocks.signInWithPopup).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(PENDING_REDIRECT_ATTESTATION_KEY)).not.toBeNull();
+
+    delete authMock.config;
+    sessionStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps popup sign-in in an installed iOS PWA with a stable app window', async () => {
+    vi.stubGlobal('navigator', {
+      ...window.navigator,
+      onLine: true,
+      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
+      platform: 'iPhone',
+      maxTouchPoints: 5,
+      standalone: true,
+    });
+    const authMock = mockedAuth as { config?: { authDomain?: string } };
+    authMock.config = { authDomain: window.location.hostname };
+
+    mount();
+    await userEvent.click(screen.getByText('signin'));
+
+    expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
+    expect(mocks.signInWithRedirect).not.toHaveBeenCalled();
+
+    delete authMock.config;
+    vi.unstubAllGlobals();
+  });
+
+  it('coalesces repeated sign-in calls into one Firebase auth transaction', async () => {
+    const popup = deferred<Record<string, never>>();
+    mocks.signInWithPopup.mockReturnValueOnce(popup.promise);
 
     let signIn!: () => Promise<void>;
     function Capture() {
@@ -181,15 +240,136 @@ describe('AuthContext deal-error hardening', () => {
       </AuthProvider>,
     );
 
-    await signIn();
+    const first = signIn();
+    const second = signIn();
+    expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
 
-    // Alias origin → send the player to the canonical origin to sign in there,
-    // via replace() so the alias page is not left as the Back target…
-    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.com/card');
-    // …and do NOT hit the cross-origin OAuth handler from the alias origin.
+    popup.settle({});
+    await Promise.all([first, second]);
+  });
+
+  it('persists the checked 18+ acknowledgement after returning from mobile redirect sign-in', async () => {
+    sessionStorage.setItem(PENDING_REDIRECT_ATTESTATION_KEY, '1');
+    mocks.getRedirectResult.mockResolvedValueOnce({ user: FAKE_USER });
+
+    mount();
+
+    await waitFor(() => expect(mocks.attestAdult).toHaveBeenCalledWith(FAKE_USER));
+    expect(mocks.attestAdult).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.getItem(PENDING_REDIRECT_ATTESTATION_KEY)).toBeNull();
+  });
+
+  it('does not consume or report a redirect result without an app-owned pending marker', async () => {
+    mount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mocks.getRedirectResult).not.toHaveBeenCalled();
+    expect(mocks.track).not.toHaveBeenCalledWith('login_failed', expect.anything());
+  });
+
+  it('hands a signed-out web.app boot to firebaseapp.com before rendering a second sign-in screen', async () => {
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+    mount();
+    await act(async () => void (await emitAuth(null)));
+
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/card');
     expect(mocks.signInWithPopup).not.toHaveBeenCalled();
+    expect(mocks.signInWithRedirect).not.toHaveBeenCalled();
     expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
 
+    vi.unstubAllGlobals();
+  });
+
+  it('bounds a stalled online web.app auth bootstrap and hands off automatically', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    expect(replace).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/card');
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('never times out an offline web.app boot into a cross-origin handoff', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('navigator', { ...window.navigator, onLine: false });
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('suppresses the timeout handoff when Firebase restores the current User first', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+    const authMock = mockedAuth as { currentUser?: unknown };
+    authMock.currentUser = FAKE_USER;
+
+    mount();
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    delete authMock.currentUser;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('cancels the pending handoff when auth publishes a User before the timeout', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    await act(async () => void (await emitAuth(FAKE_USER)));
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 });
@@ -201,7 +381,14 @@ describe('AuthContext stale-attempt + retry hardening', () => {
     mount();
     await act(async () => void (await emitAuth(FAKE_USER))); // account A: deal left in flight
     await act(async () => void (await emitAuth(null))); // player signs out
-    await act(async () => void (await emitAuth({ uid: 'sailor-2', displayName: 'Other', photoURL: null }))); // account B deals
+    await act(
+      async () =>
+        void (await emitAuth({
+          uid: 'sailor-2',
+          displayName: 'Other',
+          photoURL: null,
+        })),
+    ); // account B deals
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 

@@ -10,6 +10,12 @@ import posthog from 'posthog-js';
 import {
   POSTHOG_INIT_OPTIONS,
   POSTHOG_PROXY_HOST,
+  POSTHOG_DIRECT_HOST,
+  POSTHOG_PERSONAL_PROXY_HOST,
+  POSTHOG_INGEST_HOSTS,
+  pickIngestHost,
+  envHostBypassesProbe,
+  ingestHostAlive,
   posthogReady,
   phCapture,
   phIdentify,
@@ -212,6 +218,11 @@ describe('PostHog init guard', () => {
 describe('PostHog init with a key', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    // Guaranteed even when a mid-test assertion fails (CodeRabbit on #342):
+    // several tests stub global fetch for the init probe and assert BEFORE
+    // their inline unstub; without this, one real failure would leak the stub
+    // into later tests and cascade.
+    vi.unstubAllGlobals();
     vi.resetModules();
     vi.clearAllMocks();
   });
@@ -239,21 +250,151 @@ describe('PostHog init with a key', () => {
     expect(ph.capture).toHaveBeenCalledWith('bingo', { lines: 1 });
   });
 
-  it('defaults api_host to the reverse proxy when VITE_POSTHOG_HOST is unset (#149)', async () => {
+  it('defaults api_host to the personal proxy (chain primary) when VITE_POSTHOG_HOST is unset (#149/#344)', async () => {
     vi.resetModules();
     vi.stubEnv('VITE_POSTHOG_KEY', 'phc_test');
     // Empty out the override (the repo's .env.local sets one for the loader) so
-    // this exercises the in-code default: prod ships through the first-party proxy.
+    // this exercises the in-code default: both proxies answer → the chain
+    // primary (personal proxy) wins, and BOTH probes were actually issued.
     vi.stubEnv('VITE_POSTHOG_HOST', '');
+    const fetchMock = vi.fn().mockResolvedValue({ type: 'opaque' } as Response);
+    vi.stubGlobal('fetch', fetchMock);
     const ph = (await import('posthog-js')).default;
     const mod = await import('./posthog');
-    mod.initPostHog();
+    await mod.initPostHog();
+    vi.unstubAllGlobals();
+    const probedHosts = fetchMock.mock.calls.map(([url]) => (url as string).split('/?')[0]);
+    expect(probedHosts).toEqual(
+      expect.arrayContaining(['https://d.nathanpayne.com', 'https://d.gaycruisebingo.com']),
+    );
     expect(ph.init).toHaveBeenCalledWith(
       'phc_test',
       expect.objectContaining({
-        api_host: 'https://d.gaycruisebingo.com',
+        api_host: 'https://d.nathanpayne.com',
         ui_host: 'https://us.posthog.com',
       }),
     );
+  });
+
+  it('falls back to the gcb proxy when only the personal proxy is dead (#344)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_test');
+    vi.stubEnv('VITE_POSTHOG_HOST', '');
+    // URL-aware stub: personal proxy dead, gcb proxy answering.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((url: string) =>
+        // Slash-anchored (CodeQL js/incomplete-url-substring-sanitization):
+        // the probe URL is always `<host>/?alive=…`, and the anchored form
+        // can't match a hostname that merely starts with ours.
+        url.startsWith('https://d.nathanpayne.com/')
+          ? Promise.reject(new TypeError('Load failed'))
+          : Promise.resolve({ type: 'opaque' } as Response),
+      ),
+    );
+    const ph = (await import('posthog-js')).default;
+    const mod = await import('./posthog');
+    await mod.initPostHog();
+    vi.unstubAllGlobals();
+    expect(ph.init).toHaveBeenCalledWith(
+      'phc_test',
+      expect.objectContaining({ api_host: 'https://d.gaycruisebingo.com' }),
+    );
+  });
+
+  it('falls back to direct PostHog Cloud when BOTH proxies are dead (#342/#344)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_test');
+    vi.stubEnv('VITE_POSTHOG_HOST', '');
+    // The #342 incident shape, worst case: every proxy probe rejects.
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Load failed')));
+    const ph = (await import('posthog-js')).default;
+    const mod = await import('./posthog');
+    await mod.initPostHog();
+    vi.unstubAllGlobals();
+    expect(ph.init).toHaveBeenCalledWith(
+      'phc_test',
+      expect.objectContaining({ api_host: 'https://us.i.posthog.com' }),
+    );
+  });
+
+  it('replays an identify that arrived during the init probe window (#342)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_test');
+    vi.stubEnv('VITE_POSTHOG_HOST', '');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ type: 'opaque' } as Response));
+    const ph = (await import('posthog-js')).default;
+    const mod = await import('./posthog');
+    const initSettled = mod.initPostHog();
+    // Firebase restores a cached signed-in user before the probe settles.
+    mod.phIdentify('sailor-9');
+    expect(ph.identify).not.toHaveBeenCalled();
+    await initSettled;
+    vi.unstubAllGlobals();
+    expect(ph.identify).toHaveBeenCalledWith('sailor-9');
+  });
+
+  it('a sign-out during the probe window clears the pending identity — never resurrected after init (#342)', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_POSTHOG_KEY', 'phc_test');
+    vi.stubEnv('VITE_POSTHOG_HOST', '');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ type: 'opaque' } as Response));
+    const ph = (await import('posthog-js')).default;
+    const mod = await import('./posthog');
+    const initSettled = mod.initPostHog();
+    mod.phIdentify('sailor-9');
+    mod.phReset();
+    await initSettled;
+    // Unstub BEFORE asserting (CodeRabbit on #342): an assertion failure here
+    // must not leak the stubbed fetch into later tests and cascade.
+    vi.unstubAllGlobals();
+    expect(ph.identify).not.toHaveBeenCalled();
+  });
+});
+
+describe('ingest-host failover chain (#342/#344 — shipboard SNI filter blocked the gcb proxy)', () => {
+  it('the chain is priority-ordered: personal proxy, gcb proxy, direct PostHog Cloud', () => {
+    expect(POSTHOG_INGEST_HOSTS).toEqual([
+      'https://d.nathanpayne.com',
+      'https://d.gaycruisebingo.com',
+      'https://us.i.posthog.com',
+    ]);
+  });
+
+  it('pickIngestHost takes the first alive host in chain order, direct as the unprobed last resort', () => {
+    expect(pickIngestHost(true, true)).toBe(POSTHOG_PERSONAL_PROXY_HOST);
+    expect(pickIngestHost(true, false)).toBe(POSTHOG_PERSONAL_PROXY_HOST);
+    expect(pickIngestHost(false, true)).toBe(POSTHOG_PROXY_HOST);
+    expect(pickIngestHost(false, false)).toBe(POSTHOG_DIRECT_HOST);
+  });
+
+  it('an override restating a PROXY member does NOT bypass; the direct host and outside hosts do', () => {
+    for (const envHost of [
+      POSTHOG_PERSONAL_PROXY_HOST,
+      `${POSTHOG_PERSONAL_PROXY_HOST}/`,
+      POSTHOG_PROXY_HOST,
+      `${POSTHOG_PROXY_HOST}/`,
+      undefined,
+      '',
+      '   ',
+    ]) {
+      expect(envHostBypassesProbe(envHost)).toBe(false);
+    }
+    // Restating the direct host IS the documented "skip the proxies"
+    // diagnostic bypass; hosts outside the chain bypass too.
+    expect(envHostBypassesProbe(POSTHOG_DIRECT_HOST)).toBe(true);
+    expect(envHostBypassesProbe('https://eu.example.dev')).toBe(true);
+  });
+
+  it('ingestHostAlive probes the GIVEN host no-cors/no-store and maps resolve→true, reject→false', async () => {
+    const okImpl = vi.fn().mockResolvedValue({ type: 'opaque' } as Response);
+    await expect(ingestHostAlive(POSTHOG_PERSONAL_PROXY_HOST, okImpl as unknown as typeof fetch)).resolves.toBe(true);
+    const [url, init] = okImpl.mock.calls[0] as [string, RequestInit];
+    expect(url.startsWith(`${POSTHOG_PERSONAL_PROXY_HOST}/?alive=`)).toBe(true);
+    expect(init.mode).toBe('no-cors');
+    expect(init.cache).toBe('no-store');
+
+    const deadImpl = vi.fn().mockRejectedValue(new TypeError('Load failed'));
+    await expect(ingestHostAlive(POSTHOG_PROXY_HOST, deadImpl as unknown as typeof fetch)).resolves.toBe(false);
   });
 });
