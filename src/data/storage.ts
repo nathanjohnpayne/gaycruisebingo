@@ -1,5 +1,6 @@
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { storage, EVENT_ID } from '../firebase';
+import { PROOF_MEDIA_CACHE_CONTROL } from './proofMediaCache';
 
 /** Downscale + re-encode an image in the browser so we upload ~100–300 KB, not 12 MP. */
 export async function downscaleImage(file: Blob, max = 1280, quality = 0.82): Promise<Blob> {
@@ -64,7 +65,12 @@ export async function uploadProofMedia(
     kind === 'photo' ? { ext: 'jpg', contentType: 'image/jpeg' } : audioExtAndContentType(payload.type);
   const path = `proofs/${EVENT_ID}/${uid}/${proofId}.${ext}`;
   const r = ref(storage, path);
-  await uploadBytes(r, payload, { contentType });
+  // #363: without an explicit cacheControl, Firebase Storage serves media as
+  // `private, max-age=0` and the Feed refetches every photo on every visit.
+  // Proof objects are immutable (path unique per proofId, never overwritten),
+  // so the long-lived immutable policy is safe. Avatars below deliberately do
+  // NOT get this: avatars/{uid}.jpg is overwritten in place on profile edits.
+  await uploadBytes(r, payload, { contentType, cacheControl: PROOF_MEDIA_CACHE_CONTROL });
   const url = await getDownloadURL(r);
   return { path, url };
 }

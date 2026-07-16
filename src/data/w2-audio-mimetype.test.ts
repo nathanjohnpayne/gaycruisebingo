@@ -24,6 +24,14 @@ vi.mock('firebase/storage', () => ({
 }));
 
 import { uploadProofMedia } from './storage';
+import { PROOF_MEDIA_CACHE_CONTROL } from './proofMediaCache';
+
+// #363: every proof upload also stamps the immutable Cache-Control (proof
+// objects are never rewritten), so the browser stops refetching Feed media.
+// The exact-metadata assertions below carry it alongside the #295 contentType
+// mapping. (Avatars keep NO cacheControl — their path is overwritten in place;
+// src/components/w1-profile-avatar.test.tsx pins that metadata exactly.)
+const CC = PROOF_MEDIA_CACHE_CONTROL;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -41,14 +49,14 @@ describe('uploadProofMedia — audio extension/Content-Type follow the Blob’s 
     const [ref, uploaded, meta] = H.uploadBytes.mock.calls[0];
     expect((ref as { path: string }).path).toBe('proofs/med-2026/u1/P.webm');
     expect(uploaded).toBe(blob); // audio is never re-encoded (unlike photo)
-    expect(meta).toEqual({ contentType: 'audio/webm' });
+    expect(meta).toEqual({ contentType: 'audio/webm', cacheControl: CC });
   });
 
   it('a bare "audio/webm" type (no codecs param) still uploads as .webm / audio/webm', async () => {
     const blob = new Blob(['clip'], { type: 'audio/webm' });
     const { path } = await uploadProofMedia('u1', 'P', blob, 'audio');
     expect(path).toBe('proofs/med-2026/u1/P.webm');
-    expect(H.uploadBytes.mock.calls[0][2]).toEqual({ contentType: 'audio/webm' });
+    expect(H.uploadBytes.mock.calls[0][2]).toEqual({ contentType: 'audio/webm', cacheControl: CC });
   });
 
   it('a Safari-recorded MP4/AAC clip uploads as .m4a / audio/mp4, NOT .webm / audio/webm', async () => {
@@ -59,28 +67,28 @@ describe('uploadProofMedia — audio extension/Content-Type follow the Blob’s 
     const [ref, uploaded, meta] = H.uploadBytes.mock.calls[0];
     expect((ref as { path: string }).path).toBe('proofs/med-2026/u1/P.m4a');
     expect(uploaded).toBe(blob);
-    expect(meta).toEqual({ contentType: 'audio/mp4' });
+    expect(meta).toEqual({ contentType: 'audio/mp4', cacheControl: CC });
   });
 
   it('an mp4 type WITH a codecs parameter (e.g. "audio/mp4;codecs=mp4a.40.2") still normalizes to audio/mp4 / .m4a', async () => {
     const blob = new Blob(['clip'], { type: 'audio/mp4;codecs=mp4a.40.2' });
     const { path } = await uploadProofMedia('u1', 'P', blob, 'audio');
     expect(path).toBe('proofs/med-2026/u1/P.m4a');
-    expect(H.uploadBytes.mock.calls[0][2]).toEqual({ contentType: 'audio/mp4' });
+    expect(H.uploadBytes.mock.calls[0][2]).toEqual({ contentType: 'audio/mp4', cacheControl: CC });
   });
 
   it('a bare "audio/aac" type also maps to .m4a / audio/mp4', async () => {
     const blob = new Blob(['clip'], { type: 'audio/aac' });
     const { path } = await uploadProofMedia('u1', 'P', blob, 'audio');
     expect(path).toBe('proofs/med-2026/u1/P.m4a');
-    expect(H.uploadBytes.mock.calls[0][2]).toEqual({ contentType: 'audio/mp4' });
+    expect(H.uploadBytes.mock.calls[0][2]).toEqual({ contentType: 'audio/mp4', cacheControl: CC });
   });
 
   it('an empty/unrecognized Blob type falls back to the pre-#295 .webm / audio/webm default rather than guessing', async () => {
     const blob = new Blob(['clip'], { type: '' });
     const { path } = await uploadProofMedia('u1', 'P', blob, 'audio');
     expect(path).toBe('proofs/med-2026/u1/P.webm');
-    expect(H.uploadBytes.mock.calls[0][2]).toEqual({ contentType: 'audio/webm' });
+    expect(H.uploadBytes.mock.calls[0][2]).toEqual({ contentType: 'audio/webm', cacheControl: CC });
   });
 
   it('the download URL still resolves from the SAME ref the extension was derived for', async () => {
@@ -99,6 +107,6 @@ describe('uploadProofMedia — audio extension/Content-Type follow the Blob’s 
     const blob = new Blob(['img'], { type: 'image/jpeg' });
     const { path } = await uploadProofMedia('u1', 'P', blob, 'photo', { stripExif: false });
     expect(path).toBe('proofs/med-2026/u1/P.jpg');
-    expect(H.uploadBytes.mock.calls[0][2]).toEqual({ contentType: 'image/jpeg' });
+    expect(H.uploadBytes.mock.calls[0][2]).toEqual({ contentType: 'image/jpeg', cacheControl: CC });
   });
 });

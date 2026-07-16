@@ -62,6 +62,12 @@ body {
 button {
   font-family: inherit;
   cursor: pointer;
+  /* #366: without this, a button that never declares its own color renders the
+     UA default ButtonText — near-black, unreadable on the (mostly dark) themes.
+     Nothing declares color-scheme, so the UA assumes light. Inheriting the
+     surrounding ink is always the intended pairing; every button with a design
+     color (.btn, .iconbtn, …) still sets its own. */
+  color: inherit;
 }
 a {
   color: inherit;
@@ -1399,10 +1405,16 @@ a {
   gap: 8px;
 }
 .proof-media {
+  /* #363: contain, never crop — every photo fully displays regardless of
+     aspect ratio. A portrait shot clamps to the 320px box and pillarboxes;
+     the bars are filled by the blurred copy behind (.proof-media-blur).
+     position: relative lifts the sharp layer above that absolute fill. */
+  position: relative;
+  display: block;
   width: 100%;
   border-radius: 10px;
   max-height: 320px;
-  object-fit: cover;
+  object-fit: contain;
 }
 .proof-quote {
   margin: 0;
@@ -1620,6 +1632,22 @@ a {
 }
 .proof-media-wrap {
   position: relative;
+  /* #363: clip the over-scaled blur fill to the media's own rounded box. */
+  overflow: hidden;
+  border-radius: 10px;
+}
+/* #363: the letterbox/pillarbox fill — the SAME (scheme-guarded) image again,
+   cover-fit, blurred, and over-scaled so its soft edges never show. It sits
+   behind the contain-fit foreground, so the empty bars around an off-ratio
+   photo read as a color-matched glow instead of dead panel. */
+.proof-media-blur {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(24px);
+  transform: scale(1.15);
 }
 .proof-src-badge {
   position: absolute;
