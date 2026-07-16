@@ -310,6 +310,68 @@ describe('AuthContext deal-error hardening', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+
+  it('never times out an offline web.app boot into a cross-origin handoff', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('navigator', { ...window.navigator, onLine: false });
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('suppresses the timeout handoff when Firebase restores the current User first', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+    const authMock = mockedAuth as { currentUser?: unknown };
+    authMock.currentUser = FAKE_USER;
+
+    mount();
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    delete authMock.currentUser;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('cancels the pending handoff when auth publishes a User before the timeout', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    await act(async () => void (await emitAuth(FAKE_USER)));
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('AuthContext stale-attempt + retry hardening', () => {

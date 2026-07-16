@@ -38,7 +38,10 @@ function isOnline(): boolean {
 // whole app on its loading screen. Bound that gate and hand failures to the
 // existing retry surface; never fall back to cached authority or render the Board.
 export const AUTH_BOOTSTRAP_TIMEOUT_MS = 10_000;
-export const WEB_APP_AUTH_SETTLE_TIMEOUT_MS = 1_500;
+// Local auth persistence normally settles immediately; live mobile smoke showed
+// the blocked custom-domain bootstrap never settled. Three seconds leaves ample
+// room for a slow device without preserving an unbounded signed-out stall.
+export const WEB_APP_AUTH_SETTLE_TIMEOUT_MS = 3_000;
 export const PENDING_REDIRECT_ATTESTATION_KEY = 'gcb:pending-redirect-attestation';
 
 function prefersRedirectSignIn(nav: Pick<Navigator, 'userAgent' | 'platform' | 'maxTouchPoints'>): boolean {
@@ -264,12 +267,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // build instead stalls against the blocked custom auth domain, bound that
   // signed-out online boot and move to the stable same-project app origin.
   useEffect(() => {
-    if (user || !loading || !isOnline() || !firebaseAuthOriginRedirectUrl(window.location)) return;
+    if (user || !loading || !online || !firebaseAuthOriginRedirectUrl(window.location)) return;
     const timer = setTimeout(() => {
-      if (!auth.currentUser) handoffSignedOutWebApp();
+      if (online && isOnline() && !auth.currentUser) handoffSignedOutWebApp();
     }, WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [handoffSignedOutWebApp, loading, user]);
+  }, [handoffSignedOutWebApp, loading, online, user]);
 
   // Set / clear `dealError` and its typed reason in LOCKSTEP (#70). Every deal or
   // bootstrap failure routes through `failDeal` (which classifies pool-shortfall vs
