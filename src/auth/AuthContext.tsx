@@ -306,14 +306,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // signed-out online boot and move to the stable same-project app origin.
   // Not armed while an app-owned redirect return is completing (#357); the
   // pending flag flipping false re-runs this effect, so the bound re-arms
-  // rather than silently dying with the suppressed one-shot timer.
+  // rather than silently dying with the suppressed one-shot timer. There is
+  // deliberately no settled-vs-loading guard (Codex P2 on the #357 round):
+  // a signed-out settle DURING the pending window suppresses the immediate
+  // handoff and renders SignIn, so the re-armed bound must also cover the
+  // already-settled signed-out session — otherwise it would sit on web.app
+  // indefinitely. On every path that already navigated, the chokepoint's
+  // started-once ref makes the re-armed timer's fire a no-op.
   useEffect(() => {
-    if (user || !loading || !online || !fallbackAuthOrigin || redirectReturnPending) return;
+    if (user || !online || !fallbackAuthOrigin || redirectReturnPending) return;
     const timer = setTimeout(() => {
       if (online && isOnline() && !auth.currentUser) handoffSignedOutWebApp();
     }, WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [fallbackAuthOrigin, handoffSignedOutWebApp, loading, online, redirectReturnPending, user]);
+  }, [fallbackAuthOrigin, handoffSignedOutWebApp, online, redirectReturnPending, user]);
 
   // Set / clear `dealError` and its typed reason in LOCKSTEP (#70). Every deal or
   // bootstrap failure routes through `failDeal` (which classifies pool-shortfall vs

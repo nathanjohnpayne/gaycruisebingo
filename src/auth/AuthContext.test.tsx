@@ -523,6 +523,41 @@ describe('AuthContext deal-error hardening', () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
+
+  it('hands off a signed-out settle that was suppressed mid-redirect once the return completes (#357)', async () => {
+    vi.useFakeTimers();
+    sessionStorage.setItem(PENDING_REDIRECT_ATTESTATION_KEY, '1');
+    const redirect = deferred<null>();
+    mocks.getRedirectResult.mockReturnValueOnce(redirect.promise);
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    // Auth settles signed-out WHILE the app-owned return is still completing:
+    // the immediate handoff is suppressed (SignIn may render), no navigation.
+    await act(async () => void (await emitAuth(null)));
+    expect(replace).not.toHaveBeenCalled();
+
+    // Once the return settles signed-out, the re-armed bound must still move
+    // the already-settled signed-out session — it must not sit on web.app
+    // indefinitely just because auth settled before the redirect result did.
+    await act(async () => {
+      redirect.settle(null);
+      await Promise.resolve();
+    });
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/card');
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
 });
 
 describe('AuthContext stale-attempt + retry hardening', () => {
