@@ -66,7 +66,11 @@ export default defineConfig(({ command, mode }) => {
         includeAssets: ['favicon.svg', 'og-default.png', 'apple-touch-icon.png'],
         manifest: {
           name: 'Gay Cruise Bingo',
-          short_name: 'Cruise Bingo',
+          // Matches `name` on purpose: short_name is the home-screen label, and
+          // launchers truncate it (~12 chars) rather than drop the leading word.
+          // A clipped "Gay Cruise B…" beats a tidy "Cruise Bingo" that loses the
+          // one word the app is named for (#359).
+          short_name: 'Gay Cruise Bingo',
           description: 'Live multiplayer bingo for the high seas.',
           theme_color: '#07060d',
           background_color: '#07060d',
