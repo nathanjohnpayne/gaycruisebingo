@@ -133,6 +133,68 @@ describe('ProofSheet photo body — two affordances (#190)', () => {
   });
 });
 
+describe('claim sheet button register (#309 — wireframe parity)', () => {
+  // The wireframes' claim-sheet frame (plans/daily-cards-wireframes.html):
+  // sentence-case labels in the MARKUP (the CSS `text-transform: none` scope
+  // hook is the `.claim-sheet` root class), the mainline/primary actions on
+  // the filled `primary` variant (Take photo, Mark it — the wireframe's
+  // `.btn.ok`), the alternatives outlined (Library, Cancel), the Photo
+  // segment pre-selected, and the pledge on its accent-outline register
+  // (never the filled primary).
+
+  it('mounts Photo-first with the .claim-sheet scope hook on the sheet root', () => {
+    const { container } = render(<ProofSheet {...baseProps()} />);
+    expect(container.querySelector('.sheet.claim-sheet')).not.toBeNull();
+    // Photo opens pre-selected (#309/#310 row 16): its segment is `.on` and
+    // the photo body's affordances are already on first paint.
+    expect(screen.getByRole('button', { name: 'Photo' })).toHaveClass('seg-btn', 'on');
+    expect(fileInputs(container)).toHaveLength(2);
+  });
+
+  it('renders every label in the wireframe casing — never uppercase markup', () => {
+    render(<ProofSheet {...baseProps()} onPledge={vi.fn()} claimMode="honor" />);
+    // Exact accessible names — case-sensitive, so an uppercase regression in
+    // the markup (the CSS-transform era look) fails here.
+    expect(screen.getByRole('button', { name: 'Photo' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Sound' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Callout' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mark it' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '🎖️ Cross My Heart' })).toBeInTheDocument();
+    expect(screen.getByText('Take photo')).toBeInTheDocument();
+    expect(screen.getByText('Library')).toBeInTheDocument();
+  });
+
+  it('fills the primary actions and keeps the alternatives outlined', () => {
+    render(<ProofSheet {...baseProps()} onPledge={vi.fn()} claimMode="honor" />);
+    // Filled accent primaries (the wireframe's `.btn.ok`): Take photo + Mark it.
+    expect(screen.getByText('Take photo')).toHaveClass('btn', 'primary', 'photo-affordance');
+    expect(screen.getByRole('button', { name: 'Mark it' })).toHaveClass('btn', 'primary');
+    // Outlined alternatives: Library + Cancel carry no `primary`.
+    expect(screen.getByText('Library')).toHaveClass('btn');
+    expect(screen.getByText('Library')).not.toHaveClass('primary');
+    expect(screen.getByRole('button', { name: 'Cancel' })).not.toHaveClass('primary');
+    // The pledge is the accent OUTLINE register (.pledge-btn), never the
+    // filled primary — it reads as the honor pledge, not a submit.
+    const pledge = screen.getByRole('button', { name: '🎖️ Cross My Heart' });
+    expect(pledge).toHaveClass('btn', 'pledge-btn');
+    expect(pledge).not.toHaveClass('primary');
+  });
+
+  it('admin_confirmed keeps the filled primary on the "Submit claim" casing', () => {
+    render(<ProofSheet {...baseProps()} claimMode="admin_confirmed" />);
+    expect(screen.getByRole('button', { name: 'Submit claim' })).toHaveClass('btn', 'primary');
+  });
+
+  it('moves the filled segment state with the selection', async () => {
+    const user = userEvent.setup();
+    render(<ProofSheet {...baseProps()} />);
+    await user.click(screen.getByRole('button', { name: 'Sound' }));
+    expect(screen.getByRole('button', { name: 'Sound' })).toHaveClass('on');
+    expect(screen.getByRole('button', { name: 'Photo' })).not.toHaveClass('on');
+  });
+});
+
 describe('uploadProofMedia — EXIF/GPS strip (#211)', () => {
   beforeEach(() => {
     H.uploadBytes.mockResolvedValue(undefined);

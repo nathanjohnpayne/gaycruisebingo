@@ -77,10 +77,14 @@ interface Props {
 
 export default function ProofSheet(props: Props) {
   const { uid, displayName, photoURL, cells, cell, claimMode, currentFirstBingoAt, onAttached, onPledge, photoProofSource, dayIndex, daily, tutorialDayIndexes, ceremonialDayIndexes, statsFrozen, stripExif, tallyCount, onClose } = props;
-  // No proof type is pre-selected (issue #181): the sheet opens on EVERY claim
-  // now, so it opens compact — the capture body below renders only once a type
-  // is chosen, keeping the pledge/segments in immediate thumb reach.
-  const [type, setType] = useState<ProofType | null>(null);
+  // Photo opens pre-selected (#309, folding in the #310 row-16 parity note):
+  // the wireframe paints the claim sheet with the Photo body OPEN — Take photo
+  // + Library visible on first paint — which drops one tap from the mainline
+  // capture path. Sound/Callout bodies still mount only when chosen, and
+  // `Mark it` stays gated on a valid capture, so the pledge/segments keep the
+  // #181 tightened-sheet thumb reach with the photo affordances now part of
+  // that first paint (specs/w4-honor-pledge.md § Tightened sheet).
+  const [type, setType] = useState<ProofType | null>('photo');
   const [photo, setPhoto] = useState<Blob | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   // Which affordance produced the current photo — stamped onto the Proof as
@@ -259,7 +263,11 @@ export default function ProofSheet(props: Props) {
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
+      {/* `claim-sheet` scopes the #309 button register (sentence-case labels,
+          filled accent primaries) to THIS sheet — `.sheet` chrome is shared
+          with the profile/tally/who-list/menu sheets, which keep the global
+          `.btn` look. Same surface-scoped pattern as #322's toast register. */}
+      <div className="sheet claim-sheet" onClick={(e) => e.stopPropagation()}>
         <div className="sheet-header">
           <div className="sheet-title">Proof for “{cell.text}”</div>
           {/* The claim sheet's dismiss `x` (daily-cards-spec § "Iconography —
@@ -312,7 +320,10 @@ export default function ProofSheet(props: Props) {
             {/* Two affordances (#190): 📷 Take photo force-launches the rear
                 camera (`capture="environment"`); 🖼️ Library is the no-`capture`
                 picker (the ProfileEditor pattern) — the gap #190 reported. Both
-                render in EVERY Claim Mode; only `camera_only` hides Library. */}
+                render in EVERY Claim Mode; only `camera_only` hides Library.
+                Take photo is the mainline capture path, so it wears the filled
+                `primary` (#309 — the wireframe's `.btn.ok`); Library stays the
+                outlined alternative. */}
             <div className="photo-affordances">
               {/* Keyboard/AT access (Codex P2, #211): the file input is VISUALLY
                   hidden but stays in the tab order + a11y tree (`.visually-hidden`,
@@ -320,7 +331,7 @@ export default function ProofSheet(props: Props) {
                   tabs onto it, the wrapping label supplies its accessible name, and
                   Enter/Space opens the picker. `.photo-affordance:focus-within`
                   moves the visible focus ring onto the pill. */}
-              <label className="btn photo-affordance">
+              <label className="btn primary photo-affordance">
                 <Camera className="photo-affordance-icon" aria-hidden="true" /> Take photo
                 <input type="file" accept="image/*" capture="environment" className="visually-hidden" onChange={onPhoto('camera')} />
               </label>
