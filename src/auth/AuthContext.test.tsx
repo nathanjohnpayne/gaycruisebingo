@@ -1,7 +1,12 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AuthProvider, PENDING_REDIRECT_ATTESTATION_KEY, useAuth } from './AuthContext';
+import {
+  AuthProvider,
+  PENDING_REDIRECT_ATTESTATION_KEY,
+  WEB_APP_AUTH_SETTLE_TIMEOUT_MS,
+  useAuth,
+} from './AuthContext';
 // The mocked module instance (vi.mock below) — the fallback-handler test writes
 // a config slot onto it to observe the #340 authDomain override.
 import { auth as mockedAuth } from '../firebase';
@@ -281,6 +286,90 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.signInWithRedirect).not.toHaveBeenCalled();
     expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
 
+    vi.unstubAllGlobals();
+  });
+
+  it('bounds a stalled online web.app auth bootstrap and hands off automatically', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    expect(replace).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/card');
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('never times out an offline web.app boot into a cross-origin handoff', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('navigator', { ...window.navigator, onLine: false });
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('suppresses the timeout handoff when Firebase restores the current User first', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+    const authMock = mockedAuth as { currentUser?: unknown };
+    authMock.currentUser = FAKE_USER;
+
+    mount();
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    delete authMock.currentUser;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('cancels the pending handoff when auth publishes a User before the timeout', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    await act(async () => void (await emitAuth(FAKE_USER)));
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 });
