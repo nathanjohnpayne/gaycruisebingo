@@ -44,6 +44,19 @@ export const AUTH_BOOTSTRAP_TIMEOUT_MS = 10_000;
 export const WEB_APP_AUTH_SETTLE_TIMEOUT_MS = 3_000;
 export const PENDING_REDIRECT_ATTESTATION_KEY = 'gcb:pending-redirect-attestation';
 
+// Mobile browser tabs sign in via one top-level redirect; everything else keeps
+// the popup (see signIn()). The UA regex catches devices that say so outright.
+// The second clause is the iPadOS desktop-UA masquerade (#347): iPadOS Safari
+// reports `platform === 'MacIntel'` and a Mac UA string, and `maxTouchPoints > 1`
+// is the accepted discriminator — real Macs report 0. KNOWN TRADEOFF: a future
+// touch-enabled Mac would match and get redirect sign-in in a browser tab. That
+// failure mode is benign — redirect sign-in is fully supported on desktop; the
+// popup is only a preference where the window is stable — and installed PWAs are
+// unaffected (the call site checks isStandaloneApp() separately). Revisit when a
+// capability signal distinguishes iPadOS from a touch Mac (e.g. a UA-Client-Hints
+// platform value Safari actually ships); no such signal exists today, and the
+// alternatives (UA sniffing deeper, or dropping the clause and sending iPad
+// Safari down the popup path it demonstrably loses state on) are strictly worse.
 function prefersRedirectSignIn(nav: Pick<Navigator, 'userAgent' | 'platform' | 'maxTouchPoints'>): boolean {
   return (
     /Android|iPhone|iPad|iPod|Mobile/i.test(nav.userAgent) || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1)
@@ -215,12 +228,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInAttemptRef = useRef<Promise<void> | null>(null);
   const redirectResultHandledRef = useRef(false);
   const webAppHandoffStartedRef = useRef(false);
-  // The canonical-auth-origin handoff target, snapshotted ONCE at mount (#358).
-  // hostname is immutable for the document's lifetime, and every consumer (the
-  // settle-timer gate, the handoff itself, the sign-in tap fallback) runs only
-  // in signed-out sessions — which render SignIn/Loading and cannot navigate —
-  // so the path/query/hash captured here cannot go stale before a handoff fires.
-  const [fallbackAuthOrigin] = useState(() => firebaseAuthOriginRedirectUrl(window.location));
+  // Whether THIS document lives on a fallback origin — a hostname property,
+  // immutable for the document's lifetime — snapshotted once for the cheap
+  // gating decisions (the settle-timer arm and the sign-in tap branch, #358).
+  // The DECISION is the only thing snapshotted: the navigated-to URL is not
+  // (#376) — a signed-in web.app session can change route/query/hash before a
+  // mid-session sign-out hands off, so the chokepoint recomputes the full
+  // target from the live location at navigation time, preserving the active
+  // route instead of replaying the mount-time one.
+  const [onFallbackAuthOrigin] = useState(() => firebaseAuthOriginRedirectUrl(window.location) !== null);
   // An app-owned redirect sign-in return is completing on THIS origin (#357):
   // the same-origin marker was present at mount and getRedirectResult has not
   // settled yet. While true, no signed-out handoff may navigate — a cross-origin
@@ -288,18 +304,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // and the sign-in tap fallback — routes through here, so the started-once
   // dedupe and the pending-redirect-return guard apply to every navigation path
   // (#354: a raw replace() beside this ref could fire a duplicate/late
-  // navigation). Returns true when the signed-out visit is handled by
+  // navigation). The target URL is computed HERE, from the live location at
+  // navigation time (#376): a mid-session sign-out fires from wherever the
+  // signed-in session navigated, so a mount-time snapshot would replay a stale
+  // route/query/hash. Returns true when the signed-out visit is handled by
   // navigation (started now or earlier); false when this origin is already
   // canonical, or while an app-owned redirect return is completing (#357) — the
   // caller then renders normally and the settle timer re-arms on settlement.
   const handoffSignedOutWebApp = useCallback((): boolean => {
     if (redirectReturnPendingRef.current) return false;
     if (webAppHandoffStartedRef.current) return true;
-    if (!fallbackAuthOrigin) return false;
+    const target = firebaseAuthOriginRedirectUrl(window.location);
+    if (!target) return false;
     webAppHandoffStartedRef.current = true;
-    window.location.replace(fallbackAuthOrigin);
+    window.location.replace(target);
     return true;
-  }, [fallbackAuthOrigin]);
+  }, []);
 
   // Firebase should restore a cached User without the network. If a web.app
   // build instead stalls against the blocked custom auth domain, bound that
@@ -314,12 +334,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // indefinitely. On every path that already navigated, the chokepoint's
   // started-once ref makes the re-armed timer's fire a no-op.
   useEffect(() => {
-    if (user || !online || !fallbackAuthOrigin || redirectReturnPending) return;
+    if (user || !online || !onFallbackAuthOrigin || redirectReturnPending) return;
     const timer = setTimeout(() => {
       if (online && isOnline() && !auth.currentUser) handoffSignedOutWebApp();
     }, WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [fallbackAuthOrigin, handoffSignedOutWebApp, online, redirectReturnPending, user]);
+  }, [handoffSignedOutWebApp, onFallbackAuthOrigin, online, redirectReturnPending, user]);
 
   // Set / clear `dealError` and its typed reason in LOCKSTEP (#70). Every deal or
   // bootstrap failure routes through `failDeal` (which classifies pool-shortfall vs
@@ -816,7 +836,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (signInAttemptRef.current) return signInAttemptRef.current;
 
     const attempt = (async () => {
-      if (fallbackAuthOrigin) {
+      if (onFallbackAuthOrigin) {
         // A signed-out fallback-origin visitor never starts an auth transaction
         // here — delegate to the shared chokepoint so its started-once dedupe
         // and pending-redirect-return guard cover the tap path too (#354): a
@@ -874,7 +894,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {});
     return attempt;
-  }, [attest, fallbackAuthOrigin, handoffSignedOutWebApp]);
+  }, [attest, handoffSignedOutWebApp, onFallbackAuthOrigin]);
 
   const signOutUser = async () => {
     await signOut(auth);

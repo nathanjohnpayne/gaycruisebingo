@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { firebaseAuthOriginRedirectUrl } from './canonical-redirect';
+import * as canonicalRedirect from './canonical-redirect';
 
 describe('firebaseAuthOriginRedirectUrl', () => {
   it('hands gaycruisebingo.web.app to firebaseapp.com, preserving path/query/hash', () => {
@@ -49,6 +50,21 @@ describe('firebaseAuthOriginRedirectUrl', () => {
           hash: '',
         }),
       ).toBeNull();
+    }
+  });
+
+  it('keeps the #345-removed auth-origin exports removed (#348)', () => {
+    // PR #345 deleted the mutable-auth-domain machinery: canonicalRedirectUrl,
+    // canonicalOriginAlive, and FALLBACK_AUTH_DOMAIN. No in-repo consumer
+    // remains, but the names were part of this module's surface long enough
+    // that a stale downstream import (or a revert-merge resurrecting the old
+    // probe-and-mutate flow) is plausible. This guard makes any reintroduction
+    // an explicit, reviewed decision instead of a silent API regression — if
+    // one of these names comes back on purpose, delete it from this list in
+    // the same PR and say why.
+    const removedExports = ['canonicalRedirectUrl', 'canonicalOriginAlive', 'FALLBACK_AUTH_DOMAIN'];
+    for (const name of removedExports) {
+      expect(name in canonicalRedirect, `export "${name}" was removed in #345 and must stay removed`).toBe(false);
     }
   });
 });

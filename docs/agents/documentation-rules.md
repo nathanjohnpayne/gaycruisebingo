@@ -34,6 +34,10 @@ A direct edit here is overwritten on the next sync and breaks the mirror. Edit t
 
 No CI check rejects a direct edit to a repo-owned `docs/**` file, and CodeRabbit's `docs/**` path review is advisory --- so a normal docs-only change to a repo-owned path is allowed and unblocked. The generated-mirror markers above are the guard: `tests/test_project_doc_sync.sh` asserts every materialized mirror carries them, and the mirror's own `do_not_edit:` header routes an editor to the canonical source.
 
+## Incident-fix documentation diffs stay narrow
+
+When a PR fixes an incident or a live behavioral bug, its documentation hunks must contain only the behavioral text that changed — no formatter-wide churn (reflowing untouched paragraphs, renumbering lists, restyling emphasis, reordering sections) riding along in the same diff. Reviewers audit an incident fix by reading its doc delta as a statement of what behavior changed; every cosmetic hunk mixed in dilutes that signal and slows the review exactly when speed matters (#349, observed on PR #345's `docs/app/README.md` hunks). Run repo-wide formatting passes as their own change — e.g. a dedicated `scripts/lint-md-prose-wrap.sh --write` PR — where a reviewer can wave the whole diff through as render-neutral, instead of untangling it from a behavioral fix.
+
 ## Prose line-wrapping
 
 Soft-wrap Markdown prose: write one physical line per paragraph and let the renderer wrap it. Do not hard-wrap prose at a fixed column (roughly 72 to 80 characters). GitHub-flavored Markdown collapses single newlines inside a paragraph to spaces, so fixed-column wrapping is invisible in the rendered output, is enforced by nothing, is applied inconsistently, and creates reflow churn on every edit.
