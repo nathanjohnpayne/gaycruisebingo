@@ -88,10 +88,19 @@ export default function LaunchIntro({ forceOpen = false, onDismiss }: LaunchIntr
     onDismiss?.();
   };
 
+  // Deliberately NOT `.coach-overlay` on the container, despite borrowing that
+  // overlay's shape: `.coach-overlay` is CoachOverlay's IDENTITY, and the e2e
+  // parity walk asserts that overlay is gone after its CTA. Wearing the class
+  // here made this announcement answer to that selector and fail the assertion.
+  // Neither `.coach-overlay` nor `.coach-overlay-backdrop` carries any CSS (the
+  // look comes from `.sheet`/`.sheet-backdrop`), so dropping them costs nothing
+  // visually. The `coach-overlay-legend/row/chip/copy` classes below DO carry the
+  // legend's styling and are shared on purpose — they are a visual vocabulary,
+  // not an identity.
   return (
-    <div className="sheet-backdrop coach-overlay-backdrop">
+    <div className="sheet-backdrop launch-intro-backdrop">
       <div
-        className="sheet coach-overlay launch-intro"
+        className="sheet launch-intro"
         role="dialog"
         aria-modal="true"
         aria-label="New today: reshuffles"
