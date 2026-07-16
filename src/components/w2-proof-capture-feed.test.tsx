@@ -271,8 +271,11 @@ describe('ProofFeed — photo fit and the blurred fill layer (#363)', () => {
   // real stylesheet and assert the rule bodies.
   it('index.css: .proof-media CONTAINS (never crops) and .proof-media-blur is the cover-fit blurred fill', () => {
     const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.css'), 'utf-8');
+    // Full RegExp-metacharacter escape (backslash included) — escaping only
+    // `.` is the incomplete-sanitization CodeQL flags (js/incomplete-sanitization).
+    const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const ruleBody = (selector: string): string => {
-      const m = css.match(new RegExp(`${selector.replace(/\./g, '\\.')}\\s*\\{([^}]*)\\}`));
+      const m = css.match(new RegExp(`${escapeRegExp(selector)}\\s*\\{([^}]*)\\}`));
       if (!m) throw new Error(`rule not found: ${selector}`);
       return m[1];
     };
