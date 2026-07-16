@@ -284,7 +284,10 @@ describe('PostHog init with a key', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockImplementation((url: string) =>
-        url.startsWith('https://d.nathanpayne.com')
+        // Slash-anchored (CodeQL js/incomplete-url-substring-sanitization):
+        // the probe URL is always `<host>/?alive=…`, and the anchored form
+        // can't match a hostname that merely starts with ours.
+        url.startsWith('https://d.nathanpayne.com/')
           ? Promise.reject(new TypeError('Load failed'))
           : Promise.resolve({ type: 'opaque' } as Response),
       ),
