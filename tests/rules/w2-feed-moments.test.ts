@@ -152,8 +152,10 @@ describe('firestore.rules — Feed Moments (specs/w2-feed-moments.md)', () => {
     await assertFails(setDoc(p(`${ALICE}-blackout-d10`), moment(ALICE, { kind: 'blackout', dayIndex: 10 })));
     await assertFails(setDoc(p(`${ALICE}-blackout-d999999`), moment(ALICE, { kind: 'blackout', dayIndex: 999999 })));
     await assertFails(setDoc(p(`${ALICE}-blackout-d-1`), moment(ALICE, { kind: 'blackout', dayIndex: -1 })));
-    // The day-scoped form is blackout-only: a bingo cannot ride it.
-    await assertFails(setDoc(p(`${ALICE}-bingo-d3`), moment(ALICE, { kind: 'bingo', dayIndex: 3 })));
+    // The day-scoped form is for the PER-CARD kinds only (#372 added bingo — see
+    // its own test below): the event-wide `first_bingo` singleton cannot ride it,
+    // or the ceremony would mint one per Day instead of one per Event.
+    await assertFails(setDoc(p(`${ALICE}-first_bingo-d3`), moment(ALICE, { kind: 'first_bingo', dayIndex: 3 })));
     // Forged owner: Alice cannot create Bob's per-card blackout id.
     await assertFails(setDoc(p(`${BOB}-blackout-d3`), moment(ALICE, { kind: 'blackout', dayIndex: 3 })));
     // The legacy day-less per-Player id still works (asserted above too) — and a
@@ -161,6 +163,39 @@ describe('firestore.rules — Feed Moments (specs/w2-feed-moments.md)', () => {
     // the day-SUFFIXED id form, not the field's presence.
     await assertSucceeds(
       setDoc(doc(db(BOB), momentPath(`${BOB}-blackout`)), moment(BOB, { kind: 'blackout', dayIndex: 2 })),
+    );
+  });
+
+  it('allows the PER-CARD bingo id `${uid}-bingo-d${dayIndex}` only when the id Day matches the payload (#372)', async () => {
+    const p = (id: string) => doc(db(ALICE), momentPath(id));
+    // The canonical per-card create: day-scoped id, matching integer dayIndex.
+    await assertSucceeds(setDoc(p(`${ALICE}-bingo-d3`), moment(ALICE, { kind: 'bingo', dayIndex: 3 })));
+    // The bug this closes (#372): a SECOND Day's bingo posts its own Moment.
+    // Under the pre-#372 once-per-Player `${uid}-bingo` id this create was a
+    // doc-exists update on an immutable Moment, so every bingo after a Player's
+    // first was silently denied and never reached the Feed.
+    await assertSucceeds(setDoc(p(`${ALICE}-bingo-d7`), moment(ALICE, { kind: 'bingo', dayIndex: 7 })));
+    // The id's Day must equal the payload's dayIndex — a mismatch is denied. A
+    // FRESH id (d8), not one created above: a reused id would be denied as an
+    // immutable-doc update regardless, masking the create-rule condition under
+    // test (Codex P3 on #277).
+    await assertFails(setDoc(p(`${ALICE}-bingo-d8`), moment(ALICE, { kind: 'bingo', dayIndex: 5 })));
+    // A day-suffixed id with NO dayIndex field is denied (nothing to bind to).
+    await assertFails(setDoc(p(`${ALICE}-bingo-d4`), moment(ALICE, { kind: 'bingo' })));
+    // A non-integer dayIndex is denied.
+    await assertFails(setDoc(p(`${ALICE}-bingo-d4`), moment(ALICE, { kind: 'bingo', dayIndex: '4' })));
+    // Out-of-schedule Days are denied (the #277 Codex P2 bound, inherited by the
+    // shared arm): the Day must index a real entry of the Event's `days`.
+    await assertFails(setDoc(p(`${ALICE}-bingo-d10`), moment(ALICE, { kind: 'bingo', dayIndex: 10 })));
+    await assertFails(setDoc(p(`${ALICE}-bingo-d999999`), moment(ALICE, { kind: 'bingo', dayIndex: 999999 })));
+    await assertFails(setDoc(p(`${ALICE}-bingo-d-1`), moment(ALICE, { kind: 'bingo', dayIndex: -1 })));
+    // Forged owner: Alice cannot create Bob's per-card bingo id.
+    await assertFails(setDoc(p(`${BOB}-bingo-d3`), moment(ALICE, { kind: 'bingo', dayIndex: 3 })));
+    // The legacy day-less per-Player id still works — pre-#372 clients keep
+    // writing it, and a legacy id carrying a dayIndex payload stays valid: the
+    // binding constrains the day-SUFFIXED id form, not the field's presence.
+    await assertSucceeds(
+      setDoc(doc(db(BOB), momentPath(`${BOB}-bingo`)), moment(BOB, { kind: 'bingo', dayIndex: 2 })),
     );
   });
 
