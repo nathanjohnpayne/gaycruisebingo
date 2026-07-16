@@ -158,6 +158,16 @@ export interface PlayerDoc {
   squaresMarked: number;
   firstBingoAt: number | null;
   blackout?: boolean;
+  // How many Reshuffles this Player has spent, CRUISE-WIDE — not per Day (#378,
+  // specs/reshuffle.md). Trading a pristine Day Card for a fresh deal costs
+  // nothing in the game (a pristine card has produced nothing to undo), so the
+  // scarcity lives entirely in this allowance: 3 for the whole sailing, which
+  // makes the choice strategic rather than three free re-rolls every morning.
+  // Required in the contract so consumers never branch on undefined;
+  // `playerConverter` defaults a missing legacy field (every Player row written
+  // before #378 — there is no backfill) to 0. firestore.rules holds it MONOTONIC:
+  // it only ever rises by exactly 1, never falls, never exceeds 3.
+  reshufflesUsed: number;
   // Per-Day breakdown of the same three stats, keyed by dayIndex. Optional —
   // absent until a Player has played a Day; the aggregates above remain the
   // cruise-long leaderboard source.

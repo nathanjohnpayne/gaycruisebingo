@@ -43,6 +43,7 @@ function mkPlayer(uid: string, dayStats: DayStats, over: Partial<PlayerDoc> = {}
     bingoCount: root.bingoCount,
     squaresMarked: root.squaresMarked,
     firstBingoAt: root.firstBingoAt,
+    reshufflesUsed: 0,
     dayStats,
     ...over,
   };
@@ -239,6 +240,7 @@ describe('cruiseFirstBingoUid / effectiveCruiseFirstBingoAt', () => {
       bingoCount: 1,
       squaresMarked: 5,
       firstBingoAt: 1234,
+      reshufflesUsed: 0,
     };
     expect(effectiveCruiseFirstBingoAt(legacy, isTutorialDay)).toBe(1234);
     expect(cruiseFirstBingoUid([legacy], isTutorialDay)).toBe('legacy');

@@ -12,6 +12,7 @@ import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { seedEmulatorEvent } from './support/seed';
 import { joinViaSharedLink, signedInUid } from './support/join';
 import { waitForBoardServerConfirmed, claimCellByText } from './support/board';
+import { dismissCoach } from './support/daily';
 import { EVENT_ID } from './support/env';
 // @ts-expect-error — plain-JS seed script, no type declarations (see support/seed.ts).
 import { ITEMS, seedItemDocId } from '../../scripts/seed.mjs';
@@ -77,10 +78,10 @@ test('per-Day boards: different cards, correct-Day scoring, no leaderboard infla
   // Default view = today's Day = the latest unlocked (Day 1). The lazy deal fires
   // on open; the grid renders once the day-scoped board is written + confirmed.
   await waitForBoardServerConfirmed(page);
-  // Dismiss the once-per-event first-open coach overlay (#214) — its scrim
-  // otherwise intercepts the Day-switcher taps below.
-  const coachCta = page.getByRole('button', { name: /deal me in/i });
-  if (await coachCta.isVisible().catch(() => false)) await coachCta.click();
+  // Dismiss the first-open scrims (#214 coach overlay, then the #378 Reshuffle
+  // launch announcement queued behind it) — they otherwise intercept the
+  // Day-switcher taps below.
+  await dismissCoach(page);
   const day1Texts = await readDealtDayGrid(page);
 
   // (i) Switch to Day 0 → its OWN card. Different day-scoped board = different squares.

@@ -243,6 +243,30 @@ export function countMarked(cells: Cell[]): number {
   return cells.filter((c) => !c.free && c.marked && c.status !== 'pending').length;
 }
 
+/**
+ * True when a Day Card is PRISTINE — zero PLAYER-marked Squares — the sole
+ * eligibility window for a Reshuffle (#378, specs/reshuffle.md). The free centre
+ * is always `marked` and never counts (CONTEXT.md § "Free Space").
+ *
+ * Deliberately NOT `countMarked(cells) === 0`, despite reading like its twin.
+ * `countMarked` scores the LEADERBOARD, so it discounts a `status: 'pending'`
+ * Square — an admin_confirmed-mode Mark awaiting an Admin's resolution doesn't
+ * count toward your total until confirmed. Eligibility is a different question:
+ * the Player HAS tapped that Square, the card has produced a Claim in the Admin
+ * queue, and trading it away would strand that Claim against a card that no
+ * longer holds the Prompt. So a pending Mark makes a card non-pristine here even
+ * though it scores nothing there.
+ *
+ * That distinction is also what keeps this predicate honest against
+ * `firestore.rules` `boardPristine()`, which gates the write on `free == true ||
+ * marked == false` and cannot see `status` semantics. The two MUST agree, or the
+ * chip renders on a card whose reshuffle the server then denies. Pinned by
+ * src/game/reshuffle.test.ts.
+ */
+export function isPristine(cells: Cell[]): boolean {
+  return cells.every((c) => c.free || !c.marked);
+}
+
 export type Rankable = Pick<PlayerDoc, 'bingoCount' | 'squaresMarked' | 'firstBingoAt'>;
 
 /** Leaderboard order: bingos desc, then squares desc, then earliest first-bingo; two no-bingo Players tie at exactly 0. */

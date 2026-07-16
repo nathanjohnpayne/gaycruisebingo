@@ -6,7 +6,7 @@
 // regardless of the stored per-Event dismissal.
 import { test, expect } from '@playwright/test';
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
-import { seedDailyEvent } from './support/daily';
+import { seedDailyEvent, dismissLaunchIntro } from './support/daily';
 import { joinViaSharedLink, signedInUid } from './support/join';
 import { waitForBoardServerConfirmed } from './support/board';
 import { userAttested } from './support/seed';
@@ -47,6 +47,10 @@ test.describe('coach overlay', () => {
     // day-cards spec also uses to clear the scrim before Day-switcher taps.
     await page.getByRole('button', { name: /deal me in/i }).click();
     await expect(overlay).toHaveCount(0);
+    // The Reshuffle launch announcement (#378) is queued behind this overlay, so
+    // it appears the moment the coach flag is set — clear it before the reload
+    // assertions below, which expect a bare board.
+    await dismissLaunchIntro(page);
 
     // A reload does NOT re-show it — the dismissal is a per-Event localStorage
     // stamp (`gcb.coachOverlay.{eventId}.dismissedAt`), so it survives the
@@ -73,6 +77,7 @@ test.describe('coach overlay', () => {
     // Dismiss the real first-open overlay first — the replay path must work
     // AFTER dismissal, not just before it.
     await page.getByRole('button', { name: /deal me in/i }).click();
+    await dismissLaunchIntro(page);
     await expect(page.locator('.coach-overlay')).toHaveCount(0);
 
     await page.getByRole('link', { name: 'More' }).click();

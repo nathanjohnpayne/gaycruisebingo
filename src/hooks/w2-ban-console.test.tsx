@@ -150,6 +150,7 @@ const player = (uid: string, firstBingoAt: number | null): PlayerDoc => ({
   squaresMarked: 5,
   firstBingoAt,
   blackout: false,
+  reshufflesUsed: 0,
 });
 
 describe('useItems — a banned author’s Prompt drops from the public pool', () => {

@@ -106,6 +106,7 @@ function mkPlayer(over: Partial<PlayerDoc> & Pick<PlayerDoc, 'uid' | 'displayNam
     bingoCount: 0,
     squaresMarked: 0,
     firstBingoAt: null,
+    reshufflesUsed: 0,
     ...over,
   };
 }

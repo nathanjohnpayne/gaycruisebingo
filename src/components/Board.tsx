@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
-import { Lock } from 'lucide-react';
+import { Lock, Shuffle } from 'lucide-react';
 import { getDoc } from 'firebase/firestore';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useDayBoard, useDayMeta, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, useDayMetasStatus, isBanned } from '../hooks/useData';
-import { setMark, dealDayCard, resolveDisplayName } from '../data/api';
+import { setMark, dealDayCard, resolveDisplayName, RESHUFFLE_ALLOWANCE } from '../data/api';
 import { dayBoardRef } from '../data/paths';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
@@ -27,9 +27,10 @@ import {
 // the proofed-mark completion verdict ProofSheet reports back (PR #110 round 2
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
-import { hasBingo, isBlackout, winningCells, completedLines, countMarked, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
+import { hasBingo, isBlackout, winningCells, completedLines, countMarked, isPristine, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
 import { fitTextSize } from '../game/fitText';
 import { useTextSize } from '../hooks/useTextSize';
+import { useOnline } from '../hooks/useOnline';
 import { track } from '../analytics';
 import { setClaimSheetOpen } from '../hooks/useToastStack';
 import { useOpenSquareIntent, clearOpenSquare } from '../hooks/useOpenSquare';
@@ -42,7 +43,9 @@ import TutorialBanner, { TutorialTag } from './TutorialBanner';
 import FarewellPodium from './FarewellPodium';
 import { farewellPinIndex } from '../data/finale';
 import { pinDayFirstBingo, enqueueHeldHonorPin, takeHeldHonorPins, dropHeldHonorPins } from '../data/dayMeta';
-import CoachOverlay from './CoachOverlay';
+import CoachOverlay, { isCoachOverlayDismissed } from './CoachOverlay';
+import LaunchIntro from './LaunchIntro';
+import ReshuffleSheet from './ReshuffleSheet';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
 
@@ -525,6 +528,7 @@ export function DayBar({
   day,
   honor,
   timezone,
+  reshuffle,
 }: {
   day: DayDef;
   // The Day's pinned First to BINGO (#264) — when present on a NON-tutorial
@@ -533,6 +537,14 @@ export function DayBar({
   // daily-honor competitiveness (spec § "Embark (tutorial) view").
   honor?: { displayName: string; at: number } | null;
   timezone?: string;
+  // The Reshuffle chip (#378, wireframes #frame-reshuffle): remaining cruise-wide
+  // count + the tap that opens the confirm sheet. OPTIONAL by design — DayBar is
+  // shared with `LockedDayPreview`, whose bare call site therefore stays
+  // chip-free by construction rather than by a condition someone could later
+  // get wrong. The caller owns the eligibility gate; this renders what it is
+  // handed. `left` is only ever passed as 1..3 (a spent-out Player gets no
+  // chip at all, not a "×0" one — see the wireframes' ×3 → ×0 range note).
+  reshuffle?: { left: number; onOpen: () => void } | null;
 }) {
   const description = themeDescription(day.theme);
   const showHonor = honor != null && validHonorTime(honor.at) && !day.tutorial;
@@ -552,6 +564,17 @@ export function DayBar({
             </>
           )}
         </div>
+        {reshuffle && (
+          <button
+            type="button"
+            className="reshuf"
+            onClick={reshuffle.onOpen}
+            aria-label={`Reshuffle this card — ${reshuffle.left} of ${RESHUFFLE_ALLOWANCE} cruise reshuffles left`}
+          >
+            <Shuffle aria-hidden="true" className="reshuf-icon" />
+            <span aria-hidden="true">×{reshuffle.left}</span>
+          </button>
+        )}
       </div>
       {description && <p className="daybar-desc">{description}</p>}
     </div>
@@ -758,6 +781,18 @@ export default function Board() {
   const [freePulse, setFreePulse] = useState(0);
   const [proofTarget, setProofTarget] = useState<Cell | null>(null);
   const [tallyTarget, setTallyTarget] = useState<Cell | null>(null);
+  // The Reshuffle confirm sheet (#378). Parent-owned open flag, like the sheets
+  // above; the eligibility gate that decides whether the chip exists at all is
+  // `reshuffleEligible` further down.
+  const [reshuffleOpen, setReshuffleOpen] = useState(false);
+  // Reshuffle is the one write that must not queue offline (see `reshuffleBoard`),
+  // so it is the one control that has to know about connectivity.
+  const online = useOnline();
+  // Whether the coach overlay is already behind us, so the launch announcement
+  // can queue behind it (see the LaunchIntro mount). Seeded from the stored flag
+  // at mount and flipped by CoachOverlay's own dismiss — a plain render-time read
+  // would never re-render Board when that key is written.
+  const [coachSeen, setCoachSeen] = useState(isCoachOverlayDismissed);
   // A Feed Tally Card's pending "open this Prompt's sheet" request (#261),
   // consumed by the intent effect below once the right Day's board renders.
   const openSquareIntent = useOpenSquareIntent();
@@ -1309,6 +1344,49 @@ export default function Board() {
         hasBoard: !!board,
       })
     : undefined;
+  // ---- Reshuffle eligibility (#378, specs/reshuffle.md) ----
+  //
+  // The chip renders only when ALL of these hold. Each is a separate clause on
+  // purpose: every one of them is independently re-checked by firestore.rules, so
+  // a chip that renders when any is false is a button that offers a write the
+  // server will refuse.
+  //
+  //   - the card is PRISTINE — `isPristine`, not `countMarked() === 0`: a pending
+  //     admin_confirmed Mark scores nothing but IS a tap, and the rules count it
+  //     (see isPristine's doc);
+  //   - the counter is KNOWN and under the allowance. `identityKnown` gates the
+  //     read because an unconfirmed-absent player row reads `null`, and
+  //     `(player?.reshufflesUsed ?? 0) < 3` would then cheerfully offer "×3" to
+  //     someone who has spent all three — the same tri-state trap `knownFirstBingoAt`
+  //     exists for;
+  //   - the Day is UNLOCKED. Not `viewedState`, which short-circuits to 'dealt'
+  //     whenever a Board exists and so says nothing about lock state on a rendered
+  //     card — the clock comparison is the honest question, against the `now` the
+  //     unlock timer bumps;
+  //   - the card is the caller's own (`cellsAttributable`), matching every other
+  //     action path here;
+  //   - we are ONLINE — the board replace and the counter increment must land
+  //     together, so this write is the one that must never queue (ADR 0006's
+  //     offline durability is deliberately NOT wanted here).
+  const reshufflesUsed = identityKnown ? (player?.reshufflesUsed ?? 0) : null;
+  const reshuffleLeft = reshufflesUsed == null ? 0 : RESHUFFLE_ALLOWANCE - reshufflesUsed;
+  const reshuffleEligible =
+    hasDays &&
+    viewedDay != null &&
+    board != null &&
+    cellsAttributable &&
+    isPristine(cells) &&
+    reshufflesUsed != null &&
+    reshuffleLeft > 0 &&
+    viewedDay.unlockAt <= now &&
+    online;
+  // Close a dangling sheet during render, the same adjust-during-render idiom the
+  // tally/proof sheets use: the sheet is open and a Mark lands from another tab
+  // (card no longer pristine), the account switches, or the connection drops — the
+  // confirm button must not survive its own preconditions. The write path
+  // re-checks server-side too, for the races this cannot see.
+  if (reshuffleOpen && !reshuffleEligible) setReshuffleOpen(false);
+
   const daySwitcher = hasDays ? (
     <DaySwitcher days={days} viewedIndex={viewedIndex} onSelect={setViewedIndex} />
   ) : null;
@@ -1720,7 +1798,17 @@ export default function Board() {
           whenever Board has cells — whichever Board is the Player's first
           dealt card, not hardcoded to the embark Day. Self-gates on a
           per-Event localStorage flag, so this fires unconditionally. */}
-      {cells.length > 0 && <CoachOverlay />}
+      {cells.length > 0 && <CoachOverlay onDismiss={() => setCoachSeen(true)} />}
+      {/* Reshuffle launch announcement (#378, wireframes #frame-launch-intro):
+          one-time, self-gating on its own localStorage key, mounted over a dealt
+          card like the coach overlay above. QUEUED BEHIND that overlay rather
+          than mounted alongside it: both draw the same `sheet-backdrop` scrim, so
+          a Player joining mid-cruise (first card + unseen announcement in the
+          same open) would get two stacked scrims and two CTAs. The coach overlay
+          decodes the card in front of them and goes first; this announces a
+          feature and can wait for the next render — its dismissal writes the
+          key, which re-renders Board and lets this through. */}
+      {cells.length > 0 && coachSeen && <LaunchIntro />}
       {/* `board-area` is the retint scope (daily-cards-spec § "Day switcher"):
           `data-theme` here — set ONLY when the Event carries a Day schedule —
           follows the VIEWED Day and cascades the theme token set (themes.css)
@@ -1744,6 +1832,9 @@ export default function Board() {
                 : null
             }
             timezone={event?.timezone}
+            reshuffle={
+              reshuffleEligible ? { left: reshuffleLeft, onOpen: () => setReshuffleOpen(true) } : null
+            }
           />
         )}
         {/* The farewell podium (#217, daily-cards-spec § "Farewell view"):
@@ -1973,6 +2064,17 @@ export default function Board() {
           identityKnown={identityKnown}
           isSourceLive={isDoubtSourceLive}
           onClose={() => setTallyTarget(null)}
+        />
+      )}
+      {/* The Reshuffle confirm (#378). `reshuffleOpen` can only be true while
+          `reshuffleEligible` holds — the render-time close above enforces that —
+          so uid/viewedDay/the counter are all non-null here by construction. */}
+      {reshuffleOpen && uid && viewedDay && reshufflesUsed != null && (
+        <ReshuffleSheet
+          uid={uid}
+          dayIndex={viewedDay.index}
+          used={reshufflesUsed}
+          onClose={() => setReshuffleOpen(false)}
         />
       )}
     </>

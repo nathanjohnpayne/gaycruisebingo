@@ -64,6 +64,11 @@ vi.mock('../data/moments', () => ({
 }));
 vi.mock('../data/doubts', () => ({ raiseDoubt: vi.fn(), openDoubts: () => [], doubtStatusFor: () => 'none' }));
 vi.mock('../data/api', () => ({
+  // Reshuffle (#378): Board reads the allowance for the day-bar chip and
+  // ReshuffleSheet imports the write; stubbed so the imports resolve. The chip's
+  // own behaviour is proven in src/components/reshuffle-chip.test.tsx.
+  RESHUFFLE_ALLOWANCE: 3,
+  reshuffleBoard: vi.fn(async () => 1),
   setMark: H.setMark,
   dealDayCard: H.dealDayCard,
   resolveDisplayName: (p: { displayName?: unknown } | null | undefined, f: string | null | undefined) =>

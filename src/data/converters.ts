@@ -123,7 +123,22 @@ export const boardConverter: FirestoreDataConverter<BoardDoc> = {
     };
   },
 };
-export const playerConverter = passthrough<PlayerDoc>();
+// Players read through a `reshufflesUsed` default so a legacy Player row (every
+// row written before #378 — the counter ships with no backfill) reads as 0 spent
+// rather than `undefined`, which the chip's `used < 3` gate would branch on
+// wrongly (`undefined < 3` is false, silently hiding the chip from every existing
+// Player). Mirrors `boardConverter.dayIndex` above: a `typeof` guard, not `??`,
+// so a persisted null/string reads as 0 too. Writes only ever emit a real number.
+export const playerConverter: FirestoreDataConverter<PlayerDoc> = {
+  toFirestore: (data) => data as DocumentData,
+  fromFirestore: (snap: QueryDocumentSnapshot) => {
+    const data = snap.data() as PlayerDoc;
+    return {
+      ...data,
+      reshufflesUsed: typeof data.reshufflesUsed === 'number' ? data.reshufflesUsed : 0,
+    };
+  },
+};
 export const userConverter = passthrough<UserDoc>();
 
 // Items carry their doc id (used as the stable key when dealing boards).

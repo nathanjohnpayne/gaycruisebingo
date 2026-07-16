@@ -35,6 +35,7 @@ function player(overrides: Partial<PlayerDoc> & Pick<PlayerDoc, 'uid'>): PlayerD
     bingoCount: 0,
     squaresMarked: 0,
     firstBingoAt: null,
+    reshufflesUsed: 0,
     ...overrides,
   };
 }
