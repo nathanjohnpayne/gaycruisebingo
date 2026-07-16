@@ -17,21 +17,27 @@ export const MAX_VISIBLE_TOASTS = 2;
 interface ToastRequest {
   id: string;
   priority: ToastPriority;
-  requestedAt: number;
+  /** Monotonic registration sequence — the within-priority tie-break. Wall-clock
+   *  (`Date.now()`) can hand two registrations the same millisecond, silently
+   *  flipping "newest first" to insertion order on ties (#334); a counter is
+   *  strictly ordered, so ranking never depends on timer granularity. */
+  seq: number;
 }
 
 let requests: ToastRequest[] = [];
+let nextSeq = 0;
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach((l) => l());
 const subscribe = (l: () => void) => (listeners.add(l), () => listeners.delete(l));
 const getSnapshot = () => requests;
-// Urgent before invitational; newest first within a priority.
+// Urgent before invitational; newest registration first within a priority.
 const rank = (list: ToastRequest[]) =>
-  [...list].sort((a, b) => (a.priority !== b.priority ? (a.priority === 'urgent' ? -1 : 1) : b.requestedAt - a.requestedAt));
+  [...list].sort((a, b) => (a.priority !== b.priority ? (a.priority === 'urgent' ? -1 : 1) : b.seq - a.seq));
 
 /** Test-only: jsdom doesn't rerun module-init between `it`s in one file. */
 export function __resetToastStackForTests(): void {
   requests = [];
+  nextSeq = 0;
   listeners.clear();
 }
 
@@ -46,7 +52,7 @@ export function useToastSlot(id: string, priority: ToastPriority, wantsToShow: b
     const existing = requests.find((r) => r.id === id);
     if (wantsToShow) {
       if (existing) existing.priority = priority;
-      else requests = [...requests, { id, priority, requestedAt: Date.now() }];
+      else requests = [...requests, { id, priority, seq: ++nextSeq }];
       notify();
     } else if (existing) {
       requests = requests.filter((r) => r.id !== id);
