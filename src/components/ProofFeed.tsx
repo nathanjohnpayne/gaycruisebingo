@@ -750,7 +750,24 @@ export default function ProofFeed() {
           />
         );
       })}
-      {whoListCard && <FeedWhoListSheet card={whoListCard} onClose={() => setWhoListCard(null)} />}
+      {whoListCard &&
+        (() => {
+          // #333: the state holds the TAP-TIME snapshot, but the markers must
+          // re-derive from the live tally subscription while the sheet is
+          // open — a marker can unmark or a new one arrive mid-view. Select
+          // the live card by identity from the freshly derived entries; if
+          // the tally has left the feed entirely (aged past the merge cap, or
+          // every marker unmarked), keep the snapshot rather than flashing a
+          // misleading empty list for what may only be an age-off.
+          const live = entries.find(
+            (entry) =>
+              entry.feedKind === 'tallyCard' &&
+              entry.card.itemId === whoListCard.itemId &&
+              entry.card.dayIndex === whoListCard.dayIndex,
+          );
+          const card = live?.feedKind === 'tallyCard' ? live.card : whoListCard;
+          return <FeedWhoListSheet card={card} onClose={() => setWhoListCard(null)} />;
+        })()}
     </div>
   );
 }
