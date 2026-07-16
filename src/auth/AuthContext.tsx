@@ -38,6 +38,7 @@ function isOnline(): boolean {
 // whole app on its loading screen. Bound that gate and hand failures to the
 // existing retry surface; never fall back to cached authority or render the Board.
 export const AUTH_BOOTSTRAP_TIMEOUT_MS = 10_000;
+export const WEB_APP_AUTH_SETTLE_TIMEOUT_MS = 1_500;
 export const PENDING_REDIRECT_ATTESTATION_KEY = 'gcb:pending-redirect-attestation';
 
 function prefersRedirectSignIn(nav: Pick<Navigator, 'userAgent' | 'platform' | 'maxTouchPoints'>): boolean {
@@ -198,6 +199,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [online, setOnline] = useState(isOnline());
   const signInAttemptRef = useRef<Promise<void> | null>(null);
   const redirectResultHandledRef = useRef(false);
+  const webAppHandoffStartedRef = useRef(false);
   // Whether `attested === true` is AUTHORITATIVE (server-settled or a same-session
   // optimistic attest) vs merely PROVISIONAL (the offline cache lift). Distinct
   // from `attested` so the offline cache lift can settle the gate for RENDER —
@@ -248,6 +250,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // uid stays out of this set: the UI is optimistically attested but NO deal fires,
   // so no rows are created for a User whose durable stamp does not exist.
   const attestCommittedUidsRef = useRef<Set<string>>(new Set());
+
+  const handoffSignedOutWebApp = useCallback((): boolean => {
+    if (webAppHandoffStartedRef.current) return true;
+    const authOrigin = firebaseAuthOriginRedirectUrl(window.location);
+    if (!authOrigin) return false;
+    webAppHandoffStartedRef.current = true;
+    window.location.replace(authOrigin);
+    return true;
+  }, []);
+
+  // Firebase should restore a cached User without the network. If a web.app
+  // build instead stalls against the blocked custom auth domain, bound that
+  // signed-out online boot and move to the stable same-project app origin.
+  useEffect(() => {
+    if (user || !loading || !isOnline() || !firebaseAuthOriginRedirectUrl(window.location)) return;
+    const timer = setTimeout(() => {
+      if (!auth.currentUser) handoffSignedOutWebApp();
+    }, WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [handoffSignedOutWebApp, loading, user]);
 
   // Set / clear `dealError` and its typed reason in LOCKSTEP (#70). Every deal or
   // bootstrap failure routes through `failDeal` (which classifies pool-shortfall vs
@@ -425,11 +447,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAttestedAuthoritative(false);
       setUser(u);
       if (!u) {
-        const authOrigin = firebaseAuthOriginRedirectUrl(window.location);
-        if (authOrigin) {
+        if (handoffSignedOutWebApp()) {
           // Move a signed-out web.app visit before rendering SignIn, so the Player
           // sees one acknowledgement and one Google transaction on firebaseapp.com.
-          window.location.replace(authOrigin);
           return undefined;
         }
         // Signed out → App renders SignIn, never "Loading…".
@@ -450,7 +470,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // an onAuthStateChanged callback's return value).
       return bootstrapUser(u, profileAttempt);
     });
-  }, [bootstrapUser, clearDealError]);
+  }, [bootstrapUser, clearDealError, handoffSignedOutWebApp]);
 
   // Mirror connectivity into React state AND complete the DEFERRED offline
   // bootstrap when the network returns (#115). `online` flipping true re-runs the

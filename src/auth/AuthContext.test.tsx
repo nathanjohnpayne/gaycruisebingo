@@ -1,7 +1,12 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { AuthProvider, PENDING_REDIRECT_ATTESTATION_KEY, useAuth } from './AuthContext';
+import {
+  AuthProvider,
+  PENDING_REDIRECT_ATTESTATION_KEY,
+  WEB_APP_AUTH_SETTLE_TIMEOUT_MS,
+  useAuth,
+} from './AuthContext';
 // The mocked module instance (vi.mock below) — the fallback-handler test writes
 // a config slot onto it to observe the #340 authDomain override.
 import { auth as mockedAuth } from '../firebase';
@@ -281,6 +286,28 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.signInWithRedirect).not.toHaveBeenCalled();
     expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
 
+    vi.unstubAllGlobals();
+  });
+
+  it('bounds a stalled online web.app auth bootstrap and hands off automatically', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    expect(replace).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/card');
+
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 });
