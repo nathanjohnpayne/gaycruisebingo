@@ -135,7 +135,7 @@ The Vercel project serves the same Vite build at `gaycruisebingo.vercel.app`. Se
 
 `vercel.json` rewrites `/__/auth/:path*` to the equivalent Firebase Hosting path. Vercel performs this as a transparent reverse proxy, so the Firebase helper is served while the browser remains on the Vercel origin; replacing it with a `301`/`302` redirect breaks the same-origin guarantee. Keep `gaycruisebingo.vercel.app` in Firebase Auth's authorized domains and keep `https://gaycruisebingo.vercel.app/__/auth/handler` in the Google OAuth web client's authorized redirect URIs.
 
-This configuration is Vercel-only. Firebase Hosting builds continue to use `VITE_FIREBASE_AUTH_DOMAIN=gaycruisebingo.com`; direct `.firebaseapp.com` visits pin auth to that same origin, and signed-out `.web.app` visits hand off there only when sign-in starts. Both hosting providers remain independently usable.
+This configuration is Vercel-only. Firebase Hosting builds continue to use `VITE_FIREBASE_AUTH_DOMAIN=gaycruisebingo.com`; direct `.firebaseapp.com` visits pin auth to that same origin, and signed-out `.web.app` visits hand off there before SignIn renders. Both hosting providers remain independently usable.
 
 ## 8. Configuration knobs
 
