@@ -203,10 +203,16 @@ export default function ConfirmWinMoments() {
     st.inFlight = true;
     // Tutorial-Day wins are excluded from the prior-win witness (Codex P1 on
     // #288, mirroring the live path): an admin-approved warm-up bingo writes
-    // the once-per-Player `${uid}-bingo` doc too, and reading it as a prior
-    // win would permanently disqualify the player's first MAIN-GAME confirm
-    // from the ceremony.
-    void hasPriorBingoWitness(actedUid, { excludeDayIndexes: c.tutorialDays })
+    // the legacy once-per-Player `${uid}-bingo` doc too, and reading it as a
+    // prior win would permanently disqualify the player's first MAIN-GAME
+    // confirm from the ceremony. `dayIndexes` (#372) hands over the schedule so
+    // the PER-CARD witness ids are probed here exactly as on the live path —
+    // without it this path would see only the legacy doc and could re-mint a
+    // ceremony for a Player whose prior win now lives at a day-scoped id.
+    void hasPriorBingoWitness(actedUid, {
+      excludeDayIndexes: c.tutorialDays,
+      dayIndexes: c.event?.days?.map((d) => d.index),
+    })
       .then((witnessed) => {
         const st2 = getConfirmState(actedUid);
         st2.inFlight = false;

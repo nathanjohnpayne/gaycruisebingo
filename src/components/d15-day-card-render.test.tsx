@@ -227,7 +227,14 @@ describe('Board daily-cards wiring (#246)', () => {
     expect(momentsMocks.enqueueFirstBingoMoment).toHaveBeenCalledTimes(1);
     // The prior-win witness excludes tutorial Days (Codex P1 on #288): a
     // warm-up bingo's `${uid}-bingo` doc must not disqualify this candidate.
-    expect(momentsMocks.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: new Set([0]), selfWriteGeneration: expect.any(Number) });
+    // `dayIndexes` (#372) hands over the schedule so the witness can probe the
+    // per-card `${uid}-bingo-d${day}` ids, where the tutorial exclusion is exact.
+    // `selfWriteGeneration` (#332) keeps the birth-time-witness race closed.
+    expect(momentsMocks.hasPriorBingoWitness).toHaveBeenCalledWith('u1', {
+      excludeDayIndexes: new Set([0]),
+      dayIndexes: [0, 1],
+      selfWriteGeneration: expect.any(Number),
+    });
 
     // Switch to the embark tutorial Day: a bingo verdict there enqueues the
     // plain win Moment(s) but NEVER the ceremonial event singleton.

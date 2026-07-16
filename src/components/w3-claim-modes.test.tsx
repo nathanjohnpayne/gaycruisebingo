@@ -834,9 +834,15 @@ describe('ConfirmWinMoments — daily-cards events adjudicate against the Claim�
     rerender(<ConfirmWinMoments />);
     await flushAsync();
     // The witness read carries the schedule's tutorial set, so an admin-approved
-    // warm-up bingo (which wrote the once-per-Player `${uid}-bingo` doc) can
-    // never disqualify the first MAIN-GAME confirm from the ceremony.
-    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: new Set([0]) });
+    // warm-up bingo (which wrote the legacy once-per-Player `${uid}-bingo` doc)
+    // can never disqualify the first MAIN-GAME confirm from the ceremony. It
+    // also carries the schedule's Day indexes (#372) so this path probes the
+    // per-card witness ids exactly as the live Board path does — without them it
+    // would see only the legacy doc and could re-mint a decided ceremony.
+    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1', {
+      excludeDayIndexes: new Set([0]),
+      dayIndexes: [0, 1, 2],
+    });
     expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
   });
 

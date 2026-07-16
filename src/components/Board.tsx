@@ -16,7 +16,8 @@ import {
   peekPendingMoments,
   pendingBlackoutDayIndexes,
   removePendingBlackoutDay,
-  pendingBingoDayIndex,
+  pendingBingoDayIndexes,
+  removePendingBingoDay,
   pendingFirstBingoDayIndex,
   clearPendingMoment,
   dropPendingWins,
@@ -1087,9 +1088,10 @@ export default function Board() {
     const bingoNow = hasBingo(cellsNow);
     const blackoutNow = isBlackout(cellsNow);
     const actor = { uid: cUid, displayName: cName, photoURL: cPhoto };
-    // #262: the plain bingo's queued Day (the ceremonial first_bingo carries
-    // its OWN `firstBingoDayIndex` stamp — see below).
-    const bingoDay = pendingBingoDayIndex(cUid);
+    // #262/#372: the plain bingo's queued Day(s) — a SET since bingo became
+    // per-card (the ceremonial first_bingo carries its OWN `firstBingoDayIndex`
+    // stamp — see below).
+    const bingoDays = pendingBingoDayIndexes(cUid);
     // The witnessed Day must MATCH the witnessed cells (Codex P2, #275 round 4):
     // an action/proof continuation passes the ACTED board's cells, and the
     // Player may have switched the rendered Day while that await was in flight —
@@ -1097,22 +1099,25 @@ export default function Board() {
     // is trusted only for the no-override (snapshot) drains where the two are
     // the same board by construction.
     const witnessDay = cellsOverride !== undefined ? dayOverride : boardDayIndex;
-    // A day-stamped queued bingo adjudicates ONLY against ITS OWN Day's board
-    // (Codex P2 on #286, mirroring the blackout witnessDay check below):
-    // `bingoNow` witnesses exactly one board — the rendered/acted one — and a
+    // Per-card adjudication (#372) — now identical in shape to the blackout arm
+    // below, where it was already required by #267. A day-stamped queued bingo
+    // adjudicates ONLY against ITS OWN Day's board (Codex P2 on #286):
+    // `bingoNow` witnesses exactly ONE board — the rendered/acted one — and a
     // bingo held behind the identity/roster gates can be queued on Day 1, then
     // drained while Day 2 renders with its own standing bingo. Without the
-    // match, that pass would publish a Day-1-stamped Moment off Day 2's
-    // witness. A mismatched Day HOLDS (it never clears): the queued win fires
-    // when its own board next renders standing, and a fall on that board drops
-    // it via dropPendingWins. A legacy (day-less) queue keeps the plain check.
-    const bingoDayWitnessed = bingoDay === undefined || witnessDay === bingoDay;
-    if (pending.bingo && bingoNow && bingoDayWitnessed) {
-      // Single-arg on a legacy (day-less) queue — the call contract mirrors
-      // broadcastBlackout's legacy form.
-      if (bingoDay === undefined) broadcastBingo(actor);
-      else broadcastBingo(actor, bingoDay);
-      clearPendingMoment(cUid, 'bingo');
+    // match, that pass would publish a Day-1-stamped Moment off Day 2's witness.
+    // A queued Day that is not the witnessed one HOLDS (it never clears): it
+    // fires when its own board next renders standing, and a fall on that board
+    // drops just it via dropPendingWins. An empty queue is the legacy day-less
+    // broadcast (one card the whole Event — the rendered board IS the card).
+    if (pending.bingo && bingoNow) {
+      if (bingoDays.length === 0) {
+        broadcastBingo(actor);
+        clearPendingMoment(cUid, 'bingo');
+      } else if (witnessDay !== undefined && bingoDays.includes(witnessDay)) {
+        broadcastBingo(actor, witnessDay);
+        removePendingBingoDay(cUid, witnessDay);
+      }
     }
     if (pending.blackout && blackoutNow) {
       // Per-card adjudication (#267; Codex P2 on #275): `blackoutNow` witnesses
@@ -1215,7 +1220,10 @@ export default function Board() {
     // are 0/false, so nothing can spuriously read as a fall.
     if (uid) {
       if (wasBingoLines.current > 0 && bingoLines === 0) {
-        dropPendingWins(uid, { bingo: true });
+        // The fall is witnessed by THIS board — drop only its Day's queued
+        // bingo (#372, the twin of the blackout day-scoping below); legacy
+        // (no schedule) keeps the full clear.
+        dropPendingWins(uid, { bingo: true, bingoDayIndex: hasDays ? board?.dayIndex : undefined });
         if (hasDays && board?.dayIndex !== undefined) dropHeldHonorPins(uid, board.dayIndex);
       }
       if (wasBlackout.current && !black)
@@ -1584,7 +1592,10 @@ export default function Board() {
         dropPendingWins(uid, {
           bingo: !res.bingo,
           blackout: !res.blackout,
-          // The unmark verdict witnesses the ACTED board only (#267).
+          // The unmark verdict witnesses the ACTED board only (#267 for
+          // blackout; #372 extends the same day-scoping to bingo, so unmarking
+          // on one Day cannot drop another Day's still-standing queued bingo).
+          bingoDayIndex: hasDays ? viewedIndex : board?.dayIndex,
           blackoutDayIndex: hasDays ? viewedIndex : board?.dayIndex,
         });
         if (hasDays && !res.bingo) dropHeldHonorPins(uid, viewedIndex);
@@ -1743,17 +1754,23 @@ export default function Board() {
     if (res.bingoTransition && !isStatsFrozen() && !actedTutorialDay) {
       const generation = pendingActionGeneration(uid);
       // Tutorial-Day wins are excluded from the prior-win witness (Codex P1 on
-      // #288): the once-per-Player `${uid}-bingo` doc is written by warm-up
-      // wins too, and reading one as a prior win would permanently disqualify
-      // everyone who played the embark card from the headline honor.
+      // #288): the legacy once-per-Player `${uid}-bingo` doc is written by
+      // warm-up wins too, and reading one as a prior win would permanently
+      // disqualify everyone who played the embark card from the headline honor.
+      // `dayIndexes` (#372) hands over the schedule so the witness can probe the
+      // PER-CARD ids, where the same exclusion is exact rather than inferential:
+      // a tutorial win now owns its own day-scoped id, which is simply not
+      // probed. The legacy day-less doc keeps its existing exclusion path.
       const witnessed = await hasPriorBingoWitness(uid, {
         excludeDayIndexes: hasDays ? new Set(tutorialDayIndexes) : undefined,
+        dayIndexes: hasDays ? days.map((d) => d.index) : undefined,
         // #332: `generation` was captured above, before this await — if a
         // concurrent drain (gate-open/snapshot) broadcasts THIS win's plain
         // bingo while the read is in flight, the witness recognizes the
         // just-written doc as self-evidence (not a prior win) and falls
         // through to the singleton consult instead of suppressing the
-        // ceremonial candidate.
+        // ceremonial candidate. Still required with per-card ids (#372): the
+        // same race just lands on `${uid}-bingo-d${actedDay}` instead.
         selfWriteGeneration: generation,
       });
       if (!witnessed && revalidateAfterAwait(uid, generation).generationUnchanged) {

@@ -480,15 +480,18 @@ export function hasCanonicalMomentId(moment: MomentDoc): boolean {
   ) {
     return moment.id === moment.kind;
   }
-  if (moment.kind === 'bingo') {
-    return moment.id === `${moment.uid}-bingo`;
-  }
-  if (moment.kind === 'blackout') {
-    // Per-card blackouts (#267): the day-stamped `${uid}-blackout-d${dayIndex}`
-    // id (the id's Day must MATCH the doc's own dayIndex — a forged mismatch
-    // is dropped), or the legacy day-less `${uid}-blackout`.
-    if (moment.id === `${moment.uid}-blackout`) return true;
-    return typeof moment.dayIndex === 'number' && moment.id === `${moment.uid}-blackout-d${moment.dayIndex}`;
+  // The two PER-CARD kinds — blackout since #267, bingo since #372 — share one
+  // id contract: the day-stamped `${uid}-${kind}-d${dayIndex}` form, valid only
+  // when the id's Day MATCHES the doc's own dayIndex (a forged mismatch is
+  // dropped), or the legacy day-less `${uid}-${kind}` that single-Board Events
+  // and pre-per-card data still carry. Mirrors the create rule's arm exactly, so
+  // read and write cannot diverge.
+  if (moment.kind === 'bingo' || moment.kind === 'blackout') {
+    if (moment.id === `${moment.uid}-${moment.kind}`) return true;
+    return (
+      typeof moment.dayIndex === 'number' &&
+      moment.id === `${moment.uid}-${moment.kind}-d${moment.dayIndex}`
+    );
   }
   return false;
 }
