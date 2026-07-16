@@ -82,10 +82,12 @@ test.describe('pre-freeze: no podium', () => {
     await joinViaSharedLink(page);
     await waitForBoardServerConfirmed(page);
     await dismissCoach(page);
-    // Not frozen: default view is still "today" (TODAY_INDEX), not the farewell pin.
-    await expect(page.getByRole('tab').nth(TODAY_INDEX)).toHaveAttribute('aria-selected', 'true');
-
-    await page.getByRole('tab').nth(FAREWELL_INDEX).click();
+    // In the scheduler-lag window the farewell is the most-recent unlock, so
+    // `defaultViewedIndex` opens it as "today" — through the ordinary
+    // latest-unlock rule, NOT the freeze pin (`farewellPinIndex` stays null
+    // until `frozenAt` lands). The podium must still be absent: it is gated on
+    // `frozenAt` itself, never on the farewell Day merely being open.
+    await expect(page.getByRole('tab').nth(FAREWELL_INDEX)).toHaveAttribute('aria-selected', 'true');
     await readDealtDayGrid(page);
     await expect(page.locator('.tutorial-banner-farewell')).toBeVisible();
     await expect(page.locator('.farewell-podium')).toHaveCount(0);

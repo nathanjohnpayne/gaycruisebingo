@@ -4,9 +4,15 @@
 // real item docs, and (2) a five-Day `days[]` schedule —
 //   0  embark   (tutorial, embark pool)   unlocked, snapshot-stamped
 //   1  main A   (welcome-aboard)          unlocked, snapshot-stamped
-//   2  main B   (get-sporty)              unlocked, snapshot-stamped  ← today (default)
+//   2  main B   (get-sporty)              unlocked, snapshot-stamped  ← today (default) WHILE farewell is locked
 //   3  farewell (tutorial, farewell pool) LOCKED by default (see below), snapshot-stamped
 //   4  main C   (glamiators)              LOCKED (future, no snapshot)
+// When the farewell Day is opted UNLOCKED (below) it seeds as the MOST-RECENT
+// unlock — later than main B — so it, not main B, is `defaultViewedIndex`'s
+// "today". That mirrors the real scheduler-lag window (the farewell unlocks at
+// D10 08:00, after every main Day) and keeps `unlockAt` monotonic by index; an
+// earlier shape seeded it BEFORE today, an inverted schedule that only ever
+// read as "today = main B" because it was chronologically invalid (#317 Codex).
 // The two unlocked MAIN Days (1, 2) both draw from the full 80-item main pool,
 // so their cards are disjoint (the no-repeats-across-the-cruise exclusion keeps
 // them from overlapping too). `now`-relative `unlockAt`s mirror d15-day-cards so
@@ -58,8 +64,12 @@ export async function seedDailyEvent(
 ): Promise<SeededDays> {
   const testEnv = await seedEmulatorEvent({ withStorage: opts.withStorage });
   const now = Date.now();
+  // Unlocked opt-in: seed the farewell as the MOST-RECENT unlock (2h ago, later
+  // than main B's 10h) so the schedule stays monotonic by index and
+  // `defaultViewedIndex` lands on the farewell as "today" — the real
+  // scheduler-lag state. Locked default: 48h in the future.
   const farewellUnlockAt =
-    opts.frozenAt != null || opts.farewellUnlocked === true ? now - 30 * HOUR : now + 48 * HOUR;
+    opts.frozenAt != null || opts.farewellUnlocked === true ? now - 2 * HOUR : now + 48 * HOUR;
   const mainSnapshotIds = idsOf(ITEMS as SeedItem[]);
   const embarkSnapshotIds = idsOf(EMBARK_ITEMS as SeedItem[]);
   const farewellSnapshotIds = idsOf(FAREWELL_ITEMS as SeedItem[]);
