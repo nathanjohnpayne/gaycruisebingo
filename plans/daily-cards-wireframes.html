@@ -91,8 +91,10 @@
   .systoast .btn{white-space:nowrap}
   .hdr{display:flex;justify-content:space-between;align-items:center;
     padding:14px 14px 10px;border-bottom:1px solid var(--border);background:var(--panel)}
-  .title{font-weight:800;font-size:14px;letter-spacing:.06em;line-height:1.15;color:var(--ink)}
-  .title i{font-style:normal;color:var(--primary)}
+  .title{font-weight:300;font-size:15px;letter-spacing:.1em;line-height:1;color:var(--ink);
+    white-space:nowrap;text-shadow:0 0 12px rgba(255,255,255,.22)}
+  .title b{font-weight:800;letter-spacing:.06em}
+  [data-theme='summer-white'] .title{text-shadow:none}
   .today{text-align:right;font-size:12.5px;line-height:1.35}
   .today .port{font-weight:700;color:var(--ink)}
   .today .theme{color:var(--dim)}
@@ -288,7 +290,7 @@
   <div class="unit">
     <div class="mini" data-theme="dog-tag">
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
       </div>
       <div class="strip">
@@ -327,7 +329,7 @@
   <div class="unit">
     <div class="mini" data-theme="get-sporty">
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
       </div>
       <div class="board" style="padding-bottom:0">
@@ -361,7 +363,7 @@
   <div class="unit">
     <div class="mini" data-theme="get-sporty">
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
       </div>
       <div class="board" style="padding-bottom:0">
@@ -396,7 +398,7 @@
   <div class="unit">
     <div class="mini" data-theme="welcome-aboard">
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">Sails Jul 15</div><div class="theme">🛳️ Welcome Aboard</div></div>
       </div>
       <div class="board">
@@ -432,7 +434,7 @@
   <div class="unit">
     <div class="mini" data-theme="duty-free">
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">🇲🇹 Valletta</div><div class="theme">✈️ Duty Free</div></div>
       </div>
       <div class="board" style="gap:8px">
@@ -486,7 +488,7 @@
   <div class="unit" id="frame-reshuffle">
     <div class="mini" data-theme="get-sporty">
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
       </div>
       <div class="board" style="padding-bottom:0">
@@ -518,7 +520,7 @@
   <div class="unit" id="frame-launch-intro">
     <div class="mini" data-theme="welcome-aboard">
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">🇮🇹 Trieste</div><div class="theme">🛳️ Welcome Aboard</div></div>
       </div>
       <div class="board">
@@ -554,7 +556,7 @@
     <div class="mini" data-theme="welcome-aboard" data-chrome="manual">
       <div class="statusbar"><span>9:41</span><div class="dynisland"></div><span><svg data-lucide="signal" class="lucide lucide-signal" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M2 20h.01" /> <path d="M7 20v-4" /> <path d="M12 20v-8" /> <path d="M17 20V8" /> <path d="M22 4v16" /> </svg> <svg data-lucide="battery-full" class="lucide lucide-battery-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 10v4" /> <path d="M14 10v4" /> <path d="M22 14v-4" /> <path d="M6 10v4" /> <rect x="2" y="6" width="16" height="12" rx="2" /> </svg></span></div>
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">Sails Jul 15</div><div class="theme">🛳️ Welcome Aboard</div></div>
       </div>
       <div class="board" style="padding-bottom:0">
@@ -586,7 +588,7 @@
   <div class="unit">
     <div class="mini" data-theme="glamiators">
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">🇮🇹 Palermo</div><div class="theme">🏛️ Glamiators</div></div>
       </div>
       <div class="strip">
@@ -629,7 +631,7 @@
   <div class="unit">
     <div class="mini" data-theme="seriously-pink">
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">🌊 Sea Day</div><div class="theme">💖 Seriously Pink T-Dance</div></div>
       </div>
       <div class="board" style="gap:7px">
@@ -730,7 +732,7 @@
   <div class="unit">
     <div class="mini" data-theme="neon-playground">
       <div class="hdr">
-        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="title">GAY CRUISE <b>BINGO</b></div>
         <div class="today"><div class="port">🇮🇹 Sorrento</div><div class="theme">🌈 Neon Playground</div></div>
       </div>
       <div class="board" style="gap:7px">
@@ -875,7 +877,7 @@ DAYS.forEach(d=>{
   unit.className='unit';
   unit.innerHTML=
   '<div class="mini" data-theme="'+d.theme+'">'+
-    '<div class="hdr"><div class="title">GAY CRUISE<br>BINGO</div>'+
+    '<div class="hdr"><div class="title">GAY CRUISE <b>BINGO</b></div>'+
       '<div class="today"><div class="port">'+(d.headPort? d.headPort : d.flag+' '+d.port)+'</div>'+
       '<div class="theme">'+d.emoji+' '+d.label+'</div></div></div>'+
     '<div class="strip">'+stripHTML(d)+'</div>'+
