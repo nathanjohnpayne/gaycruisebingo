@@ -52,28 +52,51 @@ export const POSTHOG_INIT_OPTIONS: Partial<PostHogConfig> = {
 export const POSTHOG_PROXY_HOST = 'https://d.gaycruisebingo.com';
 
 /**
- * Direct PostHog Cloud US ingestion — the fallback when the first-party proxy
- * is unreachable (#342). The 2026-07-15 shipboard DPI filter blocked the entire
- * registered domain by SNI, `d.gaycruisebingo.com` included, so every event from
- * the network the whole player base was on silently died in posthog-js's retry
- * queue while `us.i.posthog.com` remained reachable. Falling back trades the
- * proxy's ad-blocker resistance for actually delivering events.
+ * Personal-domain reverse proxy — the PRIMARY ingest host (#344). Same
+ * PostHog-managed Cloudflare proxy infrastructure as the gaycruisebingo proxy
+ * (both CNAME to *.cf-prod-us-proxy.proxyhog.com), but on a registered domain
+ * the 2026-07-15 shipboard DPI filter does NOT block. Ordering rationale: the
+ * filter killed the ENTIRE gaycruisebingo.com domain by SNI — subdomains
+ * included — so a same-domain proxy fails exactly when the app's audience (the
+ * ship) needs it; the personal domain keeps proxy-grade ad-blocker resistance
+ * without sharing that fate. Deliberate loose coupling to the owner's personal
+ * domain, accepted by owner decision (#344).
+ */
+export const POSTHOG_PERSONAL_PROXY_HOST = 'https://d.nathanpayne.com';
+
+/**
+ * Direct PostHog Cloud US ingestion — the LAST-RESORT host (#342). Never
+ * probed: when both proxies are down, events are best-effort against the
+ * backend itself (more ad-blocker-visible, but delivery beats silence — the
+ * #342 incident had events dying silently in posthog-js's retry queue).
  */
 export const POSTHOG_DIRECT_HOST = 'https://us.i.posthog.com';
 
 /**
- * Whether the first-party ingest proxy answers (#342): the same cheap
- * no-cors/no-store transport probe as canonical-redirect's
- * `canonicalOriginAlive` — an opaque response proves TCP+TLS+HTTP completed;
- * rejection (reset / filtered SNI / no DNS) or timeout means events would die.
+ * The priority-ordered ingest chain (#344): personal proxy, then the
+ * first-party gaycruisebingo proxy (#149's default, demoted by #344), then
+ * direct PostHog Cloud. Exported for tests and for the override policy below.
+ */
+export const POSTHOG_INGEST_HOSTS = [
+  POSTHOG_PERSONAL_PROXY_HOST,
+  POSTHOG_PROXY_HOST,
+  POSTHOG_DIRECT_HOST,
+] as const;
+
+/**
+ * Whether `host` answers (#342): the same cheap no-cors/no-store transport
+ * probe as canonical-redirect's `canonicalOriginAlive` — an opaque response
+ * proves TCP+TLS+HTTP completed; rejection (reset / filtered SNI / no DNS) or
+ * timeout means events would die.
  */
 export async function ingestHostAlive(
+  host: string,
   fetchImpl: typeof fetch = fetch,
   timeoutMs = 1500,
 ): Promise<boolean> {
   const { signal, cleanup } = probeTimeoutSignal(timeoutMs);
   try {
-    await fetchImpl(`${POSTHOG_PROXY_HOST}/?alive=${Date.now()}`, {
+    await fetchImpl(`${host}/?alive=${Date.now()}`, {
       mode: 'no-cors',
       cache: 'no-store',
       signal,
@@ -87,26 +110,30 @@ export async function ingestHostAlive(
 }
 
 /**
- * Which ingestion host to init with (#342). Pure so the policy is testable:
- * a non-blank `VITE_POSTHOG_HOST` override always wins (the existing direct-US
- * bypass contract, probe never consulted); otherwise the proxy when it answers,
- * else direct PostHog Cloud.
+ * Which ingestion host to init with, given the two proxy probes (#344). Pure
+ * so the priority policy is testable: first alive host in chain order, and
+ * direct PostHog Cloud unconditionally last (never probed — see its note).
  */
-export function resolveIngestHost(envHost: string | undefined, proxyAlive: boolean): string {
-  const override = envHost?.trim();
-  // An override that just restates the proxy is NOT a bypass (Codex P2 on
-  // #342): .env.example ships VITE_POSTHOG_HOST=<proxy>, so treating it as an
-  // unconditional winner would silently disable the outage fallback for every
-  // deploy built from a copied example env. Only a genuinely different host
-  // (the direct-US bypass contract) skips the probe.
-  if (override && override.replace(/\/+$/, '') !== POSTHOG_PROXY_HOST) return override;
-  return proxyAlive ? POSTHOG_PROXY_HOST : POSTHOG_DIRECT_HOST;
+export function pickIngestHost(personalAlive: boolean, gcbProxyAlive: boolean): string {
+  if (personalAlive) return POSTHOG_PERSONAL_PROXY_HOST;
+  if (gcbProxyAlive) return POSTHOG_PROXY_HOST;
+  return POSTHOG_DIRECT_HOST;
 }
 
-/** True when this env override should skip the transport probe entirely. */
+/**
+ * True when this env override should skip the transport probes entirely. An
+ * override that merely restates a PROXY chain member is NOT a bypass (Codex
+ * P2 on #342): .env.example ships VITE_POSTHOG_HOST=<gcb proxy>, so treating
+ * it as an unconditional winner would silently disable the outage failover
+ * for every deploy built from a copied example env. The DIRECT host is
+ * different: restating it is the documented "skip the proxies, go straight to
+ * PostHog Cloud" diagnostic bypass, so it wins unconditionally — as does any
+ * host outside the chain.
+ */
 export function envHostBypassesProbe(envHost: string | undefined): boolean {
-  const override = envHost?.trim();
-  return !!override && override.replace(/\/+$/, '') !== POSTHOG_PROXY_HOST;
+  const override = envHost?.trim().replace(/\/+$/, '');
+  if (!override) return false;
+  return override !== POSTHOG_PERSONAL_PROXY_HOST && override !== POSTHOG_PROXY_HOST;
 }
 
 /**
@@ -227,16 +254,24 @@ export async function initPostHog(): Promise<void> {
   const key = import.meta.env.VITE_POSTHOG_KEY as string | undefined;
   if (!key) return;
   const envHost = import.meta.env.VITE_POSTHOG_HOST as string | undefined;
-  // Probe the proxy unless an env override forces a genuinely different host
-  // (#342): a blocked proxy (shipboard SNI filter) silently drops every event,
-  // so ~1.5s of probe at boot buys working analytics for the whole session.
-  // `track()` calls in that window no-op via the existing `ready` gate; the
-  // initial pageview is captured by posthog.init itself afterwards, so nothing
-  // user-visible waits.
-  const api_host = resolveIngestHost(
-    envHost,
-    envHostBypassesProbe(envHost) ? true : await ingestHostAlive(),
-  );
+  // Walk the ingest chain unless an env override forces a host genuinely
+  // outside it (#342/#344): a blocked proxy (shipboard SNI filter) silently
+  // drops every event, so ~1.5s of parallel probes at boot buys working
+  // analytics for the whole session. Both proxies are probed CONCURRENTLY —
+  // the wait is one probe budget, not chain-length × budget. `track()` calls
+  // in that window no-op via the existing `ready` gate; the initial pageview
+  // is captured by posthog.init itself afterwards, so nothing user-visible
+  // waits.
+  let api_host: string;
+  if (envHostBypassesProbe(envHost)) {
+    api_host = envHost!.trim();
+  } else {
+    const [personalAlive, gcbProxyAlive] = await Promise.all([
+      ingestHostAlive(POSTHOG_PERSONAL_PROXY_HOST),
+      ingestHostAlive(POSTHOG_PROXY_HOST),
+    ]);
+    api_host = pickIngestHost(personalAlive, gcbProxyAlive);
+  }
   try {
     posthog.init(key, { api_host, ...POSTHOG_INIT_OPTIONS });
     ready = true;
