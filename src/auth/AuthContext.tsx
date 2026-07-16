@@ -1,5 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
+import {
+  getRedirectResult,
+  onAuthStateChanged,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+  type User,
+} from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
 import {
   attestAdult,
@@ -10,7 +17,7 @@ import {
   readAdultAttestationFromServer,
 } from '../data/api';
 import { track } from '../analytics';
-import { canonicalRedirectUrl, canonicalOriginAlive, FALLBACK_AUTH_DOMAIN } from '../canonical-redirect';
+import { firebaseAuthOriginRedirectUrl } from '../canonical-redirect';
 import SignIn from '../components/SignIn';
 import ConfirmWinMoments from '../components/ConfirmWinMoments';
 import PoolRecoveryWatcher from '../components/PoolRecoveryWatcher';
@@ -31,9 +38,44 @@ function isOnline(): boolean {
 // whole app on its loading screen. Bound that gate and hand failures to the
 // existing retry surface; never fall back to cached authority or render the Board.
 export const AUTH_BOOTSTRAP_TIMEOUT_MS = 10_000;
-export const SIGN_IN_CANONICAL_HEALTH_TTL_MS = 30_000;
+export const PENDING_REDIRECT_ATTESTATION_KEY = 'gcb:pending-redirect-attestation';
 
-type CanonicalOriginHealth = { alive: boolean; checkedAt: number };
+function prefersRedirectSignIn(nav: Pick<Navigator, 'userAgent' | 'platform' | 'maxTouchPoints'>): boolean {
+  return (
+    /Android|iPhone|iPad|iPod|Mobile/i.test(nav.userAgent) || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1)
+  );
+}
+
+function isStandaloneApp(): boolean {
+  const iosStandalone = Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone);
+  return iosStandalone || window.matchMedia?.('(display-mode: standalone)').matches === true;
+}
+
+function markPendingRedirectAttestation(): void {
+  try {
+    sessionStorage.setItem(PENDING_REDIRECT_ATTESTATION_KEY, String(Date.now()));
+  } catch {
+    // Firebase's redirect helper will report inaccessible sessionStorage itself.
+  }
+}
+
+function consumePendingRedirectAttestation(): boolean {
+  try {
+    const pending = sessionStorage.getItem(PENDING_REDIRECT_ATTESTATION_KEY) !== null;
+    sessionStorage.removeItem(PENDING_REDIRECT_ATTESTATION_KEY);
+    return pending;
+  } catch {
+    return false;
+  }
+}
+
+function trackSignInFailure(err: unknown): void {
+  track('login_failed', {
+    method: 'google',
+    code: (err as { code?: string })?.code,
+    message: err instanceof Error ? err.message : String(err),
+  });
+}
 
 function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -69,10 +111,7 @@ interface AuthContextValue {
   // True while a join/deal (initial or retry) or the bootstrap retry that
   // precedes a deferred deal is in flight.
   dealing: boolean;
-  // False only while an alias-origin sign-in is waiting for its pre-click
-  // canonical-origin health decision (#341). Keeping the UI disabled during
-  // that short probe lets the eventual fallback popup open inside the click's
-  // transient user activation.
+  // Reserved for auth startup readiness; current host selection is synchronous.
   signInReady: boolean;
   signIn: () => Promise<void>;
   signOutUser: () => Promise<void>;
@@ -156,9 +195,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // cache but must not deal until online — and the deferred deal has to FIRE on
   // reconnect, which only happens if `online` flipping true re-runs that effect.
   const [online, setOnline] = useState(isOnline());
-  const [signInReady, setSignInReady] = useState(() => canonicalRedirectUrl(window.location) === null);
-  const canonicalOriginHealthRef = useRef<CanonicalOriginHealth | null>(null);
-  const configuredAuthDomainRef = useRef(auth.config?.authDomain);
+  const signInAttemptRef = useRef<Promise<void> | null>(null);
+  const redirectResultPromiseRef = useRef<ReturnType<typeof getRedirectResult> | null>(null);
+  const redirectResultHandledRef = useRef(false);
   // Whether `attested === true` is AUTHORITATIVE (server-settled or a same-session
   // optimistic attest) vs merely PROVISIONAL (the offline cache lift). Distinct
   // from `attested` so the offline cache lift can settle the gate for RENDER —
@@ -209,34 +248,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // uid stays out of this set: the UI is optimistically attested but NO deal fires,
   // so no rows are created for a User whose durable stamp does not exist.
   const attestCommittedUidsRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    const canonical = canonicalRedirectUrl(window.location);
-    if (!canonical || user !== null) {
-      if (!canonical) canonicalOriginHealthRef.current = null;
-      setSignInReady(true);
-      return;
-    }
-
-    let cancelled = false;
-    canonicalOriginHealthRef.current = null;
-    setSignInReady(false);
-    const refreshCanonicalOriginHealth = () => {
-      void canonicalOriginAlive().then((alive) => {
-        if (cancelled) return;
-        canonicalOriginHealthRef.current = { alive, checkedAt: Date.now() };
-        setSignInReady(true);
-      });
-    };
-
-    refreshCanonicalOriginHealth();
-    const interval = setInterval(refreshCanonicalOriginHealth, SIGN_IN_CANONICAL_HEALTH_TTL_MS);
-
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, [user]);
 
   // Set / clear `dealError` and its typed reason in LOCKSTEP (#70). Every deal or
   // bootstrap failure routes through `failDeal` (which classifies pool-shortfall vs
@@ -636,9 +647,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // write acks, so a slow write never re-shows the prompt the User just satisfied;
   // a failed write stays optimistically attested for the session and re-attempts
   // on the next sign-in (honor-system self-statement, never a hard gate).
-  const attest = useCallback(async () => {
-    const u = auth.currentUser;
-    if (!u) return;
+  const persistAttestation = useCallback(async (u: User) => {
     // OPTIMISTIC-UI tier (#23, Finding 3): record + flip attested true BEFORE the
     // write so a later auth-state callback can never settle a re-prompt on a stale
     // read, and the UI proceeds with no flicker. This does NOT grant deal authority.
@@ -675,76 +684,87 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const signIn = async () => {
-    // Sign in same-origin with Firebase Auth's OAuth handler (authDomain =
-    // gaycruisebingo.com, #161): if the app is running on a Firebase alias origin
-    // (.web.app/.firebaseapp.com), send the Player to the canonical origin to
-    // authenticate there rather than hitting the cross-origin handler that fails in
-    // storage-partitioned webviews (#162). Redirecting at sign-in time — not at
-    // boot — means a signed-in Player reading their cached board offline is never
-    // navigated away, and signing in always needs the network anyway, so the
-    // unreliable `navigator.onLine` boot signal is sidestepped (Codex P2 on #165).
-    const canonical = canonicalRedirectUrl(window.location);
-    if (canonical) {
-      // #340: only navigate to the canonical origin when it actually answers. The
-      // 2026-07-15 apex outage reset every TLS handshake on gaycruisebingo.com
-      // while the aliases stayed up — the unconditional replace() below was then a
-      // hard dead end (Safari: "the server unexpectedly dropped the connection").
-      const canonicalHealth = canonicalOriginHealthRef.current;
-      const canonicalHealthIsFresh =
-        canonicalHealth?.alive === true && Date.now() - canonicalHealth.checkedAt <= SIGN_IN_CANONICAL_HEALTH_TTL_MS;
-      if (canonicalHealthIsFresh) {
-        // replace(), not assign(): the alias page is a signed-out throwaway, so it
-        // must not stay the Back target — after the Player authenticates on the
-        // canonical origin, Back would otherwise return to the alias origin, where
-        // Firebase Auth persistence is origin-scoped (they would look signed out and
-        // could bounce back through this redirect). (Codex P2 on #165.)
-        window.location.replace(canonical);
+  const attest = useCallback(async () => {
+    const u = auth.currentUser;
+    if (u) await persistAttestation(u);
+  }, [persistAttestation]);
+
+  // A top-level redirect reloads the app, so finish the Firebase transaction on
+  // mount and complete the acknowledgement that gated the original sign-in tap.
+  // The marker is same-origin session state and is consumed exactly once.
+  useEffect(() => {
+    redirectResultPromiseRef.current ??= getRedirectResult(auth);
+    void redirectResultPromiseRef.current
+      .then(async (result) => {
+        if (redirectResultHandledRef.current || !result) return;
+        redirectResultHandledRef.current = true;
+        track('login', { method: 'google' });
+        if (consumePendingRedirectAttestation()) await persistAttestation(result.user);
+      })
+      .catch((err) => {
+        if (redirectResultHandledRef.current) return;
+        redirectResultHandledRef.current = true;
+        trackSignInFailure(err);
+      });
+  }, [persistAttestation]);
+
+  const signIn = useCallback((): Promise<void> => {
+    if (signInAttemptRef.current) return signInAttemptRef.current;
+
+    const attempt = (async () => {
+      const authOrigin = firebaseAuthOriginRedirectUrl(window.location);
+      if (authOrigin) {
+        // This runs only for a signed-out web.app visitor. replace() avoids leaving
+        // a signed-out origin-scoped session as the Back target.
+        window.location.replace(authOrigin);
         return;
       }
-      // Canonical origin down → sign in HERE, against the Firebase-default handler
-      // (FALLBACK_AUTH_DOMAIN): the configured authDomain is the canonical host
-      // (#161), whose /__/auth/handler is exactly what the outage took down. The
-      // SDK reads auth.config.authDomain when it builds the popup URL, so this
-      // runtime override redirects only the OAuth handler, not the app. It
-      // deliberately reintroduces the #162 cross-origin-handler edge (partitioned
-      // in-app webviews) for the outage window only — strictly better than no
-      // sign-in path at all. The SignIn button is disabled until the probe has
-      // settled; direct test/programmatic callers that race it still take this
-      // no-await fallback so signInWithPopup stays inside the click's transient
-      // user activation. Reverts to same-origin canonical auth after a page load
-      // or before any non-fallback popup call. Conditional (Codex P1 on #341): unit
-      // suites stub `auth` as a bare object, and a missing config just means the
-      // popup proceeds with whatever the SDK holds — same as before this branch.
-      if (auth.config) auth.config.authDomain = FALLBACK_AUTH_DOMAIN;
-    } else if (auth.config && configuredAuthDomainRef.current) {
-      auth.config.authDomain = configuredAuthDomainRef.current;
-    }
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (err) {
-      // Sign-in failures were invisible in analytics (#163): track('login') only
-      // fires on success, and the storage-partition handler error (#161) renders
-      // on the OAuth handler's own origin, which PostHog never loads. Emit an
-      // explicit failure event carrying the Firebase error code so popup-path
-      // breakage (blocked popup, account-exists, network) is at least observable.
-      // Rethrow to preserve the prior contract — the caller (SignIn.tsx) surfaces
-      // the error. NOTE: the in-app-webview redirect fallback unloads the app
-      // before this catch can run, so it won't capture that path — the funnel
-      // (sign-in pageviews vs `login`) remains the signal there (#162/#163).
-      track('login_failed', {
-        method: 'google',
-        code: (err as { code?: string })?.code,
-        message: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
-    }
-    track('login', { method: 'google' });
-    // The 18+ checkbox gated this sign-in (SignIn.tsx), so signing in IS the
-    // attestation — persist it now that we have a uid, so a first-time User is not
-    // re-prompted for the box they just ticked (#23).
-    await attest();
-  };
+      const sameOriginHandler = auth.config?.authDomain === window.location.hostname;
+      if (sameOriginHandler && prefersRedirectSignIn(window.navigator) && !isStandaloneApp()) {
+        // Firebase recommends redirect on mobile. Keeping the browser in one
+        // top-level tab preserves the helper's sessionStorage across Google and
+        // avoids iOS Safari's popup-as-new-tab state loss.
+        markPendingRedirectAttestation();
+        try {
+          await signInWithRedirect(auth, googleProvider);
+        } catch (err) {
+          consumePendingRedirectAttestation();
+          trackSignInFailure(err);
+          throw err;
+        }
+        return;
+      }
+
+      try {
+        await signInWithPopup(auth, googleProvider);
+      } catch (err) {
+        // Sign-in failures were invisible in analytics (#163): track('login') only
+        // fires on success, and the storage-partition handler error (#161) renders
+        // on the OAuth handler's own origin, which PostHog never loads. Emit an
+        // explicit failure event carrying the Firebase error code so popup-path
+        // breakage (blocked popup, account-exists, network) is at least observable.
+        // Rethrow to preserve the prior contract — the caller (SignIn.tsx) surfaces
+        // the error. NOTE: the in-app-webview redirect fallback unloads the app
+        // before this catch can run, so it won't capture that path — the funnel
+        // (sign-in pageviews vs `login`) remains the signal there (#162/#163).
+        trackSignInFailure(err);
+        throw err;
+      }
+      track('login', { method: 'google' });
+      // The 18+ checkbox gated this sign-in (SignIn.tsx), so signing in IS the
+      // attestation — persist it now that we have a uid, so a first-time User is not
+      // re-prompted for the box they just ticked (#23).
+      await attest();
+    })();
+
+    signInAttemptRef.current = attempt;
+    void attempt
+      .finally(() => {
+        if (signInAttemptRef.current === attempt) signInAttemptRef.current = null;
+      })
+      .catch(() => {});
+    return attempt;
+  }, [attest]);
 
   const signOutUser = async () => {
     await signOut(auth);
@@ -767,7 +787,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         dealError,
         dealErrorReason,
         dealing,
-        signInReady,
+        signInReady: true,
         signIn,
         signOutUser,
         attest,

@@ -85,9 +85,9 @@ export const POSTHOG_INGEST_HOSTS = [
 
 /**
  * Whether `host` answers (#342): the same cheap no-cors/no-store transport
- * probe as canonical-redirect's `canonicalOriginAlive` — an opaque response
- * proves TCP+TLS+HTTP completed; rejection (reset / filtered SNI / no DNS) or
- * timeout means events would die.
+ * probe used by the other resilient transports — an opaque response proves
+ * TCP+TLS+HTTP completed; rejection (reset / filtered SNI / no DNS) or timeout
+ * means events would die.
  */
 export async function ingestHostAlive(
   host: string,
