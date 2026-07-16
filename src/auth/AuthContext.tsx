@@ -70,10 +70,11 @@ function consumePendingRedirectAttestation(): boolean {
 }
 
 function trackSignInFailure(err: unknown): void {
+  const rawCode = (err as { code?: unknown })?.code;
+  const code = typeof rawCode === 'string' && /^auth\/[a-z0-9-]+$/.test(rawCode) ? rawCode : 'auth/unknown';
   track('login_failed', {
     method: 'google',
-    code: (err as { code?: string })?.code,
-    message: err instanceof Error ? err.message : String(err),
+    code,
   });
 }
 
@@ -196,7 +197,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // reconnect, which only happens if `online` flipping true re-runs that effect.
   const [online, setOnline] = useState(isOnline());
   const signInAttemptRef = useRef<Promise<void> | null>(null);
-  const redirectResultPromiseRef = useRef<ReturnType<typeof getRedirectResult> | null>(null);
   const redirectResultHandledRef = useRef(false);
   // Whether `attested === true` is AUTHORITATIVE (server-settled or a same-session
   // optimistic attest) vs merely PROVISIONAL (the offline cache lift). Distinct
@@ -693,19 +693,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // mount and complete the acknowledgement that gated the original sign-in tap.
   // The marker is same-origin session state and is consumed exactly once.
   useEffect(() => {
-    redirectResultPromiseRef.current ??= getRedirectResult(auth);
-    void redirectResultPromiseRef.current
+    if (redirectResultHandledRef.current) return;
+    redirectResultHandledRef.current = true;
+    if (!consumePendingRedirectAttestation()) return;
+
+    void getRedirectResult(auth)
       .then(async (result) => {
-        if (redirectResultHandledRef.current || !result) return;
-        redirectResultHandledRef.current = true;
+        if (!result) return;
         track('login', { method: 'google' });
-        if (consumePendingRedirectAttestation()) await persistAttestation(result.user);
+        await persistAttestation(result.user);
       })
-      .catch((err) => {
-        if (redirectResultHandledRef.current) return;
-        redirectResultHandledRef.current = true;
-        trackSignInFailure(err);
-      });
+      .catch(trackSignInFailure);
   }, [persistAttestation]);
 
   const signIn = useCallback((): Promise<void> => {

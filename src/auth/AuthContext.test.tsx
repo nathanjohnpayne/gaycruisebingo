@@ -141,7 +141,7 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
   });
 
-  it("fires track('login_failed', …) with method/code/message and rethrows when the popup rejects (#163)", async () => {
+  it("fires track('login_failed', …) with a safe code and rethrows when the popup rejects (#163)", async () => {
     const err = Object.assign(new Error('Unable to process request due to missing initial state.'), {
       code: 'auth/missing-initial-state',
     });
@@ -163,11 +163,10 @@ describe('AuthContext deal-error hardening', () => {
     // Rethrow contract: signIn surfaces the original error to its caller.
     await expect(signIn()).rejects.toBe(err);
 
-    // The failure event carries method, the Firebase code, AND the message.
+    // The failure event carries only allowlisted, PII-free fields.
     expect(mocks.track).toHaveBeenCalledWith('login_failed', {
       method: 'google',
       code: 'auth/missing-initial-state',
-      message: 'Unable to process request due to missing initial state.',
     });
     // The success path did not run: no login event, no attestation.
     expect(mocks.track).not.toHaveBeenCalledWith('login', { method: 'google' });
@@ -253,6 +252,16 @@ describe('AuthContext deal-error hardening', () => {
     await waitFor(() => expect(mocks.attestAdult).toHaveBeenCalledWith(FAKE_USER));
     expect(mocks.attestAdult).toHaveBeenCalledTimes(1);
     expect(sessionStorage.getItem(PENDING_REDIRECT_ATTESTATION_KEY)).toBeNull();
+  });
+
+  it('does not consume or report a redirect result without an app-owned pending marker', async () => {
+    mount();
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(mocks.getRedirectResult).not.toHaveBeenCalled();
+    expect(mocks.track).not.toHaveBeenCalledWith('login_failed', expect.anything());
   });
 
   it('hands web.app sign-in to the stable same-project firebaseapp.com origin exactly once', async () => {
