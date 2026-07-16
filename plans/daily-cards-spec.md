@@ -154,6 +154,10 @@ Tallies, Doubts, Proofs, and Moments gain a `dayIndex` field so the feed can say
 - **Joining mid-cruise**: every Day with `unlockAt <= now` is open; the Player can deal and play all of them immediately. Locked future Days behave the same for everyone.
 - **Past Days stay open**: cards remain markable for the whole cruise once unlocked. No end-of-day locking.
 
+### Reshuffle (added 2026-07-14; simplified same day)
+
+A player may reshuffle a Day Card—a fresh deal from the same Day snapshot—under two constraints that eliminate all cascade complexity: the card must be **pristine** (zero player-marked squares; the free center doesn't count) and the allowance is **3 for the whole cruise** (`PlayerDoc.reshufflesUsed`, increment bound in rules to the board write, ≤ 3). A pristine card has produced nothing, so nothing is retracted anywhere—no tally, Feed, doubt, stat, or Moment surgery. Marking a square locks the card in; a player who unmarks everything returns it to pristine and may reshuffle, performing the "cascade" themselves through the existing unmark path, in the open. Confirm sheet gates the spend (the counter never refunds); online-only; discarded prompts return to the eligible pool. A one-time launch-day intro overlay announces the feature. Full ticket: `plans/reshuffle-ticket.md`; mockups: wireframes `#frame-reshuffle` and `#frame-launch-intro`.
+
 ## Free space per day
 
 The center square keeps "Complain about circuit music" on the eight party Days. Tutorial overrides via `freeText`:

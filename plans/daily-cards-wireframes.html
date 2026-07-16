@@ -184,6 +184,15 @@
   .tabavatar{width:15px;height:15px;border-radius:50%;background:var(--dim);
     display:inline-block;border:1.5px solid var(--primary)}
 
+  /* reshuffle */
+  .reshuf{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);
+    border-radius:10px;padding:3px 8px;font-size:10.5px;color:var(--dim);background:var(--panel);
+    font-weight:700;white-space:nowrap}
+  .btn.danger{border-color:#ff5c5c;color:#ff6b6b}
+  .warnbox{border:1px dashed #ff5c5c;border-radius:10px;padding:8px 11px;font-size:11px;
+    color:var(--ink);background:var(--bg)}
+  .warnbox b{color:#ff6b6b}
+
   /* claim sheet */
   .sheet{background:var(--panel);border-top:2px solid var(--primary);
     border-radius:16px 16px 0 0;padding:10px 14px 14px;display:flex;flex-direction:column;
@@ -471,6 +480,73 @@
       </div>
     </div>
     <p class="cap"><b>Feed—Tally cards, proofs, and Moments</b>New: <b>Tally cards</b> put bare marks in the stream—one live card per prompt per day (never duplicates), first two names then +N, avatar stack, bumped to the top when someone new gets it (debounced to one bump per ~10 min so hot squares don't bury photo proofs). Tap opens the who-list sheet; the button is ＋ Proof if you've marked it, 🙋 Got it too if the square sits unmarked on one of your cards. Proof cards: avatar + name, day chip, the square quoted, then media—photo with live/library source badge (#190), audio with play + waveform + duration, or a callout. Moments stay gradient banners.</p>
+  </div>
+
+  <!-- Reshuffle: control + confirm dialog -->
+  <div class="unit" id="frame-reshuffle">
+    <div class="mini" data-theme="get-sporty">
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
+      </div>
+      <div class="board" style="padding-bottom:0">
+        <div class="daybar">
+          <div class="dayname">Day 2 · Get Sporty</div>
+          <span class="reshuf"><svg data-lucide="shuffle" class="lucide lucide-shuffle" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m18 14 4 4-4 4" /> <path d="m18 2 4 4-4 4" /> <path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22" /> <path d="M2 6h1.972a4 4 0 0 1 3.6 2.2" /> <path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45" /> </svg> ×3</span>
+        </div>
+        <div class="grid" id="rgrid" style="opacity:.3"></div>
+      </div>
+      <div class="tabs" style="opacity:.35">
+        <div class="tab on"><span>▦</span>Card</div>
+        <div class="tab"><span>◉</span>Feed</div>
+        <div class="tab"><span>♛</span>Ranks</div>
+        <div class="tab"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+      <div class="sheet">
+        <div class="sheetgrab"></div>
+        <div class="sheet-title">Reshuffle this card?</div>
+        <div class="sheetsub">A fresh 24 squares for Day 2—same day, new luck.</div>
+        <div class="warnbox"><b>This can't be undone.</b> You'll never see this card again—and reshuffles don't come back.</div>
+        <div class="note">2 of 3 cruise reshuffles left · available only before you've marked a square</div>
+        <div class="btnrow"><span class="btn ok">Keep my card</span><span class="btn danger"><svg data-lucide="shuffle" class="lucide lucide-shuffle" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m18 14 4 4-4 4" /> <path d="m18 2 4 4-4 4" /> <path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22" /> <path d="M2 6h1.972a4 4 0 0 1 3.6 2.2" /> <path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45" /> </svg> Reshuffle it</span></div>
+      </div>
+    </div>
+    <p class="cap"><b>Reshuffle—control + confirm</b>The shuffle chip lives in the day bar with the remaining cruise-wide count (×3 → ×0). It renders only on a pristine card: the moment you mark a square, the card is yours and the chip disappears (want out anyway? unmark everything first—your call, in the open). No cascade to warn about, so the confirm is simple: the card is gone forever and the counter is spent. Keep my card is the primary; Reshuffle is the danger action.</p>
+  </div>
+
+  <!-- Launch-day intro overlay -->
+  <div class="unit" id="frame-launch-intro">
+    <div class="mini" data-theme="welcome-aboard">
+      <div class="hdr">
+        <div class="title">GAY CRUISE<br>BINGO</div>
+        <div class="today"><div class="port">🇮🇹 Trieste</div><div class="theme">🛳️ Welcome Aboard</div></div>
+      </div>
+      <div class="board">
+        <div class="daybar">
+          <div class="dayname">Welcome Aboard<span class="tag">Warm-up</span></div>
+          <div class="daymeta">🇮🇹 Trieste</div>
+        </div>
+        <div class="lockwrap">
+          <div class="grid" id="introgrid2" style="opacity:.25"></div>
+          <div class="coach">
+            <div class="coachcard">
+              <h3>🆕 New today: reshuffles</h3>
+              <div class="lgd"><span class="lgdchip plus"><svg data-lucide="shuffle" class="lucide lucide-shuffle" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m18 14 4 4-4 4" /> <path d="m18 2 4 4-4 4" /> <path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22" /> <path d="M2 6h1.972a4 4 0 0 1 3.6 2.2" /> <path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45" /> </svg></span><div>Dealt a dud? Tap the shuffle chip on your card to trade it for a fresh one before you start marking.</div></div>
+              <div class="lgd"><span class="lgdchip">!</span><div><b>Three for the whole cruise</b>—spend them wisely. A reshuffle never comes back.</div></div>
+              <div class="lgd"><span class="lgdchip freec">✓</span><div>Only before you mark: the moment you tap a square, the card's yours for the day.</div></div>
+              <div class="btnrow"><span class="btn ok">Nice—let's play</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="tabs">
+        <div class="tab on"><span>▦</span>Card</div>
+        <div class="tab"><span>◉</span>Feed</div>
+        <div class="tab"><span>♛</span>Ranks</div>
+        <div class="tab"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>Launch-day intro overlay</b>One-time announcement pop-up on first open after the feature deploys (localStorage-keyed, per feature); replayable nowhere—it's a launch beat, not a tutorial. Uses the coach-overlay pattern already in the app.</p>
   </div>
 
   <!-- Install nudge (in Safari, pre-install) -->
@@ -846,6 +922,10 @@ const ig=document.getElementById('introgrid');
 if(ig) ig.innerHTML=gridHTML({n:1,pool:EMBARK,free:"You made it aboard"});
 const ng=document.getElementById('nudgegrid');
 if(ng) ng.innerHTML=gridHTML({n:11,pool:EMBARK,free:"You made it aboard"});
+const rg=document.getElementById('rgrid');
+if(rg) rg.innerHTML=gridHTML({n:22,pool:MAIN,free:"Complain about circuit music"});
+const ig2=document.getElementById('introgrid2');
+if(ig2) ig2.innerHTML=gridHTML({n:13,pool:EMBARK,free:"You made it aboard"});
 const ug=document.getElementById('updgrid');
 if(ug) ug.innerHTML=gridHTML({n:4,pool:MAIN,free:"Complain about circuit music"});
 
