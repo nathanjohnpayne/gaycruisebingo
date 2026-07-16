@@ -228,8 +228,8 @@ describe('ProofSheet — each capture type produces a valid submit and closes', 
     const props = baseProps();
     const { container } = render(<ProofSheet {...props} />);
 
-    // No type is pre-selected (issue #181 — the sheet opens compact), so the
-    // photo capture body renders only once Photo is chosen.
+    // Photo opens pre-selected (#309 — specs/w4-honor-pledge.md § Tightened
+    // sheet), so this click is a harmless re-select of the default segment.
     await user.click(screen.getByRole('button', { name: /photo/i }));
     const file = new File(['img'], 'proof.jpg', { type: 'image/jpeg' });
     await user.upload(container.querySelector('input[type="file"]') as HTMLInputElement, file);

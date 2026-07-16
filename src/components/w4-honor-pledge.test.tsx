@@ -164,16 +164,20 @@ describe('honor mode — the claim opens the sheet; the pledge IS the claim', ()
     expect(screen.queryByText(/proof for/i)).toBeNull();
   });
 
-  it('opens compact — no capture body until a proof type is selected — and the pledge row fits one line (nowrap, full width)', async () => {
+  it('opens Photo-first (#309) — photo body on first paint, other bodies once chosen — and the pledge row fits one line (nowrap, full width)', async () => {
     const user = userEvent.setup();
     const { container } = render(<Board />);
     clickCell(0);
     await screen.findByText(/proof for/i);
 
-    // Tightened sheet: nothing pre-selected, so no capture body renders…
-    expect(container.querySelector('.proof-body')).toBeNull();
-    expect(container.querySelector('input[type="file"]')).toBeNull();
-    // …and Mark it cannot submit a nothing-proof.
+    // Photo-first (#309, the wireframe's claim-sheet frame): the Photo segment
+    // opens pre-selected with its capture body — Take photo / Library — on
+    // first paint, one less tap on the mainline capture path.
+    expect(container.querySelector('.seg-btn.on')).toHaveTextContent('Photo');
+    expect(container.querySelector('.proof-body')).not.toBeNull();
+    expect(container.querySelector('input[type="file"]')).toBeInTheDocument();
+    // The pre-selection never loosens the submit gate: no capture yet, so
+    // Mark it cannot submit a nothing-proof.
     expect(screen.getByRole('button', { name: /mark it/i })).toBeDisabled();
 
     // The pledge is its own full-width, single-line row (specs/w4-honor-pledge.md):
@@ -181,9 +185,11 @@ describe('honor mode — the claim opens the sheet; the pledge IS the claim', ()
     const pledge = screen.getByRole('button', { name: PLEDGE });
     expect(pledge.className).toContain('pledge-btn');
 
-    // Choosing a type expands its capture body.
-    await user.click(screen.getByRole('button', { name: /photo/i }));
-    expect(container.querySelector('input[type="file"]')).toBeInTheDocument();
+    // The Sound/Callout bodies still mount only once chosen: switching to
+    // Callout swaps the photo body's file inputs for the textarea.
+    await user.click(screen.getByRole('button', { name: /callout/i }));
+    expect(container.querySelector('input[type="file"]')).toBeNull();
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
   });
 
   it('a REAL proof still works from a claim open — the pledge is optional, not forced', async () => {

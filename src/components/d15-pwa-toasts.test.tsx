@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, act, cleanup } from '@testing-library/react';
 import {
   __resetToastStackForTests,
   __resetHasMarkedForTests,
@@ -77,31 +77,51 @@ describe('useToastSlot stacking', () => {
     expect(screen.getByTestId('install')).toHaveTextContent('1');
   });
 
-  it('caps visible toasts at MAX_VISIBLE_TOASTS — a third-comer waits for a slot', async () => {
-    // Freeze Date.now() so `b` and `c` (both invitational) register the same
-    // `requestedAt`: a genuine tie the stable sort resolves by insertion order,
-    // so `b` keeps slot 1. Without this, a slow runner can hand `c`'s effect a
-    // strictly later timestamp, and "newest wins ties" (useToastStack.ts) then
-    // promotes `c` over `b` — a flip waitFor can't rescue, since it just retries
-    // the same losing assertion to timeout (flake seen in CI on #249). We assert
-    // the capacity+tie rule, not wall-clock granularity.
-    const now = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
-    try {
-      render(
-        <>
-          <SlotProbe id="a" priority="urgent" />
-          <SlotProbe id="b" priority="invitational" />
-          <SlotProbe id="c" priority="invitational" />
-        </>,
-      );
-      await waitFor(() => {
-        expect(screen.getByTestId('a')).toHaveTextContent('0');
-        expect(screen.getByTestId('b')).toHaveTextContent('1');
-        expect(screen.getByTestId('c')).toHaveTextContent('waiting');
-      });
-    } finally {
-      now.mockRestore();
-    }
+  it('caps visible toasts at MAX_VISIBLE_TOASTS — the lowest-ranked excess request waits for a slot', () => {
+    // b and c share a priority, so the within-priority tie-break decides who
+    // gets the last slot. That tie-break is the monotonic registration seq
+    // (#334) — c registered after b, so c is newest and wins; b waits. No
+    // Date.now() is involved, so there is no same-millisecond race for a slow
+    // runner to flip (the #249 flake): this asserts the same outcome the old
+    // wall-clock rank produced whenever b and c straddled a millisecond, now
+    // guaranteed on every run.
+    render(
+      <>
+        <SlotProbe id="a" priority="urgent" />
+        <SlotProbe id="b" priority="invitational" />
+        <SlotProbe id="c" priority="invitational" />
+      </>,
+    );
+    expect(screen.getByTestId('a')).toHaveTextContent('0');
+    expect(screen.getByTestId('c')).toHaveTextContent('1');
+    expect(screen.getByTestId('b')).toHaveTextContent('waiting');
+  });
+
+  it('ranks a same-priority late-comer identically whether it mounts in the same commit or a later one — registration order, never timer granularity', () => {
+    // The staggered twin of the sibling-mount case above: c registers in a
+    // separate commit (arbitrarily later in wall-clock terms), and the ranking
+    // must come out the same as when b and c mounted together — newest
+    // registration wins the contested slot. Before #334 these two paths could
+    // disagree: same-ms registrations fell back to insertion order while
+    // cross-ms ones ranked newest-first.
+    const { rerender } = render(
+      <>
+        <SlotProbe id="a" priority="urgent" />
+        <SlotProbe id="b" priority="invitational" />
+      </>,
+    );
+    expect(screen.getByTestId('a')).toHaveTextContent('0');
+    expect(screen.getByTestId('b')).toHaveTextContent('1');
+    rerender(
+      <>
+        <SlotProbe id="a" priority="urgent" />
+        <SlotProbe id="b" priority="invitational" />
+        <SlotProbe id="c" priority="invitational" />
+      </>,
+    );
+    expect(screen.getByTestId('a')).toHaveTextContent('0');
+    expect(screen.getByTestId('c')).toHaveTextContent('1');
+    expect(screen.getByTestId('b')).toHaveTextContent('waiting');
   });
 });
 

@@ -62,6 +62,12 @@ body {
 button {
   font-family: inherit;
   cursor: pointer;
+  /* #366: without this, a button that never declares its own color renders the
+     UA default ButtonText — near-black, unreadable on the (mostly dark) themes.
+     Nothing declares color-scheme, so the UA assumes light. Inheriting the
+     surrounding ink is always the intended pairing; every button with a design
+     color (.btn, .iconbtn, …) still sets its own. */
+  color: inherit;
 }
 a {
   color: inherit;
@@ -1181,20 +1187,44 @@ a {
   white-space: nowrap;
   border: 0;
 }
+/* The claim sheet's button register (#309 — the wireframes' claim-sheet
+   frame): sentence-case labels and FILLED accent primaries, scoped to
+   `.claim-sheet` because `.sheet` chrome (and the global `.btn`) is shared
+   with the profile/tally/who-list/menu sheets, which keep the uppercase
+   outline look. Same surface-scoped move as #322's toast register. */
+.claim-sheet .btn {
+  text-transform: none;
+  letter-spacing: normal;
+}
+/* The wireframes' `.btn.ok`: the primary action fills with the theme accent —
+   Take photo, ■ Stop, and Mark it / Submit claim — instead of the global
+   primary's border-recolor + glow. Cancel, Library, and ● Record stay
+   outlined. Same fill recipe as the #322 toast primary. */
+.claim-sheet .btn.primary {
+  background: var(--primary);
+  color: var(--on-gradient, #000);
+  border-color: var(--primary);
+  box-shadow: none;
+}
 /* The 🎖️ Cross My Heart pledge (issue #181): its own full-width row above the
    proof-type segments — never a fourth segment — so the label stays on one
-   line at 320px. Enabled (glowing like a selected segment) only in honor
-   mode; stricter modes render it disabled as a teaser for the honor path. */
+   line at 320px. Enabled only in honor mode; stricter modes render it
+   disabled as a teaser for the honor path. #309 restyles it to the
+   wireframes' `.pledge`: an accent-colored, bold outline — distinct from the
+   filled `--primary` actions — dropping the old primary-border + glow. */
 .pledge-btn {
   width: 100%;
   white-space: nowrap;
   margin-bottom: 12px;
-  border-color: var(--primary);
-  box-shadow: 0 0 10px var(--shadow);
-  font-weight: 600;
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 700;
 }
 .pledge-btn:disabled {
   opacity: 0.45;
+  /* --ink, not the enabled accent: keeps the disabled teaser reading greyed
+     (the pre-#309 disabled look), not as a dimmed call to action. */
+  color: var(--ink);
   border-color: var(--border);
   box-shadow: none;
   cursor: not-allowed;
@@ -1216,6 +1246,16 @@ a {
 .seg-btn.on {
   border-color: var(--primary);
   box-shadow: 0 0 10px var(--shadow);
+}
+/* #309 — the claim sheet's SELECTED proof-type segment fills solid (the
+   wireframes' `.segbtn.on`), replacing the border-recolor + glow. Scoped:
+   Admin's claim-mode/photo-source/tab segments keep the global look. */
+.claim-sheet .seg-btn.on {
+  background: var(--primary);
+  color: var(--on-gradient, #000);
+  border-color: var(--primary);
+  font-weight: 700;
+  box-shadow: none;
 }
 .seg-btn-icon {
   width: 15px;
@@ -1399,10 +1439,16 @@ a {
   gap: 8px;
 }
 .proof-media {
+  /* #363: contain, never crop — every photo fully displays regardless of
+     aspect ratio. A portrait shot clamps to the 320px box and pillarboxes;
+     the bars are filled by the blurred copy behind (.proof-media-blur).
+     position: relative lifts the sharp layer above that absolute fill. */
+  position: relative;
+  display: block;
   width: 100%;
   border-radius: 10px;
   max-height: 320px;
-  object-fit: cover;
+  object-fit: contain;
 }
 .proof-quote {
   margin: 0;
@@ -1620,6 +1666,22 @@ a {
 }
 .proof-media-wrap {
   position: relative;
+  /* #363: clip the over-scaled blur fill to the media's own rounded box. */
+  overflow: hidden;
+  border-radius: 10px;
+}
+/* #363: the letterbox/pillarbox fill — the SAME (scheme-guarded) image again,
+   cover-fit, blurred, and over-scaled so its soft edges never show. It sits
+   behind the contain-fit foreground, so the empty bars around an off-ratio
+   photo read as a color-matched glow instead of dead panel. */
+.proof-media-blur {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(24px);
+  transform: scale(1.15);
 }
 .proof-src-badge {
   position: absolute;
@@ -1920,8 +1982,14 @@ body.install-prompt-visible.update-prompt-visible .bug-report-pick {
   border-radius: 12px;
   background: var(--bg);
 }
-.bug-report-capture .btn {
-  justify-self: start;
+/* The capture-action pair (retake/retry + pick a different screen) shares a
+   row when the sheet is wide enough and wraps back to stacked when narrow —
+   width-driven, no breakpoint (#362). The preview img above stays a
+   full-width grid row of .bug-report-capture. */
+.bug-report-capture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .bug-report-error {
   color: var(--danger, #ff6b7a);

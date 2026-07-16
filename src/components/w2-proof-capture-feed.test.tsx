@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import type { ProofDoc } from '../types';
 
 // w2-proof-capture, Feed layer (RTL-jsdom). Drives the REAL ProofFeed + the REAL
@@ -230,5 +233,57 @@ describe('ProofFeed — the Proof IS the Feed entry (ADR 0002)', () => {
     render(<ProofFeed />);
     sub.fire(colSnap([]));
     expect(screen.getByText(/nothing in the feed yet/i)).toBeInTheDocument();
+  });
+});
+
+// --- #363: photos letterbox/pillarbox over a blurred fill — never cropped ----
+
+describe('ProofFeed — photo fit and the blurred fill layer (#363)', () => {
+  it('renders the blurred fill BEHIND the contained photo, both from the SAME safeMediaUrl-guarded value', () => {
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+    sub.fire(colSnap([proof({ id: 'p', createdAt: 1000, type: 'photo', mediaURL: 'https://x/p.jpg' })]));
+
+    const wrap = document.querySelector('.proof-media-wrap')!;
+    const blur = wrap.querySelector('img.proof-media-blur')!;
+    const fg = wrap.querySelector('img.proof-media')!;
+    // One guarded URL feeds both layers — the blur fill is not a second,
+    // separately-resolved src path around the safeMediaUrl barrier.
+    expect(fg.getAttribute('src')).toBe('https://x/p.jpg');
+    expect(blur.getAttribute('src')).toBe('https://x/p.jpg');
+    // The fill is decorative: empty alt, hidden from the a11y tree, and FIRST
+    // in the wrap so the sharp photo paints above it.
+    expect(blur.getAttribute('alt')).toBe('');
+    expect(blur.getAttribute('aria-hidden')).toBe('true');
+    expect(wrap.firstElementChild).toBe(blur);
+  });
+
+  it('a forged non-media scheme renders NEITHER layer (the safeMediaUrl barrier covers the fill too)', () => {
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+    sub.fire(colSnap([proof({ id: 'x', createdAt: 1000, type: 'photo', mediaURL: 'javascript:alert(1)' })]));
+    expect(document.querySelector('.proof-media')).toBeNull();
+    expect(document.querySelector('.proof-media-blur')).toBeNull();
+  });
+
+  // jsdom never applies index.css, so the non-cropping geometry is pinned the
+  // way src/theme/a11y-badge-contrast.test.tsx pins badge colors: parse the
+  // real stylesheet and assert the rule bodies.
+  it('index.css: .proof-media CONTAINS (never crops) and .proof-media-blur is the cover-fit blurred fill', () => {
+    const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'index.css'), 'utf-8');
+    // Full RegExp-metacharacter escape (backslash included) — escaping only
+    // `.` is the incomplete-sanitization CodeQL flags (js/incomplete-sanitization).
+    const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const ruleBody = (selector: string): string => {
+      const m = css.match(new RegExp(`${escapeRegExp(selector)}\\s*\\{([^}]*)\\}`));
+      if (!m) throw new Error(`rule not found: ${selector}`);
+      return m[1];
+    };
+    expect(ruleBody('.proof-media')).toMatch(/object-fit:\s*contain/);
+    expect(ruleBody('.proof-media')).not.toMatch(/object-fit:\s*cover/);
+    expect(ruleBody('.proof-media-blur')).toMatch(/object-fit:\s*cover/);
+    expect(ruleBody('.proof-media-blur')).toMatch(/filter:\s*blur/);
+    // The wrap clips the over-scaled blur to the media's rounded box.
+    expect(ruleBody('.proof-media-wrap')).toMatch(/overflow:\s*hidden/);
   });
 });

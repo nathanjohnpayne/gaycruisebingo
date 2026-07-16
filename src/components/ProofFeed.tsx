@@ -232,6 +232,11 @@ function ProofCard({
       <div className="proof-quote-pill">“{proof.itemText}”</div>
       {proof.type === 'photo' && media && (
         <div className="proof-media-wrap">
+          {/* #363: the blurred color-matched fill behind the contained photo —
+              the SAME safeMediaUrl-guarded value (never a second URL path), so
+              the XSS barrier covers both layers; decorative, so hidden from
+              a11y. The browser coalesces the duplicate src into one fetch. */}
+          <img className="proof-media-blur" src={media} alt="" aria-hidden="true" loading="lazy" />
           <img className="proof-media" src={media} alt="proof" loading="lazy" />
           {/* The transparency overlay (#190/#262): 📷 live for a camera
               capture, 🖼️ library for a picker choice; absent on legacy docs
@@ -486,7 +491,13 @@ export function TallyCard({
         <button
           className="tally-card-body grow"
           onClick={() => onOpenWhoList?.(card)}
-          style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer' }}
+          // #366: `color: 'inherit'` completes this button's inline UA-reset
+          // (background/border already opt out here): without it the marker
+          // names fell back to the UA's near-black ButtonText, unreadable on
+          // the dark themes. The global `button { color: inherit }` reset in
+          // index.css is the platform-wide fix; the inline copy keeps the
+          // component's own contract self-contained and jsdom-assertable.
+          style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'none', border: 'none', textAlign: 'left', cursor: 'pointer', color: 'inherit' }}
           title="See who marked this"
         >
           <span className="tally-avatars" style={{ display: 'inline-flex' }} aria-hidden="true">
