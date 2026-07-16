@@ -425,6 +425,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setAttestedAuthoritative(false);
       setUser(u);
       if (!u) {
+        const authOrigin = firebaseAuthOriginRedirectUrl(window.location);
+        if (authOrigin) {
+          // Move a signed-out web.app visit before rendering SignIn, so the Player
+          // sees one acknowledgement and one Google transaction on firebaseapp.com.
+          window.location.replace(authOrigin);
+          return undefined;
+        }
         // Signed out → App renders SignIn, never "Loading…".
         setLoading(false);
         return undefined;

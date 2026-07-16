@@ -264,7 +264,7 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.track).not.toHaveBeenCalledWith('login_failed', expect.anything());
   });
 
-  it('hands web.app sign-in to the stable same-project firebaseapp.com origin exactly once', async () => {
+  it('hands a signed-out web.app boot to firebaseapp.com before rendering a second sign-in screen', async () => {
     const replace = vi.fn();
     vi.stubGlobal('location', {
       hostname: 'gaycruisebingo.web.app',
@@ -273,19 +273,8 @@ describe('AuthContext deal-error hardening', () => {
       hash: '',
       replace,
     });
-    let signIn!: () => Promise<void>;
-    function Capture() {
-      const auth = useAuth();
-      signIn = auth.signIn;
-      return <span data-testid="sign-in-ready">{auth.signInReady ? 'ready' : 'pending'}</span>;
-    }
-    render(
-      <AuthProvider>
-        <Capture />
-      </AuthProvider>,
-    );
-
-    await signIn();
+    mount();
+    await act(async () => void (await emitAuth(null)));
 
     expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/card');
     expect(mocks.signInWithPopup).not.toHaveBeenCalled();
