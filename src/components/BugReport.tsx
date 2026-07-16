@@ -18,9 +18,15 @@ function BugIcon() {
 }
 
 function errorMessage(error: unknown): string {
-  const code = (error as { code?: string })?.code ?? '';
+  const { code = '', message } = (error as { code?: string; message?: string } | null) ?? {};
   if (code.includes('resource-exhausted')) return 'Too many reports right now. Please try again later.';
   if (code.includes('unauthenticated')) return 'Please sign in again before submitting.';
+  if (code.includes('invalid-argument')) {
+    // The callable names the real reason (e.g. a screenshot the contract
+    // rejects); connection-error copy would misdirect the reporter (#361).
+    const detail = typeof message === 'string' ? message.trim().slice(0, 200) : '';
+    return detail || 'The report was rejected. Adjust it and try again.';
+  }
   return 'Could not submit the report. Check your connection and try again.';
 }
 
@@ -248,15 +254,19 @@ export function BugReportProvider({ children }: { children: ReactNode }) {
                       {captureState === 'ready' && previewUrl && (
                         <>
                           <img src={previewUrl} alt="Screenshot that will be submitted with this bug report" />
-                          <button className="btn" type="button" onClick={capture}>Retake screenshot</button>
-                          <button className="btn" type="button" onClick={() => setStage('pick')}>Capture a different screen</button>
+                          <div className="bug-report-capture-actions">
+                            <button className="btn" type="button" onClick={capture}>Retake screenshot</button>
+                            <button className="btn" type="button" onClick={() => setStage('pick')}>Capture a different screen</button>
+                          </div>
                         </>
                       )}
                       {captureState === 'failed' && (
                         <>
                           <p>Screenshot unavailable. You can still send a text-only report.</p>
-                          <button className="btn" type="button" onClick={capture}>Try screenshot again</button>
-                          <button className="btn" type="button" onClick={() => setStage('pick')}>Capture a different screen</button>
+                          <div className="bug-report-capture-actions">
+                            <button className="btn" type="button" onClick={capture}>Try screenshot again</button>
+                            <button className="btn" type="button" onClick={() => setStage('pick')}>Capture a different screen</button>
+                          </div>
                         </>
                       )}
                     </div>

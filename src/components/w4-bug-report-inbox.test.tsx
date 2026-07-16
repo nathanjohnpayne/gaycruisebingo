@@ -114,6 +114,50 @@ describe('W4 bug-report inbox', () => {
     expect(screen.getByRole('dialog', { name: 'Report a bug' })).toBeInTheDocument();
   });
 
+  it('pairs the ready-state capture actions in a wrappable row below the full-width preview (#362)', async () => {
+    captureSpy.mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
+    renderFlow();
+    fireEvent.click(screen.getByRole('button', { name: 'Report a bug' }));
+    const preview = await screen.findByAltText('Screenshot that will be submitted with this bug report');
+    const actions = screen.getByRole('button', { name: 'Retake screenshot' }).closest('.bug-report-capture-actions');
+    expect(actions).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Capture a different screen' }).closest('.bug-report-capture-actions')).toBe(actions);
+    // The preview stays a direct full-width row of the capture grid, outside the pair.
+    expect(preview.closest('.bug-report-capture-actions')).toBeNull();
+    expect(preview.parentElement).toBe(actions?.parentElement);
+    // Side by side when space allows, stacked when narrow: width-driven wrap, no breakpoint.
+    const actionsBlock = INDEX_CSS.match(/\.bug-report-capture-actions\s*\{[^}]*\}/s)?.[0] ?? '';
+    expect(actionsBlock).toMatch(/display:\s*flex/);
+    expect(actionsBlock).toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  it('pairs the failed-state capture actions in the same wrappable row (#362)', async () => {
+    captureSpy.mockRejectedValue(new Error('Canvas unavailable'));
+    renderFlow();
+    fireEvent.click(screen.getByRole('button', { name: 'Report a bug' }));
+    await screen.findByText(/Screenshot unavailable/);
+    const actions = screen.getByRole('button', { name: 'Try screenshot again' }).closest('.bug-report-capture-actions');
+    expect(actions).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Capture a different screen' }).closest('.bug-report-capture-actions')).toBe(actions);
+  });
+
+  it('surfaces the server rejection reason on invalid-argument instead of connection copy (#361)', async () => {
+    captureSpy.mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
+    blobToDataUrlSpy.mockResolvedValue('data:image/png;base64,abc');
+    submitSpy.mockRejectedValueOnce({ code: 'functions/invalid-argument', message: 'Screenshot PNG header is invalid.' });
+    submitSpy.mockRejectedValueOnce({ code: 'functions/invalid-argument' });
+    renderFlow();
+    fireEvent.click(screen.getByRole('button', { name: 'Report a bug' }));
+    await screen.findByAltText('Screenshot that will be submitted with this bug report');
+    fireEvent.change(screen.getByLabelText('What happened?'), { target: { value: 'Sending always fails.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send report' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Screenshot PNG header is invalid.');
+    // Without a server detail it still names the rejection, not the connection.
+    fireEvent.click(screen.getByRole('button', { name: 'Send report' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('The report was rejected. Adjust it and try again.'));
+    expect(screen.getByRole('alert')).not.toHaveTextContent('Check your connection');
+  });
+
   it('closes with Escape and restores focus to the persistent trigger', async () => {
     captureSpy.mockRejectedValue(new Error('Capture unavailable'));
     renderFlow();
