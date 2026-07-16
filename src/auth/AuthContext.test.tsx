@@ -259,14 +259,61 @@ describe('AuthContext deal-error hardening', () => {
     expect(sessionStorage.getItem(PENDING_REDIRECT_ATTESTATION_KEY)).toBeNull();
   });
 
-  it('does not consume or report a redirect result without an app-owned pending marker', async () => {
+  it('emits nothing for a null redirect result on an ordinary mount (#346)', async () => {
     mount();
     await act(async () => {
       await Promise.resolve();
     });
 
-    expect(mocks.getRedirectResult).not.toHaveBeenCalled();
+    // The result IS consulted every mount (the marker-loss fallback needs it),
+    // but a null result — every ordinary mount — stays out of analytics.
+    expect(mocks.getRedirectResult).toHaveBeenCalledTimes(1);
+    expect(mocks.track).not.toHaveBeenCalledWith('login', expect.anything());
     expect(mocks.track).not.toHaveBeenCalledWith('login_failed', expect.anything());
+    expect(mocks.attestAdult).not.toHaveBeenCalled();
+  });
+
+  it('completes a redirect return whose app marker was lost: login and attestation still land (#346)', async () => {
+    // No sessionStorage marker — Safari dropped it across the provider
+    // round-trip — but Firebase still hands back the completed redirect.
+    mocks.getRedirectResult.mockResolvedValueOnce({ user: FAKE_USER });
+
+    mount();
+
+    await waitFor(() => expect(mocks.attestAdult).toHaveBeenCalledWith(FAKE_USER));
+    expect(mocks.attestAdult).toHaveBeenCalledTimes(1);
+    expect(mocks.track).toHaveBeenCalledWith('login', { method: 'google' });
+  });
+
+  it('keeps a marker-less redirect rejection out of analytics: no phantom login_failed (#346)', async () => {
+    mocks.getRedirectResult.mockRejectedValueOnce(
+      Object.assign(new Error('missing initial state'), { code: 'auth/missing-initial-state' }),
+    );
+
+    mount();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(mocks.track).not.toHaveBeenCalledWith('login_failed', expect.anything());
+  });
+
+  it('reports login_failed when an app-owned redirect return rejects (marker present)', async () => {
+    sessionStorage.setItem(PENDING_REDIRECT_ATTESTATION_KEY, '1');
+    mocks.getRedirectResult.mockRejectedValueOnce(
+      Object.assign(new Error('network down'), { code: 'auth/network-request-failed' }),
+    );
+
+    mount();
+
+    await waitFor(() =>
+      expect(mocks.track).toHaveBeenCalledWith('login_failed', {
+        method: 'google',
+        code: 'auth/network-request-failed',
+      }),
+    );
+    expect(sessionStorage.getItem(PENDING_REDIRECT_ATTESTATION_KEY)).toBeNull();
   });
 
   it('hands a signed-out web.app boot to firebaseapp.com before rendering a second sign-in screen', async () => {
@@ -368,6 +415,110 @@ describe('AuthContext deal-error hardening', () => {
     await act(async () => void (await emitAuth(FAKE_USER)));
     await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
     expect(replace).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('hands off web.app on a mid-session sign-out, not only on first load (#353)', async () => {
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    await act(async () => void (await emitAuth(FAKE_USER)));
+    expect(replace).not.toHaveBeenCalled(); // signed-in cached sessions stay put
+
+    // An explicit sign-out lands on the canonical origin: any sign-in tap from
+    // web.app would hand off anyway, so staying would only add a second
+    // acknowledgement screen before the same navigation.
+    await act(async () => void (await emitAuth(null)));
+    expect(replace).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/card');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('routes a web.app sign-in tap through the shared handoff and starts no auth transaction there', async () => {
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    await userEvent.click(screen.getByText('signin'));
+
+    expect(replace).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/card');
+    expect(mocks.signInWithPopup).not.toHaveBeenCalled();
+    expect(mocks.signInWithRedirect).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('never re-navigates web.app: a sign-in tap after the handoff started is a deduped no-op (#354)', async () => {
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    await act(async () => void (await emitAuth(null)));
+    expect(replace).toHaveBeenCalledOnce(); // the auth-settled handoff
+
+    // The tap path shares the chokepoint's started-once dedupe: no second
+    // replace() while the first navigation is still committing, and no auth
+    // transaction ever starts on web.app.
+    await userEvent.click(screen.getByText('signin'));
+    expect(replace).toHaveBeenCalledOnce();
+    expect(mocks.signInWithPopup).not.toHaveBeenCalled();
+    expect(mocks.signInWithRedirect).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
+  it('suppresses the settle-timeout handoff while an app-owned redirect return is pending, then re-arms (#357)', async () => {
+    vi.useFakeTimers();
+    sessionStorage.setItem(PENDING_REDIRECT_ATTESTATION_KEY, '1');
+    const redirect = deferred<null>();
+    mocks.getRedirectResult.mockReturnValueOnce(redirect.promise);
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount();
+    // The 3s bound elapses while the app-owned return is mid-completion: the
+    // handoff must not interrupt it with a cross-origin navigation.
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    // The return settles signed-out — the bound re-arms and the handoff fires,
+    // so the suppression is a deferral, not a lost stall bound.
+    await act(async () => {
+      redirect.settle(null);
+      await Promise.resolve();
+    });
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/card');
 
     vi.useRealTimers();
     vi.unstubAllGlobals();

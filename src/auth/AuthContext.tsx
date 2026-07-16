@@ -73,6 +73,18 @@ function consumePendingRedirectAttestation(): boolean {
   }
 }
 
+// Read the marker WITHOUT consuming it. Evaluated during the first render —
+// before any effect can subscribe to auth or arm the settle timer — so the
+// pending-redirect-return guard (#357) is in place before either could fire;
+// the redirect-result effect still consumes the marker exactly once.
+function peekPendingRedirectAttestation(): boolean {
+  try {
+    return sessionStorage.getItem(PENDING_REDIRECT_ATTESTATION_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function trackSignInFailure(err: unknown): void {
   const rawCode = (err as { code?: unknown })?.code;
   const code = typeof rawCode === 'string' && /^auth\/[a-z0-9-]+$/.test(rawCode) ? rawCode : 'auth/unknown';
@@ -203,6 +215,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signInAttemptRef = useRef<Promise<void> | null>(null);
   const redirectResultHandledRef = useRef(false);
   const webAppHandoffStartedRef = useRef(false);
+  // The canonical-auth-origin handoff target, snapshotted ONCE at mount (#358).
+  // hostname is immutable for the document's lifetime, and every consumer (the
+  // settle-timer gate, the handoff itself, the sign-in tap fallback) runs only
+  // in signed-out sessions — which render SignIn/Loading and cannot navigate —
+  // so the path/query/hash captured here cannot go stale before a handoff fires.
+  const [fallbackAuthOrigin] = useState(() => firebaseAuthOriginRedirectUrl(window.location));
+  // An app-owned redirect sign-in return is completing on THIS origin (#357):
+  // the same-origin marker was present at mount and getRedirectResult has not
+  // settled yet. While true, no signed-out handoff may navigate — a cross-origin
+  // replace() mid-completion would abandon the returning sign-in. Unreachable
+  // under current invariants (sign-in never initiates from a fallback origin,
+  // and the marker is same-origin state), so this is a guard against a future
+  // regression, pinned by tests. STATE so the settle-timer effect re-arms when
+  // the return settles; REF so the stable handoff callback can read it without
+  // re-identifying (which would churn the onAuthStateChanged subscription).
+  const [redirectReturnPending, setRedirectReturnPending] = useState(peekPendingRedirectAttestation);
+  const redirectReturnPendingRef = useRef(redirectReturnPending);
   // Whether `attested === true` is AUTHORITATIVE (server-settled or a same-session
   // optimistic attest) vs merely PROVISIONAL (the offline cache lift). Distinct
   // from `attested` so the offline cache lift can settle the gate for RENDER —
@@ -254,25 +283,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // so no rows are created for a User whose durable stamp does not exist.
   const attestCommittedUidsRef = useRef<Set<string>>(new Set());
 
+  // THE signed-out handoff chokepoint: every cross-origin move to the canonical
+  // auth origin — the auth-settled-signed-out branch, the bounded settle timer,
+  // and the sign-in tap fallback — routes through here, so the started-once
+  // dedupe and the pending-redirect-return guard apply to every navigation path
+  // (#354: a raw replace() beside this ref could fire a duplicate/late
+  // navigation). Returns true when the signed-out visit is handled by
+  // navigation (started now or earlier); false when this origin is already
+  // canonical, or while an app-owned redirect return is completing (#357) — the
+  // caller then renders normally and the settle timer re-arms on settlement.
   const handoffSignedOutWebApp = useCallback((): boolean => {
+    if (redirectReturnPendingRef.current) return false;
     if (webAppHandoffStartedRef.current) return true;
-    const authOrigin = firebaseAuthOriginRedirectUrl(window.location);
-    if (!authOrigin) return false;
+    if (!fallbackAuthOrigin) return false;
     webAppHandoffStartedRef.current = true;
-    window.location.replace(authOrigin);
+    window.location.replace(fallbackAuthOrigin);
     return true;
-  }, []);
+  }, [fallbackAuthOrigin]);
 
   // Firebase should restore a cached User without the network. If a web.app
   // build instead stalls against the blocked custom auth domain, bound that
   // signed-out online boot and move to the stable same-project app origin.
+  // Not armed while an app-owned redirect return is completing (#357); the
+  // pending flag flipping false re-runs this effect, so the bound re-arms
+  // rather than silently dying with the suppressed one-shot timer.
   useEffect(() => {
-    if (user || !loading || !online || !firebaseAuthOriginRedirectUrl(window.location)) return;
+    if (user || !loading || !online || !fallbackAuthOrigin || redirectReturnPending) return;
     const timer = setTimeout(() => {
       if (online && isOnline() && !auth.currentUser) handoffSignedOutWebApp();
     }, WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
     return () => clearTimeout(timer);
-  }, [handoffSignedOutWebApp, loading, online, user]);
+  }, [fallbackAuthOrigin, handoffSignedOutWebApp, loading, online, redirectReturnPending, user]);
 
   // Set / clear `dealError` and its typed reason in LOCKSTEP (#70). Every deal or
   // bootstrap failure routes through `failDeal` (which classifies pool-shortfall vs
@@ -453,6 +494,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (handoffSignedOutWebApp()) {
           // Move a signed-out web.app visit before rendering SignIn, so the Player
           // sees one acknowledgement and one Google transaction on firebaseapp.com.
+          // Deliberately EVERY signed-out settle, not just first load (#353): a
+          // mid-session sign-out on web.app also lands on the canonical origin,
+          // because any sign-in tap from web.app would hand off anyway — leaving
+          // the Player on web.app's SignIn would only add a second
+          // acknowledgement screen before the same navigation.
           return undefined;
         }
         // Signed out → App renders SignIn, never "Loading…".
@@ -721,11 +767,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // A top-level redirect reloads the app, so finish the Firebase transaction on
   // mount and complete the acknowledgement that gated the original sign-in tap.
-  // The marker is same-origin session state and is consumed exactly once.
+  // The marker is same-origin session state and is consumed exactly once — but
+  // completion does NOT require it (#346): Safari can drop sessionStorage
+  // across the provider round-trip while Firebase still restores the session,
+  // and gating on the marker skipped the redirect `login` event and the checked
+  // 18+ attestation exactly then. getRedirectResult is the bounded secondary
+  // completion signal: it settles once per mount, nothing render-critical
+  // awaits it, and it resolves non-null ONLY on an actual redirect return —
+  // never on an ordinary mount — so it cannot emit phantom `login` events. And
+  // signIn() is the only initiator of signInWithRedirect, always behind the
+  // checked 18+ box, so a non-null result is itself proof the acknowledgement
+  // happened. The marker still scopes FAILURE reporting: a rejection becomes
+  // `login_failed` only when the marker proves an app-owned redirect was in
+  // flight — a marker-less rejection on an ordinary mount (e.g. partitioned
+  // helper storage) stays out of analytics.
   useEffect(() => {
     if (redirectResultHandledRef.current) return;
     redirectResultHandledRef.current = true;
-    if (!consumePendingRedirectAttestation()) return;
+    const appOwnedRedirect = consumePendingRedirectAttestation();
 
     void getRedirectResult(auth)
       .then(async (result) => {
@@ -733,18 +792,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         track('login', { method: 'google' });
         await persistAttestation(result.user);
       })
-      .catch(trackSignInFailure);
+      .catch((err: unknown) => {
+        if (appOwnedRedirect) trackSignInFailure(err);
+      })
+      .finally(() => {
+        // The app-owned redirect return has settled — release the signed-out
+        // handoff paths (#357). Ref and state flip together: the ref is what the
+        // handoff chokepoint reads synchronously; the state re-arms the timer.
+        if (redirectReturnPendingRef.current) {
+          redirectReturnPendingRef.current = false;
+          setRedirectReturnPending(false);
+        }
+      });
   }, [persistAttestation]);
 
   const signIn = useCallback((): Promise<void> => {
     if (signInAttemptRef.current) return signInAttemptRef.current;
 
     const attempt = (async () => {
-      const authOrigin = firebaseAuthOriginRedirectUrl(window.location);
-      if (authOrigin) {
-        // This runs only for a signed-out web.app visitor. replace() avoids leaving
-        // a signed-out origin-scoped session as the Back target.
-        window.location.replace(authOrigin);
+      if (fallbackAuthOrigin) {
+        // A signed-out fallback-origin visitor never starts an auth transaction
+        // here — delegate to the shared chokepoint so its started-once dedupe
+        // and pending-redirect-return guard cover the tap path too (#354): a
+        // raw replace() here could re-navigate after the auth-settled or timer
+        // handoff already fired. replace() (inside the chokepoint) avoids
+        // leaving a signed-out origin-scoped session as the Back target. When
+        // suppressed (handoff already started, or a redirect return is
+        // completing), the tap is a no-op and the chokepoint's owner — the
+        // in-flight navigation or the re-armed settle timer — finishes the job.
+        handoffSignedOutWebApp();
         return;
       }
       const sameOriginHandler = auth.config?.authDomain === window.location.hostname;
@@ -792,7 +868,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       })
       .catch(() => {});
     return attempt;
-  }, [attest]);
+  }, [attest, fallbackAuthOrigin, handoffSignedOutWebApp]);
 
   const signOutUser = async () => {
     await signOut(auth);
