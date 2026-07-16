@@ -186,6 +186,28 @@ describe('claim sheet button register (#309 — wireframe parity)', () => {
     expect(screen.getByRole('button', { name: 'Submit claim' })).toHaveClass('btn', 'primary');
   });
 
+  it("carries the wireframe's Lucide glyph per button — and none where the wireframe has none", () => {
+    // Icon-identity map from the wireframe's claim-sheet frame (lucide-react
+    // renders each glyph with a `lucide-<name>` class, the same hook the
+    // parity e2e asserts): camera/mic/pen-line on the segments, camera on
+    // Take photo, images on Library. Cancel, Mark it, and the pledge carry
+    // NO svg — the pledge's 🎖️ lead-in is label text, not an icon.
+    render(<ProofSheet {...baseProps()} onPledge={vi.fn()} claimMode="honor" />);
+    const glyphs: Array<[string, string]> = [
+      ['Photo', 'lucide-camera'],
+      ['Sound', 'lucide-mic'],
+      ['Callout', 'lucide-pen-line'],
+    ];
+    for (const [name, glyph] of glyphs) {
+      expect(screen.getByRole('button', { name }).querySelector(`svg.${glyph}`)).toBeTruthy();
+    }
+    expect(screen.getByText('Take photo').querySelector('svg.lucide-camera')).toBeTruthy();
+    expect(screen.getByText('Library').querySelector('svg.lucide-images')).toBeTruthy();
+    for (const name of ['Cancel', 'Mark it', '🎖️ Cross My Heart']) {
+      expect(screen.getByRole('button', { name }).querySelector('svg')).toBeNull();
+    }
+  });
+
   it('moves the filled segment state with the selection', async () => {
     const user = userEvent.setup();
     render(<ProofSheet {...baseProps()} />);
