@@ -1,6 +1,7 @@
 import { httpsCallable } from 'firebase/functions';
 import { toBlob } from 'html-to-image';
 import { EVENT_ID, functions } from '../firebase';
+import { planCaptureScale } from './screenshotFit';
 
 export const BUG_REPORT_SCHEMA_VERSION = 1 as const;
 export const BUG_REPORT_DESCRIPTION_MAX = 4000;
@@ -52,11 +53,35 @@ function excludedFromCapture(node: HTMLElement, mode: CaptureMode): boolean {
   return false;
 }
 
+/**
+ * Measure the surface exactly the way html-to-image's `getImageSize` does
+ * (clientWidth/Height plus border widths), so the pixel-ratio plan is solved
+ * against the same CSS size the renderer multiplies by `pixelRatio` when it
+ * sizes its canvas.
+ */
+function captureSurfaceSize(node: HTMLElement): { width: number; height: number } {
+  const style = window.getComputedStyle(node);
+  const edge = (value: string) => {
+    const parsed = parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  };
+  return {
+    width: node.clientWidth + edge(style.borderLeftWidth) + edge(style.borderRightWidth),
+    height: node.clientHeight + edge(style.borderTopWidth) + edge(style.borderBottomWidth),
+  };
+}
+
 async function captureWithMode(root: HTMLElement, mode: CaptureMode): Promise<Blob> {
+  const preferredRatio = mode === 'full' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
+  const surface = captureSurfaceSize(root);
+  // Long pages render taller than the server's PNG dimension caps allow;
+  // lowering the pixel ratio up front keeps the capture submittable (#361)
+  // and renders text directly at the final scale instead of resampling.
+  const { pixelRatio } = planCaptureScale(surface.width, surface.height, preferredRatio);
   const blob = await toBlob(root, {
     cacheBust: true,
     imagePlaceholder: TRANSPARENT_IMAGE_PLACEHOLDER,
-    pixelRatio: mode === 'full' ? Math.min(window.devicePixelRatio || 1, 2) : 1,
+    pixelRatio,
     skipFonts: mode === 'compat',
     filter: (node) => !(node instanceof HTMLElement) || !excludedFromCapture(node, mode),
     // html-to-image inlines COMPUTED styles into its clone, so `.app`'s
@@ -89,6 +114,9 @@ async function captureWithCanvas(root: HTMLElement): Promise<Blob> {
   const height = Math.max(1, Math.min(rootHeight, window.innerHeight));
   const x = Math.max(0, Math.min(Math.round(-rect.left), Math.max(0, rootWidth - width)));
   const y = Math.max(0, Math.min(Math.round(-rect.top), Math.max(0, rootHeight - height)));
+  // Viewport-cropped, so the caps rarely bind here — but solve the same plan
+  // as the html-to-image paths so no mode can exceed the server contract.
+  const { pixelRatio: scale } = planCaptureScale(width, height, 1);
   const { default: html2canvas } = await import('html2canvas');
   const canvas = await html2canvas(root, {
     allowTaint: false,
@@ -98,7 +126,7 @@ async function captureWithCanvas(root: HTMLElement): Promise<Blob> {
     imageTimeout: 1500,
     ignoreElements: (element) => element instanceof HTMLElement && excludedFromCapture(element, 'canvas'),
     logging: false,
-    scale: 1,
+    scale,
     scrollX: window.scrollX,
     scrollY: window.scrollY,
     useCORS: true,

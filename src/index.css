@@ -1982,8 +1982,14 @@ body.install-prompt-visible.update-prompt-visible .bug-report-pick {
   border-radius: 12px;
   background: var(--bg);
 }
-.bug-report-capture .btn {
-  justify-self: start;
+/* The capture-action pair (retake/retry + pick a different screen) shares a
+   row when the sheet is wide enough and wraps back to stacked when narrow —
+   width-driven, no breakpoint (#362). The preview img above stays a
+   full-width grid row of .bug-report-capture. */
+.bug-report-capture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .bug-report-error {
   color: var(--danger, #ff6b7a);

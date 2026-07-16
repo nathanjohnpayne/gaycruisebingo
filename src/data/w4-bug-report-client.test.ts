@@ -12,6 +12,7 @@ vi.mock('html2canvas', () => ({ default: html2canvasSpy }));
 vi.mock('html-to-image', () => ({ toBlob: toBlobSpy }));
 
 import { buildBugReportInput, captureAppSurface } from './bugReports';
+import { BUG_REPORT_SCREENSHOT_MAX_DIMENSION, planCaptureScale } from './screenshotFit';
 
 beforeEach(() => {
   html2canvasSpy.mockReset();
@@ -118,6 +119,29 @@ describe('bug-report client diagnostics', () => {
     expect(compatFilter(root.querySelector('[data-kind="frame"]') as HTMLElement)).toBe(false);
     expect(compatFilter(root.querySelector('[data-kind="canvas"]') as HTMLElement)).toBe(false);
     expect(compatFilter(root.querySelector('[data-kind="report-ui"]') as HTMLElement)).toBe(false);
+  });
+
+  it('lowers the capture pixel ratio so a long page fits the server PNG dimension caps (#361)', async () => {
+    const root = document.createElement('main');
+    root.className = 'app';
+    // 640 CSS px wide, 6000 tall: at DPR 2 the full-mode render would be
+    // 12000 px tall — past the contract's 8192 px cap — while ratio 1 fits.
+    Object.defineProperty(root, 'clientWidth', { configurable: true, value: 640 });
+    Object.defineProperty(root, 'clientHeight', { configurable: true, value: 6000 });
+    document.body.append(root);
+    vi.stubGlobal('devicePixelRatio', 2);
+    const blob = new Blob(['png'], { type: 'image/png' });
+    toBlobSpy.mockRejectedValueOnce(new Error('force the compat retry'));
+    toBlobSpy.mockResolvedValueOnce(blob);
+
+    await expect(captureAppSurface()).resolves.toBe(blob);
+
+    const fullRatio = (toBlobSpy.mock.calls[0][1] as { pixelRatio: number }).pixelRatio;
+    expect(fullRatio).toBe(planCaptureScale(640, 6000, 2).pixelRatio);
+    expect(fullRatio).toBeLessThan(2);
+    expect(Math.trunc(6000 * fullRatio)).toBeLessThanOrEqual(BUG_REPORT_SCREENSHOT_MAX_DIMENSION);
+    // The compat pass prefers ratio 1, which already fits — stays unscaled.
+    expect((toBlobSpy.mock.calls[1][1] as { pixelRatio: number }).pixelRatio).toBe(1);
   });
 
   it('falls back to a viewport canvas capture when both html-to-image paths fail on desktop', async () => {
