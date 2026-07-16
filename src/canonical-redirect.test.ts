@@ -1,27 +1,37 @@
-import { describe, it, expect, vi } from 'vitest';
-import { canonicalRedirectUrl, canonicalOriginAlive, FALLBACK_AUTH_DOMAIN } from './canonical-redirect';
+import { describe, it, expect } from 'vitest';
+import { firebaseAuthOriginRedirectUrl } from './canonical-redirect';
 
-describe('canonicalRedirectUrl (#162)', () => {
-  it('redirects gaycruisebingo.web.app to the canonical origin, preserving path/query/hash', () => {
+describe('firebaseAuthOriginRedirectUrl', () => {
+  it('hands gaycruisebingo.web.app to firebaseapp.com, preserving path/query/hash', () => {
     expect(
-      canonicalRedirectUrl({
+      firebaseAuthOriginRedirectUrl({
         hostname: 'gaycruisebingo.web.app',
         pathname: '/card',
         search: '?e=med-2026',
         hash: '#top',
       }),
-    ).toBe('https://gaycruisebingo.com/card?e=med-2026#top');
+    ).toBe('https://gaycruisebingo.firebaseapp.com/card?e=med-2026#top');
   });
 
-  it('redirects the gaycruisebingo.firebaseapp.com alias too', () => {
+  it('does not redirect firebaseapp.com, which is the stable Firebase auth origin', () => {
     expect(
-      canonicalRedirectUrl({ hostname: 'gaycruisebingo.firebaseapp.com', pathname: '/', search: '', hash: '' }),
-    ).toBe('https://gaycruisebingo.com/');
+      firebaseAuthOriginRedirectUrl({
+        hostname: 'gaycruisebingo.firebaseapp.com',
+        pathname: '/',
+        search: '',
+        hash: '',
+      }),
+    ).toBeNull();
   });
 
   it('returns null on the canonical host so there is no redirect loop', () => {
     expect(
-      canonicalRedirectUrl({ hostname: 'gaycruisebingo.com', pathname: '/card', search: '?e=med-2026', hash: '' }),
+      firebaseAuthOriginRedirectUrl({
+        hostname: 'gaycruisebingo.com',
+        pathname: '/card',
+        search: '?e=med-2026',
+        hash: '',
+      }),
     ).toBeNull();
   });
 
@@ -31,65 +41,14 @@ describe('canonicalRedirectUrl (#162)', () => {
       '127.0.0.1',
       'gaycruisebingo--pr-42-ab12cd.web.app', // Firebase preview channel — must not be hijacked to prod
     ]) {
-      expect(canonicalRedirectUrl({ hostname, pathname: '/', search: '', hash: '' })).toBeNull();
-    }
-  });
-});
-
-describe('canonicalOriginAlive (#340 — never navigate INTO an outage/blocked origin)', () => {
-  it('resolves true when the canonical origin answers, probing it no-cors/no-store', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ type: 'opaque' } as Response);
-    await expect(canonicalOriginAlive(fetchImpl as unknown as typeof fetch)).resolves.toBe(true);
-    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(url).toMatch(/^https:\/\/gaycruisebingo\.com\/favicon\.svg\?alive=\d+$/);
-    expect(init.mode).toBe('no-cors');
-    expect(init.cache).toBe('no-store');
-    expect(init.signal).toBeInstanceOf(AbortSignal);
-  });
-
-  it('resolves false when the probe rejects (reset / DNS failure / filtered SNI)', async () => {
-    const fetchImpl = vi.fn().mockRejectedValue(new TypeError('Load failed'));
-    await expect(canonicalOriginAlive(fetchImpl as unknown as typeof fetch)).resolves.toBe(false);
-  });
-
-  it('resolves false when the probe hangs past the timeout', async () => {
-    const fetchImpl = vi.fn(
-      (_url: string, init?: RequestInit) =>
-        new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener('abort', () =>
-            reject(init.signal?.reason ?? new DOMException('TimeoutError', 'TimeoutError')),
-          );
+      expect(
+        firebaseAuthOriginRedirectUrl({
+          hostname,
+          pathname: '/',
+          search: '',
+          hash: '',
         }),
-    );
-    await expect(canonicalOriginAlive(fetchImpl as unknown as typeof fetch, 25)).resolves.toBe(false);
-  });
-
-  it('exports the Firebase-default fallback auth domain for the outage sign-in path', () => {
-    expect(FALLBACK_AUTH_DOMAIN).toBe('gaycruisebingo.firebaseapp.com');
-  });
-
-  it('uses an AbortController timeout when AbortSignal.timeout is unsupported (older WebViews)', async () => {
-    const original = AbortSignal.timeout;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- simulating a browser without the API
-    (AbortSignal as any).timeout = undefined;
-    vi.useFakeTimers();
-    try {
-      const fetchImpl = vi.fn(
-        (_url: string, init?: RequestInit) =>
-          new Promise<Response>((_resolve, reject) => {
-            init?.signal?.addEventListener('abort', () =>
-              reject(init.signal?.reason ?? new DOMException('AbortError', 'AbortError')),
-            );
-          }),
-      );
-      const result = canonicalOriginAlive(fetchImpl as unknown as typeof fetch, 25);
-      await vi.advanceTimersByTimeAsync(25);
-      await expect(result).resolves.toBe(false);
-      const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-      expect(init.signal).toBeInstanceOf(AbortSignal);
-    } finally {
-      vi.useRealTimers();
-      AbortSignal.timeout = original;
+      ).toBeNull();
     }
   });
 });

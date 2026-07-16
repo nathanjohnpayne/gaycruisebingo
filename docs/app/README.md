@@ -39,7 +39,7 @@ GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcb-sa.json \
 
 Map the JSON fields into `.env.local`: `apiKey`→`VITE_FIREBASE_API_KEY`, `authDomain`→`VITE_FIREBASE_AUTH_DOMAIN` (**do not copy verbatim — override, see below**), `projectId`→`VITE_FIREBASE_PROJECT_ID`, `storageBucket`→`VITE_FIREBASE_STORAGE_BUCKET`, `messagingSenderId`→`VITE_FIREBASE_MESSAGING_SENDER_ID`, `appId`→`VITE_FIREBASE_APP_ID`, `measurementId`→`VITE_FIREBASE_MEASUREMENT_ID`. `VITE_EVENT_ID` defaults to `med-2026`; `VITE_RECAPTCHA_SITE_KEY` is Phase-1 (App Check) — leave it blank for Phase 0.
 
-**`VITE_FIREBASE_AUTH_DOMAIN` must be the bare hostname the app is served from — `gaycruisebingo.com` for Firebase Hosting, or `gaycruisebingo.vercel.app` for the production Vercel mirror — NOT the `gaycruisebingo.firebaseapp.com` value the console reports. Omit the scheme (`https://`).** Firebase serves the Google OAuth handler at `<authDomain>/__/auth/handler`. When that origin differs from where the app runs, storage-partitioned browsers — iOS/Android in-app webviews (links opened inside iMessage, Instagram, WhatsApp, etc.) and Safari with ITP — can't read the sign-in state written before the redirect, so Google sign-in dies with "Unable to process request due to missing initial state." Real mobile Chrome/Safari tolerate the cross-origin handler, which is why the bug hides in direct testing and only surfaces for users who open a shared link in an in-app browser. `gaycruisebingo.com` serves the handler through Firebase Hosting; the Vercel mirror serves the same namespace through the transparent rewrite described in §7.
+**`VITE_FIREBASE_AUTH_DOMAIN` must be a bare hostname (no `https://`): `gaycruisebingo.com` for the Firebase build and `gaycruisebingo.vercel.app` for the Vercel build.** At runtime the app pins known production hosts (`.com`, `.vercel.app`, and `.firebaseapp.com`) to their own first-party handler regardless of a stale build variable. A signed-out `.web.app` visitor is moved once to the same-project `.firebaseapp.com` app before sign-in because that Google callback is already authorized. Firebase serves the OAuth helper at `<authDomain>/__/auth/handler`; keeping it first-party prevents storage-partitioned browsers from losing the sign-in state. Mobile browser tabs use top-level redirect rather than a popup tab, which also avoids iOS private-browsing window loss; installed PWAs retain popup sign-in because their standalone app window has a stable opener.
 
 ## 3. Install & run
 
@@ -118,9 +118,9 @@ Phase 0 deploys rules/indexes/storage + hosting only. The Phase-1 backend (`func
 
 `gaycruisebingo.com` is registered as a Hosting custom domain and added to Auth's authorized domains. To wire (or re-wire) it, add these DNS records at the registrar — the values are Firebase's for this site:
 
-| Type | Host | Value |
-|------|------|-------|
-| `A` | `@` (apex) | `199.36.158.100` |
+| Type  | Host       | Value                         |
+| ----- | ---------- | ----------------------------- |
+| `A`   | `@` (apex) | `199.36.158.100`              |
 | `TXT` | `@` (apex) | `hosting-site=gaycruisebingo` |
 
 - **Remove** any conflicting apex `A`/`AAAA`/`CNAME` records.
@@ -135,7 +135,7 @@ The Vercel project serves the same Vite build at `gaycruisebingo.vercel.app`. Se
 
 `vercel.json` rewrites `/__/auth/:path*` to the equivalent Firebase Hosting path. Vercel performs this as a transparent reverse proxy, so the Firebase helper is served while the browser remains on the Vercel origin; replacing it with a `301`/`302` redirect breaks the same-origin guarantee. Keep `gaycruisebingo.vercel.app` in Firebase Auth's authorized domains and keep `https://gaycruisebingo.vercel.app/__/auth/handler` in the Google OAuth web client's authorized redirect URIs.
 
-This configuration is Vercel-only. Firebase Hosting builds continue to use `VITE_FIREBASE_AUTH_DOMAIN=gaycruisebingo.com`, and both production endpoints remain independently usable.
+This configuration is Vercel-only. Firebase Hosting builds continue to use `VITE_FIREBASE_AUTH_DOMAIN=gaycruisebingo.com`; direct `.firebaseapp.com` visits pin auth to that same origin, and signed-out `.web.app` visits hand off there only when sign-in starts. Both hosting providers remain independently usable.
 
 ## 8. Configuration knobs
 
@@ -170,7 +170,7 @@ Public app with user-generated content, so even under minimal gating: a one-time
 ## Known Phase 0 simplifications
 
 - Stats are client-written (honor-system game). Trivially spoofable; that is the accepted ADR-0001 trade-off — they never move server-side (`recomputeStats` was removed as anti-cheat, #40).
-- Boards are frozen at deal time; prompts added later feed *future* deals only.
+- Boards are frozen at deal time; prompts added later feed _future_ deals only.
 - OG image is static (`og-default.png`); there are no server-rendered per-share images — Share Cards are generated on-device instead (ADR 0005, #36).
 
 ## Phase 1 (scaffolded — see [`phase-1-deploy.md`](phase-1-deploy.md))

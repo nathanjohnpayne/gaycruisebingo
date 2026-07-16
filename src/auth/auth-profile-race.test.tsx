@@ -19,8 +19,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('firebase/auth', () => ({
+  getRedirectResult: vi.fn().mockResolvedValue(null),
   onAuthStateChanged: mocks.onAuthStateChanged,
   signInWithPopup: mocks.signInWithPopup,
+  signInWithRedirect: vi.fn(),
   signOut: mocks.signOut,
   GoogleAuthProvider: class {},
 }));
