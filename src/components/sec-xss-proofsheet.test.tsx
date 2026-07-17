@@ -55,6 +55,10 @@ vi.mock('../hooks/useData', () => ({
   useEventDoc: () => ({ data: null, loading: false }),
   useMyDayBoards: () => new Map(),
   useAllDoubts: () => ({ doubts: [], loading: false, hasServerData: true }),
+  // #392: the Feed resolves the viewer's own player row for its ask-for-proof
+  // affordance; this XSS suite exercises only media sinks, so a loaded-absent row
+  // (identity known, no saved name) suffices.
+  useMyPlayer: () => ({ data: null, loading: false, hasServerData: true }),
 }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
 // ProofFeed's doubts-cleared pill (#262) imports isDoubtSatisfied, whose module

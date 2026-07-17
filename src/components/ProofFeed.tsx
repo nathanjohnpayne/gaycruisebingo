@@ -1,15 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, Pause } from 'lucide-react';
-import { useFeed, useEventDoc, useMyDayBoards, useAllDoubts } from '../hooks/useData';
+import { useFeed, useEventDoc, useMyDayBoards, useAllDoubts, useMyPlayer } from '../hooks/useData';
 import { requestOpenSquare } from '../hooks/useOpenSquare';
 import { useAuth } from '../auth/AuthContext';
 import { reportProof, deleteProof } from '../data/proofs';
+import { resolveDisplayName } from '../data/api';
 import { track } from '../analytics';
 import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
 import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
-import { isDoubtSatisfied } from '../data/doubts';
+import { isDoubtSatisfied, openDoubts, doubtStatusFor, raiseDoubt } from '../data/doubts';
 import { THEMES } from '../theme/themes';
 import type {
   BoardDoc,
@@ -21,6 +22,7 @@ import type {
   PodiumMomentPayload,
   ProofDoc,
   TallyCard as TallyCardData,
+  TallyEntry,
 } from '../types';
 
 // The Feed Day chip label (#211, emoji per #262): "Day 3 · ✈️ Duty Free" — a
@@ -459,6 +461,29 @@ export function tallyActionTarget(
 }
 
 /**
+ * The viewer's OWN board `cellIndex` for a Prompt — the context a Doubt raised
+ * from the Feed records. Returns the square's `index` (0..24) when the Prompt sits
+ * on one of the viewer's dealt cards, else `-1`, meaning "raised from the Feed,
+ * not a board square". A Doubt's `cellIndex` is context-only — satisfaction
+ * derives on (target, Prompt), never this index (src/data/doubts.ts) — and the
+ * rules require only `cellIndex is number` plus the TARGET's standing Mark, so a
+ * Feed doubter who never dealt the Prompt still raises a valid Doubt. Exported for
+ * the unit test. First match wins across Days; the same Prompt on two dealt cards
+ * is a same-text sample, and either square is equally valid context.
+ */
+export function viewerCellIndexForItem(
+  boards: ReadonlyMap<number, BoardDoc>,
+  itemId: string,
+): number {
+  for (const [, board] of boards) {
+    for (const c of board.cells) {
+      if (!c.free && c.itemId === itemId) return c.index;
+    }
+  }
+  return -1;
+}
+
+/**
  * A Tally Card (#216, daily-cards-spec § "Tally Cards") — the Feed's live, lighter-
  * weight rendering of bare Marks: first two names + "+N", an avatar stack of the
  * first three markers, the day chip, and a relative bump time. One line, an accent
@@ -541,28 +566,114 @@ export function TallyCard({
 }
 
 /**
- * The Feed-level who-list sheet (#216 gap closure): tapping a Feed Tally Card
- * opens this — every marker who got the Prompt, chronologically, reusing the
- * same `.sheet-backdrop`/`.sheet` chrome as Board's `TallySheet`. Unlike the
- * Board-side sheet, this is READ-ONLY — no Doubt affordance — because the
- * Feed's `TallyCardData` carries only `markers[]` (uid + displayName +
- * markedAt), not the viewer's own Board/Doubt context `TallySheet` needs to
- * raise one; that scope is deliberately left to the existing Board-side sheet
- * (spec: "the Feed who-list can be view-only to stay scoped").
+ * The Feed-level who-list sheet (#216 gap closure): tapping a Feed Tally Card —
+ * or a leaderboard bump announcement — opens this: every marker who got the
+ * Prompt, chronologically, reusing the same `.sheet-backdrop`/`.sheet` chrome as
+ * Board's `TallySheet`.
+ *
+ * "Ask for proof" from the Feed (#392): each OTHER marker carries the same Doubt
+ * affordance — "🤨 Pics or it didn't happen" — the Board-side who-list has, so a
+ * Player can request proof from the Feed, not only from their own board square.
+ * The read-side context the raise needs comes as PROPS from `ProofFeed` rather
+ * than a new per-sheet subscription: `doubts` is the Feed's flat `useAllDoubts`
+ * stream (filtered to this Prompt), `proofs` the Feed's visible proofs, and the
+ * viewer identity + `viewerCellIndex` are resolved once at the Feed level. That
+ * closes the gap the sheet was originally scoped out of — the earlier read-only
+ * form carried only `markers[]` and no Board/Doubt context — without opening a
+ * second listener while the sheet is up.
+ *
+ * The raise itself is `raiseDoubt` (src/data/doubts.ts), the SAME writer the
+ * Board-side sheet uses — one deterministic once-only slot per (doubter, target,
+ * Prompt), attribution gated behind `identityKnown` so a public, permanent
+ * accusation never publishes under a still-loading name, a per-target in-flight
+ * guard against a double-tap, and the target's standing Mark enforced by the
+ * rules. A Doubt is social pressure, never a gate (ADR 0001). Unlike the
+ * Board-side sheet there is no own-square `isSourceLive` revalidation: a Feed
+ * doubter need not have dealt the Prompt at all (`viewerCellIndex` is -1 then),
+ * and a target who has since unmarked is denied server-side and logged benignly.
  *
  * Keyboard-operable dialog (CodeRabbit finding, PR #251): `role="dialog"` +
  * `aria-modal` + `aria-labelledby` the "Who got" title, focus moved into
- * the sheet on open (the title itself, `tabIndex={-1}`, since a read-only
- * sheet has no natural first control), Tab/Shift+Tab trapped inside via a
+ * the sheet on open (the title itself, `tabIndex={-1}`, a stable first stop even
+ * now that the rows carry Doubt buttons), Tab/Shift+Tab trapped inside via a
  * document `keydown` listener, and focus restored to whatever was focused
  * before open (captured once at mount — the sheet is a sibling of many
  * `TallyCard` triggers in the Feed, not a fixed one, so there's no single
  * `triggerRef` to hold like `ProfileEditor`/`BugReport` do) on close. Mirrors
  * `ProfileEditor.tsx`'s `Editor` focus-trap effect.
  */
-function FeedWhoListSheet({ card, onClose }: { card: TallyCardData; onClose: () => void }) {
+function FeedWhoListSheet({
+  card,
+  onClose,
+  meUid,
+  meName,
+  identityKnown,
+  doubts,
+  proofs,
+  viewerCellIndex,
+}: {
+  card: TallyCardData;
+  onClose: () => void;
+  // The signed-in viewer. Undefined/null suppresses the Doubt affordance (the
+  // Feed only mounts for a signed-in Player, so this is belt-and-braces).
+  meUid: string | null | undefined;
+  // The viewer's resolved public name, passed ONLY when `identityKnown` — the
+  // same gate the Board-side sheet applies so a Doubt never stamps a stale or
+  // Anonymous accuser (undefined falls back to the cached row name in raiseDoubt).
+  meName: string | undefined;
+  identityKnown: boolean;
+  // ALL doubts for THIS Prompt (the Feed's flat `useAllDoubts` stream, filtered to
+  // `card.itemId` by the caller): the per-row open/answered status, the once-only
+  // "already doubted" gate, and the raise idempotence backstop read from these.
+  doubts: readonly DoubtDoc[];
+  // The Feed's visible proofs, for deriving whether a Doubt is answered
+  // (`doubtStatusFor`). Same source as the Feed's "cleared N doubts" pill — a
+  // proof older than the merge cap is off the Feed, so answered-status is
+  // best-effort here, never a gate (ADR 0001).
+  proofs: readonly ProofDoc[];
+  // The doubter's own board cellIndex for the Prompt, or -1 (context-only —
+  // `viewerCellIndexForItem`).
+  viewerCellIndex: number;
+}) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleRef = useRef<HTMLDivElement>(null);
+  // Per-target in-flight guard (mirrors Board's `TallySheet`): held in a ref so a
+  // rapid double-tap in ONE tick reads the mutation the first tap made; the bump
+  // reducer re-renders so the disabled affordance shows immediately, and the guard
+  // clears when the raise settles (either path).
+  const inFlight = useRef<Set<string>>(new Set());
+  const [, bumpInFlight] = useReducer((n: number) => n + 1, 0);
+
+  // Only Doubts against a CURRENT marker count toward the header + the raise
+  // idempotence backstop — a Doubt against a Player who has since unmarked is
+  // dormant (mirrors the Board-side sheet's `open`/`openCount`).
+  const markedUids = new Set(card.markers.map((m) => m.uid));
+  const open = openDoubts(doubts, card.itemText, proofs).filter((d) => markedUids.has(d.targetUid));
+  const openCount = open.length;
+
+  const doDoubt = (m: TallyEntry) => {
+    // A signed-in viewer only, never a self-doubt (the rules deny it too), never a
+    // second in-flight raise against the same target.
+    if (!meUid || m.uid === meUid) return;
+    if (inFlight.current.has(m.uid)) return;
+    inFlight.current.add(m.uid);
+    bumpInFlight();
+    const clear = () => {
+      inFlight.current.delete(m.uid);
+      bumpInFlight();
+    };
+    // `.then(clear, clear)` clears on either settle path; raiseDoubt already logs
+    // and swallows an online rejection, so this never sees an unhandled rejection.
+    void raiseDoubt({
+      fromUid: meUid,
+      fromDisplayName: meName,
+      targetUid: m.uid,
+      targetDisplayName: m.displayName,
+      itemId: card.itemId,
+      cellIndex: viewerCellIndex,
+      currentlyOpen: open,
+    }).then(clear, clear);
+  };
 
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -608,25 +719,71 @@ function FeedWhoListSheet({ card, onClose }: { card: TallyCardData; onClose: () 
         <div className="sheet-title" id="feed-wholist-title" ref={titleRef} tabIndex={-1}>
           Who got “{card.itemText}”
         </div>
-        {/* The wireframes' player-count subtitle (#263) — the Feed variant is
-            read-only, so no doubt half here. */}
+        {/* The wireframes' subtitle (#263): the player count always, plus the
+            open-doubt half now that the Feed sheet can raise Doubts too (#392). */}
         {card.markers.length > 0 && (
           <p className="doubt-summary">
             {card.markers.length} player{card.markers.length === 1 ? '' : 's'}
+            {openCount > 0 && (
+              <>
+                {' '}· {openCount} open doubt{openCount === 1 ? '' : 's'} <span aria-hidden="true">👀</span> on this square
+              </>
+            )}
           </p>
         )}
         {card.markers.length === 0 ? (
           <p className="muted tally-empty">No one has marked this yet.</p>
         ) : (
           <div className="list">
-            {card.markers.map((m) => (
-              <div className="row" key={m.uid}>
-                <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
-                <div className="grow">
-                  <div className="name">{m.displayName}</div>
+            {card.markers.map((m) => {
+              const status = doubtStatusFor(m.uid, doubts, card.itemText, proofs);
+              const isMe = m.uid === meUid;
+              // ANY Doubt of mine against this marker — open OR satisfied —
+              // spends my once-only slot, so the affordance suppresses (the state
+              // to its left already says what happened). Someone ELSE's Doubt
+              // never blocks my raise: the slot is per (doubter, target, Prompt).
+              const iAlreadyDoubted = doubts.some(
+                (d) => d.targetUid === m.uid && d.fromUid === meUid,
+              );
+              const isPending = inFlight.current.has(m.uid);
+              const rowHasState = status === 'open' || status === 'satisfied';
+              return (
+                <div className="row wholist-row" key={m.uid}>
+                  <div className="avatar">{(m.displayName.trim()[0] ?? '?').toUpperCase()}</div>
+                  <div className="grow">
+                    <div className="name">{m.displayName}</div>
+                  </div>
+                  {/* Right-aligned state (#263, mirroring the Board-side rows):
+                      open → "👀 Doubted · waiting…"; answered → "✓ Answered". */}
+                  {status === 'open' && (
+                    <span className="wholist-state doubt-open">👀 Doubted · waiting…</span>
+                  )}
+                  {status === 'satisfied' && (
+                    <span className="wholist-state doubt-satisfied">✓ Answered</span>
+                  )}
+                  {isMe && <span className="pill you-pill">you</span>}
+                  {/* The raise affordance suppresses only for the VIEWER's own
+                      involvement — self rows and rows they already doubted — and
+                      only for a signed-in viewer. */}
+                  {!!meUid && !isMe && !iAlreadyDoubted && (
+                    <button
+                      className="btn doubt-btn"
+                      title="pics or it didn't happen"
+                      // !identityKnown: never let a public, permanent accusation
+                      // publish while the accuser's saved name is still unknown —
+                      // the gate opens when the player row loads.
+                      disabled={isPending || !identityKnown}
+                      onClick={() => doDoubt(m)}
+                    >
+                      {/* Compact label on a row already carrying a state so the
+                          narrow sheet row never overflows; the full phrase stays
+                          on stateless rows. */}
+                      {isPending ? 'Doubting…' : rowHasState ? '🤨 Doubt too' : '🤨 Pics or it didn’t happen'}
+                    </button>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
         <div className="sheet-actions">
@@ -662,12 +819,29 @@ export default function ProofFeed() {
   // one of their unlocked cards, nothing otherwise — reads these Boards
   // through the pure `tallyActionTarget`.
   const myBoards = useMyDayBoards(user?.uid, event?.days?.length ?? 0);
+  // The viewer's resolved public identity for a Doubt raised from the Feed sheet
+  // (#392) — the SAME resolution Board runs for its own who-list sheet: the saved
+  // player-row name through `resolveDisplayName`, KNOWN only once the row settles.
+  // While it loads (or a cache-only "absent" settles without server confirmation)
+  // the identity is unknown and `displayName` silently falls back to the auth name,
+  // so the sheet gates the raise on `identityKnown` — a public, permanent
+  // accusation must never publish a stale or Anonymous accuser (mirrors Board).
+  const { data: mePlayer, loading: mePlayerLoading, hasServerData: mePlayerConfirmed } = useMyPlayer(user?.uid);
+  const displayName = resolveDisplayName(mePlayer, user?.displayName);
+  const identityKnown = !mePlayerLoading && (mePlayer !== null || mePlayerConfirmed);
   // The Feed-level who-list sheet target (#216 gap closure): which Tally Card's
   // markers to show, or null when the sheet is closed. Holding the whole card
   // (not just itemId/dayIndex) is enough to render the sheet directly from the
   // tally doc already in hand — no extra subscription, unlike Board's
   // `TallySheet` which re-subscribes via `useTally`.
   const [whoListCard, setWhoListCard] = useState<TallyCardData | null>(null);
+  // The Feed's visible proofs — the read-side context the who-list sheet's Doubt
+  // affordance needs to derive answered-vs-open status. Computed here (before the
+  // loading/empty early returns) so the sheet, itself built before those returns
+  // (#333), always has it; also reused below for the "cleared N doubts" pill. Same
+  // best-effort source as that pill — a proof older than the 60-entry merge cap is
+  // off the Feed, so answered-status is best-effort, never a gate (ADR 0001).
+  const feedProofs = entries.flatMap((entry) => (entry.feedKind === 'proof' ? [entry.proof] : []));
 
   // #333 (Codex P2 on #384): the open who-list sheet is built BEFORE the
   // empty-feed early return and rendered on both paths — when the opened
@@ -690,7 +864,20 @@ export default function ProofFeed() {
         const live = tallyCards.find(
           (card) => card.itemId === whoListCard.itemId && card.dayIndex === whoListCard.dayIndex,
         );
-        return <FeedWhoListSheet card={live ?? whoListCard} onClose={() => setWhoListCard(null)} />;
+        return (
+          <FeedWhoListSheet
+            card={live ?? whoListCard}
+            onClose={() => setWhoListCard(null)}
+            meUid={user?.uid ?? null}
+            meName={identityKnown ? displayName : undefined}
+            identityKnown={identityKnown}
+            // The flat doubts stream, narrowed to THIS Prompt (the sheet reads
+            // per-row status + the once-only gate off it).
+            doubts={doubts.filter((d) => d.itemId === whoListCard.itemId)}
+            proofs={feedProofs}
+            viewerCellIndex={viewerCellIndexForItem(myBoards, whoListCard.itemId)}
+          />
+        );
       })()
     : null;
 
@@ -731,10 +918,6 @@ export default function ProofFeed() {
     const dayKey = `${card.itemText}\u0000${card.dayIndex}`;
     tallyByTextDay.set(dayKey, (tallyByTextDay.get(dayKey) ?? 0) + card.count);
   }
-  // The once-only doubt attribution needs the proofs the Feed shows (see
-  // doubtsClearedByProof) — a proof older than the merge cap is off the Feed
-  // entirely, so the earliest VISIBLE satisfying proof owns the pill.
-  const feedProofs = entries.flatMap((entry) => (entry.feedKind === 'proof' ? [entry.proof] : []));
 
   return (
     <div className="list">
