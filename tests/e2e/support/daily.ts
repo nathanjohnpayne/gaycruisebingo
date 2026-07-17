@@ -132,12 +132,30 @@ export async function readDealtDayGrid(page: Page, differsFrom?: string): Promis
 }
 
 /**
- * Dismiss the once-per-event first-open coach overlay (#214) if present — its
- * scrim otherwise intercepts Day-switcher taps. Idempotent / best-effort.
+ * Dismiss the one-time Reshuffle launch announcement (#378) if present. Like the
+ * coach overlay it draws a full scrim, so it intercepts taps until cleared.
+ * Idempotent / best-effort.
+ */
+export async function dismissLaunchIntro(page: Page): Promise<void> {
+  const cta = page.getByRole('button', { name: /let's play/i });
+  if (await cta.isVisible().catch(() => false)) await cta.click();
+}
+
+/**
+ * Dismiss every first-open scrim standing between the suite and the board — the
+ * once-per-event coach overlay (#214) and then the Reshuffle launch announcement
+ * (#378). Idempotent / best-effort.
+ *
+ * The ORDER matters and is not incidental: LaunchIntro is deliberately queued
+ * BEHIND the coach overlay (Board only mounts it once the coach flag is set), so
+ * it does not exist in the DOM until the coach CTA has been clicked. Clearing
+ * both here — rather than making every one of this helper's ~20 call sites learn
+ * about the new overlay — is what keeps "get me to a tappable board" one call.
  */
 export async function dismissCoach(page: Page): Promise<void> {
   const cta = page.getByRole('button', { name: /deal me in/i });
   if (await cta.isVisible().catch(() => false)) await cta.click();
+  await dismissLaunchIntro(page);
 }
 
 /** Read all Moment docs from the emulator (the Feed's server truth). */

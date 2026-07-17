@@ -34,6 +34,10 @@ export const GA4_EVENTS = [
   'text_size_change',
   'share_click',
   'install_pwa',
+  // Reshuffle (#378, specs/reshuffle.md) — a Player traded a pristine Day Card
+  // for a fresh deal. Params: `dayIndex`, `reshufflesUsed` (the resulting spend,
+  // 1..3). Call site: components/ReshuffleSheet.tsx.
+  'reshuffle_card',
 ] as const;
 
 export type GA4EventName = (typeof GA4_EVENTS)[number];

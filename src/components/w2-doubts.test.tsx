@@ -103,7 +103,13 @@ vi.mock('../data/doubts', async (importOriginal) => {
 vi.mock('./ProofSheet', () => ({ default: () => null }));
 // CoachOverlay (#214) mounts unconditionally with cells and would collide
 // with this file's `.sheet-backdrop` queries — stubbed, same as ProofSheet.
-vi.mock('./CoachOverlay', () => ({ default: () => null }));
+// CoachOverlay mounts unconditionally with cells, adding its own CTA. Board also
+// reads its `isCoachOverlayDismissed` export to queue LaunchIntro behind it
+// (#378), so the stub must carry that named export too — a `default`-only mock
+// makes Vitest throw on the missing export. `true` (already dismissed) + the
+// LaunchIntro stub below keeps both overlays out of this suite's button queries.
+vi.mock('./CoachOverlay', () => ({ default: () => null, isCoachOverlayDismissed: () => true }));
+vi.mock('./LaunchIntro', () => ({ default: () => null }));
 
 import Board from './Board';
 

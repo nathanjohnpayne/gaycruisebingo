@@ -135,7 +135,11 @@ vi.mock('../hooks/useData', () => ({
 }));
 // CoachOverlay (#214) mounts unconditionally with cells, adding its own CTA
 // button — off-topic here (re-deal-affordance assertions), so stub it out.
-vi.mock('./CoachOverlay', () => ({ default: () => null }));
+// Board also reads CoachOverlay's `isCoachOverlayDismissed` export to queue
+// LaunchIntro behind it (#378), so the stub must carry that named export — a
+// `default`-only mock makes Vitest throw on the missing export.
+vi.mock('./CoachOverlay', () => ({ default: () => null, isCoachOverlayDismissed: () => true }));
+vi.mock('./LaunchIntro', () => ({ default: () => null }));
 
 // Real modules under test — imported after the mocks are declared.
 import Board from './Board';

@@ -28,11 +28,12 @@ import {
   completedLines,
   countMarked,
   isBlackout,
+  isPristine,
   foldDayStat,
   type DayStats,
   type DealItem,
 } from '../game/logic';
-import type { Cell, ClaimMode, DayDef, EventDoc, ItemDoc, UserDoc } from '../types';
+import type { Cell, ClaimMode, DayDef, EventDoc, ItemDoc, PlayerDoc, UserDoc } from '../types';
 
 // Raw (converter-free) refs for writes, to keep partial merges simple.
 const rawUser = (uid: string) => doc(db, 'users', uid);
@@ -300,7 +301,7 @@ export async function joinAndDeal(u: User): Promise<boolean> {
     // value reports whether this was a genuine first join (no identity yet), so the
     // `join_event` analytic still fires exactly once.
     const existingPlayer = await getDoc(rawPlayer(u.uid));
-    const existing = existingPlayer.exists() ? (existingPlayer.data() as Partial<UserDoc & { joinedAt: number; bingoCount: number; squaresMarked: number; firstBingoAt: number | null; blackout: boolean }>) : null;
+    const existing = existingPlayer.exists() ? (existingPlayer.data() as Partial<UserDoc & { joinedAt: number; bingoCount: number; squaresMarked: number; firstBingoAt: number | null; blackout: boolean; reshufflesUsed: number }>) : null;
     const alreadyJoined = existing != null && typeof existing.joinedAt === 'number';
     const profileSnap = await getDoc(rawUser(u.uid)).catch(() => null);
     const profile = profileSnap?.exists() ? (profileSnap.data() as Partial<UserDoc>) : null;
@@ -316,6 +317,12 @@ export async function joinAndDeal(u: User): Promise<boolean> {
     if (typeof existing?.squaresMarked !== 'number') seed.squaresMarked = 0;
     if (existing?.firstBingoAt === undefined) seed.firstBingoAt = null;
     if (typeof existing?.blackout !== 'boolean') seed.blackout = false;
+    // The cruise-wide Reshuffle allowance (#378), seeded like the aggregates
+    // above and guarded the same way: written ONLY when the row does not already
+    // carry a number, so a returning Player's real spend is never reset to 0 —
+    // which firestore.rules would deny outright (the counter is monotonic), and
+    // which would fail the whole join write, not just this field.
+    if (typeof existing?.reshufflesUsed !== 'number') seed.reshufflesUsed = 0;
     await setDoc(rawPlayer(u.uid), seed, { merge: true });
     return !alreadyJoined; // a genuine first join (no prior identity) is the analytic-worthy event
   }
@@ -534,6 +541,230 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
   return true; // dealt a NEW Day Card
 }
 
+/** The cruise-wide Reshuffle allowance (#378). Mirrors `reshuffleAllowance()` in
+ *  firestore.rules — the server is the authority; this is the client's copy for
+ *  the chip's remaining count and its pre-flight guard. */
+export const RESHUFFLE_ALLOWANCE = 3;
+
+/**
+ * The seed for a Reshuffled Day Card. Deterministic — same (uid, Day, spend) →
+ * same card — so a reshuffle is reproducible in tests exactly like the first
+ * deal, but mixed with `nextUsed` so each successive reshuffle of the same Day
+ * draws a DIFFERENT layout rather than re-dealing the card it just replaced
+ * (`dealBoard` is a pure function of its seed).
+ *
+ * `currentSeed` is the escape hatch for the astronomically unlikely collision:
+ * an identical seed would deal the identical card AND read as a non-reshuffle to
+ * firestore.rules (which discriminates on `seed` changing), so the Player would
+ * spend an allowance for the same 24 squares. Nudging until it differs costs
+ * nothing and makes "the card always changes" a guarantee rather than a
+ * probability.
+ */
+export function reshuffleSeed(
+  uid: string,
+  dayIndex: number,
+  nextUsed: number,
+  currentSeed: number,
+): number {
+  let seed =
+    (seedFromUid(uid) ^
+      Math.imul(dayIndex + 1, 0x9e3779b1) ^
+      Math.imul(nextUsed + 1, 0x85ebca6b)) >>>
+    0;
+  while (seed === currentSeed) seed = (seed + 0x9e3779b1) >>> 0;
+  return seed;
+}
+
+/**
+ * Trade a PRISTINE Day Card for a fresh deal from the SAME Day Snapshot (#378,
+ * specs/reshuffle.md). Returns the resulting spend (1..3).
+ *
+ * The whole transaction is two writes: replace the Day's Board doc with a fresh
+ * stratified deal, and increment the Player's cruise-wide `reshufflesUsed`.
+ * Nothing else — and that is the point of the pristine constraint, not an
+ * omission. A card with zero Marks has produced nothing: no Tally entries to
+ * retract, no Proofs to pull from the Feed, no Doubts to dissolve, no stats to
+ * re-fold, no Moments at risk. So there is deliberately NO cascade code here. A
+ * Player who wants out of a card they HAVE marked unmarks it themselves through
+ * the existing, tested Mark path (which already removes its Tally entries), which
+ * returns the card to pristine — the cascade performed by the player, visibly,
+ * through mechanics that already exist.
+ *
+ * ONLINE-ONLY, unlike every other write in this file — and enforced by
+ * `runTransaction`, NOT by the `online` gate on the chip and NOT by awaiting a
+ * batch. That distinction is the whole point, and getting it wrong is subtle
+ * enough that the first cut of this function did (Codex P1 on #383):
+ *
+ * `setMark` is deliberately a fire-and-forget `writeBatch` because a batch QUEUES
+ * durably offline (ADR 0006) — a Mark made in a ship-wifi dead zone must survive.
+ * A reshuffle needs the exact opposite, and a batch cannot give it: offline, the
+ * batch is still persisted and applied OPTIMISTICALLY to the local cache while its
+ * commit promise merely pends forever. Awaiting it does not prevent the queue; it
+ * just never resolves. So the Player would see the replacement card, start marking
+ * it, and only later — when the drain hits a server that now denies the write
+ * (another tab marked the old card; the Day rolled) — have it rolled back
+ * underneath them, with any offline Mark computed against a card that never
+ * existed. `navigator.onLine` cannot close that window either: it reports the
+ * link, not reachability, and captive ship wifi reads as online (see useOnline).
+ *
+ * `runTransaction` is the primitive whose failure mode matches the contract: it
+ * REQUIRES a server round trip and REJECTS offline rather than buffering, so a
+ * reshuffle either lands atomically against fresh server state or fails loudly and
+ * changes nothing. Its re-read on contention is a bonus: two tabs racing a
+ * reshuffle re-run against the committed counter instead of double-spending, and
+ * the rules' `getAfter()` pairing works inside a transaction exactly as in a batch.
+ */
+export async function reshuffleBoard(params: {
+  uid: string;
+  dayIndex: number;
+  // The `seed` of the card the Player was LOOKING AT when they confirmed. The
+  // transaction refuses to deal unless the stored board still carries it, which is
+  // what makes a retry re-decide rather than re-fire (Codex P2 on #383): Firestore
+  // retries the loser of a concurrent pair, and on retry the board it re-reads is
+  // the WINNER's replacement — pristine, and paired with an incremented counter, so
+  // every eligibility check passed and a second allowance was silently consumed.
+  // Pinning to the confirmed seed turns that retry into a refusal, which is the
+  // documented contract ("a concurrent second reshuffle is denied, not merged").
+  expectedSeed: number;
+}): Promise<number> {
+  const { uid, dayIndex, expectedSeed } = params;
+  // The Event schedule and the Day Snapshot's items are read outside: neither is
+  // written here, and neither changes under a retry, so re-reading them per attempt
+  // would cost a round trip and buy nothing. Everything that CAN change — this
+  // Board, the counter, and the peer cards the exclusion set is built from — is
+  // read inside.
+  const eventSnap = await getDoc(rawEvent());
+  const eventData = eventSnap.exists() ? (eventSnap.data() as Partial<EventDoc>) : null;
+  const days = Array.isArray(eventData?.days) ? (eventData.days as DayDef[]) : [];
+  const day = days[dayIndex];
+  if (!day) throw new Error('reshuffleBoard: no such Day.');
+
+  // The Day must be OPEN and its Snapshot stamped. `dayDealState` is the one gate
+  // the deal path reads, so a reshuffle asks it the same question — with
+  // `hasBoard: false` because that flag exists to make an already-dealt Day a
+  // no-op, and re-dealing an already-dealt Day is precisely what this does. What
+  // we need from it is the locked/waking half: never reroll a locked preview, and
+  // never deal from an unfrozen pool.
+  const state = dayDealState({
+    unlockAt: day.unlockAt,
+    snapshotItemIds: day.snapshotItemIds,
+    now: Date.now(),
+    hasBoard: false,
+  });
+  if (state !== 'ready') throw new Error(`reshuffleBoard: Day is ${state}.`);
+
+  // Hydrate the SAME frozen Day Snapshot the original deal drew from — never a
+  // live `status: 'active'` query. The reshuffled card must come from the same
+  // pool everyone else's Day 2 card came from; a Prompt approved since unlock
+  // must not be able to sneak onto a rerolled card.
+  const snapshotIds = day.snapshotItemIds ?? [];
+  const itemSnaps = await Promise.all(
+    snapshotIds.map((id) => getDoc(rawItem(id)).catch(() => null)),
+  );
+  const pool: DealItem[] = itemSnaps
+    .filter((s): s is NonNullable<typeof s> => !!s && s.exists())
+    .map((s) => ({ id: s.id, data: s.data() as Partial<ItemDoc> }))
+    .filter(({ data }) => data.isFreeSpace !== true)
+    .map(({ id, data }) => ({ id, text: String(data.text ?? ''), spicy: data.spicy === true }));
+
+  // The peer cards whose Prompts the replacement must avoid. Their refs are built
+  // here; they are READ inside the transaction (below) so a retry rebuilds the
+  // exclusion set from committed state.
+  const peerRefs = days
+    .map((_, i) => i)
+    .filter((i) => i !== dayIndex)
+    .map((i) => rawDayBoard(i, uid));
+
+  // Same composition rules as the first deal (daily-cards-spec § "Unlock
+  // mechanics"): tutorial pools are all-tame so they deal unstratified; main Days
+  // keep the Event's stratified spicy share. A reshuffled card is an ORDINARY card
+  // — it must be indistinguishable from one dealt at unlock.
+  const stratify = day.pool === 'main';
+  const spicyRatio =
+    typeof eventData?.settings?.spicyRatio === 'number' ? eventData.settings.spicyRatio : 0.4;
+
+  // Everything contended happens in here, and it REJECTS offline rather than
+  // queueing — see the doc comment above for why that failure mode is the feature.
+  // Reads before writes (Firestore's transaction contract); eligibility is judged
+  // against what the transaction itself read, so a retry re-judges rather than
+  // committing a verdict formed against stale state.
+  const boardRef = rawDayBoard(dayIndex, uid);
+  const playerRef = rawPlayer(uid);
+  return runTransaction(db, async (tx) => {
+    // Every read first (Firestore's transaction contract), and every one of them
+    // re-runs on a retry — which is the point: a retry must re-decide from
+    // committed state, never re-fire a verdict formed against a snapshot that has
+    // since lost a race.
+    const [boardSnap, playerSnap, ...peerSnaps] = await Promise.all([
+      tx.get(boardRef),
+      tx.get(playerRef),
+      ...peerRefs.map((ref) => tx.get(ref)),
+    ]);
+
+    if (!boardSnap.exists()) throw new Error('reshuffleBoard: no Day Card to reshuffle.');
+    const board = boardSnap.data() as { cells?: Cell[]; seed?: number };
+
+    // The card must still be the one the Player confirmed. This is what makes a
+    // retry a REFUSAL rather than a second spend: when two tabs confirm the same
+    // card, Firestore retries the loser against the winner's replacement — which is
+    // itself pristine and freshly counted, so every other check below would pass and
+    // quietly burn a second allowance.
+    if (board.seed !== expectedSeed) {
+      throw new Error('reshuffleBoard: the card changed underneath this confirm.');
+    }
+
+    // Pristine is the eligibility window. Checked here as well as in the rules
+    // because a rules denial reaches the Player as a bare PERMISSION_DENIED — a
+    // button that looks broken; this turns the same contract into a refusal the
+    // caller can explain. `isPristine` (not `countMarked`) is the predicate the
+    // rules mirror — see its doc comment for why a pending Mark is not pristine.
+    if (!isPristine(board.cells ?? [])) {
+      throw new Error('reshuffleBoard: the card is no longer pristine.');
+    }
+
+    const player = playerSnap.exists() ? (playerSnap.data() as Partial<PlayerDoc>) : undefined;
+    const used = typeof player?.reshufflesUsed === 'number' ? player.reshufflesUsed : 0;
+    if (used >= RESHUFFLE_ALLOWANCE) {
+      throw new Error('reshuffleBoard: no cruise reshuffles left.');
+    }
+
+    // No-repeat exclusion computed from KEPT cards only (the ticket's decision):
+    // every OTHER Day Card this Player holds is excluded, but the card being
+    // DISCARDED is not — its Prompts return to the eligible pool and may legitimately
+    // land on the replacement. Excluding them would be worse than pointless: it would
+    // shrink the drawable pool on every reroll and make a "fresh" card systematically
+    // avoid 24 perfectly good Prompts the Player never actually played.
+    //
+    // Built from the transaction's OWN reads (Codex P2 on #383): two tabs
+    // reshuffling DIFFERENT Days for the same Player contend on the shared counter,
+    // so the loser retries — and a peer set captured before the transaction would
+    // still describe the winner's OLD card, letting this deal duplicate Prompts the
+    // winner just placed on their new, still-kept one.
+    const excludeIds = new Set<string>();
+    for (const snap of peerSnaps) {
+      if (!snap.exists()) continue;
+      const peerCells = (snap.data() as { cells?: Cell[] }).cells ?? [];
+      for (const c of peerCells) if (c.itemId) excludeIds.add(c.itemId);
+    }
+
+    const nextUsed = used + 1;
+    const seed = reshuffleSeed(uid, dayIndex, nextUsed, board.seed ?? 0);
+    const cells = dealBoard(pool, day.freeText ?? FREE_TEXT, seed, spicyRatio, {
+      excludeIds,
+      stratify,
+    });
+
+    // Both writes in the ONE transaction: the rules' `getAfter()` pairing requires
+    // the counter write to be present alongside the Board replace, so these can
+    // never be split. An explicit counter value, NOT `increment(1)` — the rules
+    // assert `after == before + 1` against `before`, and the transaction's re-read
+    // is what keeps that value fresh under contention.
+    tx.set(boardRef, { uid, dayIndex, seed, createdAt: Date.now(), cells });
+    tx.set(playerRef, { reshufflesUsed: nextUsed }, { merge: true });
+    return nextUsed;
+  });
+}
+
 /**
  * Fold a single Mark toggle into the next Board cells plus the denormalized
  * Player stats it implies. Pure (no Firestore, no clock) and exported so the
@@ -728,6 +959,9 @@ export async function setMark(params: {
   // path byte-identical, so legacy events (and every mock-Firestore unit test that
   // doesn't set it) are untouched.
   daily?: boolean;
+  // The Board seed the caller rendered. Normal Mark writes stamp it as `markSeed`
+  // so rules can reject a queued stale Mark after another tab reshuffles the card.
+  boardSeed?: number;
   database?: Firestore;
 }): Promise<{
   cells: Cell[];
@@ -771,6 +1005,7 @@ async function runSetMark(
     ceremonialDayIndexes?: number[];
     statsFrozen?: boolean;
     daily?: boolean;
+    boardSeed?: number;
   },
   database: Firestore,
 ): Promise<{
@@ -794,6 +1029,7 @@ async function runSetMark(
   const playerRef = doc(database, 'events', EVENT_ID, 'players', uid);
 
   let baseCells = params.cells;
+  let markSeed = params.boardSeed;
   let baseFirstBingoAt = params.currentFirstBingoAt;
   // The already-denormalized public name on the player row is the fallback
   // attribution for the Tally marker when the caller omits `displayName`.
@@ -812,8 +1048,11 @@ async function runSetMark(
   // (e.g. the very first local knowledge of it, or a test double with no
   // cache) — that is the pre-fix behavior, unchanged.
   if (cachedBoard.status === 'fulfilled' && cachedBoard.value.exists()) {
-    const boardData = cachedBoard.value.data() as { cells: Cell[]; dayIndex?: number };
+    const boardData = cachedBoard.value.data() as { cells: Cell[]; dayIndex?: number; seed?: number };
     baseCells = boardData.cells;
+    if (typeof boardData.seed === 'number') {
+      markSeed = boardData.seed;
+    }
     // The Board's own dayIndex is authoritative for which bucket this Mark
     // credits; the explicit param only seeds the fallback when nothing is cached.
     if (typeof boardData.dayIndex === 'number' && params.dayIndex === undefined) {
@@ -865,7 +1104,14 @@ async function runSetMark(
   });
 
   const batch = writeBatch(database);
-  batch.set(boardRef, { cells }, { merge: true });
+  batch.set(
+    boardRef,
+    {
+      cells,
+      ...(typeof markSeed === 'number' ? { markSeed } : {}),
+    },
+    { merge: true },
+  );
   // The standings freeze (#265): post-freeze marks keep the card honest, and
   // ONLY the ceremonial (farewell) Day still records its PER-DAY bucket — the
   // farewell card unlocks AT the freeze and its daily honor reads

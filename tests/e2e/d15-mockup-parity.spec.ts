@@ -94,6 +94,46 @@ test('structural parity — every screen against the wireframes', async ({ page 
     await expect(overlay).not.toBeVisible();
   });
 
+  await test.step('launch intro: three reshuffle beats, shown once, then dismissed (#frame-launch-intro)', async () => {
+    // Queued behind the coach overlay above — it only mounts once that flag is
+    // set, which is why this step follows the dismissal rather than racing it.
+    const intro = page.locator('.launch-intro');
+    await expect(intro).toBeVisible();
+    await expect(intro).toContainText('New today: reshuffles');
+    await expect(intro).toContainText('Dealt a dud?');
+    await expect(intro).toContainText('Three for the whole cruise');
+    await expect(intro).toContainText("the moment you tap a square, the card's yours for the day");
+    await page.getByRole('button', { name: "Nice—let's play" }).click();
+    await expect(intro).not.toBeVisible();
+  });
+
+  await test.step('reshuffle: day-bar chip on a pristine card + confirm sheet (#frame-reshuffle)', async () => {
+    // The walk reaches this step BEFORE the claim-sheet step marks anything, so
+    // the dealt card is still pristine and the chip is live. The final step below
+    // re-checks it once a Mark has landed.
+    const chip = page.locator('.reshuf');
+    await expect(chip).toBeVisible();
+    await expect(chip).toContainText('×3');
+    await expect(chip.locator('svg.lucide-shuffle')).toHaveCount(1);
+
+    await chip.click();
+    const sheet = page.locator('.reshuffle-sheet');
+    await expect(sheet).toBeVisible();
+    await expect(sheet).toContainText('Reshuffle this card?');
+    await expect(sheet).toContainText(`A fresh 24 squares for Day ${PARITY_TODAY_INDEX + 1}—same day, new luck.`);
+    await expect(sheet).toContainText("This can't be undone.");
+    await expect(sheet).toContainText("You'll never see this card again—and reshuffles don't come back.");
+    await expect(sheet).toContainText("3 of 3 cruise reshuffles left · available only before you've marked a square");
+    await expect(sheet.getByRole('button', { name: 'Keep my card' })).toBeVisible();
+    await expect(sheet.getByRole('button', { name: /Reshuffle it/ })).toBeVisible();
+
+    // Cancel — this walk must not actually spend a reshuffle, or every later step
+    // would assert against a re-dealt card.
+    await page.getByRole('button', { name: 'Keep my card' }).click();
+    await expect(sheet).not.toBeVisible();
+    await expect(chip).toBeVisible();
+  });
+
   await test.step('day switcher: single-line chips, lock states, WARM-UP/GOODBYE tags', async () => {
     const chips = page.getByRole('tab');
     await expect(chips).toHaveCount(5);

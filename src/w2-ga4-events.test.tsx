@@ -26,7 +26,7 @@ vi.mock('./firebase', () => ({
 }));
 
 describe('GA4_EVENTS catalog', () => {
-  it('enumerates the 12 PRD events plus the operational login_failed (#163) and text_size_change (#215)', () => {
+  it('enumerates the 12 PRD events plus the operational login_failed (#163), text_size_change (#215), and reshuffle_card (#378)', () => {
     expect(GA4_EVENTS).toEqual([
       'login',
       'login_failed',
@@ -42,6 +42,7 @@ describe('GA4_EVENTS catalog', () => {
       'text_size_change',
       'share_click',
       'install_pwa',
+      'reshuffle_card',
     ]);
   });
 });

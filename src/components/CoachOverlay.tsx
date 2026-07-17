@@ -29,6 +29,18 @@ function markDismissed(eventId: string): void {
   }
 }
 
+/**
+ * Whether this Event's coach overlay has already been dismissed — exported so a
+ * LATER overlay can queue behind it rather than stack on top of it (#378's
+ * LaunchIntro is the first such case). Both render the same `sheet-backdrop`
+ * scrim, so a Player who joins mid-cruise — a first dealt card AND an unseen
+ * launch announcement at once — would otherwise get two overlapping scrims and
+ * two CTAs. The key stays owned here rather than being read from the outside.
+ */
+export function isCoachOverlayDismissed(eventId: string = EVENT_ID): boolean {
+  return isDismissed(eventId);
+}
+
 // Each row leads with a SAMPLE chip drawn in the badge's own board styling
 // (the wireframes' `lgdchip` treatment) — the legend teaches the notation by
 // showing it, not just naming it.

@@ -148,6 +148,7 @@ const player = (uid: string, displayName: string, firstBingoAt: number | null): 
   squaresMarked: 5,
   firstBingoAt,
   blackout: false,
+  reshufflesUsed: 0,
 });
 
 const queue = () => document.querySelector('.admin-section.queue') as HTMLElement;

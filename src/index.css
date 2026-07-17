@@ -504,6 +504,47 @@ a {
   line-height: 1.35;
   margin: 2px 0 0;
 }
+
+/* ---------- Reshuffle (specs/reshuffle.md, #378 — wireframes' `.reshuf`) ----------
+   The shuffle chip is a third `.daybar` child, right of the meta slot. It is a
+   squared chip (10px radius), deliberately NOT the day switcher's `.day-chip`
+   pill (999px) — that class is the Day gallery's selection control and reusing it
+   here would imply this is another Day to pick. Themed entirely through tokens,
+   so all eight Themes retint it for free. */
+.reshuf {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 3px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--dim);
+  background: var(--panel);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.reshuf-icon {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.5;
+}
+/* The chip is a real <button>, so it needs the tap target the wireframe's inert
+   <span> never did — the visual box stays 10.5px-compact per the mockup while the
+   hit area reaches the 44px minimum through this overlay, rather than by padding
+   the chip out of its design. */
+.reshuf::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}
 /* Blank locked squares are dashed (#260 — the wireframes' `.cell.blank`),
    not merely dimmed; the populated free space keeps its solid chrome. */
 .cell.locked-cell {
@@ -752,6 +793,64 @@ a {
   font-size: 12.5px;
   line-height: 1.4;
 }
+/* The launch-intro's "!" beat (#378) — the scarcity warning. Same chip geometry
+   as its siblings above, in the danger register the confirm sheet uses, so
+   "reshuffles don't come back" reads as the one cautionary line of the three. */
+.coach-overlay-chip-warn {
+  background: var(--panel);
+  border: 1px solid var(--danger, #ff6b7a);
+  color: var(--danger, #ff6b7a);
+}
+/* The shuffle glyph sits inside a `-plus` chip, so it inherits that chip's
+   on-primary ink rather than carrying a colour of its own. */
+.launch-intro-icon {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2.5;
+  vertical-align: -2px;
+}
+
+/* ---------- Reshuffle confirm sheet (specs/reshuffle.md, #378 —
+   wireframes #frame-reshuffle) ---------- */
+.reshuffle-sub {
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1.4;
+  margin: 0 0 10px;
+}
+/* The wireframes' `.warnbox`: dashed danger border, not a filled alert — the
+   consequence is permanent but not an error, and a solid red panel would read as
+   "something went wrong" rather than "be sure". */
+.warnbox {
+  border: 1px dashed var(--danger, #ff6b7a);
+  border-radius: 10px;
+  padding: 8px 11px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink);
+  background: var(--bg);
+}
+.warnbox b {
+  color: var(--danger, #ff6b7a);
+}
+.reshuffle-note {
+  color: var(--dim);
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 10px 0 0;
+}
+.reshuffle-error {
+  color: var(--danger, #ff6b7a);
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+.reshuffle-btn-icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.5;
+  vertical-align: -3px;
+  margin-right: 5px;
+}
 
 .count {
   text-align: center;
@@ -788,6 +887,16 @@ a {
 }
 .btn:disabled {
   opacity: 0.5;
+}
+/* The danger register (specs/reshuffle.md, #378). `--danger` is referenced with a
+   hardcoded fallback rather than defined per-Theme, matching the ONE existing
+   danger consumer (`.bug-report-error` below): no Theme defines the token today,
+   so a fallback is what actually renders, and adding a ninth token across all
+   eight Theme blocks is a Theme-system change this ticket has no business making.
+   The fallback hex is that same consumer's, so the two cannot drift. */
+.btn.danger {
+  border-color: var(--danger, #ff6b7a);
+  color: var(--danger, #ff6b7a);
 }
 
 /* ---------- leaderboard filters ---------- */

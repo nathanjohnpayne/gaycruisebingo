@@ -36,7 +36,7 @@ vi.mock('../hooks/useData', () => ({
 import Leaderboard from './Leaderboard';
 
 const mkPlayer = (over: Partial<PlayerDoc> & Pick<PlayerDoc, 'uid' | 'displayName'>): PlayerDoc => ({
-  photoURL: null, joinedAt: 0, bingoCount: 0, squaresMarked: 0, firstBingoAt: null, ...over,
+  photoURL: null, joinedAt: 0, bingoCount: 0, squaresMarked: 0, firstBingoAt: null, reshufflesUsed: 0, ...over,
 });
 const mkProof = (uid: string, over: Partial<ProofDoc> = {}): ProofDoc =>
   ({

@@ -33,6 +33,167 @@ service cloud.firestore {
       return dayIndex == string(int(dayIndex));
     }
 
+    // ---- Reshuffle (#378, specs/reshuffle.md) ----
+    //
+    // A Player may trade a PRISTINE Day Card for a fresh deal at most 3 times per
+    // CRUISE (not per Day). The allowance is the scarcity: a pristine card has
+    // produced nothing, so a reshuffle has no cascade to undo (no tallies, proofs,
+    // doubts, stats, or Moments) — which is exactly why the budget, not the
+    // cleanup, is what has to be enforced here.
+    function reshuffleAllowance() { return 3; }
+
+    function playerDoc(eventId, uid) {
+      return /databases/$(database)/documents/events/$(eventId)/players/$(uid);
+    }
+
+    // `reshufflesUsed` read defensively as 0 when absent. Every Player row written
+    // before this feature has no such key (there is no backfill — `playerConverter`
+    // defaults it to 0 on read), so a missing field must read as "none used" rather
+    // than error the whole write.
+    function usedCount(data) {
+      return ('reshufflesUsed' in data) ? data.reshufflesUsed : 0;
+    }
+
+    // A Board write is a RESHUFFLE iff a doc already EXISTS and its `seed` is not
+    // carried through unchanged. This is the discriminator that separates the two
+    // kinds of Board write the create/update rule below covers:
+    //   - a MARK is `set(ref, { cells }, { merge: true })` (data/api.ts setMark), so
+    //     the RESULTING doc keeps its stored `seed` and this never trips;
+    //   - a DEAL is a create (`resource == null`), so this never trips either.
+    //
+    // "Not carried through" deliberately includes PRESENCE changes, not just a
+    // differing number (Codex P1 on #383). Comparing values alone left a two-step
+    // laundering path: full-replace the Board while OMITTING `seed` (the old
+    // predicate saw no incoming key and returned false), then a second write ADDS a
+    // fresh `seed` (the stored board now has no key, so it returned false again) —
+    // and a marked or spent-out card was replaced with neither a pristine check nor
+    // a counter increment. Dropping or adding the key is exactly as much of a
+    // reshuffle as changing it, so all three are gated identically.
+    //
+    // A DELETE (`request.resource` null) is excluded here because delete is denied
+    // for owners outright below — the ONE remaining way a create could be laundered.
+    function isReshuffleWrite() {
+      return resource != null
+        && request.resource != null
+        && (('seed' in request.resource.data) != ('seed' in resource.data)
+            || (('seed' in request.resource.data)
+                && request.resource.data.seed != resource.data.seed));
+    }
+
+    // One Square is not PLAYER-marked. The free centre is always `marked` and never
+    // counts (CONTEXT.md § "Free Space": "Counts toward lines but is never a
+    // Player-marked square"), so it is excluded by its own `free` flag rather than
+    // by position.
+    function cellUnmarked(c) {
+      return c.free == true || c.marked == false;
+    }
+
+    // "Pristine" = ZERO player-marked Squares. The rules language has no iteration,
+    // so the 25 Squares are unrolled explicitly — the same idiom `daysThemeLockOk`
+    // above uses for the 10-Day array. The `size() == 25` guard both pins the Board
+    // contract (BoardDoc.cells "length 25", src/types.ts) and makes every index
+    // access below safe.
+    function boardPristine(cells) {
+      return cells.size() == 25
+        && cellUnmarked(cells[0])  && cellUnmarked(cells[1])  && cellUnmarked(cells[2])
+        && cellUnmarked(cells[3])  && cellUnmarked(cells[4])  && cellUnmarked(cells[5])
+        && cellUnmarked(cells[6])  && cellUnmarked(cells[7])  && cellUnmarked(cells[8])
+        && cellUnmarked(cells[9])  && cellUnmarked(cells[10]) && cellUnmarked(cells[11])
+        && cellUnmarked(cells[12]) && cellUnmarked(cells[13]) && cellUnmarked(cells[14])
+        && cellUnmarked(cells[15]) && cellUnmarked(cells[16]) && cellUnmarked(cells[17])
+        && cellUnmarked(cells[18]) && cellUnmarked(cells[19]) && cellUnmarked(cells[20])
+        && cellUnmarked(cells[21]) && cellUnmarked(cells[22]) && cellUnmarked(cells[23])
+        && cellUnmarked(cells[24]);
+    }
+
+    // The BOARD-side half of the reshuffle contract, and the load-bearing one: the
+    // Board replace is permitted only when the Player's cruise-wide counter goes
+    // EXACTLY +1, to a value within the allowance, IN THE SAME BATCH.
+    //
+    // `getAfter()` is what makes this expressible — it projects the player doc's
+    // state after this batch commits, so the Board rule can require that the counter
+    // write is actually present alongside it. It is only meaningful inside a batched
+    // write or transaction: a LONE board replace makes `getAfter()` an evaluation
+    // error, which DENIES (the safe default), so an unpaired reshuffle cannot land.
+    // An absent player row likewise errors the `get()` and denies.
+    function reshuffleCounterPaired(eventId, uid) {
+      return getAfter(playerDoc(eventId, uid)).data.reshufflesUsed
+               == usedCount(get(playerDoc(eventId, uid)).data) + 1
+        && getAfter(playerDoc(eventId, uid)).data.reshufflesUsed <= reshuffleAllowance();
+    }
+
+    // The EXISTING (pre-write) Board must be pristine — the card being traded away
+    // is the one that has to have produced nothing. Reading `resource` (never the
+    // incoming payload, which a hand-built client controls) is what makes that
+    // check trustworthy, the same discipline `dayLocked` uses for the schedule lock.
+    function reshuffleOk(eventId, uid) {
+      return boardPristine(resource.data.cells)
+        && reshuffleCounterPaired(eventId, uid);
+    }
+
+    // Normal Mark writes are offline-queueable and merge a full replacement
+    // `cells` array. After a reshuffle, a queued stale Mark from the old card would
+    // otherwise restore the old prompts while preserving the new seed. The client
+    // stamps `markSeed` with the Board seed it folded from; on seeded Boards, any
+    // non-reshuffle cell change must carry that value. Seedless legacy Boards keep
+    // the original markability carve-out.
+    function boardCellsChanged() {
+      return resource != null
+        && request.resource != null
+        && request.resource.data.diff(resource.data).affectedKeys().hasAny(['cells']);
+    }
+
+    function seededMarkWriteOk() {
+      return !boardCellsChanged()
+        || !('seed' in resource.data)
+        || (('markSeed' in request.resource.data)
+            && request.resource.data.markSeed == resource.data.seed);
+    }
+
+    // The COUNTER-side half (#378 Option A): `reshufflesUsed` is MONOTONIC — it may
+    // only ever hold or rise by exactly 1, never fall, and never exceed the
+    // allowance; a create must start at 0.
+    //
+    // Why monotonic rather than the ticket's original "deny any counter write not
+    // paired with a board write": that pairing is NOT expressible here. This rule
+    // sits on the CRUISE-WIDE player doc, which carries no `dayIndex`, so it cannot
+    // know which Day's Board to inspect. The only day-agnostic formulation — unroll
+    // all 10 Days and ask whether ANY board's seed changed — costs 3 access calls
+    // per Day (exists + get + getAfter) against Firestore's ceiling of 20 for a
+    // batched write. Verified against the emulator: it short-circuits cheaply on a
+    // Day-0 reshuffle (allowed) but DENIES a legitimate Day-5 or Day-9 one, i.e. it
+    // would have shipped green and then silently broken mid-cruise.
+    //
+    // Monotonic is security-equivalent for the property that matters. Every BOARD
+    // reshuffle still requires a paired +1 (enforced above), so the cap of 3 holds
+    // exactly; monotonicity closes the only real exploit — resetting the counter to
+    // 0 for unlimited reshuffles. Accepted residual: an UNPAIRED +1 is permitted. It
+    // burns the Player's own allowance and writes no Board — self-harm, not an
+    // exploit. See specs/reshuffle.md § "Residuals".
+    // Removing the field is a DECREMENT and is denied as one. `usedCount()` reads a
+    // missing key as 0, so a write that DROPS `reshufflesUsed` — a full (non-merge)
+    // `setDoc` that simply omits it, or an explicit `deleteField()` — would erase a
+    // spent allowance and hand the Player three fresh reshuffles, defeating the
+    // monotonic contract this function exists to enforce (CodeRabbit 🔴, PR #383).
+    // Absence is therefore tolerated ONLY where it is already the truth: a create
+    // (a brand-new row legitimately starts at "none used"), or an update to a
+    // legacy row that never carried the key (there is no backfill). Once the field
+    // exists, every write must carry it forward.
+    function reshuffleCounterPresenceOk() {
+      return resource == null || !('reshufflesUsed' in resource.data);
+    }
+    function reshuffleCounterMonotonic() {
+      return !('reshufflesUsed' in request.resource.data)
+        ? reshuffleCounterPresenceOk()
+        : (request.resource.data.reshufflesUsed is number
+           && request.resource.data.reshufflesUsed >= 0
+           && request.resource.data.reshufflesUsed <= reshuffleAllowance()
+           && (resource == null
+               ? request.resource.data.reshufflesUsed == 0
+               : (request.resource.data.reshufflesUsed == usedCount(resource.data)
+                  || request.resource.data.reshufflesUsed == usedCount(resource.data) + 1)));
+    }
+
     // #221 (d15-admin-schedule) — the Schedule editor's write-time lock:
     // "changing a locked-future Day's theme is safe, changing an
     // already-unlocked Day is disallowed" (daily-cards-spec § "Itinerary and
@@ -256,9 +417,19 @@ service cloud.firestore {
       // #40 deliberately removed the server recompute that implied otherwise;
       // any Phase-1 recompute is consistency/repair, never integrity/anti-cheat.
       // Cross-Player writes stay denied by isOwner(uid); admins may moderate.
+      //
+      // The ONE field this rule does constrain is `reshufflesUsed` (#378): the
+      // cruise-wide reshuffle allowance is a scarce, non-refundable resource, so it
+      // is monotonic (see `reshuffleCounterMonotonic` above). That is not a
+      // retreat from the self-write model — every other stat on this row stays
+      // freely self-written — it is the one field whose whole point is that it only
+      // ever counts down. Admins are bound by it too: nothing an admin legitimately
+      // moderates here needs to rewind a Player's spent reshuffles, and exempting
+      // them would reopen the reset path for any admin-flagged account.
       match /players/{uid} {
         allow read: if signedIn();
-        allow create, update: if isOwner(uid) || isAdmin(eventId);
+        allow create, update: if (isOwner(uid) || isAdmin(eventId))
+          && reshuffleCounterMonotonic();
         allow delete: if isAdmin(eventId);
       }
 
@@ -287,11 +458,36 @@ service cloud.firestore {
         // owner/admin can always inspect existing Board state. The "doc doesn't
         // exist (deal) or is the owner's (marks)" split in the spec both reduce to
         // isOwner(uid): the doc path is boards/{uid} either way.
+        //
+        // Phase 1.5 + #378 adds a SECOND gate on top of the time gate: a RESHUFFLE
+        // — a write that changes an existing Board's `seed` — must additionally
+        // prove the card being traded away is pristine AND that the Player's
+        // cruise-wide counter goes exactly +1 within the allowance in the SAME
+        // batch (see `reshuffleOk`). Ordinary deals (creates) and Marks
+        // (seed-preserving merges) are untouched by this arm and keep the exact
+        // pre-#378 self-write behavior. The Day-unlock gate applies to a reshuffle
+        // exactly as it does to a deal, so a locked Day's preview can never be
+        // rerolled.
+        //
+        // DELETE is split out and denied to the owner (#383, Codex P1). It was
+        // previously covered by the blanket `allow write`, which handed the
+        // allowance a trivial bypass: delete your Board, then CREATE a fresh one.
+        // A create has no `resource`, so `isReshuffleWrite()` is false and the
+        // replacement skips BOTH the pristine check and the paired counter — an
+        // unlimited re-roll, available even after all three reshuffles are spent.
+        // Nothing needs owner deletion: no app path deletes a Board (`dealDayCard`
+        // only ever creates an absent one), and no test asserts it. Admins keep
+        // delete for moderation, which is the same posture proofs/{proofId} takes.
+        // This narrows self-write by exactly one operation that had no legitimate
+        // caller — it is not a retreat from ADR 0001's model for marks and stats.
         match /boards/{uid} {
           allow read: if isOwner(uid) || isAdmin(eventId);
-          allow write: if (isOwner(uid) || isAdmin(eventId))
+          allow create, update: if (isOwner(uid) || isAdmin(eventId))
             && isCanonicalDay(dayIndex)
-            && request.time.toMillis() >= get(/databases/$(database)/documents/events/$(eventId)).data.days[int(dayIndex)].unlockAt;
+            && request.time.toMillis() >= get(/databases/$(database)/documents/events/$(eventId)).data.days[int(dayIndex)].unlockAt
+            && (isReshuffleWrite() || seededMarkWriteOk())
+            && (!isReshuffleWrite() || reshuffleOk(eventId, uid));
+          allow delete: if isAdmin(eventId);
         }
 
         // Per-day First-to-BINGO honor doc: { firstBingo: { uid, displayName, at } }

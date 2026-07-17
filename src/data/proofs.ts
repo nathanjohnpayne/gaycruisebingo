@@ -200,7 +200,8 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
     const boardSnap = await tx.get(boardRef);
     const playerSnap = await tx.get(playerRef);
     const markerSnap = markerRef ? await tx.get(markerRef) : null;
-    const liveCells = (boardSnap.data()?.cells as Cell[] | undefined) ?? cells;
+    const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number } | undefined;
+    const liveCells = boardData?.cells ?? cells;
     const next: Cell[] = liveCells.map((c) =>
       c.index === cellIndex
         ? { ...c, marked: true, markedAt: now, proofId, status: pending ? 'pending' : 'confirmed' }
@@ -240,7 +241,14 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
       // The Day this claim belongs to, so the Feed reads "Day 2 · Get Sporty".
       dayIndex: typeof dayIndex === 'number' ? dayIndex : null,
     });
-    tx.set(boardRef, { cells: next }, { merge: true });
+    tx.set(
+      boardRef,
+      {
+        cells: next,
+        ...(typeof boardData?.seed === 'number' ? { markSeed: boardData.seed } : {}),
+      },
+      { merge: true },
+    );
     // The standings freeze (#265): a post-freeze proofed Mark keeps the card +
     // Tally + Proof honest and still records its PER-DAY bucket (the farewell
     // daily honor reads it — Codex P2 on #278); the ROOT aggregates stop
@@ -361,7 +369,8 @@ export async function deleteProof(
       const boardRef = daily ? rawDayBoard(proofDayIndex, proof.uid) : rawBoard(proof.uid);
       const playerRef = rawPlayer(proof.uid);
       const boardSnap = await tx.get(boardRef);
-      const cells = boardSnap.data()?.cells as Cell[] | undefined;
+      const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number } | undefined;
+      const cells = boardData?.cells;
       // Resolve the backing cell from the proof's OWN cellIndex — the
       // authoritative proof→cell link (specs/w1-board-mark-win.md § cross-writer)
       // — rather than scanning for `cells[i].proofId === id`. Given `proofId`'s
@@ -393,7 +402,14 @@ export async function deleteProof(
         const squares = countMarked(next);
         const blackout = isBlackout(next);
         const firstBingoAt = bingoCount > 0 ? existingFirst : null;
-        tx.set(boardRef, { cells: next }, { merge: true });
+        tx.set(
+          boardRef,
+          {
+            cells: next,
+            ...(typeof boardData?.seed === 'number' ? { markSeed: boardData.seed } : {}),
+          },
+          { merge: true },
+        );
         // The standings freeze (#265): a post-freeze proof deletion unmarks the
         // cell and updates its PER-DAY bucket only (symmetric with setMark's
         // bucket-only frozen write — Codex P2 on #278); the frozen ROOT

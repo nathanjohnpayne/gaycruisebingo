@@ -20,6 +20,8 @@ A phone-first, live, social bingo game for one cruise at a time. The card's prom
 
 **Tutorial Day**: The embark and disembark Days. Dealt from their own curated pools, framed as onboarding/farewell rather than competition.
 
+**Reshuffle**: Trading a pristine Day Card for a fresh deal; 3 per cruise. _Avoid_: re-deal (that's pool recovery), mulligan
+
 **Pool**: Which item set a Prompt belongs to — `main`, `embark`, or `farewell`. Only `main` accepts player submissions.
 
 **Pending**: A submitted Prompt awaiting admin approval — a Prompt-moderation state, distinct from a pending Claim (the Admin-confirmed Mark workflow, see Claim below). Invisible to players; never dealt.
@@ -30,7 +32,7 @@ A phone-first, live, social bingo game for one cruise at a time. The card's prom
 
 ### The card & play
 
-**Board**: One Player's frozen 5×5 card for the Event — 24 sampled prompts plus the free centre. Private to its owner; dealt once and never reshuffled. _Avoid_: Card (fine informally), grid
+**Board**: One Player's frozen 5×5 card — 24 sampled prompts plus the free centre. Private to its owner; dealt once and, once you have marked a square, never re-dealt. The one exception is a [Reshuffle](#days--pools): while a card is still pristine it may be traded whole for a fresh deal, 3 times per cruise. _Avoid_: Card (fine informally), grid
 
 **Square**: One of the 25 positions on a Board. Carries a Prompt's text and whether it's been marked. _Avoid_: Cell, tile, space
 

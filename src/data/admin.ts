@@ -292,7 +292,8 @@ async function resolve(
     const bSnap = await tx.get(boardRef);
     if (!bSnap.exists()) return;
     const pSnap = await tx.get(player(c.uid));
-    const cells = (bSnap.data().cells as Cell[]) ?? [];
+    const boardData = bSnap.data() as { cells?: Cell[]; seed?: number };
+    const cells = boardData.cells ?? [];
     const next = transform(cells);
     const bingoCount = completedLines(next).length;
     const bingoTransition = completedLines(cells).length === 0 && bingoCount > 0;
@@ -315,7 +316,14 @@ async function resolve(
     const metaRef = shouldPinDayHonor ? dayMeta(c.dayIndex as number) : null;
     const metaSnap = metaRef ? await tx.get(metaRef) : null;
 
-    tx.set(boardRef, { cells: next }, { merge: true });
+    tx.set(
+      boardRef,
+      {
+        cells: next,
+        ...(typeof boardData.seed === 'number' ? { markSeed: boardData.seed } : {}),
+      },
+      { merge: true },
+    );
     if (daily) {
       const playerWrite = foldDayStat({
         priorDayStats,
