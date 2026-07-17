@@ -326,18 +326,9 @@ The mapping (these names are the `data-lucide` attributes in the wireframes):
 
 To answer the drift: the More tab's move from ⋯ to the avatar is deliberate (identity stays glanceable after the top bar hands profile to the menu); `ellipsis` is its signed-out fallback, not its default.
 
-### Admin console
+### Admin console (IA redesigned 2026-07-17—hub and detail)
 
-New "Approvals" tab: pending queue (described above) plus a Schedule editor—the ten Days as rows with date, port, and a theme dropdown (locked for past/unlocked Days).
-
-New "Proof & Claims" panel, surfacing knobs that mostly already exist in the backend without UI:
-
-- **Claim mode** (existing event setting): Honor / Proof-to-mark / Admin-confirmed segmented control, captioned "a friction knob, not a trust level" per ADR 0001.
-- **Photo proof source** (#190, new): *Camera or library* (recommended default; library picks badged 🖼️ on the Feed) or *Camera only* (today's behavior, for live-proof ceremony).
-- **Strip location data** (new, default on): client-side canvas re-encode on upload so EXIF/GPS never leaves the phone. Worth having regardless of #190—library photos are far more likely to carry geotags than live captures.
-- **AI image screen** (existing `visionGate` function, now toggleable): flagged proofs hide pending review.
-- **Auto-hide after reports** (existing `reportHideThreshold`, now editable): stepper.
-- **Pending claims** (existing, admin-confirmed mode): link row with count badge.
+The built console outgrew its three tabs (the Moderation tab alone stacked six unrelated sections, taller than a phone viewport, with Close at the very bottom). Redesign: `/more/admin` is a compact **hub** of five section cards with live badges—**Review queue** (reports + pending approvals + pending claims, one merged inbox, oldest first), **Game settings** (claim mode, photo source, EXIF strip, AI image screen, auto-hide threshold, **Easy mix as a 0–100% slider** with detents and a squares-math bubble, default theme), **Schedule** (the day rows with theme + Tonight editors; Unlock-now and Re-snapshot anchor to their day), **Prompt pool** (list + curated add), and **Players** (banned roster). Every admin surface shares one navigation contract: sticky header with `‹ Admin` back and an always-visible **Done** that closes admin from any depth; backdrop tap and swipe-down dismiss; real routes so browser back walks detail → hub → More. UI-only re-housing—every write path stays as built. Ticket: `plans/admin-redesign-ticket.md`; frames `#frame-admin-hub`, `#frame-admin-queue`, `#frame-admin-settings`, `#frame-admin-schedule`.
 
 ## Tutorial item lists
 
