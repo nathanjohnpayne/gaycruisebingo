@@ -26,7 +26,7 @@ A phone-first, live, social bingo game for one cruise at a time. The card's prom
 
 **Pending**: A submitted Prompt awaiting admin approval — a Prompt-moderation state, distinct from a pending Claim (the Admin-confirmed Mark workflow, see Claim below). Invisible to players; never dealt.
 
-**Day Snapshot**: The frozen list of approved Prompts captured at a Day's unlock moment; before that moment the Day stays locked and deals nothing, so a card can never draw from an unfrozen pool. All of that Day's deals draw from the snapshot, so everyone's card reflects the same pool regardless of when they first open it.
+**Day Snapshot**: The frozen list of approved Prompts captured at a Day's unlock moment; before that moment the Day stays locked and deals nothing, so a card can never draw from an unfrozen pool. All of that Day's deals draw from the snapshot, so everyone's card reflects the same pool regardless of when they first open it. On a **main** day the snapshot carries BOTH pools — every active `main` item and every active `embark` item — so the [Easy mix](#days--pools) (a share of each card dealt from the easy embark pool) rides the one frozen list and every deal and reshuffle inherits it (specs/easy-mix.md). Tutorial days still freeze only their own pool.
 
 **Tally Card**: The Feed's live, aggregated entry for one Prompt on one Day — bumped toward the top as new Players mark it. A rendering of the Tally, not a new record. _Avoid_: Wave, streak
 

@@ -36,6 +36,7 @@ export interface DayLike {
   pool: string; // 'main' | 'embark' | 'farewell'
   unlockAt: number; // ms epoch
   snapshotItemIds?: string[];
+  snapshotEasyMixRatio?: number;
 }
 
 /** The subset of an `EventDoc` the scheduler reads. */
@@ -44,7 +45,7 @@ export interface EventLike {
   frozenAt?: number | null;
   admins?: string[];
   /** ADR 0004 Phase 0 community auto-hide threshold (mirrors the live deal pool). */
-  settings?: { reportHideThreshold?: number };
+  settings?: { reportHideThreshold?: number; easyMixRatio?: number };
   /** ADR 0004 Phase 0 event-scoped ban roster (#108; mirrors the live deal pool). */
   bannedUids?: string[];
 }
@@ -94,9 +95,29 @@ export interface SnapshotItem {
   approvedAt?: number;
 }
 
+/** The item pools a Day's snapshot draws from (specs/easy-mix.md § "Snapshot carries
+ *  both pools"). A MAIN day now freezes BOTH the main pool AND the embark pool, so the
+ *  easy-mix squares live in the one snapshot and every deal / reshuffle inherits the
+ *  mix for free. Tutorial days (embark/farewell) freeze only their own pool, unchanged.
+ */
+export function snapshotPoolsFor(dayPool: string): string[] {
+  return dayPool === 'main' ? ['main', 'embark'] : [dayPool];
+}
+
+function eventEasyMixRatio(event: EventLike | undefined): number {
+  return typeof event?.settings?.easyMixRatio === 'number' ? event.settings.easyMixRatio : 0.5;
+}
+
 /** The pool + moderation + cutoff context a snapshot is filtered against. */
 export interface SnapshotFilter {
   pool: string;
+  /**
+   * The set of item pools this snapshot admits. When present it is authoritative
+   * (a main day passes `['main', 'embark']` — see `snapshotPoolsFor`); when absent it
+   * defaults to `[pool]`, so a caller that only sets `pool` keeps the pre-easy-mix
+   * single-pool behavior.
+   */
+  pools?: string[];
   /**
    * The Day's canonical unlock moment (`day.unlockAt`), NOT the run clock: an item
    * that only entered the pool AFTER unlock must not slip into a delayed/manual run's
@@ -147,6 +168,10 @@ function isBanned(uid: string | undefined, bannedUids: readonly string[] | undef
  */
 export function activeSnapshotIds(items: SnapshotItem[], filter: SnapshotFilter): string[] {
   const { pool, cutoff, reportHideThreshold, bannedUids } = filter;
+  // The admitted pools: the explicit set when given (a main day → main + embark), else
+  // just the single `pool` (pre-easy-mix behavior). Order of `items` is preserved, so
+  // the deal path can re-split by pool while the main items keep their relative order.
+  const pools = filter.pools ?? [pool];
   // A non-positive cutoff is an "always unlocked" sentinel (seeds have used
   // `unlockAt: 0` for the live-pre-cruise embark Day), NOT a real instant —
   // treating it as one excludes EVERY item (all `createdAt` > epoch) and stamps
@@ -155,7 +180,7 @@ export function activeSnapshotIds(items: SnapshotItem[], filter: SnapshotFilter)
   // OPEN: no cutoff, the snapshot is simply the active pool at run time.
   const cutoffApplies = cutoff > 0;
   return items
-    .filter((it) => (it.pool ?? 'main') === pool)
+    .filter((it) => pools.includes(it.pool ?? 'main'))
     .filter((it) => !it.isFreeSpace)
     .filter((it) => !isReportHidden(it.reportCount ?? 0, reportHideThreshold))
     .filter((it) => !isBanned(it.createdBy, bannedUids))
@@ -264,6 +289,7 @@ interface CollectionRef extends QueryRef {
 }
 interface Transaction {
   get(ref: DocRef): Promise<DocSnapshot>;
+  get(ref: QueryRef): Promise<{ docs: DocSnapshot[] }>;
   update(ref: DocRef, data: Record<string, unknown>): void;
 }
 /** The minimal admin-SDK Firestore surface the scheduler uses. */
@@ -435,6 +461,9 @@ export async function stampDaySnapshot(
   // the live pool hides, nor items approved after the Day opened (Codex #228).
   const snapshotItemIds = activeSnapshotIds(items, {
     pool: day.pool,
+    // A main day freezes BOTH pools (main + embark) so the easy mix rides the one
+    // snapshot (specs/easy-mix.md); tutorial days freeze only their own pool.
+    pools: snapshotPoolsFor(day.pool),
     cutoff: day.unlockAt,
     reportHideThreshold: pre.settings?.reportHideThreshold,
     bannedUids: pre.bannedUids,
@@ -449,7 +478,11 @@ export async function stampDaySnapshot(
     if (i < 0) return 'no-day';
     if (arr[i].unlockAt > now) return 'not-due';
     if (arr[i].snapshotItemIds != null) return 'already-stamped'; // re-confirm: never overwrite an existing snapshot
-    arr[i] = { ...arr[i], snapshotItemIds };
+    arr[i] = {
+      ...arr[i],
+      snapshotItemIds,
+      ...(arr[i].pool === 'main' ? { snapshotEasyMixRatio: eventEasyMixRatio(ev) } : {}),
+    };
     tx.update(eventRef, { days: arr });
     return 'stamped';
   });
@@ -607,4 +640,91 @@ export async function manualUnlockNow(
     throw new UnlockPermissionError('Only an event admin can unlock a Day.');
   }
   return stampDaySnapshot(db, eventId, dayIndex, deps);
+}
+
+// --- Guarded re-snapshot (the easy-mix deploy-race fallback) ---------------------
+
+export type ResnapshotResult =
+  | 'resnapshotted'
+  | 'has-boards'
+  | 'not-recoverable'
+  | 'not-due'
+  | 'no-event'
+  | 'no-day';
+
+/**
+ * The easy-mix deploy-race fallback (specs/easy-mix.md § "Deploy race"): OVERWRITE one
+ * Day's `snapshotItemIds` with the current active pool — main + embark for a main day —
+ * but ONLY while ZERO Day Cards have been dealt for that Day.
+ *
+ * If the 08:00 scheduler fired on the pre-easy-mix build, Day 4's snapshot would carry
+ * the main pool alone (no embark ids), so no card could mix. Re-stamping BEFORE anyone
+ * deals lets the intended mix take effect. This recovery is therefore limited to
+ * Day 4 and later: already-unlocked Days 1-3 are intentionally left main-only.
+ * This is the ONE place a snapshot is
+ * overwritten rather than idempotently preserved (`stampDaySnapshot` never overwrites),
+ * so the zero-boards guard is load-bearing: a dealt card's pool is frozen by its
+ * membership in the snapshot it drew from, and rewriting the snapshot under existing
+ * cards would let a later deal or reshuffle diverge from the cards already out. Once any
+ * board exists the re-stamp is DENIED (`'has-boards'`).
+ *
+ * Admin-gated exactly like `manualUnlockNow` (a non-admin caller trips
+ * `UnlockPermissionError`). The zero-boards check is read inside the same transaction
+ * that overwrites the Day, so a concurrent card deal that creates a board forces the
+ * transaction to retry and then return `'has-boards'` instead of splitting one Day
+ * across two snapshots.
+ */
+export async function resnapshotDayIfNoBoards(
+  db: AdminFirestore,
+  callerUid: string | undefined,
+  eventId: string,
+  dayIndex: number,
+  deps: UnlockDeps = {},
+): Promise<ResnapshotResult> {
+  const now = (deps.now ?? Date.now)();
+  const eventRef = db.doc(`events/${eventId}`);
+  const pre = (await eventRef.get()).data() as EventLike | undefined;
+  if (!isEventAdmin(pre, callerUid)) {
+    throw new UnlockPermissionError('Only an event admin can re-snapshot a Day.');
+  }
+  const days = Array.isArray(pre?.days) ? pre!.days : [];
+  const day = days.find((d) => d.index === dayIndex);
+  if (!day) return 'no-day';
+  if (day.index < 3) return 'not-recoverable';
+  if (day.unlockAt > now) return 'not-due';
+
+  const items = await queryActiveItems(db, eventId);
+  const snapshotItemIds = activeSnapshotIds(items, {
+    pool: day.pool,
+    pools: snapshotPoolsFor(day.pool),
+    cutoff: day.unlockAt,
+    reportHideThreshold: pre?.settings?.reportHideThreshold,
+    bannedUids: pre?.bannedUids,
+  });
+
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(eventRef);
+    const ev = snap.data() as EventLike | undefined;
+    if (!ev) return 'no-event';
+    const arr = Array.isArray(ev.days) ? [...ev.days] : [];
+    const i = arr.findIndex((d) => d.index === dayIndex);
+    if (i < 0) return 'no-day';
+    if (arr[i].index < 3) return 'not-recoverable';
+    if (arr[i].unlockAt > now) return 'not-due';
+    // Transactional guard: a re-snapshot is permitted ONLY while no card has been
+    // dealt. Reading the boards query here serializes the overwrite against a
+    // concurrent deal creating `events/{id}/days/{i}/boards/{uid}`.
+    if ((await tx.get(db.collection(`events/${eventId}/days/${dayIndex}/boards`))).docs.length > 0) {
+      return 'has-boards';
+    }
+    // OVERWRITE — the deliberate difference from stampDaySnapshot's never-overwrite
+    // guard. The transactional zero-boards check above is what makes this safe.
+    arr[i] = {
+      ...arr[i],
+      snapshotItemIds,
+      ...(arr[i].pool === 'main' ? { snapshotEasyMixRatio: eventEasyMixRatio(ev) } : {}),
+    };
+    tx.update(eventRef, { days: arr });
+    return 'resnapshotted';
+  });
 }

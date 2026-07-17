@@ -23,6 +23,8 @@ const H = vi.hoisted(() => ({
   getDocs: vi.fn(),
   batchSet: vi.fn(),
   batchCommit: vi.fn(async () => {}),
+  txSet: vi.fn(),
+  txGet: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({
@@ -52,7 +54,16 @@ vi.mock('firebase/firestore', () => {
     writeBatch: () => ({ set: H.batchSet, commit: H.batchCommit }),
     addDoc: vi.fn(),
     increment: vi.fn(),
-    runTransaction: vi.fn(),
+    runTransaction: async (_db: unknown, fn: (tx: unknown) => Promise<unknown>) => {
+      const tx = {
+        get: async (ref: { args?: unknown[] }) => {
+          H.txGet(ref);
+          return route(ref);
+        },
+        set: H.txSet,
+      };
+      return fn(tx);
+    },
     setDoc: vi.fn(),
     updateDoc: vi.fn(),
     onSnapshot: vi.fn(),
@@ -152,15 +163,17 @@ beforeEach(() => {
   H.batchSet.mockReset();
   H.batchCommit.mockReset();
   H.batchCommit.mockResolvedValue(undefined);
+  H.txSet.mockReset();
+  H.txGet.mockReset();
 });
 
 // The last board write's (ref, data) — the day-scoped Board doc, if any.
-function writtenBoard(): { ref: { args?: unknown[] }; data: { cells: Cell[]; dayIndex: number } } | null {
-  for (const call of H.batchSet.mock.calls) {
+function writtenBoard(): { ref: { args?: unknown[] }; data: { cells: Cell[]; dayIndex: number; easyMixRatio?: number } } | null {
+  for (const call of H.txSet.mock.calls) {
     const ref = call[0] as { args?: unknown[] };
     const a = (ref.args ?? []).filter((x): x is string => typeof x === 'string');
     if (a[2] === 'days' && a[4] === 'boards') {
-      return { ref, data: call[1] as { cells: Cell[]; dayIndex: number } };
+      return { ref, data: call[1] as { cells: Cell[]; dayIndex: number; easyMixRatio?: number } };
     }
   }
   return null;
@@ -191,8 +204,8 @@ describe('dealDayCard — snapshot-gated lazy dealing', () => {
   it('deals a Day Card from the snapshot — never a live status query — when ready', async () => {
     const ids = seedPool(30);
     H.event = {
-      days: daysWith(mkDay({ index: 2, unlockAt: PAST, snapshotItemIds: ids })),
-      settings: { spicyRatio: 0.4 },
+      days: daysWith(mkDay({ index: 2, unlockAt: PAST, snapshotItemIds: ids, snapshotEasyMixRatio: 0.25 })),
+      settings: { spicyRatio: 0.4, easyMixRatio: 0.75 },
     };
 
     const dealt = await dealDayCard(U, 2);
@@ -201,6 +214,7 @@ describe('dealDayCard — snapshot-gated lazy dealing', () => {
     const board = writtenBoard();
     expect(board).not.toBeNull();
     expect(board!.data.dayIndex).toBe(2);
+    expect(board!.data.easyMixRatio).toBe(0.25);
     expect(board!.data.cells).toHaveLength(25);
     // The pool is sourced ONLY from snapshotItemIds — the live `status: active`
     // getDocs query is never used by the deal path.
@@ -215,6 +229,37 @@ describe('dealDayCard — snapshot-gated lazy dealing', () => {
     H.event = { days: daysWith(mkDay({ index: 2, unlockAt: PAST, snapshotItemIds: ids })), settings: {} };
     // Pre-existing Day-2 board for this uid.
     H.dayBoards.set(2, { uid: U.uid, cells: [] });
+
+    const dealt = await dealDayCard(U, 2);
+
+    expect(dealt).toBe(false);
+    expect(writtenBoard()).toBeNull();
+  });
+
+  it('refuses the write if the Day snapshot changes before the transactional commit', async () => {
+    const originalIds = seedPool(30);
+    const changedIds = [...originalIds, 'late-embark'];
+    H.itemsById.set('late-embark', {
+      text: 'late embark',
+      isFreeSpace: false,
+      status: 'active',
+      spicy: false,
+      pool: 'embark',
+      reportCount: 0,
+    });
+    H.event = {
+      days: daysWith(mkDay({ index: 2, unlockAt: PAST, snapshotItemIds: originalIds })),
+      settings: { spicyRatio: 0.4 },
+    };
+    H.txGet.mockImplementation((ref: { args?: unknown[] }) => {
+      const a = (ref.args ?? []).filter((x): x is string => typeof x === 'string');
+      if (a.length === 2 && a[0] === 'events') {
+        H.event = {
+          days: daysWith(mkDay({ index: 2, unlockAt: PAST, snapshotItemIds: changedIds })),
+          settings: { spicyRatio: 0.4 },
+        };
+      }
+    });
 
     const dealt = await dealDayCard(U, 2);
 

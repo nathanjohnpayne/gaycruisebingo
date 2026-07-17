@@ -253,7 +253,9 @@ describe('activeSnapshotIds — the frozen pool mirrors the live deal pool', () 
 });
 
 describe('stampDaySnapshot — the snapshot at unlock (AC 1)', () => {
-  it('stamps a due, unstamped Day with exactly the active items in its pool', async () => {
+  it('stamps a due, unstamped MAIN Day with BOTH pools — main + embark (easy mix)', async () => {
+    // specs/easy-mix.md § "Snapshot carries both pools": a main day now freezes the main
+    // pool AND the embark pool so the easy-mix squares ride the one snapshot.
     const db = makeDb({
       eventId: 'e1',
       event: { days: mainDays() },
@@ -261,14 +263,15 @@ describe('stampDaySnapshot — the snapshot at unlock (AC 1)', () => {
         { id: 'a', status: 'active', pool: 'main' },
         { id: 'b', status: 'active', pool: 'main' },
         { id: 'c', status: 'pending', pool: 'main' }, // not active → excluded
-        { id: 'd', status: 'active', pool: 'embark' }, // wrong pool → excluded
+        { id: 'd', status: 'active', pool: 'embark' }, // embark → INCLUDED on a main day
+        { id: 'far', status: 'active', pool: 'farewell' }, // other tutorial pool → excluded
         { id: 'legacy', status: 'active' }, // no pool → main → included
       ],
     });
     const result = await stampDaySnapshot(db, 'e1', 8, { now: () => D9_UNLOCK + 1 });
     expect(result).toBe('stamped');
     const day = db.readEvent().days!.find((d) => d.index === 8)!;
-    expect(day.snapshotItemIds).toEqual(['a', 'b', 'legacy']);
+    expect(day.snapshotItemIds).toEqual(['a', 'b', 'd', 'legacy']);
   });
 
   it('freezes only what the live pool would deal: no free-space, hidden, banned, or late items (#228)', async () => {

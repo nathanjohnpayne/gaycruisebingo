@@ -1,0 +1,52 @@
+---
+spec_id: easy-mix
+status: accepted
+---
+
+# Easy mix — blend embark-pool squares into main-day cards (`easy-mix`)
+
+Implements `plans/daily-cards-spec.md` § "Resolved decisions" #8 and `plans/easy-mix-ticket.md`. Cards to date have been too hard: every main-day card dealt all 24 non-free Squares from the main pool. From Day 4 onward a new event setting **`settings.easyMixRatio`** (0–1, default **0.5**) splits the 24 Squares into an **easy half** sampled from the **embark** pool (the tutorial's on-ship, campy, achievable items) and a **main half** dealt exactly as before, with the existing `spicyRatio` applying **within the main half only**. It is admin-tunable (a dial, not a deploy); the Day Snapshot now carries **both** pools so reshuffles inherit the mix for free; already-unlocked Days 1–3 are byte-for-byte untouched.
+
+Order of operations on a main-day deal: `easyMixRatio` splits 24 → easy/main counts (`0.5 → 12/12`, `0.25 → 6/18`, `0 → 0/24`); `spicyRatio` (~0.4) then applies within the main count (`12 → round(12·0.4) = 5` spicy / 7 tame). Guarded by `src/game/logic.test.ts` + `src/game/easy-mix.test.ts` (composition), `src/data/d15-dealing.test.ts` (the deal call site), and `tests/functions/easy-mix-snapshot.test.ts` (the snapshot + guarded re-snapshot).
+
+## Glossary
+
+- **Easy half**: the `round(24 · easyMixRatio)` Squares of a main-day card dealt from the embark pool. Easy items may repeat across days — per-day tallies make re-marking "Get your favorite dessert" on Day 4 legitimate — so the cross-cruise no-repeat exclusion applies to the **main half only**.
+- **Main half**: the remaining `24 − easyCount` Squares, dealt by the unchanged stratified spicy/tame sample, honoring the cross-cruise no-repeat exclusion.
+
+## Contract
+
+- **`DealItem` carries `pool`** (`src/game/logic.ts`). Optional `pool?: string`; absent → treated as `main` (legacy/synthetic items). Only `'embark'` is load-bearing: on a main-day deal, embark items are the easy half.
+- **`DealOptions` gains `easyMixRatio?: number`** (`src/game/logic.ts`). The share of the 24 Squares drawn from the embark items in `pool`, clamped 0..1. Two gates keep it inert where it must be: it is ignored on the unstratified tutorial path (`stratify: false`), and it has **no effect when `pool` carries no embark items** — a main-only snapshot (Days 1–3, stamped before easy mix) deals byte-for-byte as today. Defaults to 0 in `dealBoard`; the live default (0.5) is applied at the call sites.
+- **`dealBoard` is pool-aware on the main path** (`src/game/logic.ts`). It splits `pool` into embark (easy half) and everything-else (main half); applies the no-repeat exclusion to the **main half only**; computes `easyCount = pool has embark ? round(24 · easyMixRatio) : 0`; and, when `easyCount > 0`, interleaves an embark sample with a stratified main sample across the 24 positions. The MIN_POOL (24) guard is the main pool alone at `easyCount 0` (preserving the pre-existing thin-pool throw) and the union of both pools when mixing. Backfill is bidirectional and mirrors the stratum-dry behavior: an embark shortfall is filled from leftover tame-then-spicy main; a main shortfall is filled from spare embark. Embark and main are disjoint pools, so the 24 Squares are always distinct. `easyCount === 0` routes to the unchanged `stratifiedPicks`, so the all-main deal is byte-for-byte unchanged.
+- **The deal call sites read the setting** (`src/data/api.ts`). `dealDayCard` and `reshuffleBoard` map each hydrated snapshot item to a `DealItem` including its `pool`, read `settings.easyMixRatio` off the event doc defensively (`typeof === 'number'`, default `0.5`) exactly as they read `spicyRatio`, and pass it as `dealBoard`'s `opts.easyMixRatio`. A reshuffle draws from the same frozen snapshot, so it inherits the mix automatically.
+- **`EventDoc['settings'].easyMixRatio?: number`** (`src/types.ts`). The optional per-event override, read defensively at the deal call sites with a 0.5 default. Absent on an event doc seeded before this field existed.
+- **The main-day Day Snapshot carries both pools** (`functions/src/unlockDay.ts`). `snapshotPoolsFor(dayPool)` returns `['main', 'embark']` for a main day and `[dayPool]` otherwise. `SnapshotFilter` gains an optional `pools?: string[]` (authoritative when present, else `[pool]`), and `activeSnapshotIds` admits any item whose pool is in that set, preserving item order. `stampDaySnapshot` passes `snapshotPoolsFor(day.pool)`, so a main day freezes every active main + embark item; the idempotency guard (never re-stamp an existing snapshot) is unchanged.
+- **Guarded re-snapshot fallback** (`functions/src/unlockDay.ts`, `functions/src/index.ts`, `src/data/admin.ts`, `src/components/Admin.tsx`). `resnapshotDayIfNoBoards(db, callerUid, eventId, dayIndex)` OVERWRITES one Day's snapshot with the current active pool (both pools for a main day) — the ONE place a snapshot is overwritten rather than idempotently preserved — but ONLY for Day 4 and later and while **zero** Day Cards exist for the Day (`dayBoardCount === 0`); once any board exists it returns `'has-boards'` and changes nothing, and Days 1-3 return `'not-recoverable'`. Admin-gated like `manualUnlockNow` (`UnlockPermissionError` for a non-admin). Exposed through the existing `unlockDayNow` callable with `resnapshot: true`; the client wrapper is `resnapshotDayNow(dayIndex)`; a "Re-snapshot" button renders in the Admin Schedule tab for an unlocked main Day 4+. This recovers a Day whose snapshot was stamped by the pre-easy-mix build (the deploy race).
+- **One admin control** (`src/components/Admin.tsx`, `src/data/admin.ts`). A single "Easy mix" row in the Proof & Claims panel (0% / 25% / 50% segmented control) writes `settings.easyMixRatio` via a dot-path merge (`setEasyMixRatio`), so difficulty is a live dial with no deploy.
+
+## Deploy race
+
+Day 4's snapshot stamps at its 08:00 unlock. If the scheduler fires on the OLD (pre-easy-mix) build, the snapshot lacks embark items and no card can mix. Mitigation: deploy the new functions before the 08:00 unlock; at 08:00 verify the snapshot contains both pools; if it does not AND no card has been dealt, run the guarded re-snapshot (`resnapshotDayNow` / the Schedule-tab button) before anyone deals. Once any card exists the re-snapshot is denied and the Day keeps whatever it stamped, because a dealt card's pool is frozen by the snapshot it drew from.
+
+## No change
+
+No pool content changes, no migration, no rules changes, and nothing touches Days 1–3 or any existing board/tally/stat. The legacy single-board `joinAndDeal` is untouched (its live query is main-only, so it carries no embark items and never mixes). Reshuffle, parity, and schedule-correction work are separate tickets.
+
+## Acceptance criteria
+
+- **Given** Day 4 unlocks with the new code and `easyMixRatio` 0.5, **when** a Player deals, **then** the card has 12 easy embark Squares + 12 main Squares (≈5 spicy within the main half), the free centre, and normal tally/proof behavior — including easy repeats from Day 1. (Tests: "deals exactly 12 embark + 12 main, with ≈5 spicy inside the main half".)
+- **Given** the same pool and seed, **when** `easyMixRatio` is 0, **then** the deal is byte-for-byte today's all-main stratified composition. (Tests: "drops embark entirely and reproduces the main-only stratified deal"; "the dealBoard default (no easyMixRatio) is inert".)
+- **Given** Days 1–3 (main-only snapshots), **then** nothing changes even with `easyMixRatio` set — boards, marks, tallies, stats identical. (Tests: "a snapshot with no embark items never mixes, even with easyMixRatio set".)
+- **Given** an admin sets `easyMixRatio` to 0.25 before a Day's unlock, **then** that Day's cards deal 6 easy + 18 main without a deploy. (Tests: "ratio 0.25 deals 6 embark + 18 main".)
+- **Given** the embark pool is short, **then** the easy half backfills from tame main and the card still deals 24 distinct Squares; **given** the combined pool is below MIN_POOL, **then** `dealBoard` throws exactly like the pre-existing guard. (Tests: "backfills the easy half from tame main when the embark pool is short"; "still fills 24 when the MAIN pool is thin"; "throws when the combined pool is below MIN_POOL".)
+- **Given** a reshuffle on a Day whose snapshot carries both pools, **then** the fresh card obeys the same mix (it draws from the same snapshot). (Covered by the snapshot contract + `reshuffleBoard` passing `easyMixRatio`.)
+- **Given** a main day unlocks, **then** its snapshot contains both the active main and active embark ids. (Tests: "includes active embark items alongside main in a main-day snapshot"; "a main day freezes BOTH the main and embark pools".)
+- **Given** the deploy race, **then** an admin can re-snapshot a Day with both pools while zero cards exist, and the re-snapshot is denied once any card is dealt. (Tests: "OVERWRITES a main-only snapshot with both pools while zero boards exist"; "is DENIED once any board exists for the Day"; "rejects a non-admin caller".)
+
+## Test coverage
+
+- `src/game/easy-mix.test.ts` (Vitest, pure-logic — no Firebase): the 0.5 split (12/12, 5 spicy in main), the 0.25 split (6/18), determinism per seed, the ratio-0 no-regression proof (drops embark, reproduces the main-only deal; the default is inert; a no-embark snapshot never mixes), defensive backfill (short embark → tame-main backfill; thin main → spare-embark backfill; below-MIN_POOL throw), exclusion applying to the main half only (an excluded main prompt is kept off; an excluded embark prompt is ignored), and the untouched free centre.
+- `tests/functions/easy-mix-snapshot.test.ts` (Vitest, in-memory Firestore fake — no runtime): `snapshotPoolsFor` (main → both pools, tutorial → own pool), `activeSnapshotIds` honoring the `pools` set (and falling back to the single `pool`), `stampDaySnapshot` freezing both pools on a main day, and `resnapshotDayIfNoBoards` (overwrite while zero boards, denied once a board exists, Day 1-3 not-recoverable, non-admin rejected, not-due before unlock, no-day out of range).
+- `tests/functions/d15-scheduler-unlock.test.ts` updates the existing snapshot assertion: a main day now freezes main + embark, and the other tutorial pool (farewell) is still excluded.
+- Pre-existing `dealBoard` contracts stay pinned in `src/game/logic.test.ts` (25 cells, free centre, the `< MIN_POOL` throw, determinism) — all on the `easyCount 0` path, so they are unchanged.

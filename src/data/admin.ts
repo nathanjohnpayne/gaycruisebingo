@@ -104,6 +104,14 @@ export const setVisionGate = (on: boolean): Promise<void> =>
 export const setReportHideThreshold = (n: number): Promise<void> =>
   updateDoc(evt(), { 'settings.reportHideThreshold': n });
 
+// Easy mix (specs/easy-mix.md): the share of a main-day Board dealt from the embark
+// pool, a live `settings.easyMixRatio` write mirroring the four above. A DOT-PATH
+// merge so it never clobbers a sibling `settings` key. Difficulty becomes a dial, not
+// a deploy — an admin changing it before a Day unlocks changes that Day's mix (the
+// value is read at deal time off the frozen snapshot, which already carries both pools).
+export const setEasyMixRatio = (ratio: number): Promise<void> =>
+  updateDoc(evt(), { 'settings.easyMixRatio': ratio });
+
 // The Admin Schedule editor (#221, daily-cards-spec § "Admin console" / §
 // "Itinerary and schedule"): "changing a locked-future Day's theme is safe,
 // changing an already-unlocked Day is disallowed." `days` is a Firestore ARRAY
@@ -184,6 +192,16 @@ export const setDayTonight = (days: DayDef[], dayIndex: number, tonight: string[
 /** What `unlockDayNow` reports back — mirrors `SnapshotResult` in `functions/src/unlockDay.ts`. */
 export type UnlockDayNowResult = 'stamped' | 'already-stamped' | 'not-due' | 'no-event' | 'no-day';
 
+/** What the guarded re-snapshot reports back — mirrors `ResnapshotResult` in
+ *  `functions/src/unlockDay.ts` (specs/easy-mix.md § "Deploy race"). */
+export type ResnapshotDayResult =
+  | 'resnapshotted'
+  | 'has-boards'
+  | 'not-recoverable'
+  | 'not-due'
+  | 'no-event'
+  | 'no-day';
+
 /**
  * The Admin console's manual "unlock now" fallback (daily-cards-spec §
  * "Unlock mechanics": "a manual admin 'unlock now' button covers function
@@ -204,6 +222,24 @@ export async function unlockDayNow(dayIndex: number): Promise<UnlockDayNowResult
     'unlockDayNow',
   );
   const res = await callable({ eventId: EVENT_ID, dayIndex });
+  return res.data.result;
+}
+
+/**
+ * The easy-mix deploy-race fallback (specs/easy-mix.md § "Deploy race"): re-stamp one
+ * Day's snapshot with the current active pool (main + embark for a main day) so the
+ * easy mix takes effect on a Day whose snapshot was frozen by the pre-easy-mix build.
+ * Routes to the SAME admin-gated `unlockDayNow` callable with `resnapshot: true`, which
+ * OVERWRITES the snapshot but ONLY while zero Day Cards exist for the Day
+ * (`resnapshotDayIfNoBoards` — the guard is server-side; a Day with any board dealt
+ * gets `has-boards` and no change). Scoped to `EVENT_ID` like every write here.
+ */
+export async function resnapshotDayNow(dayIndex: number): Promise<ResnapshotDayResult> {
+  const callable = httpsCallable<
+    { eventId: string; dayIndex: number; resnapshot: true },
+    { result: ResnapshotDayResult }
+  >(functions, 'unlockDayNow');
+  const res = await callable({ eventId: EVENT_ID, dayIndex, resnapshot: true });
   return res.data.result;
 }
 
