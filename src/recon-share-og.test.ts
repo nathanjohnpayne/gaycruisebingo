@@ -85,15 +85,17 @@ describe('recon: bare-URL unfurl keeps working with no server', () => {
     // so the asset is reproducible. The depicted daybar must be a real seeded
     // (day, theme, port) trio — the v1 render showed a trio that exists on no
     // seeded Day (Codex P3 on #337) — so derive the expectation from the seed
-    // itself: the board art is neon-playground, and the daybar must name that
-    // theme's own Day and port exactly as DayBar renders them
+    // itself. The 2026-07-17 schedule correction moved neon-playground off
+    // every Day, so the pink-neon board art now names its unified successor,
+    // neon-pink-playground (Sea Day / Day 3); the daybar must name that theme's
+    // own Day and port exactly as DayBar renders them
     // (`Day {index + 1} · {label}` + port, src/components/Board.tsx).
     const template = read('../scripts/og/og-default.html');
     expect(existsSync(resolve('../scripts/og/render-og-default.mjs'))).toBe(true);
-    const day = DAYS.find((d) => d.theme === 'neon-playground');
-    if (!day) throw new Error('no seeded neon-playground Day');
+    const day = DAYS.find((d) => d.theme === 'neon-pink-playground');
+    if (!day) throw new Error('no seeded neon-pink-playground Day');
     const theme = THEMES.find((t) => t.id === day.theme);
-    if (!theme) throw new Error('no ThemeMeta for neon-playground');
+    if (!theme) throw new Error('no ThemeMeta for neon-pink-playground');
     expect(template).toContain(`Day ${day.index + 1} · ${theme.label} ${theme.emoji}`);
     expect(template).toContain(`${day.portEmoji} ${day.port}`);
   });

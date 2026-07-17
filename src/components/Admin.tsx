@@ -29,6 +29,7 @@ import {
   setClaimMode,
   setEventTheme,
   setDayTheme,
+  setDayTonight,
   setPhotoProofSource,
   setStripPhotoExif,
   setVisionGate,
@@ -414,14 +415,49 @@ function ResnapshotButton({ dayIndex }: { dayIndex: number }) {
  * the Day is `dayDueForManualUnlock` — unlocked but not yet snapshot-stamped,
  * the state a lagging/failed 08:00 scheduler run leaves behind.
  */
+// The "Tonight:" line's two events are stored as a `string[]`; the editor round-
+// trips them through one text field joined by the same " · " the day bar renders,
+// so an admin edits the line exactly as players see it. Split tolerates either
+// bullet spacing and drops empty segments; the DayBar render guard copes with any
+// count, so a mid-edit line never throws.
+const TONIGHT_SEP = ' · ';
+function joinTonight(tonight: string[] | undefined): string {
+  return (Array.isArray(tonight) ? tonight : []).join(TONIGHT_SEP);
+}
+function splitTonight(text: string): string[] {
+  return text
+    .split(/\s*·\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// Best-effort admin chrome (schedule correction 2026-07-17): a "2 parties" pill
+// on Days whose two Tonight events are BOTH parties, vs a headline show/concert
+// + party. There is no structured party/show flag on the model (tonight is free
+// text), so "party" is inferred from the data's own convention — a headline
+// show/concert leads with 🎭 or 🎤 (AirOtic, Solea Pfeiffer, Persephone, HAYLA);
+// everything else is a party. Purely cosmetic: a mis-inferred pill never affects
+// dealing, scoring, or the stored line.
+const SHOW_LEAD_EMOJI = ['🎭', '🎤'];
+function isPartyEvent(event: string): boolean {
+  const trimmed = event.trim();
+  return trimmed.length > 0 && !SHOW_LEAD_EMOJI.some((e) => trimmed.startsWith(e));
+}
+function isTwoPartyDay(day: DayDef): boolean {
+  const tonight = Array.isArray(day.tonight) ? day.tonight : [];
+  return !day.tutorial && tonight.length === 2 && tonight.every(isPartyEvent);
+}
+
 function ScheduleRow({
   day,
   now,
   onChangeTheme,
+  onChangeTonight,
 }: {
   day: DayDef;
   now: number;
   onChangeTheme: (dayIndex: number, theme: ThemeId) => void;
+  onChangeTonight: (dayIndex: number, tonight: string[]) => Promise<void>;
 }) {
   const locked = day.unlockAt <= now;
   const dueForManualUnlock = dayDueForManualUnlock(day, now);
@@ -429,13 +465,51 @@ function ScheduleRow({
   // unlocked AND been stamped (a stamped-but-maybe-main-only snapshot); an unstamped Day
   // uses "Unlock now" above, and tutorial Days never mix. Server enforces zero-boards.
   const canResnapshot = day.pool === 'main' && day.unlockAt <= now && day.snapshotItemIds != null;
+  // Local draft so typing doesn't fight the subscribed doc; committed on blur.
+  const [tonightDraft, setTonightDraft] = useState(() => joinTonight(day.tonight));
+  const [tonightError, setTonightError] = useState('');
+  useEffect(() => {
+    setTonightDraft(joinTonight(day.tonight));
+    setTonightError('');
+  }, [day.tonight]);
+  const commitTonight = async () => {
+    if (locked) return;
+    const next = splitTonight(tonightDraft);
+    if (next.length !== 2 || next.some((entry) => entry.trim().length === 0)) {
+      setTonightError('Tonight needs exactly two entries.');
+      return;
+    }
+    setTonightError('');
+    if (joinTonight(next) === joinTonight(day.tonight)) return;
+    try {
+      await onChangeTonight(day.index, next);
+    } catch {
+      setTonightDraft(joinTonight(day.tonight));
+      setTonightError('Tonight save failed. Reload the schedule and try again.');
+    }
+  };
   return (
     <div className="row">
       <div className="grow">
         <div className="name">
           Day {day.index + 1} · {day.date} · {day.portEmoji} {day.port}
+          {day.tutorial ? (
+            <span className="pill">tutorial</span>
+          ) : (
+            isTwoPartyDay(day) && <span className="pill">2 parties</span>
+          )}
         </div>
         <div className="sub">{locked ? 'locked — already unlocked or past' : 'editable until unlock'}</div>
+        <input
+          className="tonight-input"
+          aria-label={`Day ${day.index + 1} tonight`}
+          value={tonightDraft}
+          disabled={locked}
+          placeholder="e.g. 🪖 Dog Tag T-Dance · ✈️ Duty Free"
+          onChange={(e) => setTonightDraft(e.target.value)}
+          onBlur={() => void commitTonight()}
+        />
+        {tonightError ? <div className="error" role="alert">{tonightError}</div> : null}
       </div>
       {canResnapshot && <ResnapshotButton dayIndex={day.index} />}
       <UnlockNowButton dayIndex={day.index} visible={dueForManualUnlock} />
@@ -496,6 +570,7 @@ function ScheduleTab({ days }: { days: DayDef[] }) {
             day={d}
             now={now}
             onChangeTheme={(dayIndex, theme) => setDayTheme(days, dayIndex, theme)}
+            onChangeTonight={(dayIndex, tonight) => setDayTonight(days, dayIndex, tonight)}
           />
         ))}
       </div>

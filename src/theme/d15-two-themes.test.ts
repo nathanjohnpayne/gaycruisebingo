@@ -62,10 +62,14 @@ const TEXT_PAIRS: [fg: string, bg: string][] = [
 const TEXT_MIN = 4.5;
 
 describe('THEMES — welcome-aboard / so-long-farewell entries (specs/d15-two-themes.md)', () => {
-  it('keeps neon-playground first/default and appends the two new Themes at the end', () => {
+  it('keeps neon-playground first/default and the two tutorial Themes right after the eight party Themes', () => {
+    // The eight party Themes occupy indexes 0..7; the two tutorial Themes were
+    // appended at 8 and 9. The five unified day Themes (schedule correction
+    // 2026-07-17) come AFTER these, so the tutorial pair is no longer last —
+    // assert their fixed positions rather than from the end.
     expect(THEMES[0]?.id).toBe('neon-playground');
-    expect(THEMES[THEMES.length - 2]?.id).toBe('welcome-aboard');
-    expect(THEMES[THEMES.length - 1]?.id).toBe('so-long-farewell');
+    expect(THEMES[8]?.id).toBe('welcome-aboard');
+    expect(THEMES[9]?.id).toBe('so-long-farewell');
   });
 
   for (const [id, expected] of Object.entries(EXPECTED)) {

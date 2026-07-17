@@ -18,6 +18,7 @@ const days: DayDef[] = Array.from({ length: 10 }, (_, index) => ({
   port: index === 0 ? 'Embark' : index === 9 ? 'Farewell' : `Port ${index}`,
   portEmoji: '🇭🇷',
   theme: 'neon-playground',
+  tonight: [],
   pool: index === 0 ? 'embark' : index === 9 ? 'farewell' : 'main',
   tutorial: index === 0 || index === 9,
   unlockAt: 0,

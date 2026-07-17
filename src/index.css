@@ -504,6 +504,21 @@ a {
   line-height: 1.35;
   margin: 2px 0 0;
 }
+/* The "Tonight:" line (schedule correction 2026-07-17 — wireframes' two-event
+   tease): the Day's two signature events under the dress-code description, on
+   both the dealt board and the locked preview. Slightly brighter than the desc
+   (--ink, not --dim) since it names what's actually happening tonight; the
+   "Tonight:" label picks up the theme accent. */
+.daybar-tonight {
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.35;
+  margin: 2px 0 0;
+}
+.daybar-tonight-label {
+  font-weight: 700;
+  color: var(--accent);
+}
 
 /* ---------- Reshuffle (specs/reshuffle.md, #378 — wireframes' `.reshuf`) ----------
    The shuffle chip is a third `.daybar` child, right of the meta slot. It is a
@@ -1634,6 +1649,23 @@ a {
   border: 1px solid var(--border);
   font-size: 11px;
   margin-left: 6px;
+}
+/* The Schedule editor's editable "Tonight:" line (schedule correction
+   2026-07-17): a full-width text field under the Day's name/status, disabled
+   (dimmed) on locked/past Days exactly as the theme dropdown is. */
+.tonight-input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--cell);
+  color: var(--ink);
+  font-size: 12px;
+}
+.tonight-input:disabled {
+  opacity: 0.55;
 }
 /* Report queue: the moderation triage surface, called out from the rest of the
    console so it reads as the first thing an Admin acts on. `.pill-hidden` marks a

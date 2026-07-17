@@ -217,29 +217,47 @@ service cloud.firestore {
     function dayLocked(oldDay) {
       return ('unlockAt' in oldDay) && request.time.toMillis() >= oldDay.unlockAt;
     }
-    // A DayDef `theme`/`unlockAt` field is UNCHANGED across the write iff it is
-    // absent on both sides, or present on both sides with an equal value. Each
+    // A DayDef `theme`/`unlockAt`/`tonight` field is UNCHANGED across the write
+    // iff it is absent on both sides, or present on both sides with an equal value. Each
     // field is presence-guarded with `in` (same idiom as the settings/bannedUids
     // guards above) BEFORE any dot access, so a fixture Day with no `theme`/
-    // `unlockAt` key never errors the whole write — and only LITERAL dot access
-    // is used (dynamic `day[key]` indexing errors in the rules language).
+    // `unlockAt`/`tonight` key never errors the whole write — and only LITERAL
+    // dot access is used (dynamic `day[key]` indexing errors in the rules
+    // language).
     // Treating "present on one side, absent on the other" as CHANGED is what
-    // closes the theme-removal bypass (Codex P2): an incoming Day that DROPS
-    // `theme` on an already-unlocked Day is a change, not "nothing to lock".
+    // closes removal bypasses (Codex P2): an incoming Day that DROPS a locked
+    // field on an already-unlocked Day is a change, not "nothing to lock".
     function daySchedUnchanged(newDay, oldDay) {
       return ('theme' in newDay) == ('theme' in oldDay)
         && (!('theme' in newDay) || newDay.theme == oldDay.theme)
         && ('unlockAt' in newDay) == ('unlockAt' in oldDay)
-        && (!('unlockAt' in newDay) || newDay.unlockAt == oldDay.unlockAt);
+        && (!('unlockAt' in newDay) || newDay.unlockAt == oldDay.unlockAt)
+        && ('tonight' in newDay) == ('tonight' in oldDay)
+        && (!('tonight' in newDay) || newDay.tonight == oldDay.tonight);
+    }
+    // `tonight` is legacy-tolerant but strict once present. Fixtures and docs
+    // seeded before the field existed may still omit it; a write to a Day that
+    // already has Tonight metadata must carry exactly two non-empty strings.
+    function dayTonightShapeOk(newDay, oldDay) {
+      return (!('tonight' in oldDay) && !('tonight' in newDay))
+        || (('tonight' in newDay)
+            && newDay.tonight is list
+            && newDay.tonight.size() == 2
+            && newDay.tonight[0] is string
+            && newDay.tonight[0].size() > 0
+            && newDay.tonight[1] is string
+            && newDay.tonight[1].size() > 0);
     }
     // "Locked once unlocked" (daily-cards-spec § "Itinerary and schedule"): once
-    // a Day has unlocked, NEITHER its `theme` NOR its `unlockAt` may change. A
-    // still-future Day is fully editable (theme swaps AND unlockAt reschedules).
+    // a Day has unlocked, its `theme`, `unlockAt`, and `tonight` metadata may
+    // not change. A still-future Day is fully editable (theme swaps, Tonight
+    // edits, AND unlockAt reschedules).
     // Clamping `unlockAt` too (Codex P2) closes the two-step bypass where a write
     // that changes only an unlocked Day's `unlockAt` (theme unchanged) moved the
     // lock source into the future, letting a SECOND write then change the theme.
     function dayThemeChangeOk(newDay, oldDay) {
-      return !dayLocked(oldDay) || daySchedUnchanged(newDay, oldDay);
+      return dayTonightShapeOk(newDay, oldDay)
+        && (!dayLocked(oldDay) || daySchedUnchanged(newDay, oldDay));
     }
 
     // Applies dayThemeChangeOk across the whole `days` array. Firestore rules

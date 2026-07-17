@@ -62,6 +62,7 @@ describe('FarewellPodiumView', () => {
       port: 'Venice',
       portEmoji: '🇮🇹',
       theme: 'so-long-farewell',
+      tonight: [],
       pool: 'farewell',
       tutorial: true,
       unlockAt: 0,

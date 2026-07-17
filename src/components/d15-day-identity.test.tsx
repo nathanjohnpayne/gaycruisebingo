@@ -31,20 +31,21 @@ describe('headerDayIdentity — the header is a "where are we" instrument', () =
   it('mid-cruise shows that calendar day, from midnight — not gated on the 8:00 unlock', () => {
     expect(headerDayIdentity(EVENT, cest(2026, 7, 16))).toEqual({
       port: '🇭🇷 Split',
-      theme: '🏋️ Get Sporty',
+      theme: '🌍 Uniforms Without Borders',
     });
-    // 06:00 on Day 3: the Day Card is still locked (unlocks 8:00) but the ship
-    // is in Valletta — the header already says so.
+    // 06:00 on Day 3 (Sea Day, corrected 2026-07-17): the Day Card is still
+    // locked (unlocks 8:00) but the header already names today's identity.
     expect(headerDayIdentity(EVENT, cest(2026, 7, 17, 6))).toEqual({
-      port: '🇲🇹 Valletta',
-      theme: '✈️ Duty Free',
+      port: '🌊 Sea Day',
+      theme: '💖 Neon Pink Playground',
     });
   });
 
   it('sea day and farewell day render their own identities', () => {
-    expect(headerDayIdentity(EVENT, cest(2026, 7, 23))).toEqual({
+    // Sea Day is Day 3 (Jul 17) in the corrected itinerary.
+    expect(headerDayIdentity(EVENT, cest(2026, 7, 17))).toEqual({
       port: '🌊 Sea Day',
-      theme: '💖 Seriously Pink T-Dance',
+      theme: '💖 Neon Pink Playground',
     });
     expect(headerDayIdentity(EVENT, cest(2026, 7, 24))).toEqual({
       port: '🇪🇸 Barcelona',
@@ -68,7 +69,7 @@ describe('headerDayIdentity — the header is a "where are we" instrument', () =
     // Trieste. A UTC-based resolver would still say Trieste.
     expect(headerDayIdentity(EVENT, Date.UTC(2026, 6, 15, 22, 30))).toEqual({
       port: '🇭🇷 Split',
-      theme: '🏋️ Get Sporty',
+      theme: '🌍 Uniforms Without Borders',
     });
   });
 
@@ -91,10 +92,10 @@ describe('DayIdentityLines — presentational states', () => {
   });
 
   it('renders the two live lines, port bold-line first', () => {
-    const html = renderToStaticMarkup(<DayIdentityLines identity={{ port: '🇭🇷 Split', theme: '🏋️ Get Sporty' }} />);
+    const html = renderToStaticMarkup(<DayIdentityLines identity={{ port: '🇭🇷 Split', theme: '🌍 Uniforms Without Borders' }} />);
     expect(html).not.toContain('aria-hidden');
     expect(html).toContain('🇭🇷 Split');
-    expect(html).toContain('🏋️ Get Sporty');
-    expect(html.indexOf('Split')).toBeLessThan(html.indexOf('Get Sporty'));
+    expect(html).toContain('🌍 Uniforms Without Borders');
+    expect(html.indexOf('Split')).toBeLessThan(html.indexOf('Uniforms Without Borders'));
   });
 });

@@ -1,8 +1,4 @@
 import { describe, it, expect } from 'vitest';
-// @ts-expect-error — scripts/seed.mjs is a plain-JS node script with no type
-// declarations (tsconfig sets no allowJs); Vitest resolves and executes it natively,
-// mirroring src/test/w1-event-seed.test.ts's import. Side-effect-free to import:
-// seeding only runs when the script is the entry module.
 import { EVENT_SEED } from '../../scripts/seed.mjs';
 import { TABS } from '../components/tabs';
 

@@ -25,7 +25,19 @@ export type ThemeId =
   // #206; reserved in the union here so this contract-ticket's downstream
   // consumers (DayDef.theme, day chrome) can name them without waiting.
   | 'welcome-aboard'
-  | 'so-long-farewell';
+  | 'so-long-farewell'
+  // Unified day themes (schedule correction 2026-07-17, daily-cards-spec
+  // § "Theme reference"). Each folds a day's two signature parties into ONE
+  // chrome/palette/chip identity; the two events themselves live in
+  // `DayDef.tonight`. The five superseded party ThemeIds (get-sporty, duty-free,
+  // dog-tag, seriously-pink, neon-playground) stay valid — they still back the
+  // theme switcher, saved player preferences, and neon-playground stays the
+  // app default — they're just no longer day themes on this sailing.
+  | 'uniforms-without-borders'
+  | 'neon-pink-playground'
+  | 'sporty-splash'
+  | 'under-the-stars'
+  | 'atlantis-classics';
 
 // One Day of the cruise (daily-cards-spec § "Data model"). Ordered inside
 // `EventDoc.days` (length 10 for the July sailing, but the model assumes no
@@ -37,7 +49,15 @@ export interface DayDef {
   date: string;         // ISO date, e.g. '2026-07-16'
   port: string;         // 'Split'
   portEmoji: string;    // '🇭🇷'
-  theme: ThemeId;       // drives card + chrome styling
+  theme: ThemeId;       // the UNIFIED day theme — drives card + chrome styling
+  // The night's two signature events, shown on the card's "Tonight:" line
+  // (day bar + locked-day tease). EXACTLY two display strings with emoji —
+  // parties when the Day has them, else the headline show/concert + party,
+  // sourced from the VB26 vacation guide's Entertainment Preview (schedule
+  // correction 2026-07-17). Purely presentational: no dealing, snapshot, or
+  // scoring input reads it. Day 10's line is editorial (no disembark-day
+  // events are published).
+  tonight: string[];
   pool: 'main' | 'embark' | 'farewell';
   tutorial: boolean;    // true for the embark (Day 1) and farewell (Day 10) Days
   unlockAt: number;     // ms epoch — 08:00 event-tz on `date`; embark Day = event open

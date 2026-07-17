@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { DAYS, EMBARK_ITEMS, FAREWELL_ITEMS, SEED_ITEMS } from './seed';
-// scripts/seed.mjs is a plain-JS node script with no type declarations
-// (tsconfig sets no allowJs); Vitest resolves and executes it natively, and
-// importing it is side-effect-free because seeding only runs when the
-// script is the entry module.
-// @ts-expect-error — no type declarations for this plain-JS script (see above)
 import { EVENT_SEED, EMBARK_ITEMS as SCRIPT_EMBARK_ITEMS, FAREWELL_ITEMS as SCRIPT_FAREWELL_ITEMS } from '../../scripts/seed.mjs';
 
 // Covers specs/d15-tutorial-seed.md (#207): the two curated tutorial pools
@@ -69,16 +64,22 @@ describe('DAYS — the ten-Day itinerary mapping', () => {
   });
 
   it('matches the itinerary table field-for-field', () => {
+    // Corrected itinerary (schedule correction 2026-07-17, daily-cards-spec
+    // § Itinerary): Sea Day moved to Day 3, Naples replaces Sorrento on Day 6,
+    // Villefranche replaces Nice on Day 8, and each Day carries its unified
+    // theme. Dates/pools/tutorial flags are unchanged (the correction is pure
+    // relabeling; the migration preserves game state). The two-event `tonight[]`
+    // line is asserted in schedule-correction.test.ts.
     const expected = [
       ['2026-07-15', 'Trieste', '🇮🇹', 'welcome-aboard', 'embark', true],
-      ['2026-07-16', 'Split', '🇭🇷', 'get-sporty', 'main', false],
-      ['2026-07-17', 'Valletta', '🇲🇹', 'duty-free', 'main', false],
-      ['2026-07-18', 'Palermo', '🇮🇹', 'glamiators', 'main', false],
-      ['2026-07-19', 'Sorrento', '🇮🇹', 'neon-playground', 'main', false],
-      ['2026-07-20', 'Rome (Civitavecchia)', '🇮🇹', 'summer-white', 'main', false],
-      ['2026-07-21', 'Nice', '🇫🇷', 'dog-tag', 'main', false],
-      ['2026-07-22', 'Marseille', '🇫🇷', 'revival-disco', 'main', false],
-      ['2026-07-23', 'Sea Day', '🌊', 'seriously-pink', 'main', false],
+      ['2026-07-16', 'Split', '🇭🇷', 'uniforms-without-borders', 'main', false],
+      ['2026-07-17', 'Sea Day', '🌊', 'neon-pink-playground', 'main', false],
+      ['2026-07-18', 'Valletta', '🇲🇹', 'sporty-splash', 'main', false],
+      ['2026-07-19', 'Palermo', '🇮🇹', 'under-the-stars', 'main', false],
+      ['2026-07-20', 'Naples', '🇮🇹', 'glamiators', 'main', false],
+      ['2026-07-21', 'Rome (Civitavecchia)', '🇮🇹', 'atlantis-classics', 'main', false],
+      ['2026-07-22', 'Villefranche', '🇫🇷', 'summer-white', 'main', false],
+      ['2026-07-23', 'Marseille', '🇫🇷', 'revival-disco', 'main', false],
       ['2026-07-24', 'Barcelona', '🇪🇸', 'so-long-farewell', 'farewell', true],
     ] as const;
 

@@ -13,6 +13,7 @@ function day(overrides: Partial<DayDef> & Pick<DayDef, 'index' | 'pool' | 'tutor
     port: 'Trieste',
     portEmoji: '🇮🇹',
     theme: 'welcome-aboard',
+    tonight: [],
     unlockAt: 0,
     ...overrides,
   };

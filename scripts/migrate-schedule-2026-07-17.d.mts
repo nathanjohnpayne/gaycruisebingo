@@ -1,0 +1,31 @@
+import type { DayDef } from '../src/types';
+
+export type MigrationDay = Omit<DayDef, 'tonight'> & {
+  tonight?: string[];
+  snapshotItemIds?: string[];
+};
+
+export type DayDiff = {
+  index: number | undefined;
+  corrected: MigrationDay;
+  allowed: Partial<Record<'theme' | 'port' | 'portEmoji' | 'tonight', { from: unknown; to: unknown }>>;
+  forbidden: string[];
+  misalignedFields: string[];
+};
+
+export type MigrationPlan = {
+  corrected: MigrationDay[];
+  diffs: DayDiff[];
+  forbidden: DayDiff[];
+  misaligned: boolean;
+  lengthMismatch: boolean;
+  changed: boolean;
+};
+
+export const ALLOWED_FIELDS: ReadonlyArray<'theme' | 'port' | 'portEmoji' | 'tonight'>;
+export const IMMUTABLE_FIELDS: ReadonlyArray<keyof MigrationDay>;
+export const TARGET_DAYS: DayDef[];
+export function correctDay(liveDay: MigrationDay, targetDay: DayDef): MigrationDay;
+export function diffDay(liveDay: MigrationDay, targetDay: DayDef): DayDiff;
+export function planScheduleMigration(liveDays: MigrationDay[], targetDays?: DayDef[]): MigrationPlan;
+export function formatMigrationReport(plan: MigrationPlan): string;
