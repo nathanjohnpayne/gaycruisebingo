@@ -669,8 +669,40 @@ export default function ProofFeed() {
   // `TallySheet` which re-subscribes via `useTally`.
   const [whoListCard, setWhoListCard] = useState<TallyCardData | null>(null);
 
+  // #333 (Codex P2 on #384): the open who-list sheet is built BEFORE the
+  // empty-feed early return and rendered on both paths — when the opened
+  // tally was the only Feed entry and its last marker unmarks, `entries`
+  // goes empty and the early return would otherwise unmount the dialog
+  // abruptly. The live-by-identity lookup finds nothing in an empty feed, so
+  // the snapshot fallback carries the open sheet through that state.
+  const whoListSheet = whoListCard
+    ? (() => {
+        // The state holds the TAP-TIME snapshot, but the markers must
+        // re-derive from the live tally subscription while the sheet is
+        // open — a marker can unmark or a new one arrive mid-view. Select
+        // the live card by identity from the freshly derived entries; if
+        // the tally has left the feed entirely (aged past the merge cap, or
+        // every marker unmarked), keep the snapshot rather than flashing a
+        // misleading empty list for what may only be an age-off.
+        const live = entries.find(
+          (entry) =>
+            entry.feedKind === 'tallyCard' &&
+            entry.card.itemId === whoListCard.itemId &&
+            entry.card.dayIndex === whoListCard.dayIndex,
+        );
+        const card = live?.feedKind === 'tallyCard' ? live.card : whoListCard;
+        return <FeedWhoListSheet card={card} onClose={() => setWhoListCard(null)} />;
+      })()
+    : null;
+
   if (loading) return <div className="center muted">Loading…</div>;
-  if (!entries.length) return <div className="center muted">Nothing in the feed yet. Somebody do something.</div>;
+  if (!entries.length)
+    return (
+      <>
+        <div className="center muted">Nothing in the feed yet. Somebody do something.</div>
+        {whoListSheet}
+      </>
+    );
 
   // Both buttons land in the SAME place — Board's own sheet, which renders the
   // claim open (pledge row included) for an unmarked Square and the proof-add
@@ -750,7 +782,7 @@ export default function ProofFeed() {
           />
         );
       })}
-      {whoListCard && <FeedWhoListSheet card={whoListCard} onClose={() => setWhoListCard(null)} />}
+      {whoListSheet}
     </div>
   );
 }

@@ -259,6 +259,75 @@ describe('hasPriorBingoWitness — the durable prior-win witness (PR #99 round 2
   });
 });
 
+describe('the birth-time-witness race (#332): a concurrent drain must not suppress the ceremony', () => {
+  const alice = { uid: 'u1', displayName: 'Alice', photoURL: null };
+
+  it('this win’s own mid-read write reads as SELF-evidence: singleton unclaimed → witness-clean', async () => {
+    // The drain broadcasts THIS win's plain bingo while the witness read is in
+    // flight: writeMomentOnce's pre-check misses (first win — nothing cached),
+    // stamps the current generation, and the doc lands in the cache. The
+    // witness read then finds it — and must fall through to the singleton
+    // (unclaimed here) instead of reading it as a prior win.
+    getDocFromCacheSpy
+      .mockRejectedValueOnce(new Error('unavailable')) // write-once pre-check: miss → genuine write + stamp
+      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 3 }) }) // witness read: finds the fresh doc
+      .mockRejectedValueOnce(new Error('unavailable')); // singleton: unclaimed
+    broadcastBingo(alice, 3);
+    await settle();
+    const generation = pendingActionGeneration('u1');
+    await expect(hasPriorBingoWitness('u1', { selfWriteGeneration: generation })).resolves.toBe(false);
+    expect(getDocFromCacheSpy).toHaveBeenCalledTimes(3);
+    expect(getDocFromCacheSpy.mock.calls[2][0].path).toBe(`events/${EVENT_ID}/moments/first_bingo`);
+  });
+
+  it('self-evidence with the singleton already claimed stays witnessed — no duplicate ceremony', async () => {
+    getDocFromCacheSpy
+      .mockRejectedValueOnce(new Error('unavailable'))
+      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 3 }) })
+      .mockResolvedValueOnce({ exists: () => true }); // singleton claimed
+    broadcastBingo(alice, 3);
+    await settle();
+    await expect(
+      hasPriorBingoWitness('u1', { selfWriteGeneration: pendingActionGeneration('u1') }),
+    ).resolves.toBe(true);
+  });
+
+  it('a stamp from ANOTHER action generation is not self-evidence — the doc stays a prior win', async () => {
+    getDocFromCacheSpy
+      .mockRejectedValueOnce(new Error('unavailable'))
+      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 3 }) });
+    broadcastBingo(alice, 3);
+    await settle();
+    const stale = pendingActionGeneration('u1') + 1; // a generation this stamp does not belong to
+    await expect(hasPriorBingoWitness('u1', { selfWriteGeneration: stale })).resolves.toBe(true);
+  });
+
+  it('a REGAIN leaves no stamp — the pre-check skip means the found doc is genuine prior evidence', async () => {
+    // The doc predates the action (prior win), so writeMomentOnce's pre-check
+    // FINDS it and skips the write without stamping. The witness read that
+    // finds the same doc must keep reading it as a prior win even when the
+    // caller passes the current generation.
+    getDocFromCacheSpy
+      .mockResolvedValueOnce({ exists: () => true }) // write-once pre-check: HIT → skip, no stamp
+      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 3 }) }); // witness read
+    broadcastBingo(alice, 3);
+    await settle();
+    expect(setDocSpy).not.toHaveBeenCalled(); // the skip is what withholds the stamp
+    await expect(
+      hasPriorBingoWitness('u1', { selfWriteGeneration: pendingActionGeneration('u1') }),
+    ).resolves.toBe(true);
+  });
+
+  it('callers that pass no generation (confirm pipeline) keep the pre-#332 read', async () => {
+    getDocFromCacheSpy
+      .mockRejectedValueOnce(new Error('unavailable'))
+      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 3 }) });
+    broadcastBingo(alice, 3);
+    await settle();
+    await expect(hasPriorBingoWitness('u1')).resolves.toBe(true);
+  });
+});
+
 describe('the pending-Moment queue — module state that survives Board unmounts (issue #104)', () => {
   it('enqueues a bingo/blackout win off the mark transition verdict; peek reads it back', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });

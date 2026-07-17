@@ -1669,6 +1669,13 @@ export default function Board() {
       // everyone who played the embark card from the headline honor.
       const witnessed = await hasPriorBingoWitness(uid, {
         excludeDayIndexes: hasDays ? new Set(tutorialDayIndexes) : undefined,
+        // #332: `generation` was captured above, before this await — if a
+        // concurrent drain (gate-open/snapshot) broadcasts THIS win's plain
+        // bingo while the read is in flight, the witness recognizes the
+        // just-written doc as self-evidence (not a prior win) and falls
+        // through to the singleton consult instead of suppressing the
+        // ceremonial candidate.
+        selfWriteGeneration: generation,
       });
       if (!witnessed && revalidateAfterAwait(uid, generation).generationUnchanged) {
         // The candidate carries its OWN Day (#262; Codex P3 on #286 round 2):

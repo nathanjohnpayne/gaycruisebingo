@@ -139,6 +139,17 @@ const pendingMoments = new Map<string, StoredPendingFlags>();
 // continuation already captured.
 const pendingGenerations = new Map<string, number>();
 
+// The generation at which THIS device last actually WROTE `${uid}-bingo` (#332):
+// stamped inside `writeMomentOnce` at the moment the plain-bingo write proceeds
+// past the cache pre-check — i.e. only when the doc was NOT already cached, so a
+// regain (whose pre-check finds the genuine prior doc and skips the write) never
+// records one. `hasPriorBingoWitness` consults it to tell "a prior win's doc"
+// from "this very win's doc, drained into the cache while the witness read was
+// in flight" — the birth-time-witness race that suppressed ~2/8 ceremonial
+// First-to-BINGO Moments under concurrent gate-open drains. Keyed like
+// `pendingGenerations`; cleared with it in `resetPendingMoments`.
+const selfBingoWriteGenerations = new Map<string, number>();
+
 // Key by app + uid (mirrors `markChains` in api.ts). The moment writers always
 // use the module `db` singleton, so the app segment is effectively constant here;
 // keying on uid is what actually isolates two identities sharing a browser (a
@@ -388,6 +399,7 @@ export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags):
 export function resetPendingMoments(): void {
   pendingMoments.clear();
   pendingGenerations.clear();
+  selfBingoWriteGenerations.clear();
 }
 
 /**
@@ -459,6 +471,14 @@ async function writeMomentOnce(
   } catch {
     // Not in the local cache — no duplicate to protect; proceed with the write.
   }
+  // #332: about to genuinely write `${uid}-bingo` (the pre-check above found no
+  // cached doc, so this is NOT a regain re-broadcast). Stamp the current action
+  // generation SYNCHRONOUSLY before setDoc can land in the local cache: any
+  // in-flight `hasPriorBingoWitness` read that later finds this doc can then
+  // recognize it as this win's own write rather than prior-win evidence.
+  if (kind === 'bingo') {
+    selfBingoWriteGenerations.set(pendingKey(who.uid), pendingActionGeneration(who.uid));
+  }
   const payload: Omit<MomentDoc, 'id'> = {
     kind,
     uid: who.uid,
@@ -509,8 +529,29 @@ export async function hasPriorBingoWitness(
   // resolves false. A day-LESS witness on a daily Event (pre-#286 data) stays
   // a witness — conservative: the roster gate (already main-game-aware via
   // the tutorial-excluded firstBingoAt fold) remains the fallback.
-  opts?: { excludeDayIndexes?: ReadonlySet<number> },
+  opts?: {
+    excludeDayIndexes?: ReadonlySet<number>;
+    // #332: the caller's captured action generation. When THIS device's own
+    // plain-bingo write happened at that same (unchanged) generation, a found
+    // `${uid}-bingo` doc is this very win's drain landing mid-read — not
+    // prior-win evidence — so the check falls through to the singleton consult
+    // exactly like the tutorial branch. Callers that don't capture a
+    // generation (the confirm pipeline) omit it and keep the pre-#332 read.
+    selfWriteGeneration?: number;
+  },
 ): Promise<boolean> {
+  // Shared singleton consult (cache-only, Codex P1 on #288 round 5): the
+  // headline honor already claimed — by this player or anyone else — reads as
+  // witnessed; an uncached/absent singleton reads witness-clean, leaving the
+  // drain-time roster gate as the decider.
+  const singletonWitness = async (): Promise<boolean> => {
+    try {
+      const singleton = await getDocFromCache(rawMoment(FIRST_BINGO_MOMENT_ID));
+      return singleton.exists();
+    } catch {
+      return false; // singleton not cached — witness-clean, roster gate decides
+    }
+  };
   try {
     const snap = await getDocFromCache(rawMoment(`${uid}-bingo`));
     if (!snap.exists()) return false;
@@ -520,18 +561,26 @@ export async function hasPriorBingoWitness(
         // A tutorial-Day win is not a prior MAIN-GAME win — but the shared
         // `${uid}-bingo` id means a later main-game win could never write its
         // own witness, so before treating the player as witness-clean consult
-        // the first_bingo SINGLETON itself (cache-only, Codex P1 on #288
-        // round 5): if the headline honor is already claimed — by this player
-        // (their earlier main-game ceremony; a lost-and-regained line must
-        // stay suppressed) or by anyone else (a candidate is pointless) — the
-        // ceremony gate reads as witnessed. Absent → genuinely witness-clean.
-        try {
-          const singleton = await getDocFromCache(rawMoment(FIRST_BINGO_MOMENT_ID));
-          return singleton.exists();
-        } catch {
-          return false; // singleton not cached — witness-clean, roster gate decides
-        }
+        // the first_bingo SINGLETON itself: if the headline honor is already
+        // claimed — by this player (their earlier main-game ceremony; a
+        // lost-and-regained line must stay suppressed) or by anyone else (a
+        // candidate is pointless) — the ceremony gate reads as witnessed.
+        // Absent → genuinely witness-clean.
+        return singletonWitness();
       }
+    }
+    // #332 birth-time-witness race: a concurrent drain (typically gate-open)
+    // can broadcast THIS win's own plain bingo while this read is in flight,
+    // and the just-written doc must not read as a prior win and suppress the
+    // ceremonial enqueue. `writeMomentOnce` stamps the generation only when it
+    // genuinely writes (its cache pre-check found no existing doc), so a
+    // regain — whose doc predates the action — never takes this branch: its
+    // re-broadcast is skipped by the pre-check and leaves no stamp.
+    if (
+      opts?.selfWriteGeneration !== undefined &&
+      selfBingoWriteGenerations.get(pendingKey(uid)) === opts.selfWriteGeneration
+    ) {
+      return singletonWitness();
     }
     return true;
   } catch {

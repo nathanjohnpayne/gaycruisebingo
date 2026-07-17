@@ -254,6 +254,52 @@ describe('ProofFeed (default export) — Feed-level who-list sheet (#216 accepta
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.queryByText(/^Who got/)).toBeNull();
   });
+
+  it('the open sheet re-derives its markers from the live tally (#333): arrivals appear, unmarks leave', () => {
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+
+    const alice: TallyEntry = {
+      uid: 'alice',
+      displayName: 'Alice Anchor',
+      markedAt: 1000,
+      dayIndex: 0,
+      itemText: 'Balcony or porthole photo',
+    };
+    const bob: TallyEntry = {
+      uid: 'bob',
+      displayName: 'Bob Bosun',
+      markedAt: 2000,
+      dayIndex: 0,
+      itemText: 'Balcony or porthole photo',
+    };
+    sub.fire({ docs: [markerDoc('p1', alice)], metadata: { fromCache: false } });
+    fireEvent.click(document.querySelector('.tally-card .tally-card-body')!);
+    expect(document.querySelectorAll('.sheet .list .row')).toHaveLength(1);
+
+    // A new marker arrives while the sheet is open — the sheet shows the LIVE
+    // list, not the tap-time snapshot.
+    sub.fire({ docs: [markerDoc('p1', alice), markerDoc('p1', bob)], metadata: { fromCache: false } });
+    let rows = document.querySelectorAll('.sheet .list .row');
+    expect(rows).toHaveLength(2);
+    expect([...rows].map((r) => r.querySelector('.name')?.textContent)).toContain('Bob Bosun');
+
+    // A marker unmarks while the sheet is open — the stale row leaves.
+    sub.fire({ docs: [markerDoc('p1', bob)], metadata: { fromCache: false } });
+    rows = document.querySelectorAll('.sheet .list .row');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].querySelector('.name')?.textContent).toBe('Bob Bosun');
+    // The sheet itself stayed open throughout — same dialog, live content.
+    expect(screen.getByText(/Who got/)).toBeTruthy();
+
+    // The LAST marker unmarks and the feed goes empty (Codex P2 on #384): the
+    // empty-feed early return must not unmount the open dialog — it stays up
+    // on the tap-time snapshot fallback, alongside the empty-feed message.
+    sub.fire({ docs: [], metadata: { fromCache: false } });
+    expect(screen.getByText(/Who got/)).toBeTruthy();
+    expect(screen.getByText(/Nothing in the feed yet/)).toBeTruthy();
+  });
 });
 
 // --- #261: Feed Tally Card actions — target resolution + live wiring -------

@@ -274,7 +274,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
     // Legacy (no schedule): no tutorial exclusion rides the witness read (#288).
-    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: undefined }); // the witness-gated candidate
+    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: undefined, selfWriteGeneration: expect.any(Number) }); // the witness-gated candidate
   });
 
   it('does NOT claim First-to-BINGO when another Player already has a firstBingoAt', async () => {
@@ -468,7 +468,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     await clickMark('p4', { bingo: true, bingoTransition: true }, dealtWith(ROW0));
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
-    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: undefined });
+    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: undefined, selfWriteGeneration: expect.any(Number) });
 
     // The player unmarks the line (firstBingoAt is volatile and clears with it)…
     await clickMark('p0', { bingo: false, bingoTransition: false });
@@ -731,7 +731,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
     expect(H.broadcastBingo).toHaveBeenCalledWith({ uid: 'u1', displayName: 'Deck Daddy', photoURL: null });
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1); // witness clean + roster clean
-    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: undefined }); // same ceremonial gauntlet
+    expect(H.hasPriorBingoWitness).toHaveBeenCalledWith('u1', { excludeDayIndexes: undefined, selfWriteGeneration: expect.any(Number) }); // same ceremonial gauntlet
   });
 
   it('a proofed Mark that completes no line broadcasts nothing (finding 1)', async () => {
