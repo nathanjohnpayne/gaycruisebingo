@@ -680,18 +680,17 @@ export default function ProofFeed() {
         // The state holds the TAP-TIME snapshot, but the markers must
         // re-derive from the live tally subscription while the sheet is
         // open — a marker can unmark or a new one arrive mid-view. Select
-        // the live card by identity from the freshly derived entries; if
-        // the tally has left the feed entirely (aged past the merge cap, or
-        // every marker unmarked), keep the snapshot rather than flashing a
-        // misleading empty list for what may only be an age-off.
-        const live = entries.find(
-          (entry) =>
-            entry.feedKind === 'tallyCard' &&
-            entry.card.itemId === whoListCard.itemId &&
-            entry.card.dayIndex === whoListCard.dayIndex,
+        // the live card by identity from the UNCAPPED tallyCards stream
+        // (#385, Codex P2 on #384 round 2): the 60-entry mergeFeed cap can
+        // evict the opened card from `entries` while its tally is still
+        // live, and the sheet must keep re-deriving through that eviction.
+        // Only a card gone from tallyCards too (every marker unmarked —
+        // deriveTallyCards never emits a zero-count card) falls back to the
+        // snapshot rather than flashing a misleading empty list.
+        const live = tallyCards.find(
+          (card) => card.itemId === whoListCard.itemId && card.dayIndex === whoListCard.dayIndex,
         );
-        const card = live?.feedKind === 'tallyCard' ? live.card : whoListCard;
-        return <FeedWhoListSheet card={card} onClose={() => setWhoListCard(null)} />;
+        return <FeedWhoListSheet card={live ?? whoListCard} onClose={() => setWhoListCard(null)} />;
       })()
     : null;
 

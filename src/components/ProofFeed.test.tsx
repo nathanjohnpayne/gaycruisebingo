@@ -300,6 +300,59 @@ describe('ProofFeed (default export) — Feed-level who-list sheet (#216 accepta
     expect(screen.getByText(/Who got/)).toBeTruthy();
     expect(screen.getByText(/Nothing in the feed yet/)).toBeTruthy();
   });
+
+  it('keeps re-deriving when the 60-entry merge cap evicts the open card from the feed (#385)', () => {
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+
+    const alice: TallyEntry = {
+      uid: 'alice',
+      displayName: 'Alice Anchor',
+      markedAt: 1000,
+      dayIndex: 0,
+      itemText: 'Balcony or porthole photo',
+    };
+    const bob: TallyEntry = {
+      uid: 'bob',
+      displayName: 'Bob Bosun',
+      markedAt: 2000,
+      dayIndex: 0,
+      itemText: 'Balcony or porthole photo',
+    };
+    sub.fire({ docs: [markerDoc('p1', alice)], metadata: { fromCache: false } });
+    fireEvent.click(document.querySelector('.tally-card .tally-card-body')!);
+    expect(document.querySelectorAll('.sheet .list .row')).toHaveLength(1);
+
+    // 61 newer Proofs push the opened Tally Card out of the CAPPED entries
+    // merge, while the same snapshot pass delivers a SECOND marker on the
+    // tally. The card leaves the rendered feed — but the open sheet reads
+    // the uncapped tallyCards stream, so the new marker still appears.
+    const proofDocs = Array.from({ length: 61 }, (_, i) => ({
+      id: `pr${i}`,
+      data: () => ({
+        uid: `u${i}`,
+        displayName: `Prover ${i}`,
+        photoURL: null,
+        type: 'callout',
+        cellIndex: 0,
+        itemText: `Prompt ${i}`,
+        text: 'seen it',
+        createdAt: 5000 + i,
+        reportCount: 0,
+        status: 'active',
+      }),
+      ref: { parent: { parent: { id: 'proofs', parent: { id: EVENT_ID } } } },
+    }));
+    sub.fire(
+      { docs: [markerDoc('p1', alice), markerDoc('p1', bob)], metadata: { fromCache: false } },
+      { docs: proofDocs, metadata: { fromCache: false } },
+    );
+    expect(document.querySelector('.tally-card')).toBeNull(); // evicted from the capped merge
+    const rows = document.querySelectorAll('.sheet .list .row');
+    expect(rows).toHaveLength(2); // yet the sheet re-derived live
+    expect([...rows].map((r) => r.querySelector('.name')?.textContent)).toContain('Bob Bosun');
+  });
 });
 
 // --- #261: Feed Tally Card actions — target resolution + live wiring -------
