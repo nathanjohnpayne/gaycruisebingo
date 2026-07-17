@@ -1,13 +1,17 @@
 import { describe, it, expect } from 'vitest';
+import type { DayDef } from '../types';
 import { DAYS } from './seed';
+// @ts-expect-error — scripts/seed.mjs is a plain-JS node script with no type
+// declarations (tsconfig sets no allowJs); Vitest resolves and executes it
+// natively, and importing it is side-effect-free because seeding only runs
+// when the script is the entry module.
 import { EVENT_SEED } from '../../scripts/seed.mjs';
-import {
-  ALLOWED_FIELDS,
-  IMMUTABLE_FIELDS,
-  diffDay,
-  correctDay,
-  planScheduleMigration,
-} from '../../scripts/migrate-schedule-2026-07-17.mjs';
+// @ts-expect-error — plain-JS owner-run migration script; the test below keeps
+// local types for the pure planning core it imports.
+import { ALLOWED_FIELDS, IMMUTABLE_FIELDS, diffDay, correctDay, planScheduleMigration } from '../../scripts/migrate-schedule-2026-07-17.mjs';
+
+type LiveDay = Omit<DayDef, 'tonight'> & { tonight?: string[] };
+const IMMUTABLE_DAY_FIELDS = IMMUTABLE_FIELDS as Array<keyof LiveDay>;
 
 // Covers specs/schedule-correction.md: the corrected itinerary (unified day
 // themes + two-event "Tonight:" lines) asserted against the seed, and the
@@ -56,7 +60,8 @@ describe('schedule correction — corrected day → theme/port/tonight mapping (
   });
 
   it('stays in sync with scripts/seed.mjs EVENT_SEED.days (tonight included)', () => {
-    expect(EVENT_SEED.days.map((d) => d.tonight)).toEqual(DAYS.map((d) => d.tonight));
+    const scriptDays = EVENT_SEED.days as Array<Pick<DayDef, 'tonight'>>;
+    expect(scriptDays.map((d) => d.tonight)).toEqual(DAYS.map((d) => d.tonight));
   });
 });
 
@@ -64,7 +69,7 @@ describe('schedule correction — corrected day → theme/port/tonight mapping (
 // original ports/themes, no `tonight`, and a scheduler-stamped `snapshotItemIds`
 // on the already-unlocked Days 1–3 (index 0..2). Dates and unlockAt match the
 // corrected seed exactly (the correction never moves them).
-function oldLiveDays() {
+function oldLiveDays(): LiveDay[] {
   const at = (date: string) => Date.parse(`${date}T08:00:00+02:00`);
   return [
     { index: 0, date: '2026-07-15', port: 'Trieste', portEmoji: '🇮🇹', theme: 'welcome-aboard', pool: 'embark', tutorial: true, unlockAt: 0, freeText: 'You made it aboard', snapshotItemIds: ['e1', 'e2'] },
@@ -101,7 +106,7 @@ describe('schedule migration — planning core (specs/schedule-correction.md)', 
     expect(plan.corrected[2].snapshotItemIds).toEqual(['m4', 'm5']);
     // ...and date / unlockAt / pool / tutorial / freeText are untouched.
     for (let i = 0; i < plan.corrected.length; i++) {
-      for (const f of IMMUTABLE_FIELDS) {
+      for (const f of IMMUTABLE_DAY_FIELDS) {
         expect(plan.corrected[i][f]).toEqual(oldLiveDays()[i][f]);
       }
     }
@@ -109,7 +114,8 @@ describe('schedule migration — planning core (specs/schedule-correction.md)', 
 
   it('writes the corrected Days to match the seed (theme/port/portEmoji/tonight)', () => {
     const plan = planScheduleMigration(oldLiveDays());
-    plan.corrected.forEach((d, i) => {
+    const corrected = plan.corrected as LiveDay[];
+    corrected.forEach((d, i) => {
       expect(d.theme).toBe(DAYS[i].theme);
       expect(d.port).toBe(DAYS[i].port);
       expect(d.portEmoji).toBe(DAYS[i].portEmoji);
