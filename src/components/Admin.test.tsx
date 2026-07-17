@@ -44,6 +44,7 @@ const H = vi.hoisted(() => ({
   setClaimMode: vi.fn(),
   setEventTheme: vi.fn(),
   setDayTheme: vi.fn(),
+  setDayTonight: vi.fn(),
   setPhotoProofSource: vi.fn(),
   setStripPhotoExif: vi.fn(),
   setVisionGate: vi.fn(),
@@ -99,6 +100,7 @@ vi.mock('../data/admin', () => ({
   setClaimMode: (...a: unknown[]) => H.setClaimMode(...a),
   setEventTheme: (...a: unknown[]) => H.setEventTheme(...a),
   setDayTheme: (...a: unknown[]) => H.setDayTheme(...a),
+  setDayTonight: (...a: unknown[]) => H.setDayTonight(...a),
   setPhotoProofSource: (...a: unknown[]) => H.setPhotoProofSource(...a),
   setStripPhotoExif: (...a: unknown[]) => H.setStripPhotoExif(...a),
   setVisionGate: (...a: unknown[]) => H.setVisionGate(...a),
@@ -138,6 +140,7 @@ const dayDef = (over: Partial<DayDef> = {}): DayDef => ({
   port: 'Split',
   portEmoji: '🇭🇷',
   theme: 'neon-playground',
+  tonight: [],
   pool: 'main',
   tutorial: false,
   unlockAt: Date.now() + 3600_000, // future by default — enabled
@@ -258,6 +261,52 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
 
     const select = screen.getByLabelText('Day 1 theme') as HTMLSelectElement;
     expect(select.disabled).toBe(true);
+  });
+
+  it('renders a "2 parties" pill on a two-party Day and none on a show+party Day (schedule correction)', () => {
+    const days = [
+      // Both events are parties → pill.
+      dayDef({ index: 0, tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] }),
+      // Headline show (🎭) + party → no pill.
+      dayDef({ index: 1, tonight: ['🎭 AirOtic', '🌌 Under the Stars'] }),
+      // Tutorial Day → its own "tutorial" pill, never "2 parties".
+      dayDef({ index: 2, tutorial: true, pool: 'embark', tonight: ['⛵ Sail-Away Party', '🎉 Welcome Party'] }),
+    ];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    render(<Admin />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    const twoPartyRow = screen.getByText(/Day 1 ·/).closest('.row') as HTMLElement;
+    expect(within(twoPartyRow).getByText('2 parties')).toBeInTheDocument();
+    const showRow = screen.getByText(/Day 2 ·/).closest('.row') as HTMLElement;
+    expect(within(showRow).queryByText('2 parties')).toBeNull();
+    const tutorialRow = screen.getByText(/Day 3 ·/).closest('.row') as HTMLElement;
+    expect(within(tutorialRow).queryByText('2 parties')).toBeNull();
+    expect(within(tutorialRow).getByText('tutorial')).toBeInTheDocument();
+  });
+
+  it("a future Day's Tonight line is editable and invokes setDayTonight(days, dayIndex, tonight) on blur", () => {
+    const days = [dayDef({ index: 0, unlockAt: Date.now() + 3600_000, tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    render(<Admin />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    const input = screen.getByLabelText('Day 1 tonight') as HTMLInputElement;
+    expect(input.disabled).toBe(false);
+    expect(input.value).toBe('🪖 Dog Tag T-Dance · ✈️ Duty Free');
+    fireEvent.change(input, { target: { value: '💦 Splash T-Dance · 🏋️ Get Sporty' } });
+    fireEvent.blur(input);
+    expect(H.setDayTonight).toHaveBeenCalledWith(days, 0, ['💦 Splash T-Dance', '🏋️ Get Sporty']);
+  });
+
+  it("a past/unlocked Day's Tonight line is disabled (corrected via the owner migration, not the editor)", () => {
+    const days = [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    render(<Admin />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    const input = screen.getByLabelText('Day 1 tonight') as HTMLInputElement;
+    expect(input.disabled).toBe(true);
   });
 
   it('an "Unlock now" button appears ONLY for a Day that is unlocked but not yet snapshot-stamped, and invokes unlockDayNow(dayIndex)', async () => {

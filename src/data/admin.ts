@@ -140,6 +140,27 @@ export const setDayTheme = (days: DayDef[], dayIndex: number, theme: ThemeId): P
     });
   });
 
+/**
+ * Edit a Day's "Tonight:" line (schedule correction 2026-07-17). Same surgical
+ * merge-onto-current-array transaction as `setDayTheme` — for the same
+ * concurrency reason (a wholesale write from a stale snapshot would clobber a
+ * concurrent scheduler `snapshotItemIds` stamp or another admin's edit). Only
+ * the caller's disabled-when-locked control keeps this off unlocked/past Days;
+ * `tonight` is display metadata the firestore `daySchedUnchanged` lock does not
+ * clamp (it guards `theme`/`unlockAt` only), so a future-Day edit is accepted
+ * server-side. The already-unlocked Days 1–3 are corrected by the one-time
+ * owner migration, not this control.
+ */
+export const setDayTonight = (days: DayDef[], dayIndex: number, tonight: string[]): Promise<void> =>
+  runTransaction(db, async (tx) => {
+    const snap = await tx.get(evt());
+    const current =
+      (snap.exists() ? (snap.data().days as DayDef[] | undefined) : undefined) ?? days;
+    tx.update(evt(), {
+      days: current.map((d) => (d.index === dayIndex ? { ...d, tonight } : d)),
+    });
+  });
+
 /** What `unlockDayNow` reports back — mirrors `SnapshotResult` in `functions/src/unlockDay.ts`. */
 export type UnlockDayNowResult = 'stamped' | 'already-stamped' | 'not-due' | 'no-event' | 'no-day';
 

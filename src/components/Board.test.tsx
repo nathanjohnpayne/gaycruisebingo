@@ -138,6 +138,7 @@ function day(overrides: Partial<DayDef> & Pick<DayDef, 'index' | 'unlockAt' | 't
     date: `2026-07-${String(15 + overrides.index).padStart(2, '0')}`,
     port: `Port ${overrides.index}`,
     portEmoji: '🇭🇷',
+    tonight: [],
     pool: 'main',
     tutorial: false,
     ...overrides,

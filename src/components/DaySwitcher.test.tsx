@@ -20,6 +20,7 @@ function makeDays(count = 10, startUnlock = 0): DayDef[] {
     port: `Port ${index}`,
     portEmoji: '🇭🇷',
     theme: 'get-sporty',
+    tonight: [],
     pool: index === 0 ? 'embark' : index === count - 1 ? 'farewell' : 'main',
     tutorial: index === 0 || index === count - 1,
     unlockAt: startUnlock + index * DAY_MS,

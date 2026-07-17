@@ -178,3 +178,83 @@
   --shadow: rgba(255, 139, 106, 0.4);
   --on-gradient: #000;
 }
+
+/* Unified day themes (schedule correction 2026-07-17, daily-cards-spec
+   § "Theme reference" / "Proposed palettes"). Palettes verbatim from the spec;
+   every new ThemeId is pulled into the w1-themes + badge-contrast suites
+   automatically, which hold these to the same 4.5:1 floors the existing themes
+   clear. */
+[data-theme='uniforms-without-borders'] {
+  /* khaki + borderless sky */
+  --bg: #0a0d12;
+  --panel: #12171f;
+  --ink: #eef4f7;
+  --dim: #a9b8ac;
+  --primary: #b5c15a;
+  --secondary: #3aa0ff;
+  --accent: #ffd23f;
+  --cell: #12171f;
+  --border: rgba(181, 193, 90, 0.35);
+  --shadow: rgba(181, 193, 90, 0.4);
+  --on-gradient: #000;
+}
+
+[data-theme='neon-pink-playground'] {
+  /* hot pink × laser cyan */
+  --bg: #14061a;
+  --panel: #1e0a26;
+  --ink: #ffeafa;
+  --dim: #e0a3d0;
+  --primary: #ff4fb0;
+  --secondary: #00e6ff;
+  --accent: #fff06a;
+  --cell: #1e0a26;
+  --border: rgba(255, 79, 176, 0.4);
+  --shadow: rgba(255, 79, 176, 0.45);
+  --on-gradient: #000;
+}
+
+[data-theme='sporty-splash'] {
+  /* pool water × varsity green */
+  --bg: #04121a;
+  --panel: #0a1c26;
+  --ink: #eafaff;
+  --dim: #9cc4d4;
+  --primary: #33c6ff;
+  --secondary: #39ff88;
+  --accent: #ffe600;
+  --cell: #0a1c26;
+  --border: rgba(51, 198, 255, 0.38);
+  --shadow: rgba(51, 198, 255, 0.4);
+  --on-gradient: #000;
+}
+
+[data-theme='under-the-stars'] {
+  /* midnight indigo, star gold, violet */
+  --bg: #070a18;
+  --panel: #0d1224;
+  --ink: #f2f2ff;
+  --dim: #a9aed6;
+  --primary: #ffd76a;
+  --secondary: #8f7bff;
+  --accent: #fffefb;
+  --cell: #0d1224;
+  --border: rgba(255, 215, 106, 0.3);
+  --shadow: rgba(255, 215, 106, 0.35);
+  --on-gradient: #000;
+}
+
+[data-theme='atlantis-classics'] {
+  /* terracotta amphora × aegean teal */
+  --bg: #0b0e10;
+  --panel: #131a1c;
+  --ink: #f6f1ea;
+  --dim: #c0b3a2;
+  --primary: #e2814d;
+  --secondary: #2ec5b6;
+  --accent: #ffd23f;
+  --cell: #131a1c;
+  --border: rgba(226, 129, 77, 0.35);
+  --shadow: rgba(226, 129, 77, 0.4);
+  --on-gradient: #000;
+}

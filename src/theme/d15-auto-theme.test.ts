@@ -11,6 +11,7 @@ function day(partial: Partial<DayDef> & Pick<DayDef, 'index' | 'unlockAt' | 'the
     date: '2027-01-01',
     port: 'Test Port',
     portEmoji: '🚢',
+    tonight: [],
     pool: 'main',
     tutorial: false,
     ...partial,

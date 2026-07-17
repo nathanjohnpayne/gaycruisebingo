@@ -15,6 +15,7 @@ function day(overrides: Partial<DayDef> & Pick<DayDef, 'index' | 'pool'>): DayDe
     port: 'Split',
     portEmoji: '🇭🇷',
     theme: 'neon-playground',
+    tonight: [],
     tutorial: overrides.pool !== 'main',
     unlockAt: NOW - HOUR,
     ...overrides,

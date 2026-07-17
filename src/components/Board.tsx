@@ -548,6 +548,12 @@ export function DayBar({
   reshuffle?: { left: number; onOpen: () => void } | null;
 }) {
   const description = themeDescription(day.theme);
+  // The "Tonight:" line (schedule correction 2026-07-17): the Day's two
+  // signature events, rendered on both the dealt board and the locked preview.
+  // Guarded with `?? []` because DayBar is also handed cast fixtures and legacy
+  // Event docs seeded before `tonight` existed — a missing field renders no
+  // line rather than throwing on `.join`.
+  const tonight = (Array.isArray(day.tonight) ? day.tonight : []).filter(Boolean);
   const showHonor = honor != null && validHonorTime(honor.at) && !day.tutorial;
   return (
     <div className="board-header daybar-block">
@@ -578,6 +584,12 @@ export function DayBar({
         )}
       </div>
       {description && <p className="daybar-desc">{description}</p>}
+      {tonight.length > 0 && (
+        <p className="daybar-tonight">
+          <span className="daybar-tonight-label">Tonight:</span>{' '}
+          {tonight.join(' · ')}
+        </p>
+      )}
     </div>
   );
 }
