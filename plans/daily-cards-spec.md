@@ -22,20 +22,22 @@ Decisions already made with Nathan: one cruise-long leaderboard plus per-day Fir
 
 Sailing: July 15–24, 2026, Trieste → Barcelona (Virgin Voyages Scarlet Lady). Every port is CEST, so a single event timezone (`Europe/Rome`) covers the whole cruise—no ship-clock drift handling needed.
 
-| Day | Date       | Port                 | Theme                              |
-|-----|------------|----------------------|------------------------------------|
-| 1   | Wed Jul 15 | 🇮🇹 Trieste          | 🛳️ Welcome Aboard (tutorial)       |
-| 2   | Thu Jul 16 | 🇭🇷 Split            | 🏋️ Get Sporty                      |
-| 3   | Fri Jul 17 | 🇲🇹 Valletta         | ✈️ Duty Free                       |
-| 4   | Sat Jul 18 | 🇮🇹 Palermo          | 🏛️ Glamiators                      |
-| 5   | Sun Jul 19 | 🇮🇹 Sorrento         | 🌈 Neon Playground                 |
-| 6   | Mon Jul 20 | 🇮🇹 Rome (Civitavecchia) | 🤍 Summer White                |
-| 7   | Tue Jul 21 | 🇫🇷 Nice             | 🪖 Dog Tag T-Dance                 |
-| 8   | Wed Jul 22 | 🇫🇷 Marseille        | 🪩 Revival: Classic Disco T-Dance  |
-| 9   | Thu Jul 23 | 🌊 Sea Day           | 💖 Seriously Pink T-Dance          |
-| 10  | Fri Jul 24 | 🇪🇸 Barcelona        | 👋 So Long, Farewell (tutorial)    |
+**Corrected 2026-07-17 (mid-cruise), from `schedule_1.xlsx` + the VB26 vacation guide's Entertainment Preview—supersedes the seeded mapping.** The model split: each Day has ONE **unified theme** (drives chrome, palette, chips, honors emoji) and a **"Tonight:" line of exactly two signature events** (parties when the day has them, else the night's headline show/concert + party, per the guide). `DayDef` gains `tonight: string[]` (two display strings with emoji); the theme stays a single ThemeId.
 
-This mapping seeds the event. The schedule stays **admin-editable** in the Admin console anyway (party order can shift onboard, and future cruises need their own mapping); changing a locked-future Day's theme is safe, changing an already-unlocked Day is disallowed.
+| Day | Date       | Port                     | Unified theme                    | Tonight (two signature events)                    |
+|-----|------------|--------------------------|----------------------------------|---------------------------------------------------|
+| 1   | Wed Jul 15 | 🇮🇹 Trieste              | 🛳️ Welcome Aboard (tutorial)     | ⛵ Sail-Away Party · 🎉 Atlantis Welcome Party    |
+| 2   | Thu Jul 16 | 🇭🇷 Split                | 🌍 Uniforms Without Borders      | 🪖 Dog Tag T-Dance · ✈️ Duty Free                 |
+| 3   | Fri Jul 17 | 🌊 Sea Day               | 💖 Neon Pink Playground          | 💖 Seriously Pink T-Dance · 🌈 Neon Playground    |
+| 4   | Sat Jul 18 | 🇲🇹 Valletta             | 💦 Sporty Splash                 | 💦 Splash T-Dance · 🏋️ Get Sporty                |
+| 5   | Sun Jul 19 | 🇮🇹 Palermo              | 🌌 Under the Stars               | 🎭 AirOtic · 🌌 Under the Stars                   |
+| 6   | Mon Jul 20 | 🇮🇹 Naples               | 🏛️ Glamiators                    | 🎤 Solea Pfeiffer · 🏛️ Glamiators                |
+| 7   | Tue Jul 21 | 🇮🇹 Rome (Civitavecchia) | 🏺 Atlantis Classics             | 🎭 Persephone · 🏺 Atlantis Classics              |
+| 8   | Wed Jul 22 | 🇫🇷 Villefranche         | 🤍 Summer White                  | 🎤 HAYLA · 🤍 Summer White Party                  |
+| 9   | Thu Jul 23 | 🇫🇷 Marseille            | 🪩 Revival! Classic Disco        | 🪩 Revival! Classic Disco T-Dance · 🎉 Last Dance |
+| 10  | Fri Jul 24 | 🇪🇸 Barcelona            | 👋 So Long, Farewell (tutorial)  | 🧳 Disembark in Barcelona · 👋 Until next year *(editorial—no guide events)* |
+
+Sources: every Tonight pair is from the guide's Entertainment Preview except Day 10 (disembark morning—no events published; the line is editorial). The guide's port for Monday still reads Sorrento; the corrected sheet (Naples) supersedes it. The schedule stays **admin-editable** for future days; Days 1–3 are already unlocked, so this correction lands via a one-time owner migration (see `plans/schedule-correction-ticket.md`)—labels, themes, and the tonight lines only, never boards, snapshots, or stats.
 
 ## Theme reference
 
@@ -53,6 +55,13 @@ The existing `ThemeMeta` (id, label, emoji—the theme-switcher button's data) i
 | `seriously-pink` | 💖 Seriously Pink T-Dance | A hot afternoon of pink silliness, Barbie energy, and frivolous dolled-up fun. |
 | `welcome-aboard` *(new)* | 🛳️ Welcome Aboard | You made it. Learn the game, find the soft-serve, wave goodbye to land. |
 | `so-long-farewell` *(new)* | 👋 So Long, Farewell | Last one. Mark your goodbyes—then go book next year. |
+| `uniforms-without-borders` *(unified, 2026-07-17)* | 🌍 Uniforms Without Borders | Men in small uniforms meet no-borders-no-VAT—one night of international service. |
+| `neon-pink-playground` *(unified)* | 💖 Neon Pink Playground | Barbie energy by day, laser-lit neon by night—pink silliness straight into the Red Room. |
+| `sporty-splash` *(unified)* | 💦 Sporty Splash | Leave your phone in the cabin—water everywhere, then locker-room fantasy and varsity realness. |
+| `under-the-stars` *(unified)* | 🌌 Under the Stars | No theme. Just dance. An open-deck night under the Mediterranean sky. *(Guide copy.)* |
+| `atlantis-classics` *(unified)* | 🏺 Atlantis Classics | Three decades of Atlantis dance music—big anthems, diva voices, and classic sounds that still sound amazing today. *(Guide copy.)* |
+
+New party (no ThemeId—display-only in `tonight`): **💦 Splash T-Dance**—"Nothing to this one but water, and lots of it. Leave your phone and anything precious in your cabin and get soaked in the summer heat." The five superseded ThemeIds (`get-sporty`, `duty-free`, `dog-tag`, `seriously-pink`, `neon-playground`) remain valid—they still back the theme switcher, saved player preferences, and `neon-playground` stays the app default—they're just no longer day themes on this sailing; their names live on in `tonight` strings.
 
 ### Proposed palettes for the two new themes
 
@@ -73,6 +82,32 @@ Same token contract as `themes.css` (every new ThemeId is automatically pulled i
   --cell: #1e1019; --border: rgba(255,139,106,.35); --shadow: rgba(255,139,106,.4);
   --on-gradient: #000;
 }
+/* unified day themes (schedule correction 2026-07-17); same suites apply */
+[data-theme='uniforms-without-borders'] { /* khaki + borderless sky */
+  --bg:#0a0d12; --panel:#12171f; --ink:#eef4f7; --dim:#a9b8ac;
+  --primary:#b5c15a; --secondary:#3aa0ff; --accent:#ffd23f; --cell:#12171f;
+  --border:rgba(181,193,90,.35); --shadow:rgba(181,193,90,.4); --on-gradient:#000;
+}
+[data-theme='neon-pink-playground'] { /* hot pink × laser cyan */
+  --bg:#14061a; --panel:#1e0a26; --ink:#ffeafa; --dim:#e0a3d0;
+  --primary:#ff4fb0; --secondary:#00e6ff; --accent:#fff06a; --cell:#1e0a26;
+  --border:rgba(255,79,176,.4); --shadow:rgba(255,79,176,.45); --on-gradient:#000;
+}
+[data-theme='sporty-splash'] { /* pool water × varsity green */
+  --bg:#04121a; --panel:#0a1c26; --ink:#eafaff; --dim:#9cc4d4;
+  --primary:#33c6ff; --secondary:#39ff88; --accent:#ffe600; --cell:#0a1c26;
+  --border:rgba(51,198,255,.38); --shadow:rgba(51,198,255,.4); --on-gradient:#000;
+}
+[data-theme='under-the-stars'] { /* midnight indigo, star gold, violet */
+  --bg:#070a18; --panel:#0d1224; --ink:#f2f2ff; --dim:#a9aed6;
+  --primary:#ffd76a; --secondary:#8f7bff; --accent:#fffefb; --cell:#0d1224;
+  --border:rgba(255,215,106,.3); --shadow:rgba(255,215,106,.35); --on-gradient:#000;
+}
+[data-theme='atlantis-classics'] { /* terracotta amphora × aegean teal */
+  --bg:#0b0e10; --panel:#131a1c; --ink:#f6f1ea; --dim:#c0b3a2;
+  --primary:#e2814d; --secondary:#2ec5b6; --accent:#ffd23f; --cell:#131a1c;
+  --border:rgba(226,129,77,.35); --shadow:rgba(226,129,77,.4); --on-gradient:#000;
+}
 ```
 
 ## Data model
@@ -90,7 +125,10 @@ interface DayDef {
   date: string;         // ISO date, e.g. '2026-07-16'
   port: string;         // 'Split'
   portEmoji: string;    // '🇭🇷'
-  theme: ThemeId;       // drives card + chrome styling
+  theme: ThemeId;       // the UNIFIED day theme—drives card + chrome styling
+  tonight: string[];    // EXACTLY two signature events shown on the card's "Tonight:" line
+                        // (parties preferred, else headline show/concert + party—from the
+                        // VB26 guide's Entertainment Preview; 2026-07-17 correction)
   pool: 'main' | 'embark' | 'farewell';
   tutorial: boolean;    // true for days 1 and 10
   unlockAt: number;     // ms epoch—08:00 event-tz on `date`; embark day = event open
@@ -338,6 +376,7 @@ Nothing sailing-specific lives in code paths; a new cruise is a new `EventDoc`:
 4. **Palettes**: as proposed (nautical navy/cyan/brass; dusk plum/coral/peach), subject only to the contrast suites.
 5. **Photo source (#190)**: default `camera_or_library` with the 🖼️ Feed badge; `camera_only` remains an event-level admin override.
 6. **Winners announcement**: the two-beat finish—last-call standings Moment at 20:00 Day 9; standings freeze + podium at the 08:00 Day 10 farewell unlock; the farewell card is ceremonial (embark still counts toward totals).
+7. **Schedule correction (2026-07-17, from `schedule_1.xlsx`)**: unified day theme + a required two-event `tonight[]` line per the corrected itinerary above (Naples on Day 6, Villefranche on Day 8, sea day moved to Day 3; events from the VB26 guide); five new unified ThemeIds with palettes; applied to the live event via a metadata-only owner migration—game state untouched.
 
 ## Out of scope
 

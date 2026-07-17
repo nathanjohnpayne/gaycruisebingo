@@ -64,6 +64,22 @@
   [data-theme='so-long-farewell']{--bg:#140b12;--panel:#1e1019;--ink:#fff0ea;--dim:#d0a8ab;
     --primary:#ff8b6a;--secondary:#feb47b;--accent:#ffd23f;--cell:#1e1019;
     --border:rgba(255,139,106,.35);--on-gradient:#000}
+  /* unified day themes (schedule correction 2026-07-17) */
+  [data-theme='uniforms-without-borders']{--bg:#0a0d12;--panel:#12171f;--ink:#eef4f7;--dim:#a9b8ac;
+    --primary:#b5c15a;--secondary:#3aa0ff;--accent:#ffd23f;--cell:#12171f;
+    --border:rgba(181,193,90,.35);--on-gradient:#000}
+  [data-theme='neon-pink-playground']{--bg:#14061a;--panel:#1e0a26;--ink:#ffeafa;--dim:#e0a3d0;
+    --primary:#ff4fb0;--secondary:#00e6ff;--accent:#fff06a;--cell:#1e0a26;
+    --border:rgba(255,79,176,.4);--on-gradient:#000}
+  [data-theme='sporty-splash']{--bg:#04121a;--panel:#0a1c26;--ink:#eafaff;--dim:#9cc4d4;
+    --primary:#33c6ff;--secondary:#39ff88;--accent:#ffe600;--cell:#0a1c26;
+    --border:rgba(51,198,255,.38);--on-gradient:#000}
+  [data-theme='under-the-stars']{--bg:#070a18;--panel:#0d1224;--ink:#f2f2ff;--dim:#a9aed6;
+    --primary:#ffd76a;--secondary:#8f7bff;--accent:#fffefb;--cell:#0d1224;
+    --border:rgba(255,215,106,.3);--on-gradient:#000}
+  [data-theme='atlantis-classics']{--bg:#0b0e10;--panel:#131a1c;--ink:#f6f1ea;--dim:#c0b3a2;
+    --primary:#e2814d;--secondary:#2ec5b6;--accent:#ffd23f;--cell:#131a1c;
+    --border:rgba(226,129,77,.35);--on-gradient:#000}
 
   /* ---------- phone frame: iPhone 15 Pro canvas (393×852pt, 19.5:9), themed via tokens ---------- */
   .mini{width:393px;min-height:852px;background:var(--bg);color:var(--ink);border:2px solid #2a2a2e;
@@ -288,29 +304,29 @@
 
   <!-- Locked future day, viewed from Day 2 -->
   <div class="unit">
-    <div class="mini" data-theme="dog-tag">
+    <div class="mini" data-theme="sporty-splash">
       <div class="hdr">
         <div class="title">GAY CRUISE <b>BINGO</b></div>
-        <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
+        <div class="today"><div class="port">🌊 Sea Day</div><div class="theme">💖 Neon Pink Playground</div></div>
       </div>
       <div class="strip">
         <div class="chip">✓ Wed 🛳️</div>
-        <div class="chip">Thu 🇭🇷 🏋️</div>
-        <div class="chip lock">🔒 Fri ✈️</div>
-        <div class="chip lock now">🔒 Tue 🪖</div>
+        <div class="chip">✓ Thu 🌍</div>
+        <div class="chip">Fri 🌊 💖</div>
+        <div class="chip lock now">🔒 Sat 💦</div>
         <div class="fade">›</div>
       </div>
       <div class="board">
         <div class="daybar">
-          <div class="dayname">Day 7 · Dog Tag T-Dance</div>
-          <div class="daymeta">🇫🇷 Nice</div>
+          <div class="dayname">Day 4 · Sporty Splash</div>
+          <div class="daymeta">🇲🇹 Valletta</div>
         </div>
-        <div class="desc">The longest-running signature party, inspired by men in small uniforms. Souvenir dog tags provided.</div>
+        <div class="desc"><b>Tonight:</b> 💦 Splash T-Dance · 🏋️ Get Sporty—water everywhere, then varsity realness. Leave your phone in the cabin.</div>
         <div class="lockwrap">
           <div class="grid" id="lockgrid"></div>
           <div class="lockbadge">
             <div class="lockicon"><svg data-lucide="lock" class="lucide lucide-lock" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="11" x="3" y="11" rx="2" ry="2" /> <path d="M7 11V7a5 5 0 0 1 10 0v4" /> </svg></div>
-            <div class="locktext">Unlocks 8:00 a.m. · Tue Jul 21</div>
+            <div class="locktext">Unlocks 8:00 a.m. · Sat, Jul 18</div>
           </div>
         </div>
         <div class="note">24 fresh squares land at 8. Come back after coffee.</div>
@@ -322,19 +338,19 @@
         <div class="tab"><span>⋯</span>More</div>
       </div>
     </div>
-    <p class="cap"><b>Locked Day preview</b>Viewed from Day 2: full Dog Tag chrome and dress-code tease, hatched blank squares, live free space, lock badge with the unlock time. The header still shows today (Split · Get Sporty).</p>
+    <p class="cap"><b>Locked Day preview</b>Viewed from Day 3: full Sporty Splash chrome with the two-party "Tonight" tease, hatched blank squares, live free space, lock badge with the unlock time. The header still shows today (Sea Day · Neon Pink Playground).</p>
   </div>
 
   <!-- Claim sheet (tile tap) -->
   <div class="unit">
-    <div class="mini" data-theme="get-sporty">
+    <div class="mini" data-theme="uniforms-without-borders">
       <div class="hdr">
         <div class="title">GAY CRUISE <b>BINGO</b></div>
-        <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
+        <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🌍 Uniforms Without Borders</div></div>
       </div>
       <div class="board" style="padding-bottom:0">
         <div class="daybar">
-          <div class="dayname">Day 2 · Get Sporty</div>
+          <div class="dayname">Day 2 · Uniforms Without Borders</div>
           <div class="daymeta">🇭🇷 Split</div>
         </div>
         <div class="grid" id="dimgrid" style="opacity:.3"></div>
@@ -361,14 +377,14 @@
 
   <!-- Tally who-list / raising a Doubt -->
   <div class="unit">
-    <div class="mini" data-theme="get-sporty">
+    <div class="mini" data-theme="uniforms-without-borders">
       <div class="hdr">
         <div class="title">GAY CRUISE <b>BINGO</b></div>
-        <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
+        <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🌍 Uniforms Without Borders</div></div>
       </div>
       <div class="board" style="padding-bottom:0">
         <div class="daybar">
-          <div class="dayname">Day 2 · Get Sporty</div>
+          <div class="dayname">Day 2 · Uniforms Without Borders</div>
           <div class="daymeta">🇭🇷 Split</div>
         </div>
         <div class="grid" id="tallygrid" style="opacity:.3"></div>
@@ -432,10 +448,10 @@
 
   <!-- Feed: proofs + moments -->
   <div class="unit">
-    <div class="mini" data-theme="duty-free">
+    <div class="mini" data-theme="neon-pink-playground">
       <div class="hdr">
         <div class="title">GAY CRUISE <b>BINGO</b></div>
-        <div class="today"><div class="port">🇲🇹 Valletta</div><div class="theme">✈️ Duty Free</div></div>
+        <div class="today"><div class="port">🌊 Sea Day</div><div class="theme">💖 Neon Pink Playground</div></div>
       </div>
       <div class="board" style="gap:8px">
         <div class="tcard">
@@ -445,7 +461,7 @@
         </div>
         <div class="moment">🎉 BINGO—Javi's 2nd<span class="who"> · Day 3 · 4:02p</span></div>
         <div class="pcard">
-          <div class="phead"><div class="avatar"></div>Theo<span class="who">· Day 3 · ✈️ Duty Free · 3:47p</span></div>
+          <div class="phead"><div class="avatar"></div>Theo<span class="who">· Day 3 · 💖 Neon Pink Playground · 3:47p</span></div>
           <div class="pquote">“Feathers, mesh, or sequins before noon”</div>
           <div class="pphoto">🏞️<span class="srcbadge">📷 live</span></div>
           <div class="pfoot"><span class="pill">👀 cleared 2 doubts</span><span class="pill">tally 7</span></div>
@@ -486,14 +502,14 @@
 
   <!-- Reshuffle: control + confirm dialog -->
   <div class="unit" id="frame-reshuffle">
-    <div class="mini" data-theme="get-sporty">
+    <div class="mini" data-theme="sporty-splash">
       <div class="hdr">
         <div class="title">GAY CRUISE <b>BINGO</b></div>
-        <div class="today"><div class="port">🇭🇷 Split</div><div class="theme">🏋️ Get Sporty</div></div>
+        <div class="today"><div class="port">🇲🇹 Valletta</div><div class="theme">💦 Sporty Splash</div></div>
       </div>
       <div class="board" style="padding-bottom:0">
         <div class="daybar">
-          <div class="dayname">Day 2 · Get Sporty</div>
+          <div class="dayname">Day 4 · Sporty Splash</div>
           <span class="reshuf"><svg data-lucide="shuffle" class="lucide lucide-shuffle" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m18 14 4 4-4 4" /> <path d="m18 2 4 4-4 4" /> <path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22" /> <path d="M2 6h1.972a4 4 0 0 1 3.6 2.2" /> <path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45" /> </svg> ×3</span>
         </div>
         <div class="grid" id="rgrid" style="opacity:.3"></div>
@@ -507,7 +523,7 @@
       <div class="sheet">
         <div class="sheetgrab"></div>
         <div class="sheet-title">Reshuffle this card?</div>
-        <div class="sheetsub">A fresh 24 squares for Day 2—same day, new luck.</div>
+        <div class="sheetsub">A fresh 24 squares for Day 4—same day, new luck.</div>
         <div class="warnbox"><b>This can't be undone.</b> You'll never see this card again—and reshuffles don't come back.</div>
         <div class="note">2 of 3 cruise reshuffles left · available only before you've marked a square</div>
         <div class="btnrow"><span class="btn ok">Keep my card</span><span class="btn danger"><svg data-lucide="shuffle" class="lucide lucide-shuffle" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m18 14 4 4-4 4" /> <path d="m18 2 4 4-4 4" /> <path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22" /> <path d="M2 6h1.972a4 4 0 0 1 3.6 2.2" /> <path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45" /> </svg> Reshuffle it</span></div>
@@ -589,18 +605,18 @@
     <div class="mini" data-theme="glamiators">
       <div class="hdr">
         <div class="title">GAY CRUISE <b>BINGO</b></div>
-        <div class="today"><div class="port">🇮🇹 Palermo</div><div class="theme">🏛️ Glamiators</div></div>
+        <div class="today"><div class="port">🇮🇹 Naples</div><div class="theme">🏛️ Glamiators</div></div>
       </div>
       <div class="strip">
-        <div class="chip">✓ Fri ✈️</div>
-        <div class="chip now">Sat 🇮🇹 🏛️</div>
-        <div class="chip lock">🔒 Sun 🌈</div>
-        <div class="chip lock">🔒 Mon 🤍</div>
+        <div class="chip">✓ Sun 🌌</div>
+        <div class="chip now">Mon 🇮🇹 🏛️</div>
+        <div class="chip lock">🔒 Tue 🏺</div>
+        <div class="chip lock">🔒 Wed 🤍</div>
         <div class="fade">›</div>
       </div>
       <div class="board">
         <div class="daybar">
-          <div class="dayname">Day 4 · Glamiators</div>
+          <div class="dayname">Day 6 · Glamiators</div>
           <div class="daymeta">First to BINGO: Theo, 11:02</div>
         </div>
         <div class="grid" id="updgrid"></div>
@@ -629,10 +645,10 @@
 
   <!-- More menu -->
   <div class="unit">
-    <div class="mini" data-theme="seriously-pink">
+    <div class="mini" data-theme="neon-pink-playground">
       <div class="hdr">
         <div class="title">GAY CRUISE <b>BINGO</b></div>
-        <div class="today"><div class="port">🌊 Sea Day</div><div class="theme">💖 Seriously Pink T-Dance</div></div>
+        <div class="today"><div class="port">🌊 Sea Day</div><div class="theme">💖 Neon Pink Playground</div></div>
       </div>
       <div class="board" style="gap:7px">
         <div class="menucard">
@@ -680,11 +696,11 @@
         <div class="note">Approved items join every not-yet-unlocked Day at its 8:00 snapshot.</div>
         <div class="secthead">Schedule · theme per night</div>
         <div class="schedrow">Wed 15 · Trieste <span class="pill">tutorial</span><span class="dd dis">🛳️ Welcome Aboard</span></div>
-        <div class="schedrow">Thu 16 · Split<span class="dd dis">🏋️ Get Sporty ✓</span></div>
-        <div class="schedrow">Fri 17 · Valletta<span class="dd">✈️ Duty Free ▾</span></div>
-        <div class="schedrow">Sat 18 · Palermo<span class="dd">🏛️ Glamiators ▾</span></div>
-        <div class="schedrow">Sun 19 · Sorrento<span class="dd">🌈 Neon Playground ▾</span></div>
-        <div class="schedrow">Mon 20 · Rome<span class="dd">🤍 Summer White ▾</span></div>
+        <div class="schedrow">Thu 16 · Split <span class="pill">2 parties</span><span class="dd dis">🌍 Uniforms w/o Borders ✓</span></div>
+        <div class="schedrow">Fri 17 · Sea Day <span class="pill">2 parties</span><span class="dd dis">💖 Neon Pink Playground ✓</span></div>
+        <div class="schedrow">Sat 18 · Valletta <span class="pill">2 parties</span><span class="dd">💦 Sporty Splash ▾</span></div>
+        <div class="schedrow">Sun 19 · Palermo<span class="dd">🌌 Under the Stars ▾</span></div>
+        <div class="schedrow">Mon 20 · Naples<span class="dd">🏛️ Glamiators ▾</span></div>
         <div class="note">Past / unlocked days frozen; future themes editable. Reusable per event for future cruises.</div>
       </div>
       <div class="tabs">
@@ -733,16 +749,16 @@
     <div class="mini" data-theme="neon-playground">
       <div class="hdr">
         <div class="title">GAY CRUISE <b>BINGO</b></div>
-        <div class="today"><div class="port">🇮🇹 Sorrento</div><div class="theme">🌈 Neon Playground</div></div>
+        <div class="today"><div class="port">🇮🇹 Naples</div><div class="theme">🏛️ Glamiators</div></div>
       </div>
       <div class="board" style="gap:7px">
         <div class="secthead">Daily first to bingo</div>
         <div class="honors">
           <div class="honor"><b>🛳️ D1</b>Marco</div>
-          <div class="honor"><b>🏋️ D2</b>Jess</div>
-          <div class="honor"><b>✈️ D3</b>Dan</div>
-          <div class="honor"><b>🏛️ D4</b>Theo</div>
-          <div class="honor"><b>🌈 D5</b>—</div>
+          <div class="honor"><b>🌍 D2</b>Jess</div>
+          <div class="honor"><b>💖 D3</b>Dan</div>
+          <div class="honor"><b>💦 D4</b>Theo</div>
+          <div class="honor"><b>🌌 D5</b>—</div>
           <div class="fade">›</div>
         </div>
         <div class="secthead">Cruise leaderboard · all cards</div>
@@ -800,35 +816,45 @@ const FAREWELL = ["Last sunrise or sunset photo","Goodbye, cruise boyfriend","Sw
 // ---------- the real 2026 schedule ----------
 const DAYS = [
 {n:1, date:"Wed Jul 15", port:"Trieste", flag:"🇮🇹", theme:"welcome-aboard", emoji:"🛳️", label:"Welcome Aboard",
+ tonight:"⛵ Sail-Away Party · 🎉 Atlantis Welcome Party",
  desc:"You made it. Learn the game, find the soft-serve, wave goodbye to land.",
  pool:EMBARK, free:"You made it aboard", tag:"Warm-up", headPort:"Sails Jul 15",
  banner:"<b>How this works</b><ol><li><b>Mark what happens</b>—tap a square when you see it, do it, or survive it.</li><li><b>Five in a row is BINGO.</b> Center's free.</li><li><b>The feed is the proof</b>—pics, doubts, Moments.</li></ol>",
  note:"This one's a warm-up. The real chaos starts tomorrow at 8."},
-{n:2, date:"Thu Jul 16", port:"Split", flag:"🇭🇷", theme:"get-sporty", emoji:"🏋️", label:"Get Sporty",
- desc:"Locker-room fantasy, varsity realness, cheer-captain glam—looks that leave very little to the imagination.",
+{n:2, date:"Thu Jul 16", port:"Split", flag:"🇭🇷", theme:"uniforms-without-borders", emoji:"🌍", label:"Uniforms Without Borders",
+ tonight:"🪖 Dog Tag T-Dance · ✈️ Duty Free",
+ desc:"Men in small uniforms meet no-borders-no-VAT—one night of international service.",
  pool:MAIN, free:"Complain about circuit music"},
-{n:3, date:"Fri Jul 17", port:"Valletta", flag:"🇲🇹", theme:"duty-free", emoji:"✈️", label:"Duty Free",
- desc:"No borders, no limits, no VAT. National colors, flags, or whatever you find in Duty Free.",
+{n:3, date:"Fri Jul 17", port:"Sea Day", flag:"🌊", theme:"neon-pink-playground", emoji:"💖", label:"Neon Pink Playground",
+ tonight:"💖 Seriously Pink T-Dance · 🌈 Neon Playground",
+ desc:"Barbie energy by day, laser-lit neon in the Red Room after midnight.",
  pool:MAIN, free:"Complain about circuit music"},
-{n:4, date:"Sat Jul 18", port:"Palermo", flag:"🇮🇹", theme:"glamiators", emoji:"🏛️", label:"Glamiators",
+{n:4, date:"Sat Jul 18", port:"Valletta", flag:"🇲🇹", theme:"sporty-splash", emoji:"💦", label:"Sporty Splash",
+ tonight:"💦 Splash T-Dance · 🏋️ Get Sporty",
+ desc:"Leave your phone in the cabin—water everywhere, then locker-room fantasy and varsity realness.",
+ pool:MAIN, free:"Complain about circuit music"},
+{n:5, date:"Sun Jul 19", port:"Palermo", flag:"🇮🇹", theme:"under-the-stars", emoji:"🌌", label:"Under the Stars",
+ tonight:"🎭 AirOtic · 🌌 Under the Stars",
+ desc:"No theme. Just dance. An open-deck night under the Mediterranean sky.",
+ pool:MAIN, free:"Complain about circuit music"},
+{n:6, date:"Mon Jul 20", port:"Naples", flag:"🇮🇹", theme:"glamiators", emoji:"🏛️", label:"Glamiators",
+ tonight:"🎤 Solea Pfeiffer · 🏛️ Glamiators",
  desc:"Roman toga-chic meets runway excess. Ancient fantasy, body armor, spectator looks welcome.",
  pool:MAIN, free:"Complain about circuit music"},
-{n:5, date:"Sun Jul 19", port:"Sorrento", flag:"🇮🇹", theme:"neon-playground", emoji:"🌈", label:"Neon Playground",
- desc:"Fast, flashy, bright, and silly. Neon, sparkles, and lights for a laser-lit night in the Red Room.",
+{n:7, date:"Tue Jul 21", port:"Rome", flag:"🇮🇹", theme:"atlantis-classics", emoji:"🏺", label:"Atlantis Classics",
+ tonight:"🎭 Persephone · 🏺 Atlantis Classics",
+ desc:"Three decades of Atlantis dance music—big anthems, diva voices, and classic sounds that still sound amazing today.",
  pool:MAIN, free:"Complain about circuit music"},
-{n:6, date:"Mon Jul 20", port:"Rome", flag:"🇮🇹", theme:"summer-white", emoji:"🤍", label:"Summer White",
+{n:8, date:"Wed Jul 22", port:"Villefranche", flag:"🇫🇷", theme:"summer-white", emoji:"🤍", label:"Summer White",
+ tonight:"🎤 HAYLA · 🤍 Summer White Party",
  desc:"Atlantis's pinnacle party. Dress up or down in white for a sexy, creative, irreverent night under the stars.",
  pool:MAIN, free:"Complain about circuit music"},
-{n:7, date:"Tue Jul 21", port:"Nice", flag:"🇫🇷", theme:"dog-tag", emoji:"🪖", label:"Dog Tag T-Dance",
- desc:"The longest-running signature party, inspired by men in small uniforms. Souvenir dog tags provided.",
- pool:MAIN, free:"Complain about circuit music"},
-{n:8, date:"Wed Jul 22", port:"Marseille", flag:"🇫🇷", theme:"revival-disco", emoji:"🪩", label:"Revival: Classic Disco",
+{n:9, date:"Thu Jul 23", port:"Marseille", flag:"🇫🇷", theme:"revival-disco", emoji:"🪩", label:"Revival! Classic Disco",
+ tonight:"🪩 Revival! Classic Disco T-Dance · 🎉 Last Dance",
  desc:"A '70s disco afternoon—artificial fabrics, facial hair, oversized shoes, obnoxious accessories.",
  pool:MAIN, free:"Complain about circuit music"},
-{n:9, date:"Thu Jul 23", port:"Sea Day", flag:"🌊", theme:"seriously-pink", emoji:"💖", label:"Seriously Pink T-Dance",
- desc:"A hot afternoon of pink silliness, Barbie energy, and frivolous dolled-up fun.",
- pool:MAIN, free:"Complain about circuit music"},
 {n:10, date:"Fri Jul 24", port:"Barcelona", flag:"🇪🇸", theme:"so-long-farewell", emoji:"👋", label:"So Long, Farewell",
+ tonight:"🧳 Disembark in Barcelona · 👋 Until next year",
  desc:"Last one. Mark your goodbyes—then go book next year.",
  pool:FAREWELL, free:"We had the best damn time", tag:"Goodbye",
  banner:"<b>🏆 Final standings—Champion: Jess · First to BINGO: Marco · 10 daily honors inside</b>Last one. 🥲 Mark your goodbyes—then go book next year. Standings froze at unlock; this card is pure ceremony.",
@@ -885,7 +911,7 @@ DAYS.forEach(d=>{
       '<div class="daybar"><div class="dayname">Day '+d.n+' · '+d.label+
         (d.tag?'<span class="tag">'+d.tag+'</span>':'')+'</div>'+
         '<div class="daymeta">'+d.flag+' '+d.port+'</div></div>'+
-      '<div class="desc">'+d.desc+'</div>'+
+      '<div class="desc">'+d.desc+'</div>'+(d.tonight?'<div class="desc"><b>Tonight:</b> '+d.tonight+'</div>':'')+
       (d.banner?'<div class="banner">'+d.banner+'</div>':'')+
       '<div class="grid">'+gridHTML(d)+'</div>'+
       (d.note?'<div class="note">'+d.note+'</div>':'')+
