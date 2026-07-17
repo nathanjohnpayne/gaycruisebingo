@@ -606,6 +606,40 @@ function ReportThresholdStepper({ value, onChange }: { value: number; onChange: 
 }
 
 /**
+ * The "Easy mix" dial (specs/easy-mix.md): a 0–100% slider in 10% increments writing
+ * `settings.easyMixRatio`. Local state gives the thumb optimistic, lag-free motion
+ * during a drag (a controlled input bound directly to the async Firestore value would
+ * stick), and the value is COMMITTED once on release (pointer/key up) — so one
+ * adjustment is one write, never a transient value per intermediate 10% step. Re-syncs
+ * to the event doc whenever the committed value changes elsewhere (another admin, or
+ * first load). The stored ratio may be any 0..1 value (e.g. a legacy 0.25 from the old
+ * stepper); it renders faithfully and the next drag snaps to the 10% grid.
+ */
+function EasyMixSlider({ value, onChange }: { value: number; onChange: (ratio: number) => void }) {
+  const [pct, setPct] = useState(Math.round(value * 100));
+  useEffect(() => setPct(Math.round(value * 100)), [value]);
+  const commit = (next: number) => {
+    if (next / 100 !== value) onChange(next / 100);
+  };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={10}
+        value={pct}
+        aria-label="Easy mix percentage"
+        onChange={(e) => setPct(Number(e.target.value))}
+        onPointerUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
+        onKeyUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
+      />
+      <span style={{ minWidth: 40, textAlign: 'right' }}>{pct}%</span>
+    </div>
+  );
+}
+
+/**
  * Admin curated add (#269): text + spicy + pool, landing ACTIVE (an admin
  * adding IS the approval). Pool defaults to main; embark/farewell are the
  * curated pools the spec says admins edit through the console.
@@ -791,7 +825,6 @@ function ProofClaimsPanel({
   const threshold = event?.settings?.reportHideThreshold ?? 4;
   // Easy mix (specs/easy-mix.md): default 0.5 mirrors the deal-time call-site default.
   const easyMix = event?.settings?.easyMixRatio ?? 0.5;
-  const easyMixSteps = [0, 0.25, 0.5];
 
   return (
     <div className="admin-section">
@@ -853,20 +886,10 @@ function ProofClaimsPanel({
           <div className="name">Easy mix</div>
           <div className="sub">
             Share of each main-day card dealt from the easy embark pool—the rest is the normal spicy/tame main
-            deal. Applies to Days that unlock from here on; a live setting, no deploy.
+            deal. Slide in 10% steps. Applies to Days that unlock from here on; a live setting, no deploy.
           </div>
         </div>
-        <div className="seg">
-          {easyMixSteps.map((r) => (
-            <button
-              key={r}
-              className={'seg-btn' + (easyMix === r ? ' on' : '')}
-              onClick={() => setEasyMixRatio(r)}
-            >
-              {Math.round(r * 100)}%
-            </button>
-          ))}
-        </div>
+        <EasyMixSlider value={easyMix} onChange={(r) => setEasyMixRatio(r)} />
       </div>
       {/* Admin-confirmed mode only (#269, the wireframes' caption) — in other
           modes there is no claims queue to jump to. */}
