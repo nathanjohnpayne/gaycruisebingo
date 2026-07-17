@@ -226,7 +226,7 @@ Wireframes for every state below are in `daily-cards-wireframes.html`.
 
 ### Header
 
-Two stacked lines next to the "Gay Cruise Bingo" title, always showing **today's** port and theme (not the viewed Day's—the header is a "where are we" instrument; the board chrome communicates the viewed Day):
+Two stacked lines next to the "Gay Cruise Bingo" title, always showing **today's** port and theme (not the viewed Day's—the header is a "where are we" instrument; the board chrome communicates the viewed Day). Mid-cruise, "today" is the latest **unlocked** Day—the same notion the day switcher and Auto theme use—so the header and the board's default Day roll to a new port together at the 08:00 unlock rather than the header leading it from calendar midnight. The pre-cruise "Sails …" and post-cruise "Until next year" states stay keyed on the calendar date in the event timezone:
 
 ```
 ┌──────────────────────────────────────────┐
