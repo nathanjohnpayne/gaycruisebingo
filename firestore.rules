@@ -54,22 +54,30 @@ service cloud.firestore {
       return ('reshufflesUsed' in data) ? data.reshufflesUsed : 0;
     }
 
-    // A Board write is a RESHUFFLE iff a doc already EXISTS and the incoming `seed`
-    // differs from the stored one. This is the discriminator that separates the two
-    // kinds of Board write the one `allow write` rule below covers:
+    // A Board write is a RESHUFFLE iff a doc already EXISTS and its `seed` is not
+    // carried through unchanged. This is the discriminator that separates the two
+    // kinds of Board write the create/update rule below covers:
     //   - a MARK is `set(ref, { cells }, { merge: true })` (data/api.ts setMark), so
     //     the RESULTING doc keeps its stored `seed` and this never trips;
     //   - a DEAL is a create (`resource == null`), so this never trips either.
-    // Both sides are presence-guarded before the comparison, and a DELETE (where
-    // `request.resource` is null) is excluded, so classification never errors a
-    // write that predates this feature — a fixture Board with no `seed` key simply
-    // is not a reshuffle and keeps its pre-#378 self-write allowance.
+    //
+    // "Not carried through" deliberately includes PRESENCE changes, not just a
+    // differing number (Codex P1 on #383). Comparing values alone left a two-step
+    // laundering path: full-replace the Board while OMITTING `seed` (the old
+    // predicate saw no incoming key and returned false), then a second write ADDS a
+    // fresh `seed` (the stored board now has no key, so it returned false again) —
+    // and a marked or spent-out card was replaced with neither a pristine check nor
+    // a counter increment. Dropping or adding the key is exactly as much of a
+    // reshuffle as changing it, so all three are gated identically.
+    //
+    // A DELETE (`request.resource` null) is excluded here because delete is denied
+    // for owners outright below — the ONE remaining way a create could be laundered.
     function isReshuffleWrite() {
       return resource != null
         && request.resource != null
-        && ('seed' in request.resource.data)
-        && ('seed' in resource.data)
-        && request.resource.data.seed != resource.data.seed;
+        && (('seed' in request.resource.data) != ('seed' in resource.data)
+            || (('seed' in request.resource.data)
+                && request.resource.data.seed != resource.data.seed));
     }
 
     // One Square is not PLAYER-marked. The free centre is always `marked` and never
@@ -441,12 +449,25 @@ service cloud.firestore {
         // pre-#378 self-write behavior. The Day-unlock gate applies to a reshuffle
         // exactly as it does to a deal, so a locked Day's preview can never be
         // rerolled.
+        //
+        // DELETE is split out and denied to the owner (#383, Codex P1). It was
+        // previously covered by the blanket `allow write`, which handed the
+        // allowance a trivial bypass: delete your Board, then CREATE a fresh one.
+        // A create has no `resource`, so `isReshuffleWrite()` is false and the
+        // replacement skips BOTH the pristine check and the paired counter — an
+        // unlimited re-roll, available even after all three reshuffles are spent.
+        // Nothing needs owner deletion: no app path deletes a Board (`dealDayCard`
+        // only ever creates an absent one), and no test asserts it. Admins keep
+        // delete for moderation, which is the same posture proofs/{proofId} takes.
+        // This narrows self-write by exactly one operation that had no legitimate
+        // caller — it is not a retreat from ADR 0001's model for marks and stats.
         match /boards/{uid} {
           allow read: if isOwner(uid) || isAdmin(eventId);
-          allow write: if (isOwner(uid) || isAdmin(eventId))
+          allow create, update: if (isOwner(uid) || isAdmin(eventId))
             && isCanonicalDay(dayIndex)
             && request.time.toMillis() >= get(/databases/$(database)/documents/events/$(eventId)).data.days[int(dayIndex)].unlockAt
             && (!isReshuffleWrite() || reshuffleOk(eventId, uid));
+          allow delete: if isAdmin(eventId);
         }
 
         // Per-day First-to-BINGO honor doc: { firstBingo: { uid, displayName, at } }

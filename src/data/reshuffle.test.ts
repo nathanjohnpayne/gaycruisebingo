@@ -23,6 +23,7 @@ const H = vi.hoisted(() => ({
   batchSet: vi.fn(),
   batchCommit: vi.fn(async () => {}),
   txSet: vi.fn(),
+  txGet: vi.fn(),
   // `runTransaction` REJECTS offline rather than queueing — that failure mode is
   // the whole contract (Codex P1 on #383). `offline: true` makes this double
   // behave like the real SDK does with no connection.
@@ -59,7 +60,10 @@ vi.mock('firebase/firestore', () => {
     runTransaction: async (_db: unknown, fn: (tx: unknown) => Promise<unknown>) => {
       if (H.offline) throw new Error('Failed to get document because the client is offline.');
       const tx = {
-        get: async (ref: { args?: unknown[] }) => route(ref),
+        get: async (ref: { args?: unknown[] }) => {
+          H.txGet(ref);
+          return route(ref);
+        },
         set: H.txSet,
       };
       return fn(tx);
@@ -176,18 +180,18 @@ beforeEach(() => {
 
 describe('reshuffleBoard — the happy path', () => {
   it('writes exactly TWO docs: the day board and the counter — nothing else', async () => {
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     expect(H.txSet).toHaveBeenCalledTimes(2);
   });
 
   it('returns the resulting spend and bumps the counter by exactly 1', async () => {
     H.player = { uid: 'u1', reshufflesUsed: 1 };
-    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).resolves.toBe(2);
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).resolves.toBe(2);
     expect(writtenPlayer()).toEqual({ reshufflesUsed: 2 });
   });
 
   it('deals a full 24-prompt card plus the free centre', async () => {
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     const board = writtenBoard()!;
     expect(board.cells).toHaveLength(25);
     expect(board.cells[12].free).toBe(true);
@@ -195,29 +199,29 @@ describe('reshuffleBoard — the happy path', () => {
   });
 
   it('draws ONLY from that Day\'s frozen snapshot', async () => {
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     const dealt = writtenBoard()!.cells.filter((c) => !c.free).map((c) => c.itemId!);
     for (const id of dealt) expect(SNAPSHOT_IDS).toContain(id);
   });
 
   it('changes the seed — the rules discriminate a reshuffle on exactly that', async () => {
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     expect(writtenBoard()!.seed).not.toBe(111);
   });
 
   it('leaves the card pristine (only the free centre marked)', async () => {
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     const cells = writtenBoard()!.cells;
     expect(cells.every((c) => c.free || !c.marked)).toBe(true);
   });
 
   it('a second reshuffle of the same Day deals a DIFFERENT card', async () => {
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     const first = writtenBoard()!;
     vi.clearAllMocks();
     H.player = { uid: 'u1', reshufflesUsed: 1 };
     H.dayBoards.set(1, { uid: 'u1', seed: first.seed, cells: first.cells });
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: first.seed });
     expect(writtenBoard()!.seed).not.toBe(first.seed);
   });
 });
@@ -229,7 +233,7 @@ describe('reshuffleBoard — the exclusion is computed from KEPT cards only', ()
     // is honored rather than reset.
     H.dayBoards.set(0, { uid: 'u1', seed: 7, cells: cardFrom(SNAPSHOT_IDS.slice(0, 24)) });
     H.dayBoards.set(1, { uid: 'u1', seed: 111, cells: cardFrom(SNAPSHOT_IDS.slice(24, 48)) });
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     const dealt = writtenBoard()!.cells.filter((c) => !c.free).map((c) => c.itemId!);
     for (const id of SNAPSHOT_IDS.slice(0, 24)) expect(dealt).not.toContain(id);
   });
@@ -242,14 +246,14 @@ describe('reshuffleBoard — the exclusion is computed from KEPT cards only', ()
     // MIN_POOL. So: some discarded id must reappear.
     H.dayBoards.set(0, { uid: 'u1', seed: 7, cells: cardFrom(SNAPSHOT_IDS.slice(0, 24)) });
     H.dayBoards.set(1, { uid: 'u1', seed: 111, cells: cardFrom(SNAPSHOT_IDS.slice(24, 48)) });
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     const dealt = writtenBoard()!.cells.filter((c) => !c.free).map((c) => c.itemId!);
     const reused = dealt.filter((id) => SNAPSHOT_IDS.slice(24, 48).includes(id));
     expect(reused.length).toBeGreaterThan(0);
   });
 
   it('never touches another Player\'s card', async () => {
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     for (const call of H.txSet.mock.calls) {
       const a = ((call[0] as { args?: unknown[] }).args ?? []).filter((x) => typeof x === 'string');
       expect(a).not.toContain('u2');
@@ -260,7 +264,7 @@ describe('reshuffleBoard — the exclusion is computed from KEPT cards only', ()
 describe('reshuffleBoard — refusals', () => {
   it('refuses a card that is not pristine', async () => {
     H.dayBoards.set(1, { uid: 'u1', seed: 111, cells: cardFrom(SNAPSHOT_IDS.slice(0, 24), 0) });
-    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/pristine/);
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).rejects.toThrow(/pristine/);
     expect(H.txSet).not.toHaveBeenCalled();
   });
 
@@ -268,34 +272,34 @@ describe('reshuffleBoard — refusals', () => {
     const cells = cardFrom(SNAPSHOT_IDS.slice(0, 24));
     cells[0] = { ...cells[0], marked: true, status: 'pending' };
     H.dayBoards.set(1, { uid: 'u1', seed: 111, cells });
-    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/pristine/);
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).rejects.toThrow(/pristine/);
   });
 
   it('refuses once the allowance is spent', async () => {
     H.player = { uid: 'u1', reshufflesUsed: 3 };
-    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/reshuffles left/);
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).rejects.toThrow(/reshuffles left/);
     expect(H.txSet).not.toHaveBeenCalled();
   });
 
   it('refuses a LOCKED Day', async () => {
     H.event = { days: [day(0), day(1, { unlockAt: FUTURE })], settings: {} };
-    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/locked/);
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).rejects.toThrow(/locked/);
     expect(H.txSet).not.toHaveBeenCalled();
   });
 
   it('refuses a Day whose snapshot is not yet stamped (waking)', async () => {
     H.event = { days: [day(0), day(1, { snapshotItemIds: undefined })], settings: {} };
-    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/waking/);
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).rejects.toThrow(/waking/);
   });
 
   it('refuses when there is no card to reshuffle', async () => {
     H.dayBoards = new Map();
-    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/no Day Card/);
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).rejects.toThrow(/no Day Card/);
   });
 
   it('treats a legacy player row with no counter as 0 spent', async () => {
     H.player = { uid: 'u1' };
-    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).resolves.toBe(1);
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).resolves.toBe(1);
   });
 });
 
@@ -307,7 +311,7 @@ describe('reshuffleBoard — tutorial Days', () => {
       H.itemsById.set(id, { text: `Prompt ${id}`, spicy: false, isFreeSpace: false });
     }
     H.event = { days: [day(0), day(1, { pool: 'embark', tutorial: true })], settings: {} };
-    await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     expect(writtenBoard()!.cells.filter((c) => !c.free && c.itemId).length).toBe(24);
   });
 });
@@ -378,7 +382,7 @@ describe('reshuffleBoard — offline', () => {
   // reshuffle either lands against fresh server state or changes nothing at all.
   it('REJECTS rather than queueing, and writes nothing', async () => {
     H.offline = true;
-    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/offline/i);
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).rejects.toThrow(/offline/i);
     expect(H.txSet).not.toHaveBeenCalled();
     expect(H.batchSet).not.toHaveBeenCalled();
   });
@@ -388,6 +392,45 @@ describe('reshuffleBoard — offline', () => {
   // write path must be safe on its own.
   it('is not reliant on the caller having checked connectivity first', async () => {
     H.offline = true;
-    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow();
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).rejects.toThrow();
+  });
+});
+
+describe('reshuffleBoard — the confirmed-card precondition', () => {
+  // The Codex P2 on #383. Firestore retries the LOSER of a concurrent pair, and on
+  // retry the board it re-reads is the winner's replacement — itself pristine and
+  // freshly counted, so every other eligibility check passes and a second allowance
+  // is silently burned. Pinning to the seed the Player actually confirmed turns
+  // that retry into the refusal the spec promises.
+  it('REFUSES when the stored card is no longer the one that was confirmed', async () => {
+    // The board now carries a different seed — i.e. another tab already reshuffled it.
+    H.dayBoards.set(1, { uid: 'u1', seed: 777, cells: cardFrom(SNAPSHOT_IDS.slice(0, 24)) });
+    await expect(
+      reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 }),
+    ).rejects.toThrow(/changed underneath/);
+    expect(H.txSet).not.toHaveBeenCalled();
+  });
+
+  it('proceeds when the stored card still matches the confirm', async () => {
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).resolves.toBe(1);
+  });
+});
+
+describe('reshuffleBoard — the exclusion set is read inside the transaction', () => {
+  // Codex P2 on #383: two tabs reshuffling DIFFERENT Days contend on the shared
+  // counter, so the loser retries — and a peer set captured before the transaction
+  // would still describe the winner's OLD card. Reading peers via tx.get is what
+  // makes a retry rebuild the exclusion from committed state.
+  it('reads every peer Day Card through the transaction, not before it', async () => {
+    H.dayBoards.set(0, { uid: 'u1', seed: 7, cells: cardFrom(SNAPSHOT_IDS.slice(0, 24)) });
+    H.dayBoards.set(1, { uid: 'u1', seed: 111, cells: cardFrom(SNAPSHOT_IDS.slice(24, 48)) });
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
+    // Day 0's prompts are excluded, and that exclusion came from a tx read.
+    const dealt = writtenBoard()!.cells.filter((c) => !c.free).map((c) => c.itemId!);
+    for (const id of SNAPSHOT_IDS.slice(0, 24)) expect(dealt).not.toContain(id);
+    expect(H.txGet.mock.calls.some((c) => {
+      const a = ((c[0] as { args?: unknown[] }).args ?? []).filter((x) => typeof x === 'string');
+      return a[2] === 'days' && a[3] === '0' && a[4] === 'boards';
+    })).toBe(true);
   });
 });

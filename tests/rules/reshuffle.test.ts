@@ -7,7 +7,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { deleteField, doc, runTransaction, setDoc, writeBatch } from 'firebase/firestore';
+import { deleteDoc, deleteField, doc, runTransaction, setDoc, writeBatch } from 'firebase/firestore';
 
 // specs/reshuffle.md — the Reshuffle write gate (#378).
 //
@@ -232,6 +232,70 @@ describe('reshuffle — the pairing holds through a TRANSACTION (the production 
         tx.set(boardRef, board(ALICE, UNLOCKED_DAY, 4242));
         tx.set(playerRef, { reshufflesUsed: 4 }, { merge: true });
       }),
+    );
+  });
+});
+
+// The two laundering paths Codex found on #383. Both defeated the cap COMPLETELY —
+// not a nibble at the edges — by getting a Board replaced without the write ever
+// being classified as a reshuffle.
+describe('reshuffle — the cap cannot be laundered around', () => {
+  it('DENIES an owner DELETING their board (the delete-then-create bypass)', async () => {
+    // Delete, and the replacement is a CREATE: no `resource`, so the reshuffle arm
+    // never fires and the new card skips both the pristine check and the counter —
+    // an unlimited re-roll, even with all three spent. Delete is admin-only now.
+    await assertFails(
+      deleteDoc(doc(db(ALICE), `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`)),
+    );
+  });
+
+  it('DENIES dropping `seed` from an existing board (step 1 of the two-step)', async () => {
+    // A full replace that OMITS seed. Comparing values alone read "no incoming key"
+    // as "not a reshuffle"; presence changes are gated now.
+    const d = db(ALICE);
+    await assertFails(
+      setDoc(doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`), {
+        uid: ALICE,
+        dayIndex: UNLOCKED_DAY,
+        createdAt: NOW(),
+        cells: cells(),
+      }),
+    );
+  });
+
+  it('DENIES ADDING a seed to a seedless board (step 2 of the two-step)', async () => {
+    // Seed the seedless state directly (step 1 is denied above, but a legacy row
+    // could legitimately lack the key), then try to launder a fresh card in.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`), {
+        uid: ALICE,
+        dayIndex: UNLOCKED_DAY,
+        createdAt: NOW(),
+        cells: cells(0), // and MARKED, so a legitimate reshuffle is impossible
+      });
+    });
+    const d = db(ALICE);
+    await assertFails(
+      setDoc(doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`), board(ALICE, UNLOCKED_DAY, 555)),
+    );
+  });
+
+  it('still ALLOWS a seedless legacy board to be MARKED (no seed on either side)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`), {
+        uid: ALICE,
+        dayIndex: UNLOCKED_DAY,
+        createdAt: NOW(),
+        cells: cells(),
+      });
+    });
+    const d = db(ALICE);
+    await assertSucceeds(
+      setDoc(
+        doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
+        { cells: cells(0) },
+        { merge: true },
+      ),
     );
   });
 });

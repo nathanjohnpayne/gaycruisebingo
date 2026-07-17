@@ -617,13 +617,22 @@ export function reshuffleSeed(
 export async function reshuffleBoard(params: {
   uid: string;
   dayIndex: number;
+  // The `seed` of the card the Player was LOOKING AT when they confirmed. The
+  // transaction refuses to deal unless the stored board still carries it, which is
+  // what makes a retry re-decide rather than re-fire (Codex P2 on #383): Firestore
+  // retries the loser of a concurrent pair, and on retry the board it re-reads is
+  // the WINNER's replacement — pristine, and paired with an incremented counter, so
+  // every eligibility check passed and a second allowance was silently consumed.
+  // Pinning to the confirmed seed turns that retry into a refusal, which is the
+  // documented contract ("a concurrent second reshuffle is denied, not merged").
+  expectedSeed: number;
 }): Promise<number> {
-  const { uid, dayIndex } = params;
-  // The UNCONTENDED reads stay outside the transaction: the Event schedule, the
-  // Day Snapshot's items, and the Player's OTHER Day Cards (the exclusion set) are
-  // not being written here, so re-reading them on every transaction retry would
-  // buy nothing and cost a round trip each. The two docs this actually writes —
-  // the Board and the Player row — are read INSIDE, where contention matters.
+  const { uid, dayIndex, expectedSeed } = params;
+  // The Event schedule and the Day Snapshot's items are read outside: neither is
+  // written here, and neither changes under a retry, so re-reading them per attempt
+  // would cost a round trip and buy nothing. Everything that CAN change — this
+  // Board, the counter, and the peer cards the exclusion set is built from — is
+  // read inside.
   const eventSnap = await getDoc(rawEvent());
   const eventData = eventSnap.exists() ? (eventSnap.data() as Partial<EventDoc>) : null;
   const days = Array.isArray(eventData?.days) ? (eventData.days as DayDef[]) : [];
@@ -658,24 +667,13 @@ export async function reshuffleBoard(params: {
     .filter(({ data }) => data.isFreeSpace !== true)
     .map(({ id, data }) => ({ id, text: String(data.text ?? ''), spicy: data.spicy === true }));
 
-  // No-repeat exclusion computed from KEPT cards only (the ticket's decision):
-  // every OTHER Day Card this Player holds is excluded, but the card being
-  // DISCARDED is not — its Prompts return to the eligible pool and may legitimately
-  // land on the replacement. Excluding them would be worse than pointless: it would
-  // shrink the drawable pool on every reroll and make a "fresh" card systematically
-  // avoid 24 perfectly good Prompts the Player never actually played.
-  const otherCards = await Promise.all(
-    days
-      .map((_, i) => i)
-      .filter((i) => i !== dayIndex)
-      .map((i) => getDoc(rawDayBoard(i, uid)).catch(() => null)),
-  );
-  const excludeIds = new Set<string>();
-  for (const snap of otherCards) {
-    if (!snap || !snap.exists()) continue;
-    const cells = (snap.data() as { cells?: Cell[] }).cells ?? [];
-    for (const c of cells) if (c.itemId) excludeIds.add(c.itemId);
-  }
+  // The peer cards whose Prompts the replacement must avoid. Their refs are built
+  // here; they are READ inside the transaction (below) so a retry rebuilds the
+  // exclusion set from committed state.
+  const peerRefs = days
+    .map((_, i) => i)
+    .filter((i) => i !== dayIndex)
+    .map((i) => rawDayBoard(i, uid));
 
   // Same composition rules as the first deal (daily-cards-spec § "Unlock
   // mechanics"): tutorial pools are all-tame so they deal unstratified; main Days
@@ -693,10 +691,27 @@ export async function reshuffleBoard(params: {
   const boardRef = rawDayBoard(dayIndex, uid);
   const playerRef = rawPlayer(uid);
   return runTransaction(db, async (tx) => {
-    const [boardSnap, playerSnap] = await Promise.all([tx.get(boardRef), tx.get(playerRef)]);
+    // Every read first (Firestore's transaction contract), and every one of them
+    // re-runs on a retry — which is the point: a retry must re-decide from
+    // committed state, never re-fire a verdict formed against a snapshot that has
+    // since lost a race.
+    const [boardSnap, playerSnap, ...peerSnaps] = await Promise.all([
+      tx.get(boardRef),
+      tx.get(playerRef),
+      ...peerRefs.map((ref) => tx.get(ref)),
+    ]);
 
     if (!boardSnap.exists()) throw new Error('reshuffleBoard: no Day Card to reshuffle.');
     const board = boardSnap.data() as { cells?: Cell[]; seed?: number };
+
+    // The card must still be the one the Player confirmed. This is what makes a
+    // retry a REFUSAL rather than a second spend: when two tabs confirm the same
+    // card, Firestore retries the loser against the winner's replacement — which is
+    // itself pristine and freshly counted, so every other check below would pass and
+    // quietly burn a second allowance.
+    if (board.seed !== expectedSeed) {
+      throw new Error('reshuffleBoard: the card changed underneath this confirm.');
+    }
 
     // Pristine is the eligibility window. Checked here as well as in the rules
     // because a rules denial reaches the Player as a bare PERMISSION_DENIED — a
@@ -711,6 +726,25 @@ export async function reshuffleBoard(params: {
     const used = typeof player?.reshufflesUsed === 'number' ? player.reshufflesUsed : 0;
     if (used >= RESHUFFLE_ALLOWANCE) {
       throw new Error('reshuffleBoard: no cruise reshuffles left.');
+    }
+
+    // No-repeat exclusion computed from KEPT cards only (the ticket's decision):
+    // every OTHER Day Card this Player holds is excluded, but the card being
+    // DISCARDED is not — its Prompts return to the eligible pool and may legitimately
+    // land on the replacement. Excluding them would be worse than pointless: it would
+    // shrink the drawable pool on every reroll and make a "fresh" card systematically
+    // avoid 24 perfectly good Prompts the Player never actually played.
+    //
+    // Built from the transaction's OWN reads (Codex P2 on #383): two tabs
+    // reshuffling DIFFERENT Days for the same Player contend on the shared counter,
+    // so the loser retries — and a peer set captured before the transaction would
+    // still describe the winner's OLD card, letting this deal duplicate Prompts the
+    // winner just placed on their new, still-kept one.
+    const excludeIds = new Set<string>();
+    for (const snap of peerSnaps) {
+      if (!snap.exists()) continue;
+      const peerCells = (snap.data() as { cells?: Cell[] }).cells ?? [];
+      for (const c of peerCells) if (c.itemId) excludeIds.add(c.itemId);
     }
 
     const nextUsed = used + 1;

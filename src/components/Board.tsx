@@ -2077,6 +2077,7 @@ export default function Board() {
           uid={uid}
           dayIndex={viewedDay.index}
           used={reshufflesUsed}
+          expectedSeed={board.seed}
           onClose={() => setReshuffleOpen(false)}
         />
       )}

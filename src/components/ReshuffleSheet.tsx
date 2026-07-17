@@ -9,6 +9,9 @@ export type ReshuffleSheetProps = {
   dayIndex: number;
   /** Reshuffles already spent, cruise-wide (PlayerDoc.reshufflesUsed). */
   used: number;
+  /** The `seed` of the card on screen. Pinned through to the write so a retry
+   *  under contention refuses rather than spending a second allowance. */
+  expectedSeed: number;
   onClose: () => void;
   /** Fired after the batch commits, with the resulting spend. */
   onReshuffled?: (nextUsed: number) => void;
@@ -35,6 +38,7 @@ export default function ReshuffleSheet({
   uid,
   dayIndex,
   used,
+  expectedSeed,
   onClose,
   onReshuffled,
   reshuffle = reshuffleBoard,
@@ -53,7 +57,7 @@ export default function ReshuffleSheet({
       // Mark could have landed from another tab. The render-time eligibility
       // close in Board handles the case where THIS tab can see that; this is the
       // case where it cannot.
-      const nextUsed = await reshuffle({ uid, dayIndex });
+      const nextUsed = await reshuffle({ uid, dayIndex, expectedSeed });
       track('reshuffle_card', { dayIndex, reshufflesUsed: nextUsed });
       onReshuffled?.(nextUsed);
       onClose();

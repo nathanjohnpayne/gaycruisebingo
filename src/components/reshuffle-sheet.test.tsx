@@ -32,6 +32,7 @@ function setup(over: Partial<Parameters<typeof ReshuffleSheet>[0]> = {}) {
       uid="u1"
       dayIndex={1}
       used={1}
+      expectedSeed={111}
       onClose={onClose}
       onReshuffled={onReshuffled}
       reshuffle={reshuffle as never}
@@ -103,7 +104,7 @@ describe('ReshuffleSheet — confirming', () => {
     const { onClose, onReshuffled, reshuffle } = setup({ dayIndex: 1, used: 1 });
     fireEvent.click(screen.getByRole('button', { name: GO }));
     await waitFor(() => expect(onClose).toHaveBeenCalled());
-    expect(reshuffle).toHaveBeenCalledWith({ uid: 'u1', dayIndex: 1 });
+    expect(reshuffle).toHaveBeenCalledWith({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     expect(H.track).toHaveBeenCalledWith('reshuffle_card', { dayIndex: 1, reshufflesUsed: 2 });
     expect(onReshuffled).toHaveBeenCalledWith(2);
   });
@@ -115,6 +116,7 @@ describe('ReshuffleSheet — confirming', () => {
         uid="u1"
         dayIndex={1}
         used={1}
+        expectedSeed={111}
         onClose={onClose}
         reshuffle={(() => Promise.reject(new Error('denied'))) as never}
       />,
@@ -129,7 +131,7 @@ describe('ReshuffleSheet — confirming', () => {
     let resolve: (v: number) => void = () => {};
     const reshuffle = vi.fn(() => new Promise<number>((r) => (resolve = r)));
     render(
-      <ReshuffleSheet uid="u1" dayIndex={1} used={1} onClose={vi.fn()} reshuffle={reshuffle as never} />,
+      <ReshuffleSheet uid="u1" dayIndex={1} used={1} expectedSeed={111} onClose={vi.fn()} reshuffle={reshuffle as never} />,
     );
     const go = screen.getByRole('button', { name: /Reshuffle/ });
     fireEvent.click(go);
