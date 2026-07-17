@@ -114,6 +114,7 @@ function day(over: Partial<DayDef> & Pick<DayDef, 'index' | 'unlockAt' | 'theme'
     date: `2026-07-${String(15 + over.index).padStart(2, '0')}`,
     port: `Port ${over.index}`,
     portEmoji: '🇭🇷',
+    tonight: [],
     pool: 'main',
     tutorial: false,
     ...over,
@@ -272,5 +273,59 @@ describe('Board daily-cards wiring (#246)', () => {
     expect(screen.getByText(/unlocks/i)).toBeInTheDocument();
     expect(H.dealDayCard).not.toHaveBeenCalled();
     expect(H.setMark).not.toHaveBeenCalled();
+  });
+
+  it('renders the two-event "Tonight:" line on the dealt day card (schedule correction)', () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({
+          index: 0,
+          theme: 'neon-pink-playground',
+          unlockAt: now - DAY_MS,
+          snapshotItemIds: ['x'],
+          tonight: ['💖 Seriously Pink T-Dance', '🌈 Neon Playground'],
+        }),
+      ],
+    } as unknown as EventDoc;
+    H.dayBoards.set(0, boardFor(0));
+
+    render(<Board />);
+
+    const tonight = screen.getByText('Tonight:');
+    expect(tonight).toBeInTheDocument();
+    // Both events render on the one line, joined by the day-bar separator.
+    expect(tonight.parentElement?.textContent).toContain('💖 Seriously Pink T-Dance');
+    expect(tonight.parentElement?.textContent).toContain('🌈 Neon Playground');
+  });
+
+  it('shows the "Tonight:" tease on the locked-day preview (schedule correction)', () => {
+    const now = Date.now();
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({ index: 0, theme: 'get-sporty', unlockAt: now - DAY_MS, snapshotItemIds: ['x'] }),
+        day({
+          index: 1,
+          theme: 'sporty-splash',
+          unlockAt: now + DAY_MS, // locked future
+          snapshotItemIds: ['x'],
+          tonight: ['💦 Splash T-Dance', '🏋️ Get Sporty'],
+        }),
+      ],
+    } as unknown as EventDoc;
+    H.dayBoards.set(0, boardFor(0));
+
+    render(<Board />);
+
+    // Switch to the locked future Day → its preview carries the Tonight tease.
+    fireEvent.click(screen.getAllByRole('tab')[1]);
+    expect(screen.getByText(/unlocks/i)).toBeInTheDocument();
+    const tonight = screen.getByText('Tonight:');
+    expect(tonight.parentElement?.textContent).toContain('💦 Splash T-Dance');
+    expect(tonight.parentElement?.textContent).toContain('🏋️ Get Sporty');
   });
 });

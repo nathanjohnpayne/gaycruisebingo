@@ -1,10 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { FREE_TEXT, SEED_ITEMS } from './seed';
 import { dealBoard, CENTER, type DealItem } from '../game/logic';
-// @ts-expect-error — scripts/seed.mjs is a plain-JS node script with no type
-// declarations (tsconfig sets no allowJs); Vitest resolves and executes it
-// natively, and importing it is side-effect-free because seeding only runs
-// when the script is the entry module.
 import { EVENT_SEED, ITEMS as SCRIPT_ITEMS } from '../../scripts/seed.mjs';
 
 // Covers specs/seed-and-composition.md (#129, refreshed #187): the 80-entry pool

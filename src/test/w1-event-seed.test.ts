@@ -1,13 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-// @ts-expect-error — scripts/seed.mjs is a plain-JS node script with no type
-// declarations (tsconfig sets no allowJs); Vitest resolves and executes it natively,
-// and importing it is side-effect-free because seeding only runs when the script is
-// the entry module. Asserts specs/w1-event-seed.md.
 import { EVENT_SEED, ITEMS, adminRoster, eventWritePayload, formatDriftReport, seedItemDocId, verifySeedPool } from '../../scripts/seed.mjs';
-// ALL_ITEMS is exported from the same plain-JS script (see the ts-expect-error above).
-// @ts-expect-error — no type declarations for this plain-JS script (see above)
 import { ALL_ITEMS } from '../../scripts/seed.mjs';
 
 type SeedItem = { text: string; spicy: boolean };

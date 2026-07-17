@@ -47,6 +47,7 @@ const seededDays = () => [
     port: 'Trieste',
     portEmoji: '🇮🇹',
     theme: 'welcome-aboard',
+    tonight: ['Sail-Away Party', 'Welcome Party'],
     pool: 'embark',
     tutorial: true,
     unlockAt: PAST(),
@@ -57,6 +58,7 @@ const seededDays = () => [
     port: 'Split',
     portEmoji: '🇭🇷',
     theme: 'get-sporty',
+    tonight: ['Dog Tag T-Dance', 'Duty Free'],
     pool: 'main',
     tutorial: false,
     unlockAt: FUTURE(),
@@ -111,6 +113,39 @@ describe('firestore.rules — Admin Schedule editor day-theme lock (specs/d15-ad
     await assertFails(updateDoc(eventDoc(db(ADMIN)), { days }));
   });
 
+  it('an Admin CAN change days[i].tonight for a Day with a future unlockAt', async () => {
+    const days = seededDays();
+    days[1] = { ...days[1], tonight: ['Tea Dance', 'After-Hours Karaoke'] };
+    await assertSucceeds(updateDoc(eventDoc(db(ADMIN)), { days }));
+  });
+
+  it('an Admin CANNOT write a malformed days[i].tonight for a Day with a future unlockAt', async () => {
+    const oneEntry = seededDays();
+    oneEntry[1] = { ...oneEntry[1], tonight: ['Tea Dance'] };
+    await assertFails(updateDoc(eventDoc(db(ADMIN)), { days: oneEntry }));
+
+    const threeEntries = seededDays();
+    threeEntries[1] = { ...threeEntries[1], tonight: ['Tea Dance', 'Karaoke', 'Deck Party'] };
+    await assertFails(updateDoc(eventDoc(db(ADMIN)), { days: threeEntries }));
+
+    const nonString = seededDays();
+    nonString[1] = { ...nonString[1], tonight: ['Tea Dance', 123] as unknown as string[] };
+    await assertFails(updateDoc(eventDoc(db(ADMIN)), { days: nonString }));
+  });
+
+  it('an Admin CANNOT drop tonight for a Day with a future unlockAt once the field exists', async () => {
+    const days = seededDays();
+    const { tonight: _dropped, ...withoutTonight } = days[1];
+    days[1] = withoutTonight as (typeof days)[number];
+    await assertFails(updateDoc(eventDoc(db(ADMIN)), { days }));
+  });
+
+  it('an Admin CANNOT change days[i].tonight for a Day whose unlockAt has already passed', async () => {
+    const days = seededDays();
+    days[0] = { ...days[0], tonight: ['Late Dinner', 'Deck Party'] };
+    await assertFails(updateDoc(eventDoc(db(ADMIN)), { days }));
+  });
+
   it('a non-admin can never write days[] at all — locked or unlocked Day, any field', async () => {
     const lockedChange = seededDays();
     lockedChange[1] = { ...lockedChange[1], theme: 'duty-free' };
@@ -133,6 +168,13 @@ describe('firestore.rules — Admin Schedule editor day-theme lock (specs/d15-ad
     const days = seededDays();
     const { theme: _dropped, ...withoutTheme } = days[0];
     days[0] = withoutTheme as (typeof days)[number];
+    await assertFails(updateDoc(eventDoc(db(ADMIN)), { days }));
+  });
+
+  it('an Admin CANNOT drop tonight for a Day whose unlockAt has already passed', async () => {
+    const days = seededDays();
+    const { tonight: _dropped, ...withoutTonight } = days[0];
+    days[0] = withoutTonight as (typeof days)[number];
     await assertFails(updateDoc(eventDoc(db(ADMIN)), { days }));
   });
 

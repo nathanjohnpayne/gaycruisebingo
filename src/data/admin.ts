@@ -140,6 +140,47 @@ export const setDayTheme = (days: DayDef[], dayIndex: number, theme: ThemeId): P
     });
   });
 
+function normalizeTonightEntries(tonight: string[]): string[] {
+  return tonight.map((entry) => entry.trim());
+}
+
+function isValidTonight(tonight: string[]): boolean {
+  return tonight.length === 2 && tonight.every((entry) => entry.trim().length > 0);
+}
+
+/**
+ * Edit a Day's "Tonight:" line (schedule correction 2026-07-17). Same surgical
+ * merge-onto-current-array transaction as `setDayTheme` — for the same
+ * concurrency reason (a wholesale write from a stale snapshot would clobber a
+ * concurrent scheduler `snapshotItemIds` stamp or another admin's edit). Only
+ * future Days may be edited here; the transaction re-checks the current
+ * `unlockAt` so a stale Schedule tab cannot save after unlock. The
+ * already-unlocked Days 1–3 are corrected by the one-time owner migration, not
+ * this control.
+ */
+export const setDayTonight = (days: DayDef[], dayIndex: number, tonight: string[]): Promise<void> =>
+  runTransaction(db, async (tx) => {
+    if (!isValidTonight(tonight)) {
+      throw new Error('Tonight must contain exactly two non-empty entries.');
+    }
+    const snap = await tx.get(evt());
+    const current = snap.exists() ? (snap.data().days as DayDef[] | undefined) : undefined;
+    if (!Array.isArray(current)) {
+      throw new Error('Cannot edit Tonight: event schedule is missing.');
+    }
+    const target = current.find((d) => d.index === dayIndex);
+    if (!target) {
+      throw new Error(`Cannot edit Tonight: Day ${dayIndex + 1} is missing.`);
+    }
+    if (target.unlockAt <= Date.now()) {
+      throw new Error(`Cannot edit Tonight: Day ${dayIndex + 1} has already unlocked.`);
+    }
+    const nextTonight = normalizeTonightEntries(tonight);
+    tx.update(evt(), {
+      days: current.map((d) => (d.index === dayIndex ? { ...d, tonight: nextTonight } : d)),
+    });
+  });
+
 /** What `unlockDayNow` reports back — mirrors `SnapshotResult` in `functions/src/unlockDay.ts`. */
 export type UnlockDayNowResult = 'stamped' | 'already-stamped' | 'not-due' | 'no-event' | 'no-day';
 

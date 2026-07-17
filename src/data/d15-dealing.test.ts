@@ -122,6 +122,7 @@ function mkDay(over: Partial<DayDef>): DayDef {
     port: 'Split',
     portEmoji: '🇭🇷',
     theme: 'neon-playground',
+    tonight: [],
     pool: 'main',
     tutorial: false,
     unlockAt: PAST,

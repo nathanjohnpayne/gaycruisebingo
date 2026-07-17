@@ -87,4 +87,46 @@ export const THEMES: ThemeMeta[] = [
     emoji: '👋',
     description: 'Last one. Mark your goodbyes—then go book next year.',
   },
+  // Unified day themes (schedule correction 2026-07-17, daily-cards-spec
+  // § "Theme reference"). Appended after the tutorial themes so no existing
+  // THEMES index shifts; neon-playground stays first/default. Each folds a
+  // day's two parties into one chrome identity — the two events live in
+  // `DayDef.tonight`. Descriptions track the spec table, paraphrased where
+  // needed to keep the brand mark out of user-facing copy (the w1-themes
+  // "no Atlantis mark" guard, same non-goal that made summer-white ship as
+  // "The pinnacle white party").
+  {
+    id: 'uniforms-without-borders',
+    label: 'Uniforms Without Borders',
+    emoji: '🌍',
+    description:
+      'Men in small uniforms meet no-borders-no-VAT—one night of international service.',
+  },
+  {
+    id: 'neon-pink-playground',
+    label: 'Neon Pink Playground',
+    emoji: '💖',
+    description:
+      'Barbie energy by day, laser-lit neon by night—pink silliness straight into the Red Room.',
+  },
+  {
+    id: 'sporty-splash',
+    label: 'Sporty Splash',
+    emoji: '💦',
+    description:
+      'Leave your phone in the cabin—water everywhere, then locker-room fantasy and varsity realness.',
+  },
+  {
+    id: 'under-the-stars',
+    label: 'Under the Stars',
+    emoji: '🌌',
+    description: 'No theme. Just dance. An open-deck night under the Mediterranean sky.',
+  },
+  {
+    id: 'atlantis-classics',
+    label: 'Dance Classics',
+    emoji: '🏺',
+    description:
+      'Three decades of dance music—big anthems, diva voices, and classic sounds that still sound amazing today.',
+  },
 ];

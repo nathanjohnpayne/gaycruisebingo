@@ -179,6 +179,11 @@ export const DAYS: DayDef[] = [
     port: 'Trieste',
     portEmoji: '🇮🇹',
     theme: 'welcome-aboard',
+    // Day 1's two signature events. "Welcome Party" is paraphrased from the
+    // guide's "Atlantis Welcome Party" to keep the brand mark out of user-facing
+    // copy — the same w1-themes non-goal that ships summer-white's blurb as "The
+    // pinnacle white party" (see THEMES in src/theme/themes.ts).
+    tonight: ['⛵ Sail-Away Party', '🎉 Welcome Party'],
     pool: 'embark',
     tutorial: true,
     // The 0 sentinel MEANS "live from event open" (spec § Unlock mechanics) and
@@ -196,7 +201,8 @@ export const DAYS: DayDef[] = [
     date: '2026-07-16',
     port: 'Split',
     portEmoji: '🇭🇷',
-    theme: 'get-sporty',
+    theme: 'uniforms-without-borders',
+    tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'],
     pool: 'main',
     tutorial: false,
     unlockAt: unlockAt0800Rome('2026-07-16'),
@@ -204,9 +210,10 @@ export const DAYS: DayDef[] = [
   {
     index: 2,
     date: '2026-07-17',
-    port: 'Valletta',
-    portEmoji: '🇲🇹',
-    theme: 'duty-free',
+    port: 'Sea Day',
+    portEmoji: '🌊',
+    theme: 'neon-pink-playground',
+    tonight: ['💖 Seriously Pink T-Dance', '🌈 Neon Playground'],
     pool: 'main',
     tutorial: false,
     unlockAt: unlockAt0800Rome('2026-07-17'),
@@ -214,9 +221,10 @@ export const DAYS: DayDef[] = [
   {
     index: 3,
     date: '2026-07-18',
-    port: 'Palermo',
-    portEmoji: '🇮🇹',
-    theme: 'glamiators',
+    port: 'Valletta',
+    portEmoji: '🇲🇹',
+    theme: 'sporty-splash',
+    tonight: ['💦 Splash T-Dance', '🏋️ Get Sporty'],
     pool: 'main',
     tutorial: false,
     unlockAt: unlockAt0800Rome('2026-07-18'),
@@ -224,9 +232,10 @@ export const DAYS: DayDef[] = [
   {
     index: 4,
     date: '2026-07-19',
-    port: 'Sorrento',
+    port: 'Palermo',
     portEmoji: '🇮🇹',
-    theme: 'neon-playground',
+    theme: 'under-the-stars',
+    tonight: ['🎭 AirOtic', '🌌 Under the Stars'],
     pool: 'main',
     tutorial: false,
     unlockAt: unlockAt0800Rome('2026-07-19'),
@@ -234,9 +243,10 @@ export const DAYS: DayDef[] = [
   {
     index: 5,
     date: '2026-07-20',
-    port: 'Rome (Civitavecchia)',
+    port: 'Naples',
     portEmoji: '🇮🇹',
-    theme: 'summer-white',
+    theme: 'glamiators',
+    tonight: ['🎤 Solea Pfeiffer', '🏛️ Glamiators'],
     pool: 'main',
     tutorial: false,
     unlockAt: unlockAt0800Rome('2026-07-20'),
@@ -244,9 +254,12 @@ export const DAYS: DayDef[] = [
   {
     index: 6,
     date: '2026-07-21',
-    port: 'Nice',
-    portEmoji: '🇫🇷',
-    theme: 'dog-tag',
+    port: 'Rome (Civitavecchia)',
+    portEmoji: '🇮🇹',
+    theme: 'atlantis-classics',
+    // "Dance Classics" paraphrases the guide's "Atlantis Classics" for the same
+    // markless-copy non-goal noted on Day 1.
+    tonight: ['🎭 Persephone', '🏺 Dance Classics'],
     pool: 'main',
     tutorial: false,
     unlockAt: unlockAt0800Rome('2026-07-21'),
@@ -254,9 +267,10 @@ export const DAYS: DayDef[] = [
   {
     index: 7,
     date: '2026-07-22',
-    port: 'Marseille',
+    port: 'Villefranche',
     portEmoji: '🇫🇷',
-    theme: 'revival-disco',
+    theme: 'summer-white',
+    tonight: ['🎤 HAYLA', '🤍 Summer White Party'],
     pool: 'main',
     tutorial: false,
     unlockAt: unlockAt0800Rome('2026-07-22'),
@@ -264,9 +278,10 @@ export const DAYS: DayDef[] = [
   {
     index: 8,
     date: '2026-07-23',
-    port: 'Sea Day',
-    portEmoji: '🌊',
-    theme: 'seriously-pink',
+    port: 'Marseille',
+    portEmoji: '🇫🇷',
+    theme: 'revival-disco',
+    tonight: ['🪩 Revival! Classic Disco T-Dance', '🎉 Last Dance'],
     pool: 'main',
     tutorial: false,
     unlockAt: unlockAt0800Rome('2026-07-23'),
@@ -277,6 +292,8 @@ export const DAYS: DayDef[] = [
     port: 'Barcelona',
     portEmoji: '🇪🇸',
     theme: 'so-long-farewell',
+    // Editorial line — disembark morning publishes no guide events.
+    tonight: ['🧳 Disembark in Barcelona', '👋 Until next year'],
     pool: 'farewell',
     tutorial: true,
     unlockAt: unlockAt0800Rome('2026-07-24'),
