@@ -620,6 +620,17 @@ export async function hasPriorBingoWitness(
     // confirm pipeline) omit it and keep the pre-#332 read. Applies to the
     // per-card ids too (#372): the same race lands on `${uid}-bingo-d${day}`.
     selfWriteGeneration?: number;
+    // The Day THIS action's bingo lands on (#372, Codex P2 on #386) — the ONLY
+    // doc this action could have written, and therefore the only one
+    // `selfWriteGeneration` may excuse. The generation alone is too coarse to
+    // identify the doc: it bumps only on a bingo FALL, so a Day-3 win and a
+    // later Day-5 win with no fall between them share a generation, and the
+    // Day-3 doc — genuine prior-win evidence this device wrote earlier in the
+    // session — would be waved through as "the Day-5 action's own write",
+    // clearing the ceremony gate for a player who is not witness-clean. Omit on
+    // a legacy (day-less) Event, where the single `${uid}-bingo` id is
+    // unambiguous.
+    selfWriteDayIndex?: number;
   },
 ): Promise<boolean> {
   // Shared singleton consult (cache-only, Codex P1 on #288 round 5): the
@@ -634,10 +645,19 @@ export async function hasPriorBingoWitness(
       return false; // singleton not cached — witness-clean, roster gate decides
     }
   };
+  // The one doc THIS action could have written (#372, Codex P2 on #386): its own
+  // Day's per-card id, or the day-less id on a legacy Event. Any OTHER bingo doc
+  // is by definition not this action's write, however the generations line up.
+  const selfWriteId =
+    opts?.selfWriteDayIndex !== undefined ? `${uid}-bingo-d${opts.selfWriteDayIndex}` : `${uid}-bingo`;
   // Was this exact doc written by THIS device, for THIS action (#332, keyed per
   // doc id since #372)? Then it is this win's own drain, not prior evidence.
+  // BOTH conditions are load-bearing: the id pins WHICH doc this action writes,
+  // the generation pins WHEN — so a same-Day regain (whose fall bumped the
+  // generation) still reads as the prior win it is.
   const isSelfWrite = (momentId: string): boolean =>
     opts?.selfWriteGeneration !== undefined &&
+    momentId === selfWriteId &&
     selfBingoWriteGenerations.get(selfWriteKey(uid, momentId)) === opts.selfWriteGeneration;
 
   // Per-card witnesses (#372) — cache-only and bounded by the schedule (ten Days

@@ -285,14 +285,20 @@ export default function ConfirmWinMoments() {
             // the isAdmin arm of the day-meta create rule), so a winner-side pin
             // would only re-create an existing write-once doc — denied noise.
             const day = dayKey ?? undefined;
-            // The plain bingo Moment is once-per-Player (`${uid}-bingo`), so a
-            // batch crossing bingos on TWO Day boards fires it once — for the
-            // earliest-claimed group (Codex P2 on #288 round 4): a second
-            // same-tick call could only churn the local cache before the
-            // server denies it. Blackouts stay per-group (per-card ids, #267).
-            if (plan.bingo && plainBingoOpen) {
-              broadcastBingo(actor, day);
-              plainBingoOpen = false;
+            // The bingo Moment is PER CARD since #372, so a batch crossing
+            // bingos on TWO Day boards must fire one Moment PER Day — each has
+            // its own `${uid}-bingo-d${day}` id and would be accepted. The
+            // once-per-Player `plainBingoOpen` gate below is now correct ONLY
+            // for the legacy day-less id, where a second same-tick call could
+            // still only churn the local cache before the server denied it
+            // (Codex P2 on #288 round 4). Exactly the blackout shape (#267).
+            if (plan.bingo) {
+              if (day !== undefined) {
+                broadcastBingo(actor, day);
+              } else if (plainBingoOpen) {
+                broadcastBingo(actor, day); // `day` is undefined here — the legacy id
+                plainBingoOpen = false;
+              }
             }
             if (plan.blackout) broadcastBlackout(actor, day);
             // The ceremonial event singleton is anchored to MAIN-GAME Days only

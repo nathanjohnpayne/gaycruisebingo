@@ -386,7 +386,7 @@ describe('the birth-time-witness race (#332): a concurrent drain must not suppre
     expect(cached.has(at('u1-bingo-d3'))).toBe(true); // the drain landed
     const generation = pendingActionGeneration('u1');
     await expect(
-      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: generation }),
+      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: generation, selfWriteDayIndex: 3 }),
     ).resolves.toBe(false);
     // The singleton IS consulted — the self-write did not short-circuit to "prior win".
     expect(getDocFromCacheSpy.mock.calls.some((c) => (c[0] as { path: string }).path === at('first_bingo'))).toBe(true);
@@ -397,7 +397,7 @@ describe('the birth-time-witness race (#332): a concurrent drain must not suppre
     await settle();
     cached.add(at('first_bingo')); // the headline honor is already claimed
     await expect(
-      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: pendingActionGeneration('u1') }),
+      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: pendingActionGeneration('u1'), selfWriteDayIndex: 3 }),
     ).resolves.toBe(true);
   });
 
@@ -406,7 +406,7 @@ describe('the birth-time-witness race (#332): a concurrent drain must not suppre
     await settle();
     const stale = pendingActionGeneration('u1') + 1; // a generation this stamp does not belong to
     await expect(
-      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: stale }),
+      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: stale, selfWriteDayIndex: 3 }),
     ).resolves.toBe(true);
   });
 
@@ -420,7 +420,7 @@ describe('the birth-time-witness race (#332): a concurrent drain must not suppre
     await settle();
     expect(setDocSpy).not.toHaveBeenCalled(); // the skip is what withholds the stamp
     await expect(
-      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: pendingActionGeneration('u1') }),
+      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: pendingActionGeneration('u1'), selfWriteDayIndex: 3 }),
     ).resolves.toBe(true);
   });
 
@@ -430,19 +430,43 @@ describe('the birth-time-witness race (#332): a concurrent drain must not suppre
     await expect(hasPriorBingoWitness('u1', { dayIndexes: [3] })).resolves.toBe(true);
   });
 
-  it('the stamp is bound to its OWN doc id, so one Day’s write cannot mask another Day’s prior win (#372)', async () => {
-    // Why the stamp is keyed per doc id rather than per uid: the generation only
-    // bumps on a bingo FALL, so two bingos on DIFFERENT Days share a generation.
-    // A uid-keyed stamp written for Day 5 would make the genuine Day-3 prior win
-    // read as "this very win's write" and wrongly clear the ceremony gate.
-    cached.add(at('u1-bingo-d3')); // a genuine prior win, written earlier, never stamped this session
-    broadcastBingo(alice, 5); // this action's own drain: stamps ONLY `#u1-bingo-d5`
+  it('self-write detection is bound to the ACTED Day — an earlier Day’s win this device wrote is still prior evidence (Codex P2 on #386)', async () => {
+    // The scenario the generation alone cannot distinguish: this device writes a
+    // Day-3 bingo, the player never loses that line (so NO fall, so the
+    // generation never bumps), then completes Day 5. Both writes are stamped at
+    // the SAME generation — so a check on generation alone classifies the
+    // genuine Day-3 prior win as the Day-5 action's own write, skips it, and
+    // wrongly clears the ceremony gate for a player who is not witness-clean.
+    // Binding to the acted Day is what makes it precise: only `u1-bingo-d5` can
+    // be the Day-5 action's write.
+    broadcastBingo(alice, 3); // an EARLIER action, genuinely written + stamped this session
     await settle();
+    broadcastBingo(alice, 5); // this action's own drain
+    await settle();
+    expect(cached.has(at('u1-bingo-d3'))).toBe(true);
     expect(cached.has(at('u1-bingo-d5'))).toBe(true);
-    // Probing Day 3 first: it is NOT this action's write, so it stands as prior evidence.
+    // Same generation for both (no bingo fall between them) — the exact trap.
     await expect(
-      hasPriorBingoWitness('u1', { dayIndexes: [3, 5], selfWriteGeneration: pendingActionGeneration('u1') }),
-    ).resolves.toBe(true);
+      hasPriorBingoWitness('u1', {
+        dayIndexes: [3, 5],
+        selfWriteGeneration: pendingActionGeneration('u1'),
+        selfWriteDayIndex: 5,
+      }),
+    ).resolves.toBe(true); // Day 3 stands as prior evidence
+  });
+
+  it('the acted Day’s OWN doc is still excused — self-evidence detection survives the Day binding', async () => {
+    // The complement of the above: bind too tightly and #332 comes back. The
+    // acted Day's own mid-read write must still read as self-evidence.
+    broadcastBingo(alice, 5);
+    await settle();
+    await expect(
+      hasPriorBingoWitness('u1', {
+        dayIndexes: [5],
+        selfWriteGeneration: pendingActionGeneration('u1'),
+        selfWriteDayIndex: 5,
+      }),
+    ).resolves.toBe(false); // singleton unclaimed → witness-clean, ceremony survives
   });
 });
 

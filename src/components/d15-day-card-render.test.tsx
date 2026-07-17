@@ -234,6 +234,9 @@ describe('Board daily-cards wiring (#246)', () => {
       excludeDayIndexes: new Set([0]),
       dayIndexes: [0, 1],
       selfWriteGeneration: expect.any(Number),
+      // The acted Day (#372, Codex P2 on #386): only THIS Day's doc may be
+      // excused as self-evidence, since the generation alone cannot identify it.
+      selfWriteDayIndex: 1,
     });
 
     // Switch to the embark tutorial Day: a bingo verdict there enqueues the

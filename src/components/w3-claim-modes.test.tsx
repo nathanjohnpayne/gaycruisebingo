@@ -846,7 +846,7 @@ describe('ConfirmWinMoments — daily-cards events adjudicate against the Claim�
     expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
   });
 
-  it('a BATCH crossing bingos on TWO main-game Days claims the event singleton ONCE — lowest Day (Codex P2 on #288)', async () => {
+  it('a BATCH crossing bingos on TWO main-game Days posts a bingo PER Day but claims the event singleton ONCE (#372; Codex P2 on #288)', async () => {
     H.dayBoards = new Map([
       [1, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
       [2, boardDoc(cellsWith([0, 1, 2, 3], [4]))],
@@ -869,11 +869,17 @@ describe('ConfirmWinMoments — daily-cards events adjudicate against the Claim�
     rerender(<ConfirmWinMoments />);
     await flushAsync();
 
-    // The plain bingo Moment is once-per-Player, so the batch fires it ONCE —
-    // for the earliest-claimed group (equal createdAt here → day tiebreak)…
-    expect(H.broadcastBingo).toHaveBeenCalledTimes(1);
+    // The bingo Moment is PER CARD since #372, so each confirmed Day posts its
+    // OWN Moment — both are valid, distinct `${uid}-bingo-d${day}` creates.
+    // Pre-#372 this asserted ONE call: correct then (the second targeted the
+    // same once-per-Player id and could only churn the cache before the server
+    // denied it), and exactly the #372 bug once the ids went per-card.
+    expect(H.broadcastBingo).toHaveBeenCalledTimes(2);
     expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 1);
-    // …and the event-singleton ceremony likewise fires exactly ONCE.
+    expect(H.broadcastBingo).toHaveBeenCalledWith(ACTOR, 2);
+    // …while the event-singleton ceremony still fires exactly ONCE, for the
+    // earliest-claimed group (equal createdAt here → day tiebreak). That gate is
+    // what stays once-per-Event; only the plain bingo went per-card.
     expect(H.broadcastFirstBingo).toHaveBeenCalledTimes(1);
     expect(H.broadcastFirstBingo).toHaveBeenCalledWith(ACTOR, 1);
   });

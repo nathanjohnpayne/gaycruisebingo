@@ -1772,6 +1772,11 @@ export default function Board() {
         // ceremonial candidate. Still required with per-card ids (#372): the
         // same race just lands on `${uid}-bingo-d${actedDay}` instead.
         selfWriteGeneration: generation,
+        // The Day this action's own bingo lands on (Codex P2 on #386) — only
+        // THAT doc may be excused as self-evidence. The generation alone cannot
+        // identify it: it bumps only on a bingo fall, so an earlier Day's win
+        // shares this generation and would otherwise be waved through.
+        selfWriteDayIndex: hasDays ? actedDay : undefined,
       });
       if (!witnessed && revalidateAfterAwait(uid, generation).generationUnchanged) {
         // The candidate carries its OWN Day (#262; Codex P3 on #286 round 2):
