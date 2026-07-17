@@ -35,7 +35,7 @@ Feature: bare Marks reach the Feed. Today a Mark with no Proof broadcasts nothin
 
 ## Out of scope (follow-up)
 
-The per-viewer button GATE (`tallyCardAction`) and its handlers are implemented and unit-tested on the `TallyCard` component (fed `marked` / `dealtUnmarked` sets from `boardItemSets`), but the LIVE `ProofFeed` renders the informational card (`action={null}`) for now: wiring the viewer's own Board into the Feed tab, and routing the `＋ Proof` / `🙋 Got it too` clicks to the Board's proof-add / claim sheet, is a cross-tab navigation follow-up. The who-list sheet reuse and the multi-day Board union for the gate widen naturally once day-scoped Boards (`events/{eventId}/days/{dayIndex}/boards/{uid}`) are fully wired.
+Both follow-ups this section originally deferred have since shipped, so the live `ProofFeed` is no longer the informational-only card this once described. The per-viewer button gate is wired end to end: `ProofFeed` reads the viewer's own dealt Day Boards through `useMyDayBoards`, resolves each card's target with `tallyActionTarget`, and routes the `＋ Proof` / `🙋 Got it too` clicks through `openOnBoard` (which records the `requestOpenSquare` intent and navigates to the Card tab, where Board opens its own sheet through its attribution guards). The who-list sheet reuse landed too — as the "ask for proof from the Feed" affordance below (#392). The remaining genuine gap is the multi-day Board union for the gate: `useMyDayBoards` already yields a per-Day map and `tallyActionTarget` prefers the card's own Day, so the union widens naturally as more Days unlock — no further wiring pending.
 
 ## Follow-up shipped — ask for proof from the Feed (#392)
 

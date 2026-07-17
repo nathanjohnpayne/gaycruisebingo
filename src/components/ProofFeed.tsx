@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Play, Pause } from 'lucide-react';
 import { useFeed, useEventDoc, useMyDayBoards, useAllDoubts, useMyPlayer } from '../hooks/useData';
@@ -855,6 +855,13 @@ export default function ProofFeed() {
   // tally doc already in hand — no extra subscription, unlike Board's
   // `TallySheet` which re-subscribes via `useTally`.
   const [whoListCard, setWhoListCard] = useState<TallyCardData | null>(null);
+  // Stable close callback (CodeRabbit on #398): `FeedWhoListSheet`'s focus-trap
+  // effect keys off `onClose`, so a fresh inline closure every Feed re-render — and
+  // the Feed re-renders constantly as its live stream updates — would re-run the
+  // effect and yank focus back to the sheet title mid-interaction. `setWhoListCard`
+  // is stable, so an empty-dep `useCallback` pins the identity and the effect runs
+  // once per open/close.
+  const closeWhoList = useCallback(() => setWhoListCard(null), []);
   // The Feed's visible proofs — the read-side context the who-list sheet's Doubt
   // affordance needs to derive answered-vs-open status. Computed here (before the
   // loading/empty early returns) so the sheet, itself built before those returns
@@ -887,7 +894,7 @@ export default function ProofFeed() {
         return (
           <FeedWhoListSheet
             card={live ?? whoListCard}
-            onClose={() => setWhoListCard(null)}
+            onClose={closeWhoList}
             meUid={user?.uid ?? null}
             meName={identityKnown ? displayName : undefined}
             identityKnown={identityKnown}
