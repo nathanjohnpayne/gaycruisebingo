@@ -55,13 +55,31 @@ vi.mock('../hooks/useData', () => ({
   useEventDoc: () => ({ data: null, loading: false }),
   useMyDayBoards: () => new Map(),
   useAllDoubts: () => ({ doubts: [], loading: false, hasServerData: true }),
+  // #392: the Feed resolves the viewer's own player row for its ask-for-proof
+  // affordance; this XSS suite exercises only media sinks, so a loaded-absent row
+  // (identity known, no saved name) suffices.
+  useMyPlayer: () => ({ data: null, loading: false, hasServerData: true }),
 }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
-// ProofFeed's doubts-cleared pill (#262) imports isDoubtSatisfied, whose module
-// initializes the REAL firebase app at import — fatal in CI, where no API key
-// exists (locally .env.local masks it). This suite exercises only the media
-// sinks; an inert stub keeps the SDK out of the graph.
-vi.mock('../data/doubts', () => ({ isDoubtSatisfied: () => false }));
+// ProofFeed's doubts-cleared pill (#262) imports isDoubtSatisfied, and the #392
+// Feed Doubt affordance imports openDoubts/doubtStatusFor/raiseDoubt — all from a
+// module that initializes the REAL firebase app at import — fatal in CI, where no
+// API key exists (locally .env.local masks it). This suite exercises only the
+// media sinks (the who-list sheet those feed is never opened here); inert stubs
+// keep the SDK out of the graph.
+vi.mock('../data/doubts', () => ({
+  isDoubtSatisfied: () => false,
+  openDoubts: () => [],
+  doubtStatusFor: () => 'none',
+  raiseDoubt: () => Promise.resolve(),
+}));
+// #392: ProofFeed resolves the viewer's display name via resolveDisplayName from
+// ../data/api, whose module ALSO imports the real firebase (same CI-fatal init).
+// Stub the pure resolver so the SDK stays out of this suite's graph.
+vi.mock('../data/api', () => ({
+  resolveDisplayName: (player: { displayName?: string } | null | undefined, authName?: string | null) =>
+    player?.displayName ?? authName ?? '',
+}));
 
 import ProofSheet from './ProofSheet';
 import ProofFeed from './ProofFeed';

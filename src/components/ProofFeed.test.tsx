@@ -41,8 +41,17 @@ vi.mock('../data/proofs', () => ({ reportProof: vi.fn(), deleteProof: vi.fn() })
 vi.mock('react-router-dom', () => ({ useNavigate: () => H.navigate }));
 vi.mock('../analytics', () => ({ track: vi.fn() }));
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'viewer' } }) }));
+// #392: keep the real pure derivations (openDoubts/doubtStatusFor/isDoubtSatisfied)
+// but stub the WRITE so the Feed's ask-for-proof affordance can be asserted without
+// touching Firestore.
+vi.mock('../data/doubts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../data/doubts')>();
+  return { ...actual, raiseDoubt: vi.fn(() => Promise.resolve()) };
+});
 
-import ProofFeed, { TallyCard, tallyCardAction, tallyActionTarget, doubtsClearedByProof } from './ProofFeed';
+import ProofFeed, { TallyCard, tallyCardAction, tallyActionTarget, doubtsClearedByProof, viewerCellIndexForItem } from './ProofFeed';
+import { raiseDoubt } from '../data/doubts';
+import type { DoubtDoc } from '../types';
 import { useOpenSquareIntent, __resetOpenSquareForTests } from '../hooks/useOpenSquare';
 import { EVENT_ID } from '../firebase'; // the mock above: 'test-event'
 import type { BoardDoc } from '../types';
@@ -168,11 +177,22 @@ function markerDoc(itemId: string, entry: TallyEntry) {
   };
 }
 
+// The signed-in viewer's own player row (#392): the Feed resolves it through
+// `useMyPlayer` so a Doubt raised from the who-list sheet publishes a KNOWN
+// accuser. A confirmed row with a display name → `identityKnown` true.
+const viewerPlayerSnap = {
+  exists: () => true,
+  // The converter pins `uid = snap.id`; the identity gate (#398) requires the
+  // loaded row to belong to the current viewer ('viewer'), so stamp it here.
+  data: () => ({ uid: 'viewer', displayName: 'Vic Viewer' }),
+  metadata: { fromCache: false },
+};
+
 function captureOnNext(): {
-  fire: (tally: unknown, proofs?: unknown, moments?: unknown, event?: unknown) => void;
+  fire: (tally: unknown, proofs?: unknown, moments?: unknown, event?: unknown, player?: unknown, doubts?: unknown) => void;
   fireBoard: (dayIndex: number, board: BoardDoc | null) => void;
 } {
-  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; events: ((s: unknown) => void)[]; tally: ((s: unknown) => void) | null; doubtsAll: ((s: unknown) => void) | null; boards: Record<number, (s: unknown) => void> } = {
+  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; events: ((s: unknown) => void)[]; tally: ((s: unknown) => void) | null; doubtsAll: ((s: unknown) => void) | null; player: ((s: unknown) => void) | null; boards: Record<number, (s: unknown) => void> } = {
     proofs: null,
     moments: null,
     // EVERY event-doc subscription (#262: useAllDoubts' moderation read opens
@@ -180,6 +200,9 @@ function captureOnNext(): {
     events: [],
     tally: null,
     doubtsAll: null,
+    // #392: the Feed also opens the viewer's own player row (useMyPlayer) to
+    // resolve the Doubt accuser identity.
+    player: null,
     boards: {},
   };
   H.onSnapshot.mockImplementation((target: unknown, optionsOrNext: unknown, maybeNext?: (s: unknown) => void) => {
@@ -190,6 +213,9 @@ function captureOnNext(): {
     const args = target && typeof target === 'object' ? ((target as { args?: unknown[] }).args ?? []) : [];
     if (target && typeof target === 'object' && 'query' in (target as object)) captured.proofs = onNext;
     else if (kind === 'doc' && args[3] === 'days') captured.boards[Number(args[4])] = onNext;
+    // #392: the viewer's own player row — events/{eid}/players/{uid} — routed by
+    // its own segment so it doesn't land in the shared event-doc bucket.
+    else if (kind === 'doc' && args[3] === 'players') captured.player = onNext;
     else if (kind === 'doc') captured.events.push(onNext);
     else if (kind === 'collectionGroup') captured.tally = onNext;
     // #262: the Feed also opens the flat doubts subscription; route it by its
@@ -199,13 +225,14 @@ function captureOnNext(): {
     return () => {};
   });
   return {
-    fire: (tally, proofs = emptyColSnap, moments = emptyColSnap, event = emptyDocSnap) => {
+    fire: (tally, proofs = emptyColSnap, moments = emptyColSnap, event = emptyDocSnap, player = viewerPlayerSnap, doubts = emptyColSnap) => {
       act(() => {
         captured.proofs?.(proofs);
         captured.moments?.(moments);
         captured.events.forEach((fn) => fn(event));
+        captured.player?.(player);
         captured.tally?.(tally);
-        captured.doubtsAll?.(emptyColSnap);
+        captured.doubtsAll?.(doubts);
       });
     },
     fireBoard: (dayIndex: number, board: BoardDoc | null) => {
@@ -221,7 +248,7 @@ function captureOnNext(): {
 }
 
 describe('ProofFeed (default export) — Feed-level who-list sheet (#216 acceptance: "Tap opens the who-list sheet")', () => {
-  it('tapping a live Feed Tally Card opens a read-only sheet listing its markers', () => {
+  it('tapping a live Feed Tally Card opens a sheet listing its markers WITH an ask-for-proof affordance (#392)', () => {
     H.onSnapshot.mockReset();
     const sub = captureOnNext();
     render(<ProofFeed />);
@@ -242,17 +269,140 @@ describe('ProofFeed (default export) — Feed-level who-list sheet (#216 accepta
 
     fireEvent.click(tallyCard!.querySelector('.tally-card-body')!);
 
-    // The sheet opens, names the SAME Prompt, and lists the marker — read-only
-    // (no Doubt affordance; the Board-side who-list owns that).
+    // The sheet opens, names the SAME Prompt, and lists the marker.
     expect(screen.getByText(/Who got/)).toBeTruthy();
     const sheetRows = document.querySelectorAll('.sheet .list .row');
     expect(sheetRows).toHaveLength(1);
     expect(sheetRows[0].querySelector('.name')?.textContent).toBe('Alice Anchor');
-    expect(document.querySelector('.sheet .doubt-btn')).toBeNull();
+    // #392: the marker (someone OTHER than the viewer) now carries the Doubt
+    // affordance — "ask for proof" from the Feed, not only from the board square.
+    // With a confirmed viewer identity it is enabled.
+    const doubtBtn = sheetRows[0].querySelector<HTMLButtonElement>('.doubt-btn');
+    expect(doubtBtn).toBeTruthy();
+    expect(doubtBtn!.disabled).toBe(false);
+    expect(doubtBtn!.textContent).toContain('Pics or it didn’t happen');
 
     // Close dismisses it.
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.queryByText(/^Who got/)).toBeNull();
+  });
+
+  it('tapping the Doubt affordance raises a Doubt against that marker via raiseDoubt (#392)', async () => {
+    H.onSnapshot.mockReset();
+    vi.mocked(raiseDoubt).mockClear();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+
+    const alice: TallyEntry = { uid: 'alice', displayName: 'Alice Anchor', markedAt: 1000, dayIndex: 0, itemText: 'Balcony or porthole photo' };
+    const bob: TallyEntry = { uid: 'bob', displayName: 'Bob Bosun', markedAt: 2000, dayIndex: 0, itemText: 'Balcony or porthole photo' };
+    sub.fire({ docs: [markerDoc('p1', alice), markerDoc('p1', bob)], metadata: { fromCache: false } });
+    fireEvent.click(document.querySelector('.tally-card .tally-card-body')!);
+
+    const rows = [...document.querySelectorAll('.sheet .list .row')];
+    expect(rows).toHaveLength(2);
+    // Ask Bob for proof — wrapped so the raise's `.then(clear)` in-flight reset
+    // settles inside act() rather than after the test.
+    const bobRow = rows.find((r) => r.querySelector('.name')?.textContent === 'Bob Bosun')!;
+    await act(async () => {
+      fireEvent.click(bobRow.querySelector('.doubt-btn')!);
+    });
+
+    expect(raiseDoubt).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(raiseDoubt).mock.calls[0][0]).toMatchObject({
+      fromUid: 'viewer',
+      fromDisplayName: 'Vic Viewer',
+      targetUid: 'bob',
+      targetDisplayName: 'Bob Bosun',
+      itemId: 'p1',
+      cellIndex: -1, // the viewer dealt no board carrying this Prompt — Feed context
+    });
+  });
+
+  it('the viewer’s OWN marker row carries no Doubt affordance — no self-doubt (#392)', () => {
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+
+    const me: TallyEntry = { uid: 'viewer', displayName: 'Vic Viewer', markedAt: 1000, dayIndex: 0, itemText: 'Balcony or porthole photo' };
+    const alice: TallyEntry = { uid: 'alice', displayName: 'Alice Anchor', markedAt: 2000, dayIndex: 0, itemText: 'Balcony or porthole photo' };
+    sub.fire({ docs: [markerDoc('p1', me), markerDoc('p1', alice)], metadata: { fromCache: false } });
+    fireEvent.click(document.querySelector('.tally-card .tally-card-body')!);
+
+    const rows = [...document.querySelectorAll('.sheet .list .row')];
+    const myRow = rows.find((r) => r.querySelector('.name')?.textContent === 'Vic Viewer')!;
+    expect(myRow.querySelector('.doubt-btn')).toBeNull();
+    expect(myRow.querySelector('.you-pill')).toBeTruthy();
+    // Another marker still carries it.
+    const aliceRow = rows.find((r) => r.querySelector('.name')?.textContent === 'Alice Anchor')!;
+    expect(aliceRow.querySelector('.doubt-btn')).toBeTruthy();
+  });
+
+  it('a marker the viewer already doubted shows the OPEN state, not a second raise (#392)', () => {
+    H.onSnapshot.mockReset();
+    vi.mocked(raiseDoubt).mockClear();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+
+    const alice: TallyEntry = { uid: 'alice', displayName: 'Alice Anchor', markedAt: 1000, dayIndex: 0, itemText: 'Balcony or porthole photo' };
+    const myDoubt: DoubtDoc = {
+      id: 'viewer_alice_p1', itemId: 'p1', cellIndex: -1,
+      fromUid: 'viewer', fromDisplayName: 'Vic Viewer',
+      targetUid: 'alice', targetDisplayName: 'Alice Anchor', createdAt: 500,
+    };
+    sub.fire(
+      { docs: [markerDoc('p1', alice)], metadata: { fromCache: false } },
+      emptyColSnap, emptyColSnap, emptyDocSnap, viewerPlayerSnap,
+      { docs: [{ data: () => myDoubt }], metadata: { fromCache: false, hasPendingWrites: false } },
+    );
+    fireEvent.click(document.querySelector('.tally-card .tally-card-body')!);
+
+    const aliceRow = document.querySelector('.sheet .list .row')!;
+    // The once-only slot is spent → no raise affordance; the open state shows instead.
+    expect(aliceRow.querySelector('.doubt-btn')).toBeNull();
+    expect(aliceRow.querySelector('.doubt-open')?.textContent).toContain('Doubted');
+    // The header's open-doubt half surfaces too.
+    expect(screen.getByText(/open doubt/)).toBeTruthy();
+  });
+
+  it('the Doubt affordance stays DISABLED until the viewer’s identity is known (#392)', () => {
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+
+    const alice: TallyEntry = { uid: 'alice', displayName: 'Alice Anchor', markedAt: 1000, dayIndex: 0, itemText: 'Balcony or porthole photo' };
+    // A cache-only "absent" player row with NO server confirmation → identity unknown.
+    const unconfirmed = { exists: () => false, data: () => undefined, metadata: { fromCache: true } };
+    sub.fire(
+      { docs: [markerDoc('p1', alice)], metadata: { fromCache: false } },
+      emptyColSnap, emptyColSnap, emptyDocSnap, unconfirmed,
+    );
+    fireEvent.click(document.querySelector('.tally-card .tally-card-body')!);
+
+    const btn = document.querySelector<HTMLButtonElement>('.sheet .doubt-btn')!;
+    expect(btn).toBeTruthy();
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('the Doubt affordance stays DISABLED while the loaded player row belongs to a PREVIOUS account (#398 account-switch race)', () => {
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+
+    const alice: TallyEntry = { uid: 'alice', displayName: 'Alice Anchor', markedAt: 1000, dayIndex: 0, itemText: 'Balcony or porthole photo' };
+    // Right after an account switch the viewer uid is already 'viewer', but
+    // useMyPlayer still holds the PREVIOUS account's server-confirmed row — its
+    // uid is 'olduser'. The identity gate must reject this stale row so a Doubt
+    // can't publish under the wrong name until the current uid's row resolves.
+    const staleRow = { exists: () => true, data: () => ({ uid: 'olduser', displayName: 'Old Account' }), metadata: { fromCache: false } };
+    sub.fire(
+      { docs: [markerDoc('p1', alice)], metadata: { fromCache: false } },
+      emptyColSnap, emptyColSnap, emptyDocSnap, staleRow,
+    );
+    fireEvent.click(document.querySelector('.tally-card .tally-card-body')!);
+
+    const btn = document.querySelector<HTMLButtonElement>('.sheet .doubt-btn')!;
+    expect(btn).toBeTruthy();
+    expect(btn.disabled).toBe(true);
   });
 
   it('the open sheet re-derives its markers from the live tally (#333): arrivals appear, unmarks leave', () => {
@@ -399,6 +549,22 @@ describe('tallyActionTarget — where a Tally Card button lands (#261)', () => {
   it('null when the Prompt is on none of the viewer cards (informational card)', () => {
     const boards = new Map([[0, boardWith([{ itemId: 'other' }, { itemId: '', free: true }], 0)]]);
     expect(tallyActionTarget({ itemId: 'p1', dayIndex: 0 }, boards)).toBeNull();
+  });
+});
+
+describe('viewerCellIndexForItem — the doubter’s own square for a Feed Doubt (#392)', () => {
+  it('returns the cellIndex of the Prompt on the viewer’s board', () => {
+    const boards = new Map([[0, boardWith([{ itemId: 'other' }, { itemId: 'p1' }], 0)]]);
+    expect(viewerCellIndexForItem(boards, 'p1')).toBe(1);
+  });
+
+  it('returns -1 when the Prompt is on none of the viewer’s dealt cards (raised from the Feed)', () => {
+    const boards = new Map([[0, boardWith([{ itemId: 'other' }, { itemId: '', free: true }], 0)]]);
+    expect(viewerCellIndexForItem(boards, 'p1')).toBe(-1);
+  });
+
+  it('returns -1 for an empty board set (no cards dealt yet)', () => {
+    expect(viewerCellIndexForItem(new Map(), 'p1')).toBe(-1);
   });
 });
 
