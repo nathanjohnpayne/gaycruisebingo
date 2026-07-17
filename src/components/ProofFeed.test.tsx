@@ -292,6 +292,13 @@ describe('ProofFeed (default export) — Feed-level who-list sheet (#216 accepta
     expect(rows[0].querySelector('.name')?.textContent).toBe('Bob Bosun');
     // The sheet itself stayed open throughout — same dialog, live content.
     expect(screen.getByText(/Who got/)).toBeTruthy();
+
+    // The LAST marker unmarks and the feed goes empty (Codex P2 on #384): the
+    // empty-feed early return must not unmount the open dialog — it stays up
+    // on the tap-time snapshot fallback, alongside the empty-feed message.
+    sub.fire({ docs: [], metadata: { fromCache: false } });
+    expect(screen.getByText(/Who got/)).toBeTruthy();
+    expect(screen.getByText(/Nothing in the feed yet/)).toBeTruthy();
   });
 });
 
