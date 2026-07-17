@@ -68,6 +68,30 @@ function isStandaloneApp(): boolean {
   return iosStandalone || window.matchMedia?.('(display-mode: standalone)').matches === true;
 }
 
+// Route sign-in through a single top-level redirect instead of a popup in the two
+// environments where the popup is unreliable but the same-origin handler keeps
+// redirect stable (the caller still gates this on `sameOriginHandler`):
+//   1. Mobile browser tabs — Firebase's recommendation; the popup opens as a new
+//      tab there, and iOS Safari loses the helper's sessionStorage across it.
+//   2. Installed DESKTOP PWAs (Chrome/Edge "Install app") — the standalone window
+//      has no address bar and silently blocks/never surfaces the OAuth popup, so
+//      the Sign in tap appears to do nothing (#395).
+// Installed iOS/Android PWAs deliberately stay on the popup: they report a mobile
+// UA (prefersRedirectSignIn === true) AND run standalone, so NEITHER clause
+// matches. On iOS the popup opens as a stable in-app view, while redirect drops
+// the helper's sessionStorage across the provider round-trip — the iOS-standalone
+// case the popup exception was built for. A desktop browser tab (non-mobile UA,
+// not standalone) also matches neither clause and keeps the popup, which is
+// reliable inside a normal tab.
+function shouldRedirectSignIn(
+  nav: Pick<Navigator, 'userAgent' | 'platform' | 'maxTouchPoints'>,
+  standalone: boolean,
+): boolean {
+  const isMobileBrowserTab = prefersRedirectSignIn(nav) && !standalone;
+  const isDesktopInstalledApp = standalone && !prefersRedirectSignIn(nav);
+  return isMobileBrowserTab || isDesktopInstalledApp;
+}
+
 function markPendingRedirectAttestation(): void {
   try {
     sessionStorage.setItem(PENDING_REDIRECT_ATTESTATION_KEY, String(Date.now()));
@@ -850,10 +874,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       const sameOriginHandler = auth.config?.authDomain === window.location.hostname;
-      if (sameOriginHandler && prefersRedirectSignIn(window.navigator) && !isStandaloneApp()) {
-        // Firebase recommends redirect on mobile. Keeping the browser in one
-        // top-level tab preserves the helper's sessionStorage across Google and
-        // avoids iOS Safari's popup-as-new-tab state loss.
+      if (sameOriginHandler && shouldRedirectSignIn(window.navigator, isStandaloneApp())) {
+        // One top-level redirect keeps the browser on a single origin so the
+        // helper's sessionStorage survives the Google round-trip — the flow the
+        // mobile tab and the installed desktop PWA (#395) both need. See
+        // shouldRedirectSignIn; the popup path below still serves desktop browser
+        // tabs and installed iOS PWAs.
         markPendingRedirectAttestation();
         try {
           await signInWithRedirect(auth, googleProvider);
