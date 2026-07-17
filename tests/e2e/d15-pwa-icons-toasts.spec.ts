@@ -15,7 +15,7 @@
 // trigger itself is synthesized.
 import { test, expect, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { cpSync, renameSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { seedDailyEvent, dismissCoach, readDealtDayGrid } from './support/daily';
 import { joinViaSharedLink } from './support/join';
@@ -194,8 +194,9 @@ test.describe('update banner: defers while a claim sheet is open; stacks over th
     // Restoring the exact original bytes puts the server, the precache
     // manifest, and every later page load back on one consistent build.
     const distDir = path.join(process.cwd(), 'dist');
-    const distBackup = path.join(process.cwd(), 'dist.e2e-update-test-backup');
+    const distBackup = path.join(process.cwd(), 'node_modules', '.cache', 'gcb-e2e-dist-backup');
     rmSync(distBackup, { recursive: true, force: true });
+    mkdirSync(path.dirname(distBackup), { recursive: true });
     cpSync(distDir, distBackup, { recursive: true });
     try {
       const fakeSha = `e2e-forced-update-${Date.now()}`;

@@ -80,7 +80,7 @@ export async function seedEmulatorEvent(
     // (boardHasMarkedText) and the leaderboard count reads the Firestore players
     // rows this wipe just reset — so auth accumulation is harmless.
     await testEnv.clearFirestore();
-  
+
     await testEnv.withSecurityRulesDisabled(async (context) => {
       const db = context.firestore();
       const eventRef = doc(db, 'events', EVENT_ID);
