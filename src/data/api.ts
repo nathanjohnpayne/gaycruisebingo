@@ -959,6 +959,9 @@ export async function setMark(params: {
   // path byte-identical, so legacy events (and every mock-Firestore unit test that
   // doesn't set it) are untouched.
   daily?: boolean;
+  // The Board seed the caller rendered. Normal Mark writes stamp it as `markSeed`
+  // so rules can reject a queued stale Mark after another tab reshuffles the card.
+  boardSeed?: number;
   database?: Firestore;
 }): Promise<{
   cells: Cell[];
@@ -1002,6 +1005,7 @@ async function runSetMark(
     ceremonialDayIndexes?: number[];
     statsFrozen?: boolean;
     daily?: boolean;
+    boardSeed?: number;
   },
   database: Firestore,
 ): Promise<{
@@ -1025,6 +1029,7 @@ async function runSetMark(
   const playerRef = doc(database, 'events', EVENT_ID, 'players', uid);
 
   let baseCells = params.cells;
+  let markSeed = params.boardSeed;
   let baseFirstBingoAt = params.currentFirstBingoAt;
   // The already-denormalized public name on the player row is the fallback
   // attribution for the Tally marker when the caller omits `displayName`.
@@ -1043,8 +1048,11 @@ async function runSetMark(
   // (e.g. the very first local knowledge of it, or a test double with no
   // cache) — that is the pre-fix behavior, unchanged.
   if (cachedBoard.status === 'fulfilled' && cachedBoard.value.exists()) {
-    const boardData = cachedBoard.value.data() as { cells: Cell[]; dayIndex?: number };
+    const boardData = cachedBoard.value.data() as { cells: Cell[]; dayIndex?: number; seed?: number };
     baseCells = boardData.cells;
+    if (typeof boardData.seed === 'number') {
+      markSeed = boardData.seed;
+    }
     // The Board's own dayIndex is authoritative for which bucket this Mark
     // credits; the explicit param only seeds the fallback when nothing is cached.
     if (typeof boardData.dayIndex === 'number' && params.dayIndex === undefined) {
@@ -1096,7 +1104,14 @@ async function runSetMark(
   });
 
   const batch = writeBatch(database);
-  batch.set(boardRef, { cells }, { merge: true });
+  batch.set(
+    boardRef,
+    {
+      cells,
+      ...(typeof markSeed === 'number' ? { markSeed } : {}),
+    },
+    { merge: true },
+  );
   // The standings freeze (#265): post-freeze marks keep the card honest, and
   // ONLY the ceremonial (farewell) Day still records its PER-DAY bucket — the
   // farewell card unlocks AT the freeze and its daily honor reads

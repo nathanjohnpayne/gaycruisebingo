@@ -301,12 +301,12 @@ describe('reshuffle — the cap cannot be laundered around', () => {
 });
 
 describe('reshuffle — ordinary board writes are unaffected', () => {
-  it('ALLOWS a MARK (a seed-preserving cells merge) with no counter write', async () => {
+  it('ALLOWS a MARK that carries the current board seed guard with no counter write', async () => {
     const d = db(ALICE);
     await assertSucceeds(
       setDoc(
         doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
-        { cells: cells(0) },
+        { cells: cells(0), markSeed: 111 },
         { merge: true },
       ),
     );
@@ -318,7 +318,30 @@ describe('reshuffle — ordinary board writes are unaffected', () => {
     await assertSucceeds(
       setDoc(
         doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
-        { cells: cells(1) },
+        { cells: cells(1), markSeed: 111 },
+        { merge: true },
+      ),
+    );
+  });
+
+  it('DENIES a seeded-board MARK with no seed guard', async () => {
+    const d = db(ALICE);
+    await assertFails(
+      setDoc(
+        doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
+        { cells: cells(0) },
+        { merge: true },
+      ),
+    );
+  });
+
+  it('DENIES a stale queued MARK from the pre-reshuffle seed', async () => {
+    await seedBoard(UNLOCKED_DAY, 222);
+    const d = db(ALICE);
+    await assertFails(
+      setDoc(
+        doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
+        { cells: cells(0), markSeed: 111 },
         { merge: true },
       ),
     );

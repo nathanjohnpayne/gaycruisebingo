@@ -131,6 +131,25 @@ service cloud.firestore {
         && reshuffleCounterPaired(eventId, uid);
     }
 
+    // Normal Mark writes are offline-queueable and merge a full replacement
+    // `cells` array. After a reshuffle, a queued stale Mark from the old card would
+    // otherwise restore the old prompts while preserving the new seed. The client
+    // stamps `markSeed` with the Board seed it folded from; on seeded Boards, any
+    // non-reshuffle cell change must carry that value. Seedless legacy Boards keep
+    // the original markability carve-out.
+    function boardCellsChanged() {
+      return resource != null
+        && request.resource != null
+        && request.resource.data.diff(resource.data).affectedKeys().hasAny(['cells']);
+    }
+
+    function seededMarkWriteOk() {
+      return !boardCellsChanged()
+        || !('seed' in resource.data)
+        || (('markSeed' in request.resource.data)
+            && request.resource.data.markSeed == resource.data.seed);
+    }
+
     // The COUNTER-side half (#378 Option A): `reshufflesUsed` is MONOTONIC — it may
     // only ever hold or rise by exactly 1, never fall, and never exceed the
     // allowance; a create must start at 0.
@@ -466,6 +485,7 @@ service cloud.firestore {
           allow create, update: if (isOwner(uid) || isAdmin(eventId))
             && isCanonicalDay(dayIndex)
             && request.time.toMillis() >= get(/databases/$(database)/documents/events/$(eventId)).data.days[int(dayIndex)].unlockAt
+            && (isReshuffleWrite() || seededMarkWriteOk())
             && (!isReshuffleWrite() || reshuffleOk(eventId, uid));
           allow delete: if isAdmin(eventId);
         }

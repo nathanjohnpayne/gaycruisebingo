@@ -312,6 +312,7 @@ describe('setMark (write shape)', () => {
       nextMarked: true,
       claimMode: 'honor',
       currentFirstBingoAt: null,
+      boardSeed: 42,
     });
 
     // Three writes now: the board, then the player, then the per-Prompt Tally
@@ -326,6 +327,7 @@ describe('setMark (write shape)', () => {
     expect(setSpy.mock.calls[2][0].path).toBe(`events/${EVENT_ID}/tally/i3/markers/u1`);
     expect(setSpy.mock.calls[0][2]).toEqual({ merge: true });
     expect(setSpy.mock.calls[1][2]).toEqual({ merge: true });
+    expect(setSpy.mock.calls[0][1]).toMatchObject({ markSeed: 42 });
     expect((setSpy.mock.calls[0][1].cells as Cell[])[3].marked).toBe(true);
     expect(setSpy.mock.calls[1][1]).toMatchObject({
       squaresMarked: 1,
@@ -374,7 +376,7 @@ describe('setMark (folds onto the freshest cached Board, not a stale cells prop)
     cachedCells[5] = { ...cachedCells[5], marked: true, markedAt: 500, status: 'confirmed' };
     getDocFromCacheSpy.mockResolvedValueOnce({
       exists: () => true,
-      data: () => ({ cells: cachedCells }),
+      data: () => ({ cells: cachedCells, seed: 99 }),
     });
 
     await setMark({
@@ -384,9 +386,11 @@ describe('setMark (folds onto the freshest cached Board, not a stale cells prop)
       nextMarked: true,
       claimMode: 'honor',
       currentFirstBingoAt: null,
+      boardSeed: 42,
     });
 
-    const boardWrite = setSpy.mock.calls[0][1] as { cells: Cell[] };
+    const boardWrite = setSpy.mock.calls[0][1] as { cells: Cell[]; markSeed?: number };
+    expect(boardWrite.markSeed).toBe(99);
     expect(boardWrite.cells[5].marked).toBe(true); // survived, from the cache
     expect(boardWrite.cells[6].marked).toBe(true); // this Mark
     const playerWrite = setSpy.mock.calls[1][1] as { squaresMarked: number };

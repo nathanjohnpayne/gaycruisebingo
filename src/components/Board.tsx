@@ -1558,6 +1558,7 @@ export default function Board() {
         // Route the Mark to the DAY-SCOPED board + fold its stats into
         // `dayStats[viewedIndex]` (#246). Legacy events keep the single-board path.
         daily: hasDays,
+        boardSeed: board?.seed,
         tutorialDayIndexes,
         ceremonialDayIndexes,
         statsFrozen,

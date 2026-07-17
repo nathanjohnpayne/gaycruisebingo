@@ -142,6 +142,9 @@ export interface BoardDoc {
   // exclude repeats across the cruise.
   dayIndex: number;
   seed: number;
+  // Last Board seed a normal Mark write was computed against. Firestore rules use
+  // this as a stale-write guard after a Reshuffle; legacy rows may omit it.
+  markSeed?: number;
   createdAt: number;
   cells: Cell[]; // length 25
 }
