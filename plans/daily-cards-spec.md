@@ -377,6 +377,7 @@ Nothing sailing-specific lives in code paths; a new cruise is a new `EventDoc`:
 5. **Photo source (#190)**: default `camera_or_library` with the 🖼️ Feed badge; `camera_only` remains an event-level admin override.
 6. **Winners announcement**: the two-beat finish—last-call standings Moment at 20:00 Day 9; standings freeze + podium at the 08:00 Day 10 farewell unlock; the farewell card is ceremonial (embark still counts toward totals).
 7. **Schedule correction (2026-07-17, from `schedule_1.xlsx`)**: unified day theme + a required two-event `tonight[]` line per the corrected itinerary above (Naples on Day 6, Villefranche on Day 8, sea day moved to Day 3; events from the VB26 guide); five new unified ThemeIds with palettes; applied to the live event via a metadata-only owner migration—game state untouched.
+8. **Easy mix (2026-07-17)**: cards were too hard—from Day 4 onward, main-day deals blend the embark pool in via `settings.easyMixRatio` (default 0.5: 12 easy + 12 main, `spicyRatio` applying within the main half). Snapshot carries both pools; easy-half repeats across days are intentional; admin-tunable without a deploy. Ticket: `plans/easy-mix-ticket.md`.
 
 ## Out of scope
 
