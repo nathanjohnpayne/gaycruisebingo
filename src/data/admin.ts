@@ -194,7 +194,13 @@ export type UnlockDayNowResult = 'stamped' | 'already-stamped' | 'not-due' | 'no
 
 /** What the guarded re-snapshot reports back — mirrors `ResnapshotResult` in
  *  `functions/src/unlockDay.ts` (specs/easy-mix.md § "Deploy race"). */
-export type ResnapshotDayResult = 'resnapshotted' | 'has-boards' | 'not-due' | 'no-event' | 'no-day';
+export type ResnapshotDayResult =
+  | 'resnapshotted'
+  | 'has-boards'
+  | 'not-recoverable'
+  | 'not-due'
+  | 'no-event'
+  | 'no-day';
 
 /**
  * The Admin console's manual "unlock now" fallback (daily-cards-spec §

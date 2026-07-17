@@ -644,7 +644,13 @@ export async function manualUnlockNow(
 
 // --- Guarded re-snapshot (the easy-mix deploy-race fallback) ---------------------
 
-export type ResnapshotResult = 'resnapshotted' | 'has-boards' | 'not-due' | 'no-event' | 'no-day';
+export type ResnapshotResult =
+  | 'resnapshotted'
+  | 'has-boards'
+  | 'not-recoverable'
+  | 'not-due'
+  | 'no-event'
+  | 'no-day';
 
 /**
  * The easy-mix deploy-race fallback (specs/easy-mix.md § "Deploy race"): OVERWRITE one
@@ -653,7 +659,9 @@ export type ResnapshotResult = 'resnapshotted' | 'has-boards' | 'not-due' | 'no-
  *
  * If the 08:00 scheduler fired on the pre-easy-mix build, Day 4's snapshot would carry
  * the main pool alone (no embark ids), so no card could mix. Re-stamping BEFORE anyone
- * deals lets the intended mix take effect. This is the ONE place a snapshot is
+ * deals lets the intended mix take effect. This recovery is therefore limited to
+ * Day 4 and later: already-unlocked Days 1-3 are intentionally left main-only.
+ * This is the ONE place a snapshot is
  * overwritten rather than idempotently preserved (`stampDaySnapshot` never overwrites),
  * so the zero-boards guard is load-bearing: a dealt card's pool is frozen by its
  * membership in the snapshot it drew from, and rewriting the snapshot under existing
@@ -682,6 +690,7 @@ export async function resnapshotDayIfNoBoards(
   const days = Array.isArray(pre?.days) ? pre!.days : [];
   const day = days.find((d) => d.index === dayIndex);
   if (!day) return 'no-day';
+  if (day.index < 3) return 'not-recoverable';
   if (day.unlockAt > now) return 'not-due';
 
   const items = await queryActiveItems(db, eventId);
@@ -700,6 +709,7 @@ export async function resnapshotDayIfNoBoards(
     const arr = Array.isArray(ev.days) ? [...ev.days] : [];
     const i = arr.findIndex((d) => d.index === dayIndex);
     if (i < 0) return 'no-day';
+    if (arr[i].index < 3) return 'not-recoverable';
     if (arr[i].unlockAt > now) return 'not-due';
     // Transactional guard: a re-snapshot is permitted ONLY while no card has been
     // dealt. Reading the boards query here serializes the overwrite against a

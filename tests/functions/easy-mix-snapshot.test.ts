@@ -199,6 +199,21 @@ describe('resnapshotDayIfNoBoards — the guarded deploy-race fallback', () => {
     expect(day.snapshotItemIds).toEqual(['m1']); // untouched
   });
 
+  it('is DENIED for already-unlocked Days 1-3 even while zero boards exist', async () => {
+    const db = makeDb({
+      eventId: 'e1',
+      event: { ...event(['m1']), days: [{ index: 1, pool: 'main', unlockAt: D4_UNLOCK, snapshotItemIds: ['m1'] }] },
+      items,
+    });
+
+    const result = await resnapshotDayIfNoBoards(db, admin, 'e1', 1, { now: () => D4_UNLOCK + 1 });
+
+    expect(result).toBe('not-recoverable');
+    const day = db.readEvent().days!.find((d) => d.index === 1)!;
+    expect(day.snapshotItemIds).toEqual(['m1']); // untouched
+    expect(day.snapshotEasyMixRatio).toBeUndefined();
+  });
+
   it('is DENIED if a board appears before the transactional overwrite', async () => {
     const db = makeDb({
       eventId: 'e1',

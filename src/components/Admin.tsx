@@ -362,7 +362,8 @@ function UnlockNowButton({ dayIndex, visible }: { dayIndex: number; visible: boo
  * but the callable (`resnapshotDayNow` → `resnapshotDayIfNoBoards`) only overwrites while
  * ZERO cards have been dealt; once any board exists it returns `has-boards` and changes
  * nothing. Rendered only for an unlocked MAIN Day (the mix never applies to tutorial
- * Days); the zero-boards safety is the SERVER's, so the button is always safe to show.
+ * Days, and Days 1-3 intentionally stay untouched); the zero-boards and Day-4 boundary
+ * safety is the SERVER's, so the button is always safe to show.
  * Admin-gate is the enclosing Schedule tab (Admin gates every tab on `isAdmin`).
  */
 function ResnapshotButton({ dayIndex }: { dayIndex: number }) {
@@ -379,6 +380,8 @@ function ResnapshotButton({ dayIndex }: { dayIndex: number }) {
           ? 'Re-snapshotted with both pools.'
           : result === 'has-boards'
             ? 'Denied — cards already dealt.'
+            : result === 'not-recoverable'
+              ? 'Denied — early Days stay untouched.'
             : `No change (${result}).`,
       );
     } catch (err) {
@@ -464,7 +467,7 @@ function ScheduleRow({
   // The easy-mix re-snapshot fallback only makes sense for a MAIN Day that has already
   // unlocked AND been stamped (a stamped-but-maybe-main-only snapshot); an unstamped Day
   // uses "Unlock now" above, and tutorial Days never mix. Server enforces zero-boards.
-  const canResnapshot = day.pool === 'main' && day.unlockAt <= now && day.snapshotItemIds != null;
+  const canResnapshot = day.index >= 3 && day.pool === 'main' && day.unlockAt <= now && day.snapshotItemIds != null;
   // Local draft so typing doesn't fight the subscribed doc; committed on blur.
   const [tonightDraft, setTonightDraft] = useState(() => joinTonight(day.tonight));
   const [tonightError, setTonightError] = useState('');
