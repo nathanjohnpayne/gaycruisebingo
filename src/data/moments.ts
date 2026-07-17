@@ -104,10 +104,14 @@ export interface PendingMomentFlags {
 interface StoredPendingFlags extends PendingMomentFlags {
   firstBingoGeneration: number;
   blackoutDayIndexes?: number[];
-  // The Day the FIRST queued bingo happened on (#262) — first-write-wins,
-  // matching the once-per-Player `${uid}-bingo` id. Payload-naming only,
-  // never part of an id.
-  bingoDayIndex?: number;
+  // The Day(s) bingo-completing Marks happened on. A SET since #372, for the
+  // same reason `blackoutDayIndexes` became one in #267: bingo is now PER-CARD
+  // (`${uid}-bingo-d${dayIndex}`), so a second Day's card bingoing while an
+  // earlier Day's Moment is still pending must queue its OWN Day rather than be
+  // swallowed by a first-write-wins stamp. Pre-#372 this was a single
+  // `bingoDayIndex` because the once-per-Player `${uid}-bingo` id meant only the
+  // first queued Day could ever actually post — which was the #372 bug.
+  bingoDayIndexes?: number[];
   // The ceremonial candidate's OWN Day (#262; Codex P3 on #286 round 2),
   // stamped at enqueueFirstBingoMoment time. Deliberately SEPARATE from
   // `bingoDayIndex`: the candidate is enqueued AFTER an async witness read,
@@ -139,16 +143,28 @@ const pendingMoments = new Map<string, StoredPendingFlags>();
 // continuation already captured.
 const pendingGenerations = new Map<string, number>();
 
-// The generation at which THIS device last actually WROTE `${uid}-bingo` (#332):
-// stamped inside `writeMomentOnce` at the moment the plain-bingo write proceeds
-// past the cache pre-check — i.e. only when the doc was NOT already cached, so a
-// regain (whose pre-check finds the genuine prior doc and skips the write) never
-// records one. `hasPriorBingoWitness` consults it to tell "a prior win's doc"
-// from "this very win's doc, drained into the cache while the witness read was
-// in flight" — the birth-time-witness race that suppressed ~2/8 ceremonial
-// First-to-BINGO Moments under concurrent gate-open drains. Keyed like
-// `pendingGenerations`; cleared with it in `resetPendingMoments`.
+// The generation at which THIS device actually WROTE a given bingo Moment doc
+// (#332): stamped inside `writeMomentOnce` at the moment the plain-bingo write
+// proceeds past the cache pre-check — i.e. only when the doc was NOT already
+// cached, so a regain (whose pre-check finds the genuine prior doc and skips the
+// write) never records one. `hasPriorBingoWitness` consults it to tell "a prior
+// win's doc" from "this very win's doc, drained into the cache while the witness
+// read was in flight" — the birth-time-witness race that suppressed ~2/8
+// ceremonial First-to-BINGO Moments under concurrent gate-open drains.
+//
+// Keyed by (uid, MOMENT DOC ID), not by uid alone (#372). Under the once-per-
+// Player `${uid}-bingo` id a uid key was unambiguous — there was only ever one
+// bingo doc to stamp. Per-card ids mean a Player owns one doc PER DAY while the
+// generation only bumps on a bingo FALL, so two bingos on different Days share a
+// generation: a uid-keyed stamp from the Day-3 write would make a genuine Day-3
+// prior win read as "this very win's write" during the Day-5 witness read, and
+// wrongly mint a second ceremony. Keying on the doc id keeps each stamp bound to
+// the exact doc it describes. Cleared with `pendingGenerations` in
+// `resetPendingMoments`.
 const selfBingoWriteGenerations = new Map<string, number>();
+function selfWriteKey(uid: string, momentId: string): string {
+  return `${pendingKey(uid)}#${momentId}`;
+}
 
 // Key by app + uid (mirrors `markChains` in api.ts). The moment writers always
 // use the module `db` singleton, so the app segment is effectively constant here;
@@ -178,9 +194,11 @@ function ensurePending(uid: string): StoredPendingFlags {
  *
  * `dayIndex` (optional) is the Day the completing Mark happened on — captured
  * HERE, at enqueue time, not re-read from render state at drain time (Codex
- * finding 2 on fix/d15-blackout-day-naming): only stamped on a
- * `blackoutTransition`, accumulating one entry per distinct Day (#267 — a
- * per-card win queues its own Day; see `StoredPendingFlags.blackoutDayIndexes`).
+ * finding 2 on fix/d15-blackout-day-naming). BOTH per-card kinds accumulate one
+ * entry per distinct Day — blackout since #267, bingo since #372 — so a win on a
+ * second Day queues its own Day rather than being swallowed by an earlier
+ * pending one (see `StoredPendingFlags.bingoDayIndexes` /
+ * `.blackoutDayIndexes`).
  */
 export function enqueueWinMoments(params: {
   uid: string;
@@ -193,7 +211,10 @@ export function enqueueWinMoments(params: {
   const flags = ensurePending(uid);
   if (bingoTransition) {
     flags.bingo = true;
-    if (flags.bingoDayIndex === undefined) flags.bingoDayIndex = dayIndex;
+    if (dayIndex !== undefined) {
+      flags.bingoDayIndexes ??= [];
+      if (!flags.bingoDayIndexes.includes(dayIndex)) flags.bingoDayIndexes.push(dayIndex);
+    }
   }
   if (blackoutTransition) {
     flags.blackout = true;
@@ -249,10 +270,16 @@ export function pendingBlackoutDayIndexes(uid: string): number[] {
   return [...(pendingMoments.get(pendingKey(uid))?.blackoutDayIndexes ?? [])];
 }
 
-/** The Day the still-pending (first) bingo was ENQUEUED on (#262) —
- *  `undefined` when nothing is queued or the enqueue carried no Day. */
-export function pendingBingoDayIndex(uid: string): number | undefined {
-  return pendingMoments.get(pendingKey(uid))?.bingoDayIndex;
+/**
+ * The Day(s) still-pending bingos were ENQUEUED on (#262; per-card set per
+ * #372) — empty when nothing is queued or the enqueue carried no Day (a legacy,
+ * non-daily caller). The twin of `pendingBlackoutDayIndexes`, for the same
+ * reason: the drain reads the ENQUEUE-time Day rather than whatever Day happens
+ * to be VIEWED at fire time, because a bingo can sit pending behind the identity
+ * gate while the Player switches Days.
+ */
+export function pendingBingoDayIndexes(uid: string): number[] {
+  return [...(pendingMoments.get(pendingKey(uid))?.bingoDayIndexes ?? [])];
 }
 
 /** The still-pending ceremonial candidate's OWN Day (#262; Codex P3 on #286
@@ -277,6 +304,26 @@ export function removePendingBlackoutDay(uid: string, dayIndex: number): void {
     flags.blackoutDayIndexes = undefined;
     flags.blackout = false;
     if (!flags.bingo && !flags.firstBingo) pendingMoments.delete(key);
+  }
+}
+
+/**
+ * Remove ONE drained Day from the pending BINGO queue (#372) — the exact twin of
+ * `removePendingBlackoutDay`, and needed for the same reason now that bingo is
+ * per-card: `bingoNow` witnesses exactly ONE board, so only the queued Day that
+ * IS that board may fire against it, and a fired Day must leave the queue while
+ * sibling queued Days stay pending. The `bingo` flag clears only when the queue
+ * empties (the flag means "something is still owed").
+ */
+export function removePendingBingoDay(uid: string, dayIndex: number): void {
+  const key = pendingKey(uid);
+  const flags = pendingMoments.get(key);
+  if (!flags?.bingoDayIndexes) return;
+  flags.bingoDayIndexes = flags.bingoDayIndexes.filter((d) => d !== dayIndex);
+  if (flags.bingoDayIndexes.length === 0) {
+    flags.bingoDayIndexes = undefined;
+    flags.bingo = false;
+    if (!flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
   }
 }
 
@@ -329,11 +376,12 @@ export function pendingActionGeneration(uid: string): number {
  */
 export function dropPendingWins(
   uid: string,
-  // `blackoutDayIndex` (#267, Codex P2 on #275 round 2): a blackout fall is
-  // witnessed by ONE board — the fallen one — so a day-scoped caller drops just
-  // that Day from the queue, leaving sibling Days' still-valid pending
-  // blackouts intact. A legacy (day-less) fall keeps the full clear.
-  fell: { bingo?: boolean; blackout?: boolean; blackoutDayIndex?: number },
+  // `blackoutDayIndex` (#267, Codex P2 on #275 round 2) and `bingoDayIndex`
+  // (#372, the same treatment now that bingo is per-card): a fall is witnessed by
+  // ONE board — the fallen one — so a day-scoped caller drops just that Day from
+  // the queue, leaving sibling Days' still-valid pending wins intact. A legacy
+  // (day-less) fall keeps the full clear.
+  fell: { bingo?: boolean; blackout?: boolean; bingoDayIndex?: number; blackoutDayIndex?: number },
 ): void {
   const key = pendingKey(uid);
   if (fell.bingo) {
@@ -342,9 +390,31 @@ export function dropPendingWins(
   const flags = pendingMoments.get(key);
   if (!flags) return;
   if (fell.bingo) {
-    flags.bingo = false;
+    const days = flags.bingoDayIndexes;
+    if (fell.bingoDayIndex !== undefined && days && days.length > 0) {
+      // Day-scoped fall (#372): only the witnessed board's Day drops; the flag
+      // stays owed while sibling Days remain queued. Without this, a Day-1
+      // unmark would wipe a still-standing Day-2 bingo out of the queue — a bug
+      // that could not exist before per-card bingo, because the once-per-Player
+      // id meant only one Day could ever be queued at all.
+      flags.bingoDayIndexes = days.filter((d) => d !== fell.bingoDayIndex);
+      if (flags.bingoDayIndexes.length === 0) {
+        flags.bingoDayIndexes = undefined;
+        flags.bingo = false;
+      }
+    } else {
+      flags.bingo = false;
+      flags.bingoDayIndexes = undefined; // the fallen bingo's Day no longer applies
+    }
+    // The CEREMONIAL candidate stays event-wide and singular, so ANY observed
+    // bingo fall still drops it outright — deliberately NOT day-scoped like the
+    // plain bingo above. The generation bump (above) is likewise unconditional,
+    // and `firstBingoCandidateCurrent` reads it at drain, so day-scoping only
+    // this drop would be inert anyway. Consequence (accepted, and strictly
+    // fail-safe): a Day-1 unmark can kill a Day-2 ceremonial candidate. It can
+    // only ever LOSE a ceremony, never publish a wrong one — the same
+    // conservative posture PR #110 round 4 settled on for the singleton.
     flags.firstBingo = false;
-    flags.bingoDayIndex = undefined; // the fallen bingo's Day no longer applies
     flags.firstBingoDayIndex = undefined;
   }
   if (fell.blackout) {
@@ -383,7 +453,7 @@ export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags):
   // bingo's fire-clear can never strip the ceremony's Day chip — including the
   // async-witness window where the candidate is enqueued only after the plain
   // bingo already fired and deleted the entry.
-  if (kind === 'bingo') flags.bingoDayIndex = undefined;
+  if (kind === 'bingo') flags.bingoDayIndexes = undefined; // fired — nothing left to protect
   if (kind === 'firstBingo') flags.firstBingoDayIndex = undefined;
   if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
 }
@@ -471,13 +541,15 @@ async function writeMomentOnce(
   } catch {
     // Not in the local cache — no duplicate to protect; proceed with the write.
   }
-  // #332: about to genuinely write `${uid}-bingo` (the pre-check above found no
+  // #332: about to genuinely write this bingo doc (the pre-check above found no
   // cached doc, so this is NOT a regain re-broadcast). Stamp the current action
   // generation SYNCHRONOUSLY before setDoc can land in the local cache: any
   // in-flight `hasPriorBingoWitness` read that later finds this doc can then
   // recognize it as this win's own write rather than prior-win evidence.
+  // Stamped against the DOC ID being written (#372), so the per-card ids each
+  // carry their own stamp — see `selfBingoWriteGenerations`.
   if (kind === 'bingo') {
-    selfBingoWriteGenerations.set(pendingKey(who.uid), pendingActionGeneration(who.uid));
+    selfBingoWriteGenerations.set(selfWriteKey(who.uid, id), pendingActionGeneration(who.uid));
   }
   const payload: Omit<MomentDoc, 'id'> = {
     kind,
@@ -529,15 +601,36 @@ export async function hasPriorBingoWitness(
   // resolves false. A day-LESS witness on a daily Event (pre-#286 data) stays
   // a witness — conservative: the roster gate (already main-game-aware via
   // the tutorial-excluded firstBingoAt fold) remains the fallback.
+  //
+  // `dayIndexes` (#372) is the Event's scheduled Day indexes. Per-card bingo
+  // means there is no longer ONE `${uid}-bingo` doc to read: the witness lives
+  // at whichever `${uid}-bingo-d${d}` the Player actually won. Given the
+  // schedule, probe each non-excluded Day's own id. This makes the tutorial
+  // exclusion EXACT rather than inferential — a warm-up win writes its own
+  // day-scoped id, which simply is not probed. Omitted on a legacy (non-daily)
+  // Event, which keeps the day-less path as the only witness.
   opts?: {
     excludeDayIndexes?: ReadonlySet<number>;
+    dayIndexes?: readonly number[];
     // #332: the caller's captured action generation. When THIS device's own
     // plain-bingo write happened at that same (unchanged) generation, a found
-    // `${uid}-bingo` doc is this very win's drain landing mid-read — not
-    // prior-win evidence — so the check falls through to the singleton consult
-    // exactly like the tutorial branch. Callers that don't capture a
-    // generation (the confirm pipeline) omit it and keep the pre-#332 read.
+    // bingo doc is this very win's drain landing mid-read — not prior-win
+    // evidence — so the check falls through to the singleton consult exactly
+    // like the tutorial branch. Callers that don't capture a generation (the
+    // confirm pipeline) omit it and keep the pre-#332 read. Applies to the
+    // per-card ids too (#372): the same race lands on `${uid}-bingo-d${day}`.
     selfWriteGeneration?: number;
+    // The Day THIS action's bingo lands on (#372, Codex P2 on #386) — the ONLY
+    // doc this action could have written, and therefore the only one
+    // `selfWriteGeneration` may excuse. The generation alone is too coarse to
+    // identify the doc: it bumps only on a bingo FALL, so a Day-3 win and a
+    // later Day-5 win with no fall between them share a generation, and the
+    // Day-3 doc — genuine prior-win evidence this device wrote earlier in the
+    // session — would be waved through as "the Day-5 action's own write",
+    // clearing the ceremony gate for a player who is not witness-clean. Omit on
+    // a legacy (day-less) Event, where the single `${uid}-bingo` id is
+    // unambiguous.
+    selfWriteDayIndex?: number;
   },
 ): Promise<boolean> {
   // Shared singleton consult (cache-only, Codex P1 on #288 round 5): the
@@ -552,51 +645,140 @@ export async function hasPriorBingoWitness(
       return false; // singleton not cached — witness-clean, roster gate decides
     }
   };
+  // The one doc THIS action could have written (#372, Codex P2 on #386): its own
+  // Day's per-card id, or the day-less id on a legacy Event. Any OTHER bingo doc
+  // is by definition not this action's write, however the generations line up.
+  const selfWriteId =
+    opts?.selfWriteDayIndex !== undefined ? `${uid}-bingo-d${opts.selfWriteDayIndex}` : `${uid}-bingo`;
+  // Was this exact doc written by THIS device, for THIS action (#332, keyed per
+  // doc id since #372)? Then it is this win's own drain, not prior evidence.
+  // BOTH conditions are load-bearing: the id pins WHICH doc this action writes,
+  // the generation pins WHEN — so a same-Day regain (whose fall bumped the
+  // generation) still reads as the prior win it is.
+  const isSelfWrite = (momentId: string): boolean =>
+    opts?.selfWriteGeneration !== undefined &&
+    momentId === selfWriteId &&
+    selfBingoWriteGenerations.get(selfWriteKey(uid, momentId)) === opts.selfWriteGeneration;
+
+  // Per-card witnesses (#372) — cache-only and bounded by the schedule (ten Days
+  // on the seeded sailing), so this is ten local reads at worst, no network.
+  let sawSelfWrite = false;
+  for (const day of opts?.dayIndexes ?? []) {
+    if (opts?.excludeDayIndexes?.has(day)) continue;
+    const perCardId = `${uid}-bingo-d${day}`;
+    try {
+      const perCard = await getDocFromCache(rawMoment(perCardId));
+      if (perCard.exists()) {
+        // The #332 race, now on the day-scoped id: a concurrent drain can write
+        // THIS win's own per-card bingo while this read is in flight. Skip it
+        // rather than read it as a prior win; a sibling Day may still be real
+        // evidence, so keep probing.
+        if (isSelfWrite(perCardId)) {
+          sawSelfWrite = true;
+          continue;
+        }
+        return true;
+      }
+    } catch {
+      // Not cached — no witness for this Day on this device; keep probing.
+    }
+  }
+  // The LEGACY day-less witness (`${uid}-bingo`) still counts, and must: every
+  // Player who bingoed before #372 shipped owns one, and it is durable proof of
+  // a prior win. Its tutorial-exclusion and #332 logic are unchanged below.
   try {
     const snap = await getDocFromCache(rawMoment(`${uid}-bingo`));
-    if (!snap.exists()) return false;
-    if (opts?.excludeDayIndexes) {
-      const witnessedDay = (snap.data() as { dayIndex?: number } | undefined)?.dayIndex;
-      if (typeof witnessedDay === 'number' && opts.excludeDayIndexes.has(witnessedDay)) {
-        // A tutorial-Day win is not a prior MAIN-GAME win — but the shared
-        // `${uid}-bingo` id means a later main-game win could never write its
-        // own witness, so before treating the player as witness-clean consult
-        // the first_bingo SINGLETON itself: if the headline honor is already
-        // claimed — by this player (their earlier main-game ceremony; a
-        // lost-and-regained line must stay suppressed) or by anyone else (a
-        // candidate is pointless) — the ceremony gate reads as witnessed.
-        // Absent → genuinely witness-clean.
+    if (snap.exists()) {
+      if (opts?.excludeDayIndexes) {
+        const witnessedDay = (snap.data() as { dayIndex?: number } | undefined)?.dayIndex;
+        if (typeof witnessedDay === 'number' && opts.excludeDayIndexes.has(witnessedDay)) {
+          // A tutorial-Day win is not a prior MAIN-GAME win — but the shared
+          // `${uid}-bingo` id means a later main-game win could never write its
+          // own witness, so before treating the player as witness-clean consult
+          // the first_bingo SINGLETON itself: if the headline honor is already
+          // claimed — by this player (their earlier main-game ceremony; a
+          // lost-and-regained line must stay suppressed) or by anyone else (a
+          // candidate is pointless) — the ceremony gate reads as witnessed.
+          // Absent → genuinely witness-clean.
+          return singletonWitness();
+        }
+      }
+      // #332 birth-time-witness race: a concurrent drain (typically gate-open)
+      // can broadcast THIS win's own plain bingo while this read is in flight,
+      // and the just-written doc must not read as a prior win and suppress the
+      // ceremonial enqueue. `writeMomentOnce` stamps the generation only when it
+      // genuinely writes (its cache pre-check found no existing doc), so a
+      // regain — whose doc predates the action — never takes this branch: its
+      // re-broadcast is skipped by the pre-check and leaves no stamp.
+      if (isSelfWrite(`${uid}-bingo`)) {
         return singletonWitness();
       }
+      return true;
     }
-    // #332 birth-time-witness race: a concurrent drain (typically gate-open)
-    // can broadcast THIS win's own plain bingo while this read is in flight,
-    // and the just-written doc must not read as a prior win and suppress the
-    // ceremonial enqueue. `writeMomentOnce` stamps the generation only when it
-    // genuinely writes (its cache pre-check found no existing doc), so a
-    // regain — whose doc predates the action — never takes this branch: its
-    // re-broadcast is skipped by the pre-check and leaves no stamp.
-    if (
-      opts?.selfWriteGeneration !== undefined &&
-      selfBingoWriteGenerations.get(pendingKey(uid)) === opts.selfWriteGeneration
-    ) {
-      return singletonWitness();
-    }
-    return true;
   } catch {
-    return false; // not in the local cache — no witness on this device
+    // Not in the local cache — no day-less witness on this device.
   }
+  // No evidence anywhere — but if the ONLY bingo doc found was this very win's
+  // own write (#332 × #372), defer to the singleton exactly as the day-less
+  // path does, rather than declaring witness-clean off our own drain.
+  if (sawSelfWrite) return singletonWitness();
+  return false;
 }
 
 /**
- * A Player's first BINGO (once per Player, ADR 0002). Broadcast on the transition
- * INTO having a bingo (Board's `wasBingo` edge), never on every completed line.
+ * A Player's BINGO — PER CARD (#372), the exact twin of `broadcastBlackout`
+ * since #267. Broadcast on the transition INTO having a bingo on a given Day's
+ * board (`setMark`'s `bingoTransition` verdict), never on every completed line.
+ *
+ * `dayIndex` NAMES the Day the bingo happened on AND scopes the deterministic
+ * dedup id to that Day (`${uid}-bingo-d${dayIndex}`): re-marking the SAME card
+ * can never double-post, while a second Day's bingo posts its own Moment.
+ *
+ * The pre-#372 id was `${uid}-bingo` — once-per-Player for the whole cruise — so
+ * only a Player's FIRST bingo ever reached the Feed: every later one re-targeted
+ * that immutable doc, hit the deny-all `update` rule, and was swallowed as the
+ * designed once-only path. Harmless while a Player had ONE board for the whole
+ * Event (per-Player was per-card there), but daily cards (#246) gave each Day its
+ * own board and its own bingo transition, so from then on the celebration fired
+ * on every Day while the Feed silently received nothing — the #372 report.
+ * Exactly the wall blackout hit, fixed the same way.
+ *
+ * A legacy single-Board caller omits `dayIndex` and keeps the once-per-Player id
+ * (a legacy Event has one card the whole Event, so per-Player IS per-card).
+ * Board's live-mark path captures the Day at ENQUEUE time via `enqueueWinMoments`
+ * and threads it through `pendingBingoDayIndexes` to the drain — never re-derived
+ * from whatever Day is on screen when a held bingo finally fires.
  */
 export function broadcastBingo(who: MomentActor, dayIndex?: number): void {
-  // The id stays once-per-Player (`${uid}-bingo`); `dayIndex` (#262) rides the
-  // PAYLOAD only, naming the Day the first bingo happened on for the Feed's
-  // day chip — captured at ENQUEUE time like the blackout Day.
-  broadcast(`${who.uid}-bingo`, 'bingo', who, dayIndex);
+  if (dayIndex === undefined) {
+    broadcast(`${who.uid}-bingo`, 'bingo', who);
+    return;
+  }
+  // Legacy same-day dedupe, mirroring broadcastBlackout's (Codex P2 on #275
+  // round 2): a card that already posted under the pre-#372 day-less id (a
+  // day-stamped payload at `${uid}-bingo`, the #262-era shape) must not post a
+  // SECOND, day-stamped Moment for the SAME Day. This is the live-data case, not
+  // a hypothetical: every Player who has bingoed before this ships already owns
+  // a `${uid}-bingo` doc. Same cache-only posture as writeMomentOnce — the check
+  // protects the visible-flash window (the doc IS cached on the device that
+  // posted it); a cold cache proceeds and the residual duplicate is a distinct
+  // id the create rule cannot dedup across (accepted, matching the existing
+  // broadcast dedup model).
+  void (async () => {
+    try {
+      const legacy = await getDocFromCache(rawMoment(`${who.uid}-bingo`));
+      if (legacy.exists() && (legacy.data() as { dayIndex?: number }).dayIndex === dayIndex) {
+        console.debug('[moments] per-card bingo skipped — legacy day-less Moment already covers this Day', {
+          uid: who.uid,
+          dayIndex,
+        });
+        return;
+      }
+    } catch {
+      // No legacy Moment in the local cache — nothing to dedupe against.
+    }
+    await writeMomentOnce(`${who.uid}-bingo-d${dayIndex}`, 'bingo', who, dayIndex);
+  })();
 }
 
 /**

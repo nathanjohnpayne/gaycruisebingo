@@ -51,9 +51,10 @@ import {
   enqueueFirstBingoMoment,
   peekPendingMoments,
   pendingBlackoutDayIndexes,
-  pendingBingoDayIndex,
+  pendingBingoDayIndexes,
   pendingFirstBingoDayIndex,
   removePendingBlackoutDay,
+  removePendingBingoDay,
   clearPendingMoment,
   dropPendingWins,
   pendingActionGeneration,
@@ -140,6 +141,54 @@ describe('moments broadcasts — the Feed beat writer (specs/w2-feed-moments.md)
     expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-blackout-d6`);
   });
 
+  it('a per-card BINGO (#372) writes a per-(Player, Day) id — a second Day posts its own Moment', async () => {
+    // THE #372 REGRESSION TEST. Pre-fix both calls targeted `u1-bingo`, so the
+    // second was a doc-exists update on an immutable Moment: denied server-side
+    // and swallowed as the designed once-only path. The Player saw the
+    // celebration on Day 6 and the Feed received nothing.
+    broadcastBingo({ uid: 'u1', displayName: 'Alice', photoURL: null }, 3);
+    broadcastBingo({ uid: 'u1', displayName: 'Alice', photoURL: null }, 6);
+    await settle();
+
+    expect(setDocSpy).toHaveBeenCalledTimes(2);
+    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-bingo-d3`);
+    expect(setDocSpy.mock.calls[0][1]).toMatchObject({ kind: 'bingo', uid: 'u1', dayIndex: 3 });
+    expect(setDocSpy.mock.calls[1][0].path).toBe(`events/${EVENT_ID}/moments/u1-bingo-d6`);
+    expect(setDocSpy.mock.calls[1][1]).toMatchObject({ kind: 'bingo', uid: 'u1', dayIndex: 6 });
+  });
+
+  it('a legacy (day-less) BINGO still broadcasts at the once-per-Player id', async () => {
+    broadcastBingo({ uid: 'u1', displayName: 'Alice', photoURL: 'https://x/a.jpg' });
+    await settle();
+
+    expect(setDocSpy).toHaveBeenCalledTimes(1);
+    const [ref, payload] = setDocSpy.mock.calls[0];
+    expect(ref.path).toBe(`events/${EVENT_ID}/moments/u1-bingo`);
+    expect(payload).toMatchObject({ kind: 'bingo', uid: 'u1', photoURL: 'https://x/a.jpg' });
+    expect('dayIndex' in payload).toBe(false);
+  });
+
+  it('a per-card BINGO skips when a LEGACY day-less Moment already covers the SAME Day (#372, mirroring #275 round 2)', async () => {
+    // Not hypothetical: every Player who bingoed before #372 shipped owns a
+    // `${uid}-bingo` doc (day-less id, day-stamped payload since #262). That
+    // Day must not post a second, day-stamped Moment for the same card.
+    getDocFromCacheSpy.mockImplementation((ref: { path: string }) =>
+      ref.path.endsWith('u1-bingo')
+        ? Promise.resolve({ exists: () => true, data: () => ({ dayIndex: 3 }) })
+        : Promise.reject(new Error('unavailable')),
+    );
+    broadcastBingo({ uid: 'u1', displayName: 'Alice', photoURL: null }, 3);
+    await settle();
+    expect(setDocSpy).not.toHaveBeenCalled(); // same card — already posted
+
+    // A DIFFERENT Day is a different card: the legacy doc does not cover it.
+    // This is the live upgrade path — the Player keeps bingoing on later Days.
+    broadcastBingo({ uid: 'u1', displayName: 'Alice', photoURL: null }, 6);
+    await settle();
+    expect(setDocSpy).toHaveBeenCalledTimes(1);
+    expect(setDocSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/moments/u1-bingo-d6`);
+  });
+
   it('First-to-BINGO broadcasts one `first_bingo` Moment at the EVENT-singleton id', async () => {
     expect(FIRST_BINGO_MOMENT_ID).toBe('first_bingo');
     broadcastFirstBingo({ uid: 'u1', displayName: 'Alice', photoURL: null });
@@ -210,6 +259,46 @@ describe('hasPriorBingoWitness — the durable prior-win witness (PR #99 round 2
     await expect(hasPriorBingoWitness('u1')).resolves.toBe(false);
   });
 
+  it('probes the PER-CARD witness ids when given the schedule (#372)', async () => {
+    // Per-card bingo means there is no single `${uid}-bingo` doc to read: the
+    // witness lives at whichever `${uid}-bingo-d${day}` the Player actually won.
+    getDocFromCacheSpy.mockImplementation((ref: { path: string }) =>
+      ref.path.endsWith('u1-bingo-d5')
+        ? Promise.resolve({ exists: () => true })
+        : Promise.reject(new Error('unavailable')),
+    );
+    await expect(hasPriorBingoWitness('u1', { dayIndexes: [0, 1, 5, 9] })).resolves.toBe(true);
+  });
+
+  it('per-card: EXCLUDED (tutorial) Days are never probed, so a warm-up win is not a prior main-game win (#372)', async () => {
+    // The day-scoped shape makes the #288 exclusion EXACT rather than
+    // inferential: the tutorial win owns its own id, which is simply not read —
+    // so none of the first_bingo-singleton fallback the shared id forced is needed.
+    getDocFromCacheSpy.mockImplementation((ref: { path: string }) =>
+      ref.path.endsWith('u1-bingo-d0')
+        ? Promise.resolve({ exists: () => true }) // the embark (tutorial) win
+        : Promise.reject(new Error('unavailable')),
+    );
+    await expect(
+      hasPriorBingoWitness('u1', { dayIndexes: [0, 1, 9], excludeDayIndexes: new Set([0, 9]) }),
+    ).resolves.toBe(false);
+    const probed = getDocFromCacheSpy.mock.calls.map((c) => (c[0] as { path: string }).path);
+    expect(probed).not.toContain(`events/${EVENT_ID}/moments/u1-bingo-d0`);
+    expect(probed).not.toContain(`events/${EVENT_ID}/moments/u1-bingo-d9`);
+    expect(probed).toContain(`events/${EVENT_ID}/moments/u1-bingo-d1`);
+  });
+
+  it('per-card: the LEGACY day-less witness still counts — pre-#372 winners keep theirs', async () => {
+    // Every Player who bingoed before #372 shipped owns a `${uid}-bingo` doc. It
+    // is durable proof of a prior win and must keep suppressing a regain.
+    getDocFromCacheSpy.mockImplementation((ref: { path: string }) =>
+      ref.path.endsWith('u1-bingo')
+        ? Promise.resolve({ exists: () => true, data: () => ({ dayIndex: 4 }) })
+        : Promise.reject(new Error('unavailable')),
+    );
+    await expect(hasPriorBingoWitness('u1', { dayIndexes: [0, 1, 4] })).resolves.toBe(true);
+  });
+
   it('resolves false — NEVER rejects — on a cache miss (fresh device / cold cache)', async () => {
     // getDocFromCache rejects when the doc is not in the local cache; the caller
     // (Board) then falls back to the roster check — the narrowed residual the
@@ -261,45 +350,64 @@ describe('hasPriorBingoWitness — the durable prior-win witness (PR #99 round 2
 
 describe('the birth-time-witness race (#332): a concurrent drain must not suppress the ceremony', () => {
   const alice = { uid: 'u1', displayName: 'Alice', photoURL: null };
+  const at = (id: string) => `events/${EVENT_ID}/moments/${id}`;
+  // PATH-aware cache, not call-ordered mocks (#372): a per-card `broadcastBingo`
+  // reads TWICE before writing (the legacy same-day dedupe, then writeMomentOnce's
+  // pre-check), so ordinal `mockResolvedValueOnce` chains no longer describe the
+  // sequence. `setDoc` seeds the cache, which is exactly the race being modelled:
+  // the drain's write lands in the local cache mid-witness-read.
+  let cached: Set<string>;
+  const seedCache = (payload: Record<string, unknown> = { dayIndex: 3 }) => {
+    getDocFromCacheSpy.mockImplementation((ref: { path: string }) =>
+      cached.has(ref.path)
+        ? Promise.resolve({ exists: () => true, data: () => payload })
+        : Promise.reject(new Error('unavailable')),
+    );
+    setDocSpy.mockImplementation((ref: { path: string }) => {
+      cached.add(ref.path);
+      return Promise.resolve(undefined);
+    });
+  };
+
+  beforeEach(() => {
+    cached = new Set<string>();
+    seedCache();
+  });
 
   it('this win’s own mid-read write reads as SELF-evidence: singleton unclaimed → witness-clean', async () => {
-    // The drain broadcasts THIS win's plain bingo while the witness read is in
-    // flight: writeMomentOnce's pre-check misses (first win — nothing cached),
-    // stamps the current generation, and the doc lands in the cache. The
-    // witness read then finds it — and must fall through to the singleton
-    // (unclaimed here) instead of reading it as a prior win.
-    getDocFromCacheSpy
-      .mockRejectedValueOnce(new Error('unavailable')) // write-once pre-check: miss → genuine write + stamp
-      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 3 }) }) // witness read: finds the fresh doc
-      .mockRejectedValueOnce(new Error('unavailable')); // singleton: unclaimed
+    // The drain broadcasts THIS win's per-card bingo while the witness read is
+    // in flight: writeMomentOnce's pre-check misses (first win — nothing
+    // cached), stamps the current generation against the doc id, and the doc
+    // lands in the cache. The witness read then finds it — and must fall
+    // through to the singleton (unclaimed here) instead of reading it as a
+    // prior win.
     broadcastBingo(alice, 3);
     await settle();
+    expect(cached.has(at('u1-bingo-d3'))).toBe(true); // the drain landed
     const generation = pendingActionGeneration('u1');
-    await expect(hasPriorBingoWitness('u1', { selfWriteGeneration: generation })).resolves.toBe(false);
-    expect(getDocFromCacheSpy).toHaveBeenCalledTimes(3);
-    expect(getDocFromCacheSpy.mock.calls[2][0].path).toBe(`events/${EVENT_ID}/moments/first_bingo`);
+    await expect(
+      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: generation, selfWriteDayIndex: 3 }),
+    ).resolves.toBe(false);
+    // The singleton IS consulted — the self-write did not short-circuit to "prior win".
+    expect(getDocFromCacheSpy.mock.calls.some((c) => (c[0] as { path: string }).path === at('first_bingo'))).toBe(true);
   });
 
   it('self-evidence with the singleton already claimed stays witnessed — no duplicate ceremony', async () => {
-    getDocFromCacheSpy
-      .mockRejectedValueOnce(new Error('unavailable'))
-      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 3 }) })
-      .mockResolvedValueOnce({ exists: () => true }); // singleton claimed
     broadcastBingo(alice, 3);
     await settle();
+    cached.add(at('first_bingo')); // the headline honor is already claimed
     await expect(
-      hasPriorBingoWitness('u1', { selfWriteGeneration: pendingActionGeneration('u1') }),
+      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: pendingActionGeneration('u1'), selfWriteDayIndex: 3 }),
     ).resolves.toBe(true);
   });
 
   it('a stamp from ANOTHER action generation is not self-evidence — the doc stays a prior win', async () => {
-    getDocFromCacheSpy
-      .mockRejectedValueOnce(new Error('unavailable'))
-      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 3 }) });
     broadcastBingo(alice, 3);
     await settle();
     const stale = pendingActionGeneration('u1') + 1; // a generation this stamp does not belong to
-    await expect(hasPriorBingoWitness('u1', { selfWriteGeneration: stale })).resolves.toBe(true);
+    await expect(
+      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: stale, selfWriteDayIndex: 3 }),
+    ).resolves.toBe(true);
   });
 
   it('a REGAIN leaves no stamp — the pre-check skip means the found doc is genuine prior evidence', async () => {
@@ -307,24 +415,58 @@ describe('the birth-time-witness race (#332): a concurrent drain must not suppre
     // FINDS it and skips the write without stamping. The witness read that
     // finds the same doc must keep reading it as a prior win even when the
     // caller passes the current generation.
-    getDocFromCacheSpy
-      .mockResolvedValueOnce({ exists: () => true }) // write-once pre-check: HIT → skip, no stamp
-      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 3 }) }); // witness read
+    cached.add(at('u1-bingo-d3'));
     broadcastBingo(alice, 3);
     await settle();
     expect(setDocSpy).not.toHaveBeenCalled(); // the skip is what withholds the stamp
     await expect(
-      hasPriorBingoWitness('u1', { selfWriteGeneration: pendingActionGeneration('u1') }),
+      hasPriorBingoWitness('u1', { dayIndexes: [3], selfWriteGeneration: pendingActionGeneration('u1'), selfWriteDayIndex: 3 }),
     ).resolves.toBe(true);
   });
 
   it('callers that pass no generation (confirm pipeline) keep the pre-#332 read', async () => {
-    getDocFromCacheSpy
-      .mockRejectedValueOnce(new Error('unavailable'))
-      .mockResolvedValueOnce({ exists: () => true, data: () => ({ dayIndex: 3 }) });
     broadcastBingo(alice, 3);
     await settle();
-    await expect(hasPriorBingoWitness('u1')).resolves.toBe(true);
+    await expect(hasPriorBingoWitness('u1', { dayIndexes: [3] })).resolves.toBe(true);
+  });
+
+  it('self-write detection is bound to the ACTED Day — an earlier Day’s win this device wrote is still prior evidence (Codex P2 on #386)', async () => {
+    // The scenario the generation alone cannot distinguish: this device writes a
+    // Day-3 bingo, the player never loses that line (so NO fall, so the
+    // generation never bumps), then completes Day 5. Both writes are stamped at
+    // the SAME generation — so a check on generation alone classifies the
+    // genuine Day-3 prior win as the Day-5 action's own write, skips it, and
+    // wrongly clears the ceremony gate for a player who is not witness-clean.
+    // Binding to the acted Day is what makes it precise: only `u1-bingo-d5` can
+    // be the Day-5 action's write.
+    broadcastBingo(alice, 3); // an EARLIER action, genuinely written + stamped this session
+    await settle();
+    broadcastBingo(alice, 5); // this action's own drain
+    await settle();
+    expect(cached.has(at('u1-bingo-d3'))).toBe(true);
+    expect(cached.has(at('u1-bingo-d5'))).toBe(true);
+    // Same generation for both (no bingo fall between them) — the exact trap.
+    await expect(
+      hasPriorBingoWitness('u1', {
+        dayIndexes: [3, 5],
+        selfWriteGeneration: pendingActionGeneration('u1'),
+        selfWriteDayIndex: 5,
+      }),
+    ).resolves.toBe(true); // Day 3 stands as prior evidence
+  });
+
+  it('the acted Day’s OWN doc is still excused — self-evidence detection survives the Day binding', async () => {
+    // The complement of the above: bind too tightly and #332 comes back. The
+    // acted Day's own mid-read write must still read as self-evidence.
+    broadcastBingo(alice, 5);
+    await settle();
+    await expect(
+      hasPriorBingoWitness('u1', {
+        dayIndexes: [5],
+        selfWriteGeneration: pendingActionGeneration('u1'),
+        selfWriteDayIndex: 5,
+      }),
+    ).resolves.toBe(false); // singleton unclaimed → witness-clean, ceremony survives
   });
 });
 
@@ -457,17 +599,57 @@ describe('pendingBlackoutDayIndexes — the blackout Day(s) captured at ENQUEUE 
   });
 });
 
-describe('pendingBingoDayIndex — the bingo Day captured at ENQUEUE time (#262)', () => {
-  it('first-write-wins, matching the once-per-Player `${uid}-bingo` id', () => {
-    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+describe('pendingBingoDayIndexes — the bingo Day(s) captured at ENQUEUE time (#262; per-card set #372)', () => {
+  it('ACCUMULATES one entry per distinct Day — a second Day queues its own (#372)', () => {
+    // Pre-#372 this was first-write-wins ("the FIRST queued bingo's Day"),
+    // which matched the once-per-Player `${uid}-bingo` id: a second Day's bingo
+    // could never post anyway, so queueing it was pointless. That WAS the bug.
+    // Per-card ids mean each Day's win is its own Moment, so each must queue.
+    expect(pendingBingoDayIndexes('u1')).toEqual([]);
     enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 2 });
     enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 5 });
-    expect(pendingBingoDayIndex('u1')).toBe(2); // the FIRST queued bingo's Day
+    expect(pendingBingoDayIndexes('u1')).toEqual([2, 5]);
   });
 
-  it('undefined on a legacy (day-less) enqueue', () => {
+  it('de-duplicates a repeat enqueue for the SAME Day', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 2 });
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 2 });
+    expect(pendingBingoDayIndexes('u1')).toEqual([2]);
+  });
+
+  it('empty on a legacy (day-less) enqueue — the flag still owes a day-less broadcast', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false });
-    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+    expect(pendingBingoDayIndexes('u1')).toEqual([]);
+    expect(peekPendingMoments('u1').bingo).toBe(true);
+  });
+
+  it('removePendingBingoDay drops ONE fired Day and leaves siblings owed (#372)', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 2 });
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 5 });
+    removePendingBingoDay('u1', 2);
+    expect(pendingBingoDayIndexes('u1')).toEqual([5]);
+    expect(peekPendingMoments('u1').bingo).toBe(true); // Day 5 still owed
+    removePendingBingoDay('u1', 5);
+    expect(pendingBingoDayIndexes('u1')).toEqual([]);
+    expect(peekPendingMoments('u1').bingo).toBe(false); // queue empty — nothing owed
+  });
+
+  it('a day-scoped FALL drops only the fallen Day, leaving a sibling Day still owed (#372)', () => {
+    // The regression per-card bingo would otherwise introduce: a Day-2 unmark
+    // wiping a still-standing Day-5 bingo out of the queue.
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 2 });
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 5 });
+    dropPendingWins('u1', { bingo: true, bingoDayIndex: 2 });
+    expect(pendingBingoDayIndexes('u1')).toEqual([5]);
+    expect(peekPendingMoments('u1').bingo).toBe(true);
+  });
+
+  it('a legacy (day-less) fall still clears the whole bingo queue', () => {
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 2 });
+    enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 5 });
+    dropPendingWins('u1', { bingo: true });
+    expect(pendingBingoDayIndexes('u1')).toEqual([]);
+    expect(peekPendingMoments('u1').bingo).toBe(false);
   });
 
   it('the ceremonial candidate carries ITS OWN Day — the plain-bingo fire cannot strip it (Codex P2 R1 + P3 R2 on #286)', () => {
@@ -487,7 +669,7 @@ describe('pendingBingoDayIndex — the bingo Day captured at ENQUEUE time (#262)
     // whole flags entry) inside that gap. The late candidate stamps its own Day.
     enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 5 });
     clearPendingMoment('u1', 'bingo'); // fired mid-witness-read; entry deleted
-    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+    expect(pendingBingoDayIndexes('u1')).toEqual([]);
     enqueueFirstBingoMoment('u1', 5); // the witness continuation lands after
     expect(pendingFirstBingoDayIndex('u1')).toBe(5);
     expect(peekPendingMoments('u1').firstBingo).toBe(true);
@@ -496,18 +678,18 @@ describe('pendingBingoDayIndex — the bingo Day captured at ENQUEUE time (#262)
   it('clears with the bingo fire when NO ceremonial candidate is queued', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 3 });
     clearPendingMoment('u1', 'bingo');
-    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+    expect(pendingBingoDayIndexes('u1')).toEqual([]);
     // A LATER bingo on a different Day must capture ITS OWN Day, never inherit
     // a stale one.
     enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 7 });
-    expect(pendingBingoDayIndex('u1')).toBe(7);
+    expect(pendingBingoDayIndexes('u1')).toEqual([7]);
   });
 
   it('a bingo FALL drops both Days with the win (dropPendingWins)', () => {
     enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: false, dayIndex: 4 });
     enqueueFirstBingoMoment('u1', 4);
     dropPendingWins('u1', { bingo: true });
-    expect(pendingBingoDayIndex('u1')).toBeUndefined();
+    expect(pendingBingoDayIndexes('u1')).toEqual([]);
     expect(pendingFirstBingoDayIndex('u1')).toBeUndefined();
   });
 });
@@ -645,6 +827,17 @@ describe('hasCanonicalMomentId — read-side singleton/per-player Moment filter'
     expect(hasCanonicalMomentId({ ...moment('u1-blackout-d4', 1, 'blackout'), uid: 'u1', dayIndex: 5 })).toBe(false);
     expect(hasCanonicalMomentId({ ...moment('u1-blackout-d4', 1, 'blackout'), uid: 'u1' })).toBe(false);
     expect(hasCanonicalMomentId({ ...moment('u2-blackout-d4', 1, 'blackout'), uid: 'u1', dayIndex: 4 })).toBe(false);
+
+    // Per-card bingo ids (#372) — the same contract, now that bingo shares the
+    // day-scoped form. Without this the writer's new ids would be filtered out
+    // of every Feed on the read side, so the fix would post and never render.
+    expect(hasCanonicalMomentId({ ...moment('u1-bingo-d4', 1, 'bingo'), uid: 'u1', dayIndex: 4 })).toBe(true);
+    expect(hasCanonicalMomentId({ ...moment('u1-bingo-d4', 1, 'bingo'), uid: 'u1', dayIndex: 5 })).toBe(false);
+    expect(hasCanonicalMomentId({ ...moment('u1-bingo-d4', 1, 'bingo'), uid: 'u1' })).toBe(false);
+    expect(hasCanonicalMomentId({ ...moment('u2-bingo-d4', 1, 'bingo'), uid: 'u1', dayIndex: 4 })).toBe(false);
+    // first_bingo is NOT day-scopable — the event singleton renders only from
+    // the literal id, mirroring the create rule.
+    expect(hasCanonicalMomentId({ ...moment('first_bingo-d4', 1, 'first_bingo'), uid: 'u1', dayIndex: 4 })).toBe(false);
 
     expect(hasCanonicalMomentId({ ...moment('spoof-first', 1, 'first_bingo'), uid: 'u1' })).toBe(false);
     expect(hasCanonicalMomentId({ ...moment('u1-first_bingo', 1, 'first_bingo'), uid: 'u1' })).toBe(false);
