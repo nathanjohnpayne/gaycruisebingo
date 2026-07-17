@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import type { DayDef, EventDoc, ItemDoc } from '../types';
 
 // specs/d15-approvals.md, component layer (RTL-jsdom). Drives the REAL Admin
@@ -297,6 +297,21 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
     fireEvent.change(input, { target: { value: '💦 Splash T-Dance · 🏋️ Get Sporty' } });
     fireEvent.blur(input);
     expect(H.setDayTonight).toHaveBeenCalledWith(days, 0, ['💦 Splash T-Dance', '🏋️ Get Sporty']);
+  });
+
+  it('surfaces a failed Tonight save and restores the persisted line', async () => {
+    H.setDayTonight.mockRejectedValueOnce(new Error('locked'));
+    const days = [dayDef({ index: 0, unlockAt: Date.now() + 3600_000, tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    render(<Admin />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    const input = screen.getByLabelText('Day 1 tonight') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '💦 Splash T-Dance · 🏋️ Get Sporty' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Tonight save failed.'));
+    expect(input.value).toBe('🪖 Dog Tag T-Dance · ✈️ Duty Free');
   });
 
   it('rejects one- or three-entry Tonight drafts before calling setDayTonight', () => {

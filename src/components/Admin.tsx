@@ -409,7 +409,7 @@ function ScheduleRow({
   day: DayDef;
   now: number;
   onChangeTheme: (dayIndex: number, theme: ThemeId) => void;
-  onChangeTonight: (dayIndex: number, tonight: string[]) => void;
+  onChangeTonight: (dayIndex: number, tonight: string[]) => Promise<void>;
 }) {
   const locked = day.unlockAt <= now;
   const dueForManualUnlock = dayDueForManualUnlock(day, now);
@@ -420,7 +420,7 @@ function ScheduleRow({
     setTonightDraft(joinTonight(day.tonight));
     setTonightError('');
   }, [day.tonight]);
-  const commitTonight = () => {
+  const commitTonight = async () => {
     if (locked) return;
     const next = splitTonight(tonightDraft);
     if (next.length !== 2 || next.some((entry) => entry.trim().length === 0)) {
@@ -428,7 +428,13 @@ function ScheduleRow({
       return;
     }
     setTonightError('');
-    if (joinTonight(next) !== joinTonight(day.tonight)) onChangeTonight(day.index, next);
+    if (joinTonight(next) === joinTonight(day.tonight)) return;
+    try {
+      await onChangeTonight(day.index, next);
+    } catch {
+      setTonightDraft(joinTonight(day.tonight));
+      setTonightError('Tonight save failed. Reload the schedule and try again.');
+    }
   };
   return (
     <div className="row">
@@ -449,7 +455,7 @@ function ScheduleRow({
           disabled={locked}
           placeholder="e.g. 🪖 Dog Tag T-Dance · ✈️ Duty Free"
           onChange={(e) => setTonightDraft(e.target.value)}
-          onBlur={commitTonight}
+          onBlur={() => void commitTonight()}
         />
         {tonightError ? <div className="error" role="alert">{tonightError}</div> : null}
       </div>

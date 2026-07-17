@@ -235,6 +235,19 @@ service cloud.firestore {
         && ('tonight' in newDay) == ('tonight' in oldDay)
         && (!('tonight' in newDay) || newDay.tonight == oldDay.tonight);
     }
+    // `tonight` is legacy-tolerant but strict once present. Fixtures and docs
+    // seeded before the field existed may still omit it; a write to a Day that
+    // already has Tonight metadata must carry exactly two non-empty strings.
+    function dayTonightShapeOk(newDay, oldDay) {
+      return (!('tonight' in oldDay) && !('tonight' in newDay))
+        || (('tonight' in newDay)
+            && newDay.tonight is list
+            && newDay.tonight.size() == 2
+            && newDay.tonight[0] is string
+            && newDay.tonight[0].size() > 0
+            && newDay.tonight[1] is string
+            && newDay.tonight[1].size() > 0);
+    }
     // "Locked once unlocked" (daily-cards-spec § "Itinerary and schedule"): once
     // a Day has unlocked, its `theme`, `unlockAt`, and `tonight` metadata may
     // not change. A still-future Day is fully editable (theme swaps, Tonight
@@ -243,7 +256,8 @@ service cloud.firestore {
     // that changes only an unlocked Day's `unlockAt` (theme unchanged) moved the
     // lock source into the future, letting a SECOND write then change the theme.
     function dayThemeChangeOk(newDay, oldDay) {
-      return !dayLocked(oldDay) || daySchedUnchanged(newDay, oldDay);
+      return dayTonightShapeOk(newDay, oldDay)
+        && (!dayLocked(oldDay) || daySchedUnchanged(newDay, oldDay));
     }
 
     // Applies dayThemeChangeOk across the whole `days` array. Firestore rules
