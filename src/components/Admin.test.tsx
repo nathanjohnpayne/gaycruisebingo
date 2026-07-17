@@ -48,9 +48,11 @@ const H = vi.hoisted(() => ({
   setStripPhotoExif: vi.fn(),
   setVisionGate: vi.fn(),
   setReportHideThreshold: vi.fn(),
+  setEasyMixRatio: vi.fn(),
   banUser: vi.fn(),
   unbanUser: vi.fn(),
   unlockDayNow: vi.fn(),
+  resnapshotDayNow: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event', storage: {}, auth: {}, googleProvider: {}, analytics: null }));
@@ -103,9 +105,11 @@ vi.mock('../data/admin', () => ({
   setStripPhotoExif: (...a: unknown[]) => H.setStripPhotoExif(...a),
   setVisionGate: (...a: unknown[]) => H.setVisionGate(...a),
   setReportHideThreshold: (...a: unknown[]) => H.setReportHideThreshold(...a),
+  setEasyMixRatio: (...a: unknown[]) => H.setEasyMixRatio(...a),
   banUser: (...a: unknown[]) => H.banUser(...a),
   unbanUser: (...a: unknown[]) => H.unbanUser(...a),
   unlockDayNow: (...a: unknown[]) => H.unlockDayNow(...a),
+  resnapshotDayNow: (...a: unknown[]) => H.resnapshotDayNow(...a),
 }));
 vi.mock('../data/proofs', () => ({ deleteProof: (...a: unknown[]) => H.deleteProof(...a) }));
 vi.mock('../theme/themes', () => ({
@@ -305,7 +309,7 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
   const panel = () => screen.getByText('Proof & Claims').closest('.admin-section') as HTMLElement;
   const row = (label: string) => within(panel()).getByText(label).closest('.row') as HTMLElement;
 
-  it('renders all six rows reflecting current EventDoc values, with the ADR 0001 caption and no "verified" language', () => {
+  it('renders its knob rows reflecting current EventDoc values, with the ADR 0001 caption and no "verified" language', () => {
     H.event = {
       ...H.event,
       claimMode: 'proof_required',
@@ -352,6 +356,23 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
     expect(H.setReportHideThreshold).toHaveBeenCalledWith(5);
     fireEvent.click(within(stepperRow).getByRole('button', { name: 'Decrease auto-hide threshold' }));
     expect(H.setReportHideThreshold).toHaveBeenCalledWith(3);
+  });
+
+  it('the Easy mix control (specs/easy-mix.md) reflects easyMixRatio and writes via setEasyMixRatio', () => {
+    // A stored 0.25 → the 25% step is on; the 0.5 default is used when unset.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.25 } } as unknown as EventDoc;
+    render(<Admin />);
+    const mixRow = row('Easy mix');
+    expect(within(mixRow).getByRole('button', { name: '25%' })).toHaveClass('on');
+    fireEvent.click(within(mixRow).getByRole('button', { name: '50%' }));
+    expect(H.setEasyMixRatio).toHaveBeenCalledWith(0.5);
+    fireEvent.click(within(mixRow).getByRole('button', { name: '0%' }));
+    expect(H.setEasyMixRatio).toHaveBeenCalledWith(0);
+  });
+
+  it('the Easy mix control defaults to 50% when easyMixRatio is unset', () => {
+    render(<Admin />); // H.event.settings has no easyMixRatio
+    expect(within(row('Easy mix')).getByRole('button', { name: '50%' })).toHaveClass('on');
   });
 
   // Legacy negative threshold (isReportHidden treats non-positive as "no filtering"):

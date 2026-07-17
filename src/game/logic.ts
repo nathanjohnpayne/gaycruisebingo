@@ -47,6 +47,13 @@ export interface DealItem {
   id: string;
   text: string;
   spicy: boolean;
+  /**
+   * Which item pool the Prompt belongs to (`main` | `embark` | `farewell`). Absent
+   * on the pre-easy-mix / synthetic-test items → treated as `main`. Only `'embark'`
+   * is load-bearing here: on a main-day deal, embark items form the EASY half of the
+   * mix (specs/easy-mix.md), while everything else is the main half.
+   */
+  pool?: string;
 }
 
 function interleavePicks(spicyPicks: DealItem[], tamePicks: DealItem[]): DealItem[] {
@@ -72,16 +79,31 @@ function interleavePicks(spicyPicks: DealItem[], tamePicks: DealItem[]): DealIte
   return slots as DealItem[];
 }
 
+/** What a stratified selection chose (`spicy`/`tame`) plus what it left behind
+ *  (`leftoverSpicy`/`leftoverTame`) — the leftovers backfill the easy half of a mix. */
+interface StratifiedSelection {
+  spicy: DealItem[];
+  tame: DealItem[];
+  leftoverSpicy: DealItem[];
+  leftoverTame: DealItem[];
+}
+
 /**
- * Stratified sample of 24 picks from `pool`: `spicyRatio` of them (rounded)
- * drawn from the spicy category, the rest from tame, each category shuffled
- * independently with the SAME seeded `rnd` for determinism. Backfills from
- * the other category when one runs short (so a thin category still yields a
- * full 24, so long as the pool overall has >= MIN_POOL), then lays out the
- * chosen categories evenly across the 24 non-free positions so spicy/tame
- * interleave instead of clustering.
+ * Select `count` picks from `pool`, stratified by the 🔞 `spicy` flag: shuffle the
+ * spicy and tame subsets independently (both with the SAME seeded `rnd`, so the deal
+ * stays deterministic per seed), take `round(count * spicyRatio)` spicy and the rest
+ * tame, and backfill from whichever category has more when the other runs short.
+ * Returns the chosen slices AND the untouched remainders. Consuming `rnd` here is
+ * IDENTICAL to the pre-easy-mix `stratifiedPicks` when `count === 24` — the spicy
+ * then tame shuffle, same target math — so the all-main deal is byte-for-byte
+ * unchanged (the easy-mix no-regression proof).
  */
-function stratifiedPicks(pool: DealItem[], spicyRatio: number, rnd: () => number): DealItem[] {
+function selectStratified(
+  pool: DealItem[],
+  count: number,
+  spicyRatio: number,
+  rnd: () => number,
+): StratifiedSelection {
   const spicyPool = shuffle(
     pool.filter((p) => p.spicy),
     rnd,
@@ -90,15 +112,71 @@ function stratifiedPicks(pool: DealItem[], spicyRatio: number, rnd: () => number
     pool.filter((p) => !p.spicy),
     rnd,
   );
-  const targetSpicy = Math.round(24 * spicyRatio);
-  const targetTame = 24 - targetSpicy;
+  const targetSpicy = Math.round(count * spicyRatio);
+  const targetTame = count - targetSpicy;
   let spicyTaken = Math.min(spicyPool.length, targetSpicy);
   let tameTaken = Math.min(tamePool.length, targetTame + (targetSpicy - spicyTaken));
-  const remaining = 24 - spicyTaken - tameTaken;
+  const remaining = count - spicyTaken - tameTaken;
   if (remaining > 0) {
     spicyTaken += Math.min(spicyPool.length - spicyTaken, remaining);
   }
-  return interleavePicks(spicyPool.slice(0, spicyTaken), tamePool.slice(0, tameTaken));
+  return {
+    spicy: spicyPool.slice(0, spicyTaken),
+    tame: tamePool.slice(0, tameTaken),
+    leftoverSpicy: spicyPool.slice(spicyTaken),
+    leftoverTame: tamePool.slice(tameTaken),
+  };
+}
+
+/**
+ * Stratified sample of 24 picks from `pool` (the all-main deal): `spicyRatio` of them
+ * (rounded) spicy, the rest tame, laid out evenly across the 24 non-free positions so
+ * spicy/tame interleave instead of clustering. Unchanged from before easy mix — the
+ * `easyCount === 0` path routes here so a Day with no embark in its snapshot (Days
+ * 1–3) deals exactly as it always has.
+ */
+function stratifiedPicks(pool: DealItem[], spicyRatio: number, rnd: () => number): DealItem[] {
+  const sel = selectStratified(pool, 24, spicyRatio, rnd);
+  return interleavePicks(sel.spicy, sel.tame);
+}
+
+/**
+ * The easy-mix composition (specs/easy-mix.md): `easyCount` squares drawn from the
+ * embark pool + `24 - easyCount` from the stratified main deal, interleaved across the
+ * grid so the easy squares don't cluster. The MAIN half is selected FIRST so its
+ * seeded draw is unaffected by the easy half's shuffle (and `easyCount === 0` never
+ * reaches here — that is the untouched all-main path). Backfill is bidirectional and
+ * mirrors the existing stratum-dry behavior: an embark shortfall (a hidden/thin
+ * embark pool) is filled from leftover tame-then-spicy main; a main shortfall (a thin
+ * main pool) is filled from the spare embark. Embark and main items are disjoint
+ * pools, so the resulting 24 squares are always distinct.
+ */
+function mixedPicks(
+  mainPool: DealItem[],
+  embarkPool: DealItem[],
+  easyCount: number,
+  spicyRatio: number,
+  rnd: () => number,
+): DealItem[] {
+  const mainCount = 24 - easyCount;
+  const sel = selectStratified(mainPool, mainCount, spicyRatio, rnd);
+  const mainPicks = interleavePicks(sel.spicy, sel.tame); // up to mainCount
+  const leftoverMain = [...sel.leftoverTame, ...sel.leftoverSpicy]; // tame first (ticket)
+
+  const embarkShuffled = shuffle(embarkPool, rnd);
+  const embarkUsed = Math.min(easyCount, embarkShuffled.length);
+  const easyPicks = embarkShuffled.slice(0, embarkUsed);
+  // Embark short of the easy count → backfill the easy half from leftover main.
+  if (easyPicks.length < easyCount) {
+    easyPicks.push(...leftoverMain.slice(0, easyCount - easyPicks.length));
+  }
+  // Main short of its count → backfill the main half from the spare embark items
+  // (those past the `embarkUsed` the easy half already claimed, so no square repeats).
+  if (mainPicks.length < mainCount) {
+    const spareEmbark = embarkShuffled.slice(embarkUsed);
+    mainPicks.push(...spareEmbark.slice(0, mainCount - mainPicks.length));
+  }
+  return interleavePicks(easyPicks, mainPicks);
 }
 
 /** Shuffle the whole pool and take the first 24 — no spicy/tame target. Used
@@ -123,6 +201,18 @@ function unstratifiedPicks(pool: DealItem[], rnd: () => number): DealItem[] {
 export interface DealOptions {
   excludeIds?: ReadonlySet<string>;
   stratify?: boolean;
+  /**
+   * Share of the 24 non-free squares dealt from the EASY (embark) pool instead of the
+   * main pool (specs/easy-mix.md), clamped to 0..1. `round(24 * easyMixRatio)` squares
+   * come from the embark items in `pool`; the rest are the normal stratified main
+   * deal, with `spicyRatio` applied WITHIN that main remainder. Two gates keep it
+   * inert where it must be: it is ignored on the unstratified tutorial path
+   * (`stratify: false`), and it has no effect when `pool` carries no embark items — a
+   * main-only snapshot (Days 1–3, stamped before easy mix) deals byte-for-byte as
+   * today. Defaults to 0 here; the live default (0.5) is applied at the deal call
+   * sites, read defensively like `spicyRatio`.
+   */
+  easyMixRatio?: number;
 }
 
 /**
@@ -146,17 +236,6 @@ export function dealBoard(
   spicyRatio: number = 0.4,
   opts: DealOptions = {},
 ): Cell[] {
-  // Honor the no-repeat exclusion BEFORE the MIN_POOL guard so the guard checks
-  // what will actually be dealt from; `applyExclusion` already resets the
-  // exclusion (returns the full pool) when honoring it would starve the deal.
-  const usablePool = applyExclusion(pool, opts.excludeIds);
-  // A board needs MIN_POOL (24) non-free prompts; dealing from a smaller pool
-  // would leave blank cells (itemId: null, empty text). Fail fast so callers
-  // (joinAndDeal, dealDayCard) never persist a broken board. This guard fires
-  // before any stratification, so it is unaffected by ratio/backfill.
-  if (usablePool.length < MIN_POOL) {
-    throw new Error(`dealBoard needs at least ${MIN_POOL} prompts, received ${usablePool.length}.`);
-  }
   const rnd = mulberry32(seed);
   // A malformed events/{id}.settings.spicyRatio (join-side only checks
   // typeof === 'number', so NaN/Infinity/out-of-0..1 values can reach here)
@@ -165,10 +244,48 @@ export function dealBoard(
   // non-free cells, Codex #135). Clamp to a finite 0..1, falling back to the
   // default ratio when the value isn't usably numeric at all.
   const ratio = Number.isFinite(spicyRatio) ? Math.min(1, Math.max(0, spicyRatio)) : 0.4;
-  const picks =
-    opts.stratify === false
-      ? unstratifiedPicks(usablePool, rnd)
-      : stratifiedPicks(usablePool, ratio, rnd);
+
+  let picks: DealItem[];
+  if (opts.stratify === false) {
+    // Tutorial pools (embark/farewell) — the whole-pool unstratified deal, unchanged.
+    // Easy mix never applies here: these Days ARE the embark/farewell card, not a main
+    // card blending embark in. Honor the exclusion + MIN_POOL guard exactly as before.
+    const usablePool = applyExclusion(pool, opts.excludeIds);
+    if (usablePool.length < MIN_POOL) {
+      throw new Error(`dealBoard needs at least ${MIN_POOL} prompts, received ${usablePool.length}.`);
+    }
+    picks = unstratifiedPicks(usablePool, rnd);
+  } else {
+    // Main-day deal, now pool-aware (specs/easy-mix.md). Split the snapshot by pool:
+    // embark items are the easy half; everything else is the main half. The no-repeat
+    // exclusion applies to the MAIN half ONLY — easy (embark) repeats across days are
+    // intentional (per-day tallies), so embark items are never excluded.
+    const embarkItems = pool.filter((p) => p.pool === 'embark');
+    const mainUsable = applyExclusion(
+      pool.filter((p) => p.pool !== 'embark'),
+      opts.excludeIds,
+    );
+    const requestedEasy = Number.isFinite(opts.easyMixRatio)
+      ? Math.min(1, Math.max(0, opts.easyMixRatio as number))
+      : 0;
+    // The mix is SNAPSHOT-DRIVEN: only a Day whose snapshot actually carries embark
+    // items (a both-pools snapshot, Day 4 onward) mixes. A main-only snapshot (Days
+    // 1–3, stamped before easy mix) has no embark items, so easyCount is 0 and the
+    // deal falls through to today's all-main stratified draw — Days 1–3 stay
+    // byte-for-byte untouched even with easyMixRatio set on the event.
+    const easyCount = embarkItems.length > 0 ? Math.round(24 * requestedEasy) : 0;
+    // A full board needs 24 non-free squares. At easyCount 0 the deal is main-only, so
+    // the thin-pool guard is the main pool alone — preserving the pre-existing throw;
+    // with a mix the two pools backfill each other, so the guard is their union.
+    const drawable = easyCount > 0 ? mainUsable.length + embarkItems.length : mainUsable.length;
+    if (drawable < MIN_POOL) {
+      throw new Error(`dealBoard needs at least ${MIN_POOL} prompts, received ${drawable}.`);
+    }
+    picks =
+      easyCount > 0
+        ? mixedPicks(mainUsable, embarkItems, easyCount, ratio, rnd)
+        : stratifiedPicks(mainUsable, ratio, rnd);
+  }
   const cells: Cell[] = [];
   let p = 0;
   for (let i = 0; i < 25; i++) {

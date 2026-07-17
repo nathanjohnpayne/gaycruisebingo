@@ -15,6 +15,7 @@ import { applyThresholdHide, applyThresholdBackfill, type ReportableDoc } from '
 import { handleSubmitBugReport } from './bugReports';
 import {
   manualUnlockNow,
+  resnapshotDayIfNoBoards,
   runScheduledUnlock,
   UnlockPermissionError,
   type AdminFirestore,
@@ -291,18 +292,28 @@ export const unlockDayFinaleLastCall = onSchedule(
  * Follows the `submitBugReport` callable shape, and like it pins
  * `ADMIN_SDK_SERVICE_ACCOUNT` — it reads/writes Firestore through the Admin SDK,
  * which the default Gen2 compute identity cannot reach.
+ *
+ * `resnapshot: true` (specs/easy-mix.md § "Deploy race") routes to the guarded
+ * `resnapshotDayIfNoBoards` instead: it OVERWRITES the snapshot with the current
+ * active pool (main + embark for a main day) but ONLY while zero Day Cards exist —
+ * the recovery for a Day whose snapshot was stamped by the pre-easy-mix build. Same
+ * admin gate; the zero-boards guard lives in the callee.
  */
 export const unlockDayNow = onCall(
   { maxInstances: 10, timeoutSeconds: 30, serviceAccount: ADMIN_SDK_SERVICE_ACCOUNT },
   async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError('unauthenticated', 'Sign in before unlocking a Day.');
-  const data = (request.data ?? {}) as { eventId?: unknown; dayIndex?: unknown };
+  const data = (request.data ?? {}) as { eventId?: unknown; dayIndex?: unknown; resnapshot?: unknown };
   if (typeof data.eventId !== 'string' || typeof data.dayIndex !== 'number') {
     throw new HttpsError('invalid-argument', 'eventId (string) and dayIndex (number) are required.');
   }
+  const adminDb = db as unknown as AdminFirestore;
   try {
-    const result = await manualUnlockNow(db as unknown as AdminFirestore, uid, data.eventId, data.dayIndex);
+    const result =
+      data.resnapshot === true
+        ? await resnapshotDayIfNoBoards(adminDb, uid, data.eventId, data.dayIndex)
+        : await manualUnlockNow(adminDb, uid, data.eventId, data.dayIndex);
     return { result };
   } catch (err) {
     if (err instanceof UnlockPermissionError) throw new HttpsError('permission-denied', err.message);

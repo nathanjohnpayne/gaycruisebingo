@@ -489,7 +489,14 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
     .filter((s): s is NonNullable<typeof s> => !!s && s.exists())
     .map((s) => ({ id: s.id, data: s.data() as Partial<ItemDoc> }))
     .filter(({ data }) => data.isFreeSpace !== true)
-    .map(({ id, data }) => ({ id, text: String(data.text ?? ''), spicy: data.spicy === true }));
+    .map(({ id, data }) => ({
+      id,
+      text: String(data.text ?? ''),
+      spicy: data.spicy === true,
+      // Carry the pool so a main-day deal can stratify embark (the easy half) from
+      // main (specs/easy-mix.md). Absent → 'main' (legacy items, itemConverter default).
+      pool: typeof data.pool === 'string' ? data.pool : 'main',
+    }));
 
   // No repeats across the cruise: exclude every Prompt already on ANY OTHER Day
   // Card this Player holds (daily-cards-spec § "No repeats across the cruise") —
@@ -517,6 +524,12 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
   const stratify = day.pool === 'main';
   const spicyRatio =
     typeof eventData?.settings?.spicyRatio === 'number' ? eventData.settings.spicyRatio : 0.4;
+  // Easy mix (specs/easy-mix.md): the share of the 24 squares dealt from the embark
+  // pool on a main day, read defensively like spicyRatio (default 0.5). Inert unless
+  // the Day's snapshot actually carries embark items, so Days 1–3 (main-only
+  // snapshots) are untouched; `dealBoard` also ignores it on the unstratified path.
+  const easyMixRatio =
+    typeof eventData?.settings?.easyMixRatio === 'number' ? eventData.settings.easyMixRatio : 0.5;
 
   // Per-Day seed: mix the Player's stable seed with the Day index so each Day
   // Card has its own deterministic layout rather than repeating Day 0's.
@@ -524,6 +537,7 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
   const cells = dealBoard(pool, day.freeText ?? FREE_TEXT, seed, spicyRatio, {
     excludeIds,
     stratify,
+    easyMixRatio,
   });
   const now = Date.now();
 
@@ -665,7 +679,14 @@ export async function reshuffleBoard(params: {
     .filter((s): s is NonNullable<typeof s> => !!s && s.exists())
     .map((s) => ({ id: s.id, data: s.data() as Partial<ItemDoc> }))
     .filter(({ data }) => data.isFreeSpace !== true)
-    .map(({ id, data }) => ({ id, text: String(data.text ?? ''), spicy: data.spicy === true }));
+    .map(({ id, data }) => ({
+      id,
+      text: String(data.text ?? ''),
+      spicy: data.spicy === true,
+      // Same pool-carrying as the first deal — a reshuffle inherits the easy mix from
+      // the same frozen snapshot for free (specs/easy-mix.md).
+      pool: typeof data.pool === 'string' ? data.pool : 'main',
+    }));
 
   // The peer cards whose Prompts the replacement must avoid. Their refs are built
   // here; they are READ inside the transaction (below) so a retry rebuilds the
@@ -682,6 +703,10 @@ export async function reshuffleBoard(params: {
   const stratify = day.pool === 'main';
   const spicyRatio =
     typeof eventData?.settings?.spicyRatio === 'number' ? eventData.settings.spicyRatio : 0.4;
+  // Same easy-mix share as the first deal — a reshuffled card must be
+  // indistinguishable from one dealt at unlock (specs/easy-mix.md).
+  const easyMixRatio =
+    typeof eventData?.settings?.easyMixRatio === 'number' ? eventData.settings.easyMixRatio : 0.5;
 
   // Everything contended happens in here, and it REJECTS offline rather than
   // queueing — see the doc comment above for why that failure mode is the feature.
@@ -752,6 +777,7 @@ export async function reshuffleBoard(params: {
     const cells = dealBoard(pool, day.freeText ?? FREE_TEXT, seed, spicyRatio, {
       excludeIds,
       stratify,
+      easyMixRatio,
     });
 
     // Both writes in the ONE transaction: the rules' `getAfter()` pairing requires

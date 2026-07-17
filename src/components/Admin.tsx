@@ -33,9 +33,11 @@ import {
   setStripPhotoExif,
   setVisionGate,
   setReportHideThreshold,
+  setEasyMixRatio,
   banUser,
   unbanUser,
   unlockDayNow,
+  resnapshotDayNow,
 } from '../data/admin';
 import { deleteProof } from '../data/proofs';
 import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, dayDueForManualUnlock } from '../game/logic';
@@ -353,6 +355,52 @@ function UnlockNowButton({ dayIndex, visible }: { dayIndex: number; visible: boo
 }
 
 /**
+ * The easy-mix deploy-race fallback control (specs/easy-mix.md § "Deploy race"). If the
+ * 08:00 scheduler stamped Day 4 on the pre-easy-mix build, its snapshot carries the main
+ * pool alone and no card can mix. This re-stamps the Day's snapshot with BOTH pools —
+ * but the callable (`resnapshotDayNow` → `resnapshotDayIfNoBoards`) only overwrites while
+ * ZERO cards have been dealt; once any board exists it returns `has-boards` and changes
+ * nothing. Rendered only for an unlocked MAIN Day (the mix never applies to tutorial
+ * Days); the zero-boards safety is the SERVER's, so the button is always safe to show.
+ * Admin-gate is the enclosing Schedule tab (Admin gates every tab on `isAdmin`).
+ */
+function ResnapshotButton({ dayIndex }: { dayIndex: number }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
+  const [message, setMessage] = useState<string | null>(null);
+  const onClick = async () => {
+    setState('busy');
+    setMessage(null);
+    try {
+      const result = await resnapshotDayNow(dayIndex);
+      setState('done');
+      setMessage(
+        result === 'resnapshotted'
+          ? 'Re-snapshotted with both pools.'
+          : result === 'has-boards'
+            ? 'Denied — cards already dealt.'
+            : `No change (${result}).`,
+      );
+    } catch (err) {
+      setState('error');
+      setMessage(err instanceof Error ? err.message : 'Re-snapshot failed—try again.');
+    }
+  };
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <button
+        className="btn"
+        onClick={onClick}
+        disabled={state === 'busy'}
+        title="Deploy-race fallback: re-stamp this Day's snapshot with the easy-mix pools (only if no cards dealt yet)"
+      >
+        {state === 'busy' ? 'Re-snapshotting…' : 'Re-snapshot'}
+      </button>
+      {message && <span className="pill">{message}</span>}
+    </span>
+  );
+}
+
+/**
  * One row in the Schedule editor (#221, daily-cards-spec § "Admin console" / §
  * "Itinerary and schedule"): a single Day's date + port (read-only display)
  * and a theme `<select>`. Date/port are shown for context only — this ticket
@@ -377,6 +425,10 @@ function ScheduleRow({
 }) {
   const locked = day.unlockAt <= now;
   const dueForManualUnlock = dayDueForManualUnlock(day, now);
+  // The easy-mix re-snapshot fallback only makes sense for a MAIN Day that has already
+  // unlocked AND been stamped (a stamped-but-maybe-main-only snapshot); an unstamped Day
+  // uses "Unlock now" above, and tutorial Days never mix. Server enforces zero-boards.
+  const canResnapshot = day.pool === 'main' && day.unlockAt <= now && day.snapshotItemIds != null;
   return (
     <div className="row">
       <div className="grow">
@@ -385,6 +437,7 @@ function ScheduleRow({
         </div>
         <div className="sub">{locked ? 'locked — already unlocked or past' : 'editable until unlock'}</div>
       </div>
+      {canResnapshot && <ResnapshotButton dayIndex={day.index} />}
       <UnlockNowButton dayIndex={day.index} visible={dueForManualUnlock} />
       <select
         aria-label={`Day ${day.index + 1} theme`}
@@ -658,6 +711,9 @@ function ProofClaimsPanel({
   const stripExif = event?.settings?.stripPhotoExif ?? true;
   const visionGate = event?.settings?.visionGate ?? true;
   const threshold = event?.settings?.reportHideThreshold ?? 4;
+  // Easy mix (specs/easy-mix.md): default 0.5 mirrors the deal-time call-site default.
+  const easyMix = event?.settings?.easyMixRatio ?? 0.5;
+  const easyMixSteps = [0, 0.25, 0.5];
 
   return (
     <div className="admin-section">
@@ -713,6 +769,26 @@ function ProofClaimsPanel({
           <div className="sub">Reports needed before a Prompt or Proof self-hides from players.</div>
         </div>
         <ReportThresholdStepper value={threshold} onChange={setReportHideThreshold} />
+      </div>
+      <div className="row">
+        <div className="grow">
+          <div className="name">Easy mix</div>
+          <div className="sub">
+            Share of each main-day card dealt from the easy embark pool—the rest is the normal spicy/tame main
+            deal. Applies to Days that unlock from here on; a live setting, no deploy.
+          </div>
+        </div>
+        <div className="seg">
+          {easyMixSteps.map((r) => (
+            <button
+              key={r}
+              className={'seg-btn' + (easyMix === r ? ' on' : '')}
+              onClick={() => setEasyMixRatio(r)}
+            >
+              {Math.round(r * 100)}%
+            </button>
+          ))}
+        </div>
       </div>
       {/* Admin-confirmed mode only (#269, the wireframes' caption) — in other
           modes there is no claims queue to jump to. */}

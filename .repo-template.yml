@@ -44,6 +44,11 @@ spec_test_map:
   # add" list), so map it explicitly.
   d15-admin-proof-claims:
     - src/components/Admin.test.tsx
+  # easy-mix spans the pure composition (game logic) and the scheduler/snapshot
+  # side (a differently-named functions test), so map both explicitly.
+  easy-mix:
+    - src/game/easy-mix.test.ts
+    - tests/functions/easy-mix-snapshot.test.ts
 # Glob patterns that identify test files. Supplements the default
 # ("tests/**/*.test.*") which doesn't cover shell-based tests or the
 # Vite app's colocated unit tests under src/.

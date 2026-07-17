@@ -86,6 +86,14 @@ export interface EventDoc {
     // existed has no key to read, and `dealBoard`'s own default (0.4) applies
     // when it is absent.
     spicyRatio?: number;
+    // Easy mix (daily-cards-spec § "Resolved decisions" #8, specs/easy-mix.md): the
+    // share of a main-day Board's 24 non-free Squares dealt from the EASY (embark)
+    // pool instead of the main pool, 0..1. Read defensively (`typeof === 'number'`) at
+    // the deal call sites (`dealDayCard` / `reshuffleBoard`) the same way `spicyRatio`
+    // is, with a 0.5 default when absent. Optional here because an Event doc seeded
+    // before this field existed has no key to read; `spicyRatio` then applies WITHIN
+    // the main remainder. Admin-tunable so difficulty is a dial, not a deploy.
+    easyMixRatio?: number;
     // Phase 1.5 Proof & Claims admin panel (daily-cards-spec § "Data model").
     // All three are optional here and read defensively at their runtime call
     // sites — the event-level defaults (`camera_or_library` for source, `true`
