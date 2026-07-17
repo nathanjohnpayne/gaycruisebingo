@@ -835,7 +835,20 @@ export default function ProofFeed() {
   // accusation must never publish a stale or Anonymous accuser (mirrors Board).
   const { data: mePlayer, loading: mePlayerLoading, hasServerData: mePlayerConfirmed } = useMyPlayer(user?.uid);
   const displayName = resolveDisplayName(mePlayer, user?.displayName);
-  const identityKnown = !mePlayerLoading && (mePlayer !== null || mePlayerConfirmed);
+  // Identity must be KNOWN and CURRENT to the signed-in account (Codex P1 on #398).
+  // On an account switch with the sheet open, `useMyPlayer(newUid)` briefly retains
+  // the PREVIOUS account's row — its subscription resets only in a post-render
+  // effect — so `meUid` is already the new uid while `displayName` still resolves
+  // the old account's saved name. Raising a Doubt in that window would stamp a
+  // permanent public accusation with the wrong name. So gate on the loaded row
+  // BELONGING to the current uid (the converter pins `uid = snap.id`); a genuinely
+  // absent row (null + server-confirmed) is fine, since `resolveDisplayName` then
+  // falls back to the CURRENT auth name. This is the Feed analogue of the
+  // Board-side sheet's write-time source revalidation.
+  const identityKnown =
+    !mePlayerLoading &&
+    user?.uid != null &&
+    (mePlayer !== null ? mePlayer.uid === user.uid : mePlayerConfirmed);
   // The Feed-level who-list sheet target (#216 gap closure): which Tally Card's
   // markers to show, or null when the sheet is closed. Holding the whole card
   // (not just itemId/dayIndex) is enough to render the sheet directly from the

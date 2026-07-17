@@ -182,7 +182,9 @@ function markerDoc(itemId: string, entry: TallyEntry) {
 // accuser. A confirmed row with a display name → `identityKnown` true.
 const viewerPlayerSnap = {
   exists: () => true,
-  data: () => ({ displayName: 'Vic Viewer' }),
+  // The converter pins `uid = snap.id`; the identity gate (#398) requires the
+  // loaded row to belong to the current viewer ('viewer'), so stamp it here.
+  data: () => ({ uid: 'viewer', displayName: 'Vic Viewer' }),
   metadata: { fromCache: false },
 };
 
@@ -373,6 +375,28 @@ describe('ProofFeed (default export) — Feed-level who-list sheet (#216 accepta
     sub.fire(
       { docs: [markerDoc('p1', alice)], metadata: { fromCache: false } },
       emptyColSnap, emptyColSnap, emptyDocSnap, unconfirmed,
+    );
+    fireEvent.click(document.querySelector('.tally-card .tally-card-body')!);
+
+    const btn = document.querySelector<HTMLButtonElement>('.sheet .doubt-btn')!;
+    expect(btn).toBeTruthy();
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('the Doubt affordance stays DISABLED while the loaded player row belongs to a PREVIOUS account (#398 account-switch race)', () => {
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+
+    const alice: TallyEntry = { uid: 'alice', displayName: 'Alice Anchor', markedAt: 1000, dayIndex: 0, itemText: 'Balcony or porthole photo' };
+    // Right after an account switch the viewer uid is already 'viewer', but
+    // useMyPlayer still holds the PREVIOUS account's server-confirmed row — its
+    // uid is 'olduser'. The identity gate must reject this stale row so a Doubt
+    // can't publish under the wrong name until the current uid's row resolves.
+    const staleRow = { exists: () => true, data: () => ({ uid: 'olduser', displayName: 'Old Account' }), metadata: { fromCache: false } };
+    sub.fire(
+      { docs: [markerDoc('p1', alice)], metadata: { fromCache: false } },
+      emptyColSnap, emptyColSnap, emptyDocSnap, staleRow,
     );
     fireEvent.click(document.querySelector('.tally-card .tally-card-body')!);
 
