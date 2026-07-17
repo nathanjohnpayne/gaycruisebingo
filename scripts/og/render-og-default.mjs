@@ -27,23 +27,83 @@ const here = dirname(fileURLToPath(import.meta.url));
 const template = join(here, 'og-default.html');
 const out = join(here, '..', '..', 'public', 'og-default.png');
 
+// The design template pulls Anton/Bebas Neue/Oswald from Google Fonts at
+// render time (og-default.html's <link>). Every family+weight pair the
+// design actually uses (grep the template's `font-weight` declarations)
+// is asserted below so a blocked or degraded font load fails the render
+// instead of silently shipping a system-font-fallback PNG (#380, a Codex
+// P2 follow-up on #379 — this exact line used to check only the default
+// weight of each family, and only via document.fonts, with no check that
+// the stylesheet request itself succeeded).
+const GOOGLE_FONTS_CSS_PATTERN = /^https:\/\/fonts\.googleapis\.com\/css2\?/;
+const EXPECTED_FACES = [
+  { family: 'Anton', weight: 400 },
+  { family: 'Bebas Neue', weight: 400 },
+  { family: 'Oswald', weight: 300 },
+  { family: 'Oswald', weight: 400 },
+  { family: 'Oswald', weight: 500 },
+  { family: 'Oswald', weight: 600 },
+  { family: 'Oswald', weight: 700 },
+];
+
 const browser = await chromium.launch();
 try {
   const page = await browser.newPage({
     viewport: { width: 2400, height: 1260 },
     deviceScaleFactor: 1,
   });
+
+  // Track the Google Fonts stylesheet request directly: document.fonts
+  // checks alone can't distinguish "the stylesheet 404'd" from "the
+  // stylesheet loaded but a font file 404'd" from "everything worked",
+  // and on a flaky network the clearer signal makes the failure
+  // actionable instead of just "some fonts are missing".
+  let stylesheetResponse = null;
+  let stylesheetRequestFailure = null;
+  page.on('response', (response) => {
+    if (GOOGLE_FONTS_CSS_PATTERN.test(response.url())) {
+      stylesheetResponse = response;
+    }
+  });
+  page.on('requestfailed', (request) => {
+    if (GOOGLE_FONTS_CSS_PATTERN.test(request.url())) {
+      stylesheetRequestFailure = request.failure()?.errorText ?? 'unknown error';
+    }
+  });
+
   // `load` + FontFaceSet.ready gates on what actually matters (the Google
   // Fonts faces being applied) without the flakiness of `networkidle` on a
   // slow network; the generous timeout rides out slow font CDN responses.
   await page.goto(pathToFileURL(template).href, { waitUntil: 'load', timeout: 120_000 });
   await page.evaluate(() => document.fonts.ready);
-  const faces = await page.evaluate(() =>
-    ['Anton', 'Oswald', 'Bebas Neue'].filter((f) => !document.fonts.check(`24px "${f}"`)),
-  );
-  if (faces.length > 0) {
-    throw new Error(`web fonts failed to load: ${faces.join(', ')} — check network and retry`);
+
+  const problems = [];
+  if (!stylesheetResponse) {
+    problems.push(
+      `Google Fonts stylesheet request never completed (${stylesheetRequestFailure ?? 'network unreachable or blocked before a response arrived'})`,
+    );
+  } else if (!stylesheetResponse.ok()) {
+    problems.push(`Google Fonts stylesheet request returned HTTP ${stylesheetResponse.status()} (${stylesheetResponse.url()})`);
   }
+
+  const missingFaces = await page.evaluate(
+    (faces) => faces.filter(({ family, weight }) => !document.fonts.check(`${weight} 24px "${family}"`)),
+    EXPECTED_FACES,
+  );
+  if (missingFaces.length > 0) {
+    problems.push(`web font faces failed to load: ${missingFaces.map(({ family, weight }) => `${family} ${weight}`).join(', ')}`);
+  }
+
+  if (problems.length > 0) {
+    throw new Error(
+      [
+        'render-og-default.mjs: refusing to write a degraded og-default.png.',
+        ...problems.map((problem) => `  - ${problem}`),
+        '  Check network access to fonts.googleapis.com / fonts.gstatic.com (Google Fonts) and retry.',
+      ].join('\n'),
+    );
+  }
+
   await page.screenshot({ path: out });
 } finally {
   await browser.close();
