@@ -1,13 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { DayDef } from '../types';
 import { DAYS } from './seed';
-// @ts-expect-error — scripts/seed.mjs is a plain-JS node script with no type
-// declarations (tsconfig sets no allowJs); Vitest resolves and executes it
-// natively, and importing it is side-effect-free because seeding only runs
-// when the script is the entry module.
 import { EVENT_SEED } from '../../scripts/seed.mjs';
-// @ts-expect-error — plain-JS owner-run migration script; the test below keeps
-// local types for the pure planning core it imports.
 import { ALLOWED_FIELDS, IMMUTABLE_FIELDS, diffDay, correctDay, planScheduleMigration } from '../../scripts/migrate-schedule-2026-07-17.mjs';
 
 type LiveDay = Omit<DayDef, 'tonight'> & { tonight?: string[] };

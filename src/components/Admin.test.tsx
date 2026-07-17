@@ -299,6 +299,24 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
     expect(H.setDayTonight).toHaveBeenCalledWith(days, 0, ['💦 Splash T-Dance', '🏋️ Get Sporty']);
   });
 
+  it('rejects one- or three-entry Tonight drafts before calling setDayTonight', () => {
+    const days = [dayDef({ index: 0, unlockAt: Date.now() + 3600_000, tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    render(<Admin />);
+    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+
+    const input = screen.getByLabelText('Day 1 tonight') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '💦 Splash T-Dance' } });
+    fireEvent.blur(input);
+    expect(screen.getByRole('alert')).toHaveTextContent('Tonight needs exactly two entries.');
+    expect(H.setDayTonight).not.toHaveBeenCalled();
+
+    fireEvent.change(input, { target: { value: '💦 Splash T-Dance · 🏋️ Get Sporty · 🌌 Under the Stars' } });
+    fireEvent.blur(input);
+    expect(screen.getByRole('alert')).toHaveTextContent('Tonight needs exactly two entries.');
+    expect(H.setDayTonight).not.toHaveBeenCalled();
+  });
+
   it("a past/unlocked Day's Tonight line is disabled (corrected via the owner migration, not the editor)", () => {
     const days = [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] })];
     H.event = { ...H.event, days } as unknown as EventDoc;
@@ -307,6 +325,8 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
 
     const input = screen.getByLabelText('Day 1 tonight') as HTMLInputElement;
     expect(input.disabled).toBe(true);
+    fireEvent.blur(input);
+    expect(H.setDayTonight).not.toHaveBeenCalled();
   });
 
   it('an "Unlock now" button appears ONLY for a Day that is unlocked but not yet snapshot-stamped, and invokes unlockDayNow(dayIndex)', async () => {

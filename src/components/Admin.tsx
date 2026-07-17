@@ -415,11 +415,19 @@ function ScheduleRow({
   const dueForManualUnlock = dayDueForManualUnlock(day, now);
   // Local draft so typing doesn't fight the subscribed doc; committed on blur.
   const [tonightDraft, setTonightDraft] = useState(() => joinTonight(day.tonight));
+  const [tonightError, setTonightError] = useState('');
   useEffect(() => {
     setTonightDraft(joinTonight(day.tonight));
+    setTonightError('');
   }, [day.tonight]);
   const commitTonight = () => {
+    if (locked) return;
     const next = splitTonight(tonightDraft);
+    if (next.length !== 2 || next.some((entry) => entry.trim().length === 0)) {
+      setTonightError('Tonight needs exactly two entries.');
+      return;
+    }
+    setTonightError('');
     if (joinTonight(next) !== joinTonight(day.tonight)) onChangeTonight(day.index, next);
   };
   return (
@@ -443,6 +451,7 @@ function ScheduleRow({
           onChange={(e) => setTonightDraft(e.target.value)}
           onBlur={commitTonight}
         />
+        {tonightError ? <div className="error" role="alert">{tonightError}</div> : null}
       </div>
       <UnlockNowButton dayIndex={day.index} visible={dueForManualUnlock} />
       <select

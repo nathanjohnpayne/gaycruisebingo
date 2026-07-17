@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { DAYS, EMBARK_ITEMS, FAREWELL_ITEMS, SEED_ITEMS } from './seed';
-// scripts/seed.mjs is a plain-JS node script with no type declarations
-// (tsconfig sets no allowJs); Vitest resolves and executes it natively, and
-// importing it is side-effect-free because seeding only runs when the
-// script is the entry module.
-// @ts-expect-error — no type declarations for this plain-JS script (see above)
 import { EVENT_SEED, EMBARK_ITEMS as SCRIPT_EMBARK_ITEMS, FAREWELL_ITEMS as SCRIPT_FAREWELL_ITEMS } from '../../scripts/seed.mjs';
 
 // Covers specs/d15-tutorial-seed.md (#207): the two curated tutorial pools

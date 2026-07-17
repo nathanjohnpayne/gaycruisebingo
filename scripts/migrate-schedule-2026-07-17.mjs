@@ -204,15 +204,37 @@ async function initFirestore() {
       }
     }
   }
+  if (!projectId) {
+    throw new Error(
+      'schedule-migration: no Firebase project resolved. Set GOOGLE_CLOUD_PROJECT/GCLOUD_PROJECT or .firebaserc projects.default before running.',
+    );
+  }
 
   const keyUrl = new URL('../serviceAccountKey.json', import.meta.url);
   initializeApp({
     ...(existsSync(keyUrl)
       ? { credential: cert(JSON.parse(readFileSync(keyUrl))) }
       : { credential: applicationDefault() }),
-    ...(projectId ? { projectId } : {}),
+    projectId,
   });
   return { db: getFirestore(), EVENT_ID, projectId };
+}
+
+function assertWritablePlan(plan, liveDays) {
+  if (plan.misaligned) {
+    throw new Error(
+      'schedule-migration: REFUSING — live schedule is not aligned to the target' +
+        (plan.lengthMismatch ? ` (length ${liveDays.length} vs ${plan.corrected.length})` : ' (a Day date differs)') +
+        '. No write performed.',
+    );
+  }
+  if (plan.forbidden.length > 0) {
+    const days = plan.forbidden.map((d) => (d.index ?? 0) + 1).join(', ');
+    throw new Error(
+      `schedule-migration: REFUSING — the corrected schedule would change forbidden field(s) on Day(s) ${days}. ` +
+        'This migration is display-metadata only. No write performed.',
+    );
+  }
 }
 
 async function main() {
@@ -238,20 +260,10 @@ async function main() {
   console.log(formatMigrationReport(plan));
 
   // Fail closed on either abort condition.
-  if (plan.misaligned) {
-    console.error(
-      '\nschedule-migration: REFUSING — live schedule is not aligned to the target' +
-        (plan.lengthMismatch ? ` (length ${liveDays.length} vs ${plan.corrected.length})` : ' (a Day date differs)') +
-        '. No write performed.',
-    );
-    process.exit(1);
-  }
-  if (plan.forbidden.length > 0) {
-    const days = plan.forbidden.map((d) => (d.index ?? 0) + 1).join(', ');
-    console.error(
-      `\nschedule-migration: REFUSING — the corrected schedule would change forbidden field(s) on Day(s) ${days}. ` +
-        'This migration is display-metadata only. No write performed.',
-    );
+  try {
+    assertWritablePlan(plan, liveDays);
+  } catch (err) {
+    console.error(`\n${err.message}`);
     process.exit(1);
   }
 
@@ -266,9 +278,24 @@ async function main() {
   }
 
   // Single targeted update of ONLY the days field — no other event field is
-  // touched, and no subcollection is read or written.
-  await ref.update({ days: plan.corrected });
-  console.log('\nschedule-migration: applied — corrected days[] written in one update. ✅');
+  // touched, and no subcollection is read or written. The write is transaction-
+  // wrapped so a concurrent admin/scheduler edit cannot be overwritten from the
+  // stale dry-run read above.
+  await db.runTransaction(async (tx) => {
+    const applySnap = await tx.get(ref);
+    if (!applySnap.exists) {
+      throw new Error(`schedule-migration: event ${EVENT_ID} not found — aborting.`);
+    }
+    const applyDays = applySnap.get('days');
+    if (!Array.isArray(applyDays)) {
+      throw new Error('schedule-migration: event has no days[] array — aborting (nothing to correct).');
+    }
+    const applyPlan = planScheduleMigration(applyDays);
+    assertWritablePlan(applyPlan, applyDays);
+    if (!applyPlan.changed) return;
+    tx.update(ref, { days: applyPlan.corrected });
+  });
+  console.log('\nschedule-migration: applied — corrected days[] written transactionally. ✅');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
