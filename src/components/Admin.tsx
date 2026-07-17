@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import {
   useEventDoc,
@@ -617,9 +617,20 @@ function ReportThresholdStepper({ value, onChange }: { value: number; onChange: 
  */
 function EasyMixSlider({ value, onChange }: { value: number; onChange: (ratio: number) => void }) {
   const [pct, setPct] = useState(Math.round(value * 100));
-  useEffect(() => setPct(Math.round(value * 100)), [value]);
+  // Dedup against the LAST REQUESTED ratio, not the `value` prop: `onChange` writes
+  // Firestore asynchronously, so `value` stays stale until the write round-trips — a
+  // second release at the same position would otherwise write the same ratio again.
+  const lastCommitted = useRef(value);
+  useEffect(() => {
+    setPct(Math.round(value * 100));
+    lastCommitted.current = value;
+  }, [value]);
   const commit = (next: number) => {
-    if (next / 100 !== value) onChange(next / 100);
+    const ratio = next / 100;
+    if (ratio !== lastCommitted.current) {
+      lastCommitted.current = ratio;
+      onChange(ratio);
+    }
   };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

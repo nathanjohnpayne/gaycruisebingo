@@ -463,6 +463,11 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
     fireEvent.pointerUp(slider);
     expect(H.setEasyMixRatio).toHaveBeenCalledTimes(1);
     expect(H.setEasyMixRatio).toHaveBeenCalledWith(0.3);
+
+    // A second release at the same position does NOT write again — dedup is against
+    // the last requested ratio, not the (still-async-stale) event value.
+    fireEvent.pointerUp(slider);
+    expect(H.setEasyMixRatio).toHaveBeenCalledTimes(1);
   });
 
   it('the Easy mix slider defaults to 50% when easyMixRatio is unset', () => {
