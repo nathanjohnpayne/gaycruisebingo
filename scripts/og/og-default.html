@@ -1,0 +1,434 @@
+<!doctype html>
+<!--
+  Design source for public/og-default.png (the bare-URL unfurl image, ADR 0005).
+
+  v1 (PR #337) shipped as a binary-only render approved in the authoring
+  session; this file commits the design so the asset is regenerable. v2
+  (issue #338) changes ONLY the daybar trio: v1's impossible "Day 3 · Neon
+  Playground · Trieste" becomes the real seeded neon-playground day —
+  "Day 5 · Neon Playground · 🇮🇹 Sorrento" (src/data/seed.ts index 4,
+  DayBar renders `Day {index + 1}` per src/components/Board.tsx) — and adds
+  SORRENTO to the abbreviated route line so the spotlighted port appears on
+  the route. Composition, palette, and depicted copy are otherwise the
+  owner-approved v1 register (issue #338 decision): the mild pool subset,
+  including the two stylized paraphrases v1 took (`Hear "Danceteria" on the
+  dance floor`, `Soft-serve at 4 a.m.` / `Nap through sail-away`).
+
+  Colors are the neon-playground tokens from src/theme/themes.css; board
+  chrome mirrors src/index.css (.board-area, .daybar, .bingo-head, .cell);
+  fonts are the app's own faces (Oswald + Bebas Neue), pulled from Google
+  Fonts at render time.
+
+  Render: node scripts/og/render-og-default.mjs   (see that script's header)
+  Output contract: 2400x1260 PNG at public/og-default.png, pngquant-crushed
+  well under 1 MB (WhatsApp caps og:image at 600 KB; iMessage/Telegram
+  recommend <=1 MB; 2400px width keeps iMessage's full-width preview).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>og-default design source</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Oswald:wght@300;400;500;600;700&display=block" rel="stylesheet" />
+<style>
+  :root {
+    /* neon-playground (src/theme/themes.css) */
+    --bg: #07060d;
+    --panel: #0e0a1a;
+    --ink: #f6ecff;
+    --dim: #b9a9d6;
+    --primary: #ff2d95;
+    --secondary: #00e6ff;
+    --accent: #ffd23f;
+    --cell: #120c22;
+    --border: rgba(0, 230, 255, 0.35);
+    --shadow: rgba(255, 45, 149, 0.45);
+    --on-gradient: #000;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 2400px; height: 1260px; overflow: hidden; }
+  body {
+    position: relative;
+    font-family: 'Oswald', 'Helvetica Neue', Arial, sans-serif;
+    background:
+      radial-gradient(900px 700px at 14% 26%, rgba(255, 45, 149, 0.17), transparent 70%),
+      radial-gradient(1000px 800px at 82% 78%, rgba(124, 58, 237, 0.20), transparent 70%),
+      radial-gradient(700px 500px at 55% 100%, rgba(255, 45, 149, 0.10), transparent 70%),
+      radial-gradient(600px 500px at 96% 12%, rgba(0, 230, 255, 0.07), transparent 70%),
+      #030208;
+    color: var(--ink);
+  }
+
+  /* ---------- outer rounded frame ---------- */
+  .frame {
+    position: absolute;
+    inset: 30px;
+    border-radius: 54px;
+    padding: 2px;
+    background: linear-gradient(170deg,
+      rgba(255, 45, 149, 0.34) 0%,
+      rgba(255, 45, 149, 0.20) 40%,
+      rgba(255, 45, 149, 0.26) 70%,
+      rgba(255, 45, 149, 0.55) 100%);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+            mask-composite: exclude;
+  }
+
+  /* ---------- sparkles + dots ---------- */
+  .spark { position: absolute; }
+  .spark svg { display: block; }
+  .dot { position: absolute; border-radius: 50%; }
+
+  /* ---------- left column ---------- */
+  .kicker {
+    position: absolute;
+    left: 128px;
+    top: 82px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    color: var(--secondary);
+    font-weight: 600;
+    font-size: 35px;
+    letter-spacing: 0.26em;
+    text-shadow: 0 0 16px rgba(0, 230, 255, 0.5);
+    white-space: nowrap;
+  }
+  .kicker .bar {
+    width: 48px;
+    height: 3px;
+    background: var(--secondary);
+    box-shadow: 0 0 12px rgba(0, 230, 255, 0.8);
+  }
+  .lockup {
+    position: absolute;
+    left: 148px;
+    top: 152px;
+    font-family: 'Anton', 'Oswald', 'Arial Narrow', sans-serif;
+    font-weight: 400;
+    font-size: 216px;
+    line-height: 1.021;
+    letter-spacing: 0.002em;
+  }
+  .lockup .soft {
+    display: block;
+    color: #f8f0ff;
+    text-shadow:
+      0 0 24px rgba(255, 45, 149, 0.72),
+      0 0 60px rgba(255, 45, 149, 0.48),
+      0 0 130px rgba(255, 45, 149, 0.32);
+  }
+  .lockup .neon {
+    display: block;
+    background: linear-gradient(90deg,
+      #ff2d95 0%, #e14fd2 20%, #be67f9 40%, #62a9fa 60%, #2fc6fb 75%, #00e6ff 90%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter:
+      drop-shadow(0 0 22px rgba(190, 103, 249, 0.40))
+      drop-shadow(0 0 70px rgba(255, 45, 149, 0.28));
+  }
+  .tagline {
+    position: absolute;
+    left: 144px;
+    top: 863px;
+    font-weight: 300;
+    font-size: 47px;
+    color: #d9c9f0;
+    letter-spacing: 0.01em;
+  }
+  .tagline b {
+    font-weight: 600;
+    color: #ffffff;
+  }
+  .route {
+    position: absolute;
+    left: 152px;
+    top: 970px;
+    font-weight: 600;
+    font-size: 28px;
+    letter-spacing: 0.14em;
+    color: var(--accent);
+    text-shadow: 0 0 16px rgba(255, 210, 63, 0.45);
+    white-space: nowrap;
+  }
+  .route i {
+    font-style: normal;
+    color: rgba(255, 210, 63, 0.55);
+    padding: 0 0.22em;
+  }
+  .urlchip {
+    position: absolute;
+    left: 145px;
+    top: 1065px;
+    display: inline-flex;
+    align-items: center;
+    gap: 22px;
+    padding: 24px 56px 24px 46px;
+    border: 3px solid rgba(0, 230, 255, 0.75);
+    border-radius: 999px;
+    background: rgba(0, 230, 255, 0.045);
+    box-shadow: 0 0 34px rgba(0, 230, 255, 0.28), inset 0 0 24px rgba(0, 230, 255, 0.06);
+  }
+  .urlchip .ship { font-size: 48px; line-height: 1; }
+  .urlchip .url {
+    font-weight: 600;
+    font-size: 48px;
+    color: #efe6ff;
+    letter-spacing: 0.012em;
+    text-shadow: 0 0 22px rgba(0, 230, 255, 0.35);
+  }
+
+  /* ---------- board panel ---------- */
+  .board {
+    position: absolute;
+    left: 1348px;
+    top: 96px;
+    width: 936px;
+    height: 1118px;
+    transform: rotate(-1.7deg);
+    transform-origin: 50% 50%;
+    background: var(--bg);
+    border: 2px solid var(--border);
+    border-radius: 40px;
+    box-shadow:
+      0 0 60px var(--shadow),
+      0 0 140px rgba(255, 45, 149, 0.28),
+      0 0 40px rgba(167, 139, 250, 0.25);
+    padding: 28px 32px 32px;
+  }
+  .daybar {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 6px 4px 0;
+  }
+  .daybar-name {
+    font-weight: 700;
+    font-size: 41px;
+    color: var(--ink);
+  }
+  .daybar-meta {
+    font-weight: 500;
+    font-size: 30px;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+  .bingo-head {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin: 20px 0 14px;
+  }
+  .bingo-head span {
+    font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+    text-align: center;
+    font-size: 61px;
+    line-height: 1;
+    color: var(--ink);
+    text-shadow: 0 0 16px var(--shadow);
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    grid-auto-rows: 165px;
+    gap: 12px;
+  }
+  .cell {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 8px 6px;
+    border-radius: 22px;
+    background: var(--cell);
+    border: 2px solid var(--border);
+    font-weight: 600;
+    font-size: 22px;
+    line-height: 1.18;
+    color: var(--ink);
+  }
+  .cell.fit-s { font-size: 19px; }
+  .cell.marked {
+    background: linear-gradient(150deg, #f85ac8 0%, #c47ee0 34%, #92a0ef 62%, #49b2e2 100%);
+    border-color: rgba(255, 255, 255, 0.55);
+    color: var(--on-gradient);
+    font-weight: 700;
+    box-shadow: 0 0 26px rgba(255, 45, 149, 0.35);
+  }
+  .cell.marked .check {
+    position: absolute;
+    top: 8px;
+    right: 14px;
+    font-size: 30px;
+    font-weight: 700;
+    color: #0b0812;
+  }
+  .cell .tally {
+    position: absolute;
+    right: 10px;
+    bottom: 9px;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: #0b0812;
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .cell .doubt {
+    position: absolute;
+    left: -8px;
+    top: -14px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 16px;
+    border-radius: 999px;
+    background: #0b0812;
+    border: 2px solid rgba(0, 230, 255, 0.45);
+    color: #fff;
+    font-weight: 600;
+    font-size: 24px;
+  }
+  .cell.free {
+    background: #332619;
+    border: 3px solid var(--accent);
+    box-shadow: 0 0 22px rgba(255, 210, 63, 0.35);
+    flex-direction: column;
+    gap: 8px;
+  }
+  .cell.free .free-label {
+    font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+    font-weight: 400;
+    font-size: 40px;
+    line-height: 0.9;
+    letter-spacing: 0.08em;
+    color: var(--accent);
+    text-shadow: 0 0 12px rgba(255, 210, 63, 0.55);
+  }
+  .cell.free .free-prompt {
+    font-weight: 600;
+    font-size: 20px;
+    line-height: 1.14;
+    color: #ffe9a8;
+  }
+
+  /* ---------- honor pill ---------- */
+  .honor {
+    position: absolute;
+    left: 1318px;
+    top: 1136px;
+    display: inline-flex;
+    align-items: center;
+    gap: 22px;
+    padding: 20px 52px 20px 40px;
+    border-radius: 999px;
+    background: #0d0714;
+    border: 3px solid var(--accent);
+    box-shadow: 0 0 30px rgba(255, 210, 63, 0.4);
+    white-space: nowrap;
+  }
+  .honor .cup { font-size: 40px; line-height: 1; }
+  .honor .label {
+    font-weight: 600;
+    font-size: 38px;
+    color: #ffffff;
+  }
+  .honor .value {
+    font-weight: 600;
+    font-size: 38px;
+    color: var(--accent);
+  }
+</style>
+</head>
+<body>
+  <div class="frame"></div>
+
+  <!-- sparkles -->
+  <div class="spark" style="left:1268px; top:158px;">
+    <svg width="56" height="56" viewBox="0 0 24 24" fill="#ffd23f"><path d="M12 0C13.1 6.9 17.1 10.9 24 12 17.1 13.1 13.1 17.1 12 24 10.9 17.1 6.9 13.1 0 12 6.9 10.9 10.9 6.9 12 0Z"/></svg>
+  </div>
+  <div class="spark" style="left:2312px; top:428px;">
+    <svg width="42" height="42" viewBox="0 0 24 24" fill="#ff2d95"><path d="M12 0C13.1 6.9 17.1 10.9 24 12 17.1 13.1 13.1 17.1 12 24 10.9 17.1 6.9 13.1 0 12 6.9 10.9 10.9 6.9 12 0Z"/></svg>
+  </div>
+  <div class="spark" style="left:1256px; top:1004px;">
+    <svg width="48" height="48" viewBox="0 0 24 24" fill="#00e6ff"><path d="M12 0C13.1 6.9 17.1 10.9 24 12 17.1 13.1 13.1 17.1 12 24 10.9 17.1 6.9 13.1 0 12 6.9 10.9 10.9 6.9 12 0Z"/></svg>
+  </div>
+
+  <!-- ambient dots -->
+  <div class="dot" style="left:864px; top:130px;  width:11px; height:11px; background:#ffd23f;"></div>
+  <div class="dot" style="left:1252px; top:250px; width:12px; height:12px; background:#b9a9d6;"></div>
+  <div class="dot" style="left:614px; top:342px;  width:11px; height:11px; background:#00e6ff;"></div>
+  <div class="dot" style="left:748px; top:592px;  width:10px; height:10px; background:#ffd23f;"></div>
+  <div class="dot" style="left:1036px; top:12px;  width:9px;  height:9px;  background:#7c3aed;"></div>
+  <div class="dot" style="left:552px; top:1024px; width:9px;  height:9px;  background:#00b8cc;"></div>
+  <div class="dot" style="left:1266px; top:844px; width:10px; height:10px; background:#ff2d95;"></div>
+  <div class="dot" style="left:2348px; top:1076px;width:11px; height:11px; background:#ff2d95;"></div>
+
+  <!-- left column -->
+  <div class="kicker"><span class="bar"></span>LIVE MULTIPLAYER · JULY 2026<span class="bar"></span></div>
+
+  <div class="lockup">
+    <span class="soft">GAY</span>
+    <span class="soft">CRUISE</span>
+    <span class="neon">BINGO</span>
+  </div>
+
+  <p class="tagline">Sign in, get your card, <b>mark it if you see it.</b></p>
+
+  <div class="route">TRIESTE<i>·</i>SPLIT<i>·</i>VALLETTA<i>·</i>PALERMO<i>·</i>SORRENTO<i>·</i>ROME<i>·</i>NICE<i>·</i>BARCELONA</div>
+
+  <div class="urlchip"><span class="ship">🚢</span><span class="url">gaycruisebingo.com</span></div>
+
+  <!-- board panel: the seeded neon-playground Day (index 4 -> "Day 5", Sorrento) -->
+  <div class="board">
+    <div class="daybar">
+      <div class="daybar-name">Day 5 · Neon Playground 🌈</div>
+      <div class="daybar-meta">🇮🇹 Sorrento</div>
+    </div>
+    <div class="bingo-head"><span>B</span><span>I</span><span>N</span><span>G</span><span>O</span></div>
+    <div class="grid">
+      <!-- row 1 -->
+      <div class="cell marked">Matching Speedos<span class="check">✔</span><span class="tally">9</span></div>
+      <div class="cell">Lost passport</div>
+      <div class="cell">Karaoke “Fergalicious”</div>
+      <div class="cell marked">Mirror-hall selfie<span class="check">✔</span><span class="tally">12</span></div>
+      <div class="cell">Eat carbs</div>
+      <!-- row 2 -->
+      <div class="cell">Selfie with HAYLA</div>
+      <div class="cell marked">Poppers spill<span class="check">✔</span><span class="tally">7</span><span class="doubt">👀 2</span></div>
+      <div class="cell">Loudly announce an early night</div>
+      <div class="cell fit-s">Make LinkedIn content on a boat</div>
+      <div class="cell">Get locked in a bathroom</div>
+      <!-- row 3 -->
+      <div class="cell">Cause an international incident</div>
+      <div class="cell">Drink three dirty martinis</div>
+      <div class="cell free"><span class="free-label">FREE</span><span class="free-prompt">Complain about circuit&nbsp;music</span></div>
+      <div class="cell marked">Get read by Bianca Del Rio<span class="check">✔</span><span class="tally">5</span></div>
+      <div class="cell">Three-way kiss</div>
+      <!-- row 4 -->
+      <div class="cell">30-year age gap</div>
+      <div class="cell">Make out with a woman</div>
+      <div class="cell">Selfie with Bianca Del Rio</div>
+      <div class="cell marked">Sunburn line reveal<span class="check">✔</span><span class="tally">6</span></div>
+      <div class="cell fit-s">Get propositioned by septuagenarians</div>
+      <!-- row 5 -->
+      <div class="cell">Soft-serve at 4 a.m.</div>
+      <div class="cell fit-s">Nap through sail-away</div>
+      <div class="cell">Hear “Danceteria” on the dance floor</div>
+      <div class="cell">Use a condom</div>
+      <div class="cell marked">Lose your group at the party<span class="check">✔</span><span class="tally">11</span></div>
+    </div>
+  </div>
+
+  <div class="honor"><span class="cup">🏆</span><span class="label">First to BINGO:</span><span class="value">Theo · 11:02</span></div>
+</body>
+</html>

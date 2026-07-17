@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { DAYS } from './data/seed';
+import { THEMES } from './theme/themes';
 
 // Reconciliation guard for ADR 0005 (issue #39), not an app unit test: it
 // asserts on the *contents* (and, for cloud-run/, the *absence*) of the repo
@@ -63,7 +65,37 @@ describe('recon: storage.rules drops the inert /og/** block', () => {
 describe('recon: bare-URL unfurl keeps working with no server', () => {
   it('keeps public/og-default.png and the static index.html OG meta', () => {
     expect(existsSync(resolve('../public/og-default.png'))).toBe(true);
-    expect(indexHtml).toMatch(/<meta property="og:image" content="https:\/\/gaycruisebingo\.com\/og-default\.png" \/>/);
+    // #338: og:image (and twitter:image) point at the web.app host, NOT the
+    // apex — the apex TLS-resets for link crawlers (#340) and is SNI-blocked
+    // on the ship network (#164), which is what broke iMessage unfurls. The
+    // page's canonical identity (og:url) stays the apex.
+    expect(indexHtml).toMatch(/<meta property="og:image" content="https:\/\/gaycruisebingo\.web\.app\/og-default\.png" \/>/);
+    expect(indexHtml).toMatch(/<meta name="twitter:image" content="https:\/\/gaycruisebingo\.web\.app\/og-default\.png" \/>/);
+    expect(indexHtml).toMatch(/<meta property="og:url" content="https:\/\/gaycruisebingo\.com\/" \/>/);
+    // Crawler hints that let messengers lay out the preview without sniffing
+    // the image: MIME type, pixel dimensions, and alt text.
+    expect(indexHtml).toMatch(/<meta property="og:image:type" content="image\/png" \/>/);
+    expect(indexHtml).toMatch(/<meta property="og:image:width" content="2400" \/>/);
+    expect(indexHtml).toMatch(/<meta property="og:image:height" content="1260" \/>/);
+    expect(indexHtml).toMatch(/<meta property="og:image:alt" content="[^"]+" \/>/);
+  });
+
+  it('og-default.png is regenerable from a design source depicting a real seeded Day (#338)', () => {
+    // PR #337 shipped the render binary-only; #338 commits the design source
+    // so the asset is reproducible. The depicted daybar must be a real seeded
+    // (day, theme, port) trio — the v1 render showed a trio that exists on no
+    // seeded Day (Codex P3 on #337) — so derive the expectation from the seed
+    // itself: the board art is neon-playground, and the daybar must name that
+    // theme's own Day and port exactly as DayBar renders them
+    // (`Day {index + 1} · {label}` + port, src/components/Board.tsx).
+    const template = read('../scripts/og/og-default.html');
+    expect(existsSync(resolve('../scripts/og/render-og-default.mjs'))).toBe(true);
+    const day = DAYS.find((d) => d.theme === 'neon-playground');
+    if (!day) throw new Error('no seeded neon-playground Day');
+    const theme = THEMES.find((t) => t.id === day.theme);
+    if (!theme) throw new Error('no ThemeMeta for neon-playground');
+    expect(template).toContain(`Day ${day.index + 1} · ${theme.label} ${theme.emoji}`);
+    expect(template).toContain(`${day.portEmoji} ${day.port}`);
   });
 });
 
