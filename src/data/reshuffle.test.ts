@@ -14,7 +14,7 @@ const EVENT_ID = 'test-event';
 const H = vi.hoisted(() => ({
   event: null as { days?: DayDef[]; settings?: Partial<EventDoc['settings']> } | null,
   itemsById: new Map<string, Partial<ItemDoc>>(),
-  dayBoards: new Map<number, { uid: string; seed?: number; cells: Cell[] } | null>(),
+  dayBoards: new Map<number, { uid: string; seed?: number; cells: Cell[]; easyMixRatio?: number } | null>(),
   player: null as Record<string, unknown> | null,
   getDoc: vi.fn(),
   // Typed args so `mock.calls[n][0]` is reachable (a bare `vi.fn(async () => {})`
@@ -155,7 +155,7 @@ const writtenBoard = () => {
     const a = ((c[0] as { args?: unknown[] }).args ?? []).filter((x) => typeof x === 'string');
     return a[2] === 'days' && a[4] === 'boards';
   });
-  return call?.[1] as { seed: number; cells: Cell[]; dayIndex: number; uid: string } | undefined;
+  return call?.[1] as { seed: number; cells: Cell[]; dayIndex: number; uid: string; easyMixRatio?: number } | undefined;
 };
 
 const writtenPlayer = () => {
@@ -202,6 +202,15 @@ describe('reshuffleBoard — the happy path', () => {
     await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
     const dealt = writtenBoard()!.cells.filter((c) => !c.free).map((c) => c.itemId!);
     for (const id of dealt) expect(SNAPSHOT_IDS).toContain(id);
+  });
+
+  it('preserves the card’s frozen easy-mix ratio instead of reading a later event setting', async () => {
+    H.event = { days: [day(0), day(1, { snapshotEasyMixRatio: 0.5 })], settings: { spicyRatio: 0.4, easyMixRatio: 0.75 } };
+    H.dayBoards.set(1, { uid: 'u1', seed: 111, easyMixRatio: 0.25, cells: cardFrom(SNAPSHOT_IDS.slice(0, 24)) });
+
+    await reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 });
+
+    expect(writtenBoard()!.easyMixRatio).toBe(0.25);
   });
 
   it('changes the seed — the rules discriminate a reshuffle on exactly that', async () => {

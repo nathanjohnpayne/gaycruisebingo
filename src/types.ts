@@ -67,6 +67,9 @@ export interface DayDef {
   // the client falls back to the "waking up" locked state rather than dealing
   // from an unfrozen pool.
   snapshotItemIds?: string[];
+  // Frozen with the snapshot for main Days so late first-deals and reshuffles keep
+  // the ratio that was in force at unlock, even if Admin changes the event setting.
+  snapshotEasyMixRatio?: number;
 }
 
 export interface EventDoc {

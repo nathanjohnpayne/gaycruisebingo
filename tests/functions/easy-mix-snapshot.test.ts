@@ -149,7 +149,7 @@ describe('stampDaySnapshot — a main Day freezes both pools', () => {
   it('includes active embark items alongside main in a main-day snapshot', async () => {
     const db = makeDb({
       eventId: 'e1',
-      event: { days: daysWithMain() },
+      event: { days: daysWithMain(), settings: { easyMixRatio: 0.25 } },
       items: [
         { id: 'm1', status: 'active', pool: 'main' },
         { id: 'm2', status: 'active', pool: 'main' },
@@ -161,6 +161,7 @@ describe('stampDaySnapshot — a main Day freezes both pools', () => {
     expect(result).toBe('stamped');
     const day = db.readEvent().days!.find((d) => d.index === 3)!;
     expect(day.snapshotItemIds).toEqual(['m1', 'm2', 'e1', 'e2']);
+    expect(day.snapshotEasyMixRatio).toBe(0.25);
   });
 });
 
@@ -182,6 +183,7 @@ describe('resnapshotDayIfNoBoards — the guarded deploy-race fallback', () => {
     expect(result).toBe('resnapshotted');
     const day = db.readEvent().days!.find((d) => d.index === 3)!;
     expect(day.snapshotItemIds).toEqual(['m1', 'e1']); // both pools now
+    expect(day.snapshotEasyMixRatio).toBe(0.5);
   });
 
   it('is DENIED once any board exists for the Day (has-boards)', async () => {

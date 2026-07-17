@@ -95,6 +95,19 @@ export function seedFromUid(uid: string): number {
   return h >>> 0;
 }
 
+function sameStringArray(a: readonly string[] | undefined, b: readonly string[] | undefined): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every((value, index) => value === b[index]);
+}
+
+function eventEasyMixRatio(eventData: Partial<EventDoc> | null | undefined): number {
+  return typeof eventData?.settings?.easyMixRatio === 'number' ? eventData.settings.easyMixRatio : 0.5;
+}
+
+function dayEasyMixRatio(day: DayDef, eventData: Partial<EventDoc> | null | undefined): number {
+  return typeof day.snapshotEasyMixRatio === 'number' ? day.snapshotEasyMixRatio : eventEasyMixRatio(eventData);
+}
+
 /**
  * The create-only bootstrap payload for a `users/{uid}` profile row: the
  * Google-sourced identity defaults `ensureUserProfile` writes on first sign-in.
@@ -528,8 +541,7 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
   // pool on a main day, read defensively like spicyRatio (default 0.5). Inert unless
   // the Day's snapshot actually carries embark items, so Days 1–3 (main-only
   // snapshots) are untouched; `dealBoard` also ignores it on the unstratified path.
-  const easyMixRatio =
-    typeof eventData?.settings?.easyMixRatio === 'number' ? eventData.settings.easyMixRatio : 0.5;
+  const easyMixRatio = dayEasyMixRatio(day, eventData);
 
   // Per-Day seed: mix the Player's stable seed with the Day index so each Day
   // Card has its own deterministic layout rather than repeating Day 0's.
@@ -539,20 +551,36 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
     stratify,
     easyMixRatio,
   });
-  const now = Date.now();
+  const boardRef = rawDayBoard(dayIndex, u.uid);
+  const playerRef = rawPlayer(u.uid);
+  return runTransaction(db, async (tx) => {
+    const [latestEventSnap, latestBoardSnap] = await Promise.all([tx.get(rawEvent()), tx.get(boardRef)]);
+    if (latestBoardSnap.exists()) return false;
 
-  const batch = writeBatch(db);
-  batch.set(rawDayBoard(dayIndex, u.uid), { uid: u.uid, dayIndex, seed, createdAt: now, cells });
-  // Seed this Day's per-Day stat bucket (players/{uid}.dayStats[dayIndex]) so the
-  // cruise-wide aggregates and the per-Day breakdown share one shape; the Mark
-  // path folds real progress in later.
-  batch.set(
-    rawPlayer(u.uid),
-    { dayStats: { [dayIndex]: { bingoCount: 0, squaresMarked: 0, firstBingoAt: null } } },
-    { merge: true },
-  );
-  await batch.commit();
-  return true; // dealt a NEW Day Card
+    const latestEventData = latestEventSnap.exists() ? (latestEventSnap.data() as Partial<EventDoc>) : null;
+    const latestDays = Array.isArray(latestEventData?.days) ? (latestEventData.days as DayDef[]) : [];
+    const latestDay = latestDays[dayIndex];
+    if (
+      !latestDay ||
+      latestDay.unlockAt !== day.unlockAt ||
+      latestDay.snapshotEasyMixRatio !== day.snapshotEasyMixRatio ||
+      !sameStringArray(latestDay.snapshotItemIds, snapshotIds)
+    ) {
+      return false;
+    }
+
+    const now = Date.now();
+    tx.set(boardRef, { uid: u.uid, dayIndex, seed, createdAt: now, cells, easyMixRatio });
+    // Seed this Day's per-Day stat bucket (players/{uid}.dayStats[dayIndex]) so the
+    // cruise-wide aggregates and the per-Day breakdown share one shape; the Mark
+    // path folds real progress in later.
+    tx.set(
+      playerRef,
+      { dayStats: { [dayIndex]: { bingoCount: 0, squaresMarked: 0, firstBingoAt: null } } },
+      { merge: true },
+    );
+    return true; // dealt a NEW Day Card
+  });
 }
 
 /** The cruise-wide Reshuffle allowance (#378). Mirrors `reshuffleAllowance()` in
@@ -705,8 +733,7 @@ export async function reshuffleBoard(params: {
     typeof eventData?.settings?.spicyRatio === 'number' ? eventData.settings.spicyRatio : 0.4;
   // Same easy-mix share as the first deal — a reshuffled card must be
   // indistinguishable from one dealt at unlock (specs/easy-mix.md).
-  const easyMixRatio =
-    typeof eventData?.settings?.easyMixRatio === 'number' ? eventData.settings.easyMixRatio : 0.5;
+  const easyMixRatio = dayEasyMixRatio(day, eventData);
 
   // Everything contended happens in here, and it REJECTS offline rather than
   // queueing — see the doc comment above for why that failure mode is the feature.
@@ -727,7 +754,7 @@ export async function reshuffleBoard(params: {
     ]);
 
     if (!boardSnap.exists()) throw new Error('reshuffleBoard: no Day Card to reshuffle.');
-    const board = boardSnap.data() as { cells?: Cell[]; seed?: number };
+    const board = boardSnap.data() as { cells?: Cell[]; seed?: number; easyMixRatio?: number };
 
     // The card must still be the one the Player confirmed. This is what makes a
     // retry a REFUSAL rather than a second spend: when two tabs confirm the same
@@ -774,10 +801,11 @@ export async function reshuffleBoard(params: {
 
     const nextUsed = used + 1;
     const seed = reshuffleSeed(uid, dayIndex, nextUsed, board.seed ?? 0);
+    const boardEasyMixRatio = typeof board.easyMixRatio === 'number' ? board.easyMixRatio : easyMixRatio;
     const cells = dealBoard(pool, day.freeText ?? FREE_TEXT, seed, spicyRatio, {
       excludeIds,
       stratify,
-      easyMixRatio,
+      easyMixRatio: boardEasyMixRatio,
     });
 
     // Both writes in the ONE transaction: the rules' `getAfter()` pairing requires
@@ -785,7 +813,7 @@ export async function reshuffleBoard(params: {
     // never be split. An explicit counter value, NOT `increment(1)` — the rules
     // assert `after == before + 1` against `before`, and the transaction's re-read
     // is what keeps that value fresh under contention.
-    tx.set(boardRef, { uid, dayIndex, seed, createdAt: Date.now(), cells });
+    tx.set(boardRef, { uid, dayIndex, seed, createdAt: Date.now(), cells, easyMixRatio: boardEasyMixRatio });
     tx.set(playerRef, { reshufflesUsed: nextUsed }, { merge: true });
     return nextUsed;
   });

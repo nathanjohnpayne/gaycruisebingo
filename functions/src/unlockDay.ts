@@ -36,6 +36,7 @@ export interface DayLike {
   pool: string; // 'main' | 'embark' | 'farewell'
   unlockAt: number; // ms epoch
   snapshotItemIds?: string[];
+  snapshotEasyMixRatio?: number;
 }
 
 /** The subset of an `EventDoc` the scheduler reads. */
@@ -44,7 +45,7 @@ export interface EventLike {
   frozenAt?: number | null;
   admins?: string[];
   /** ADR 0004 Phase 0 community auto-hide threshold (mirrors the live deal pool). */
-  settings?: { reportHideThreshold?: number };
+  settings?: { reportHideThreshold?: number; easyMixRatio?: number };
   /** ADR 0004 Phase 0 event-scoped ban roster (#108; mirrors the live deal pool). */
   bannedUids?: string[];
 }
@@ -101,6 +102,10 @@ export interface SnapshotItem {
  */
 export function snapshotPoolsFor(dayPool: string): string[] {
   return dayPool === 'main' ? ['main', 'embark'] : [dayPool];
+}
+
+function eventEasyMixRatio(event: EventLike | undefined): number {
+  return typeof event?.settings?.easyMixRatio === 'number' ? event.settings.easyMixRatio : 0.5;
 }
 
 /** The pool + moderation + cutoff context a snapshot is filtered against. */
@@ -473,7 +478,11 @@ export async function stampDaySnapshot(
     if (i < 0) return 'no-day';
     if (arr[i].unlockAt > now) return 'not-due';
     if (arr[i].snapshotItemIds != null) return 'already-stamped'; // re-confirm: never overwrite an existing snapshot
-    arr[i] = { ...arr[i], snapshotItemIds };
+    arr[i] = {
+      ...arr[i],
+      snapshotItemIds,
+      ...(arr[i].pool === 'main' ? { snapshotEasyMixRatio: eventEasyMixRatio(ev) } : {}),
+    };
     tx.update(eventRef, { days: arr });
     return 'stamped';
   });
@@ -700,7 +709,11 @@ export async function resnapshotDayIfNoBoards(
     }
     // OVERWRITE — the deliberate difference from stampDaySnapshot's never-overwrite
     // guard. The transactional zero-boards check above is what makes this safe.
-    arr[i] = { ...arr[i], snapshotItemIds };
+    arr[i] = {
+      ...arr[i],
+      snapshotItemIds,
+      ...(arr[i].pool === 'main' ? { snapshotEasyMixRatio: eventEasyMixRatio(ev) } : {}),
+    };
     tx.update(eventRef, { days: arr });
     return 'resnapshotted';
   });
