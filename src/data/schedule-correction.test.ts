@@ -148,6 +148,22 @@ describe('schedule migration — planning core (specs/schedule-correction.md)', 
     expect(plan.lengthMismatch).toBe(true);
   });
 
+  it('does NOT flag the embark Day when its live unlockAt differs from the seed 0 sentinel', () => {
+    // The seed uses `unlockAt: 0` ("live from event open") on the embark Day, but
+    // the LIVE embark Day holds a real event-open timestamp. That is expected, not
+    // drift: `unlockAt` is not an alignment field, and the migration preserves it
+    // untouched. (Regression: the first prod dry-run wrongly aborted on this.)
+    const live = oldLiveDays();
+    const realEmbarkUnlock = Date.parse('2026-07-14T08:46:58+02:00');
+    live[0] = { ...live[0], unlockAt: realEmbarkUnlock };
+    const plan = planScheduleMigration(live);
+    expect(plan.misaligned).toBe(false);
+    expect(plan.diffs[0].misalignedFields).toEqual([]);
+    // ...and the real unlockAt is carried through to the corrected write.
+    expect(plan.corrected[0].unlockAt).toBe(realEmbarkUnlock);
+    expect(plan.diffs[0].forbidden).toEqual([]);
+  });
+
   it('diffDay reports the allowed field edits for a single Day', () => {
     const live = oldLiveDays()[2]; // Valletta 🇲🇹/duty-free → Sea Day 🌊/neon-pink-playground
     const target = DAYS[2];

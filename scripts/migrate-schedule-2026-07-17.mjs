@@ -43,14 +43,25 @@ import { EVENT_SEED } from './seed.mjs';
 // impact" guarantee hold; `diffDay`'s `forbidden` list re-asserts it in code.
 export const ALLOWED_FIELDS = ['theme', 'port', 'portEmoji', 'tonight'];
 
-// Fields that must be IDENTICAL between the live Day and the seed target for the
-// correction to be applied to the RIGHT Day. The target metadata is keyed by
-// itinerary position, so if any identity/immutable field has drifted (a shifted
-// date, a re-pooled Day, a rescheduled unlock) we must abort rather than paste a
-// theme onto a mismatched Day. `snapshotItemIds` is deliberately absent — it
-// lives on already-unlocked live Days but never on the seed target, and the
-// migration preserves it untouched, so it is neither allowed-to-change nor an
-// alignment signal.
+// Identity fields that must be IDENTICAL between the live Day and the seed
+// target for the correction to be applied to the RIGHT Day. The target metadata
+// is keyed by itinerary position, so if any of these has drifted (a shifted
+// date, a re-pooled Day) we abort rather than paste a theme onto a mismatched
+// Day. `date` is the true itinerary-position identity.
+//
+// `unlockAt` is deliberately NOT an alignment field: the embark Day carries a
+// `0` "live from event open" sentinel in the seed, but the LIVE embark Day holds
+// a real event-open timestamp — a legitimate, expected difference, not drift. It
+// is preserved untouched regardless (see below), so it needs no alignment check.
+// `freeText` and `snapshotItemIds` are likewise excluded — display/runtime state
+// the migration preserves, not itinerary identity.
+export const ALIGNMENT_FIELDS = ['index', 'date', 'pool', 'tutorial'];
+
+// The fields this migration must never change (everything a Day carries except
+// ALLOWED_FIELDS). Preservation is guaranteed by construction (`correctDay`
+// overwrites only ALLOWED_FIELDS) and re-asserted universally by `diffDay`'s
+// `forbidden` list; this named list drives the test's explicit spot-check that
+// unlockAt/date/pool/tutorial/freeText survive the write untouched.
 export const IMMUTABLE_FIELDS = ['index', 'date', 'pool', 'tutorial', 'unlockAt', 'freeText'];
 
 // The canonical corrected schedule is the seed itself (scripts/seed.mjs
@@ -87,7 +98,7 @@ export function correctDay(liveDay, targetDay) {
  * - `forbidden` — any field the WRITE would change outside ALLOWED_FIELDS
  *   (empty by construction; a non-empty list means a coding regression and
  *   aborts the run — defense in depth for the metadata-only guarantee).
- * - `misalignedFields` — IMMUTABLE_FIELDS that differ between the live Day and
+ * - `misalignedFields` — ALIGNMENT_FIELDS that differ between the live Day and
  *   the seed target; non-empty means the schedule drifted and we must abort
  *   before mislabeling a Day.
  */
@@ -109,7 +120,7 @@ export function diffDay(liveDay, targetDay) {
     if (!fieldEqual(live[key], corrected[key])) forbidden.push(key);
   }
 
-  const misalignedFields = IMMUTABLE_FIELDS.filter(
+  const misalignedFields = ALIGNMENT_FIELDS.filter(
     (key) => (key in live || key in (targetDay || {})) && !fieldEqual(live[key], targetDay?.[key]),
   );
 
