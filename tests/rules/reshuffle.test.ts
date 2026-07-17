@@ -7,7 +7,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, writeBatch } from 'firebase/firestore';
+import { deleteField, doc, setDoc, writeBatch } from 'firebase/firestore';
 
 // specs/reshuffle.md — the Reshuffle write gate (#378).
 //
@@ -235,6 +235,50 @@ describe('reshuffle — the counter is monotonic (Option A, #378)', () => {
     const d = db(ALICE);
     await assertFails(
       setDoc(doc(d, `events/${EVENT}/players/${ALICE}`), { reshufflesUsed: 2 }, { merge: true }),
+    );
+  });
+
+  // The reset-to-zero exploit by OMISSION (CodeRabbit 🔴, PR #383). `usedCount()`
+  // reads a missing key as 0, so dropping the field is a decrement wearing a
+  // disguise: it would hand a spent-out Player three fresh reshuffles, defeating
+  // the whole monotonic contract. Both removal shapes are pinned.
+  it('DENIES a full (non-merge) replacement that OMITS the counter — dropping it is a decrement', async () => {
+    await seedCounter(3);
+    const d = db(ALICE);
+    await assertFails(
+      setDoc(doc(d, `events/${EVENT}/players/${ALICE}`), {
+        uid: ALICE,
+        displayName: 'Alice',
+        bingoCount: 0,
+        squaresMarked: 0,
+        firstBingoAt: null,
+      }),
+    );
+  });
+
+  it('DENIES deleteField() on the counter', async () => {
+    await seedCounter(2);
+    const d = db(ALICE);
+    await assertFails(
+      setDoc(
+        doc(d, `events/${EVENT}/players/${ALICE}`),
+        { reshufflesUsed: deleteField() },
+        { merge: true },
+      ),
+    );
+  });
+
+  it('still ALLOWS a legacy row that never carried the counter to be updated without it', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `events/${EVENT}/players/${ALICE}`), {
+        uid: ALICE,
+        displayName: 'Alice',
+        bingoCount: 0,
+      });
+    });
+    const d = db(ALICE);
+    await assertSucceeds(
+      setDoc(doc(d, `events/${EVENT}/players/${ALICE}`), { squaresMarked: 3 }, { merge: true }),
     );
   });
 

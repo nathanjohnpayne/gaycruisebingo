@@ -69,7 +69,11 @@ export default function ReshuffleSheet({
   };
 
   return (
-    <div className="sheet-backdrop" onClick={onClose}>
+    // The backdrop is guarded by `busy` like both buttons (CodeRabbit, PR #383):
+    // an unguarded dismiss would let a stray tap tear the sheet down mid-commit,
+    // so the Player never learns whether the reshuffle they just spent actually
+    // landed — the one moment in this flow where that matters most.
+    <div className="sheet-backdrop" onClick={busy ? undefined : onClose}>
       <div
         className="sheet reshuffle-sheet"
         role="dialog"

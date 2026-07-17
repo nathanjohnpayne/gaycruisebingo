@@ -16,6 +16,9 @@ const H = vi.hoisted(() => ({
   dayBoards: new Map<number, { uid: string; seed?: number; cells: Cell[] } | null>(),
   player: null as Record<string, unknown> | null,
   getDoc: vi.fn(),
+  // Typed args so `mock.calls[n][0]` is reachable (a bare `vi.fn(async () => {})`
+  // infers a zero-length tuple and every call-site index is a type error).
+  setDoc: vi.fn(async (..._args: unknown[]) => {}),
   batchSet: vi.fn(),
   batchCommit: vi.fn(async () => {}),
 }));
@@ -48,7 +51,7 @@ vi.mock('firebase/firestore', () => {
     addDoc: vi.fn(),
     increment: vi.fn(),
     runTransaction: vi.fn(),
-    setDoc: vi.fn(),
+    setDoc: H.setDoc,
     updateDoc: vi.fn(),
     deleteField: vi.fn(),
     onSnapshot: vi.fn(),
@@ -57,7 +60,7 @@ vi.mock('firebase/firestore', () => {
   };
 });
 
-import { reshuffleBoard, reshuffleSeed } from './api';
+import { joinAndDeal, reshuffleBoard, reshuffleSeed } from './api';
 
 const snap = (exists: boolean, id = '', data: unknown = undefined) => ({
   exists: () => exists,
@@ -98,10 +101,16 @@ function seedItems() {
   }
 }
 
+/** A 25-cell card carrying all 24 supplied ids around the free centre. The id
+ *  cursor is separate from the cell index and SKIPS the centre — indexing `ids`
+ *  by the cell index would burn ids[12] on the free space and run off the end at
+ *  cell 24, leaving a junk `x24` id that the exclusion assertions then silently
+ *  under-test (CodeRabbit, PR #383). */
 function cardFrom(ids: string[], markedIndex?: number): Cell[] {
+  let cursor = 0;
   return Array.from({ length: 25 }, (_, index) => ({
     index,
-    itemId: index === 12 ? null : (ids[index] ?? `x${index}`),
+    itemId: index === 12 ? null : ids[cursor++],
     text: index === 12 ? 'FREE' : `Prompt ${index}`,
     free: index === 12,
     marked: index === 12 || index === markedIndex,
@@ -316,5 +325,34 @@ describe('reshuffleSeed', () => {
     expect(Number.isInteger(seed)).toBe(true);
     expect(seed).toBeGreaterThanOrEqual(0);
     expect(seed).toBeLessThanOrEqual(0xffffffff);
+  });
+});
+
+describe('joinAndDeal — seeding the allowance', () => {
+  const user = { uid: 'u1', displayName: 'Deck Daddy', photoURL: null } as never;
+
+  /** The player-row payload joinAndDeal merged. */
+  const joinedPlayerWrite = () => {
+    const call = H.setDoc.mock.calls.find((c) => {
+      const a = ((c[0] as { args?: unknown[] }).args ?? []).filter((x) => typeof x === 'string');
+      return a[2] === 'players';
+    });
+    return call?.[1] as Record<string, unknown> | undefined;
+  };
+
+  it('seeds reshufflesUsed: 0 on a first join, alongside the other zeroed aggregates', async () => {
+    H.player = null;
+    await joinAndDeal(user);
+    expect(joinedPlayerWrite()).toMatchObject({ reshufflesUsed: 0, bingoCount: 0 });
+  });
+
+  // The load-bearing half. joinAndDeal re-runs on every online/authority flip, so
+  // an unguarded `reshufflesUsed: 0` would rewind a real spend — and because the
+  // rules hold the counter monotonic, that write is DENIED, which fails the whole
+  // join batch rather than just this field. Guarded, the key is simply absent.
+  it('never rewinds a Player who has already spent reshuffles', async () => {
+    H.player = { uid: 'u1', joinedAt: 1, bingoCount: 0, squaresMarked: 0, firstBingoAt: null, blackout: false, reshufflesUsed: 2 };
+    await joinAndDeal(user);
+    expect(joinedPlayerWrite()).not.toHaveProperty('reshufflesUsed');
   });
 });

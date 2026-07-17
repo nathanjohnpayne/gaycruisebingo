@@ -143,15 +143,28 @@ service cloud.firestore {
     // 0 for unlimited reshuffles. Accepted residual: an UNPAIRED +1 is permitted. It
     // burns the Player's own allowance and writes no Board — self-harm, not an
     // exploit. See specs/reshuffle.md § "Residuals".
+    // Removing the field is a DECREMENT and is denied as one. `usedCount()` reads a
+    // missing key as 0, so a write that DROPS `reshufflesUsed` — a full (non-merge)
+    // `setDoc` that simply omits it, or an explicit `deleteField()` — would erase a
+    // spent allowance and hand the Player three fresh reshuffles, defeating the
+    // monotonic contract this function exists to enforce (CodeRabbit 🔴, PR #383).
+    // Absence is therefore tolerated ONLY where it is already the truth: a create
+    // (a brand-new row legitimately starts at "none used"), or an update to a
+    // legacy row that never carried the key (there is no backfill). Once the field
+    // exists, every write must carry it forward.
+    function reshuffleCounterPresenceOk() {
+      return resource == null || !('reshufflesUsed' in resource.data);
+    }
     function reshuffleCounterMonotonic() {
       return !('reshufflesUsed' in request.resource.data)
-        || (request.resource.data.reshufflesUsed is number
-            && request.resource.data.reshufflesUsed >= 0
-            && request.resource.data.reshufflesUsed <= reshuffleAllowance()
-            && (resource == null
-                ? request.resource.data.reshufflesUsed == 0
-                : (request.resource.data.reshufflesUsed == usedCount(resource.data)
-                   || request.resource.data.reshufflesUsed == usedCount(resource.data) + 1)));
+        ? reshuffleCounterPresenceOk()
+        : (request.resource.data.reshufflesUsed is number
+           && request.resource.data.reshufflesUsed >= 0
+           && request.resource.data.reshufflesUsed <= reshuffleAllowance()
+           && (resource == null
+               ? request.resource.data.reshufflesUsed == 0
+               : (request.resource.data.reshufflesUsed == usedCount(resource.data)
+                  || request.resource.data.reshufflesUsed == usedCount(resource.data) + 1)));
     }
 
     // #221 (d15-admin-schedule) — the Schedule editor's write-time lock:

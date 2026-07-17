@@ -317,6 +317,12 @@ export async function joinAndDeal(u: User): Promise<boolean> {
     if (typeof existing?.squaresMarked !== 'number') seed.squaresMarked = 0;
     if (existing?.firstBingoAt === undefined) seed.firstBingoAt = null;
     if (typeof existing?.blackout !== 'boolean') seed.blackout = false;
+    // The cruise-wide Reshuffle allowance (#378), seeded like the aggregates
+    // above and guarded the same way: written ONLY when the row does not already
+    // carry a number, so a returning Player's real spend is never reset to 0 —
+    // which firestore.rules would deny outright (the counter is monotonic), and
+    // which would fail the whole join write, not just this field.
+    if (typeof existing?.reshufflesUsed !== 'number') seed.reshufflesUsed = 0;
     await setDoc(rawPlayer(u.uid), seed, { merge: true });
     return !alreadyJoined; // a genuine first join (no prior identity) is the analytic-worthy event
   }

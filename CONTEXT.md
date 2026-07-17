@@ -32,7 +32,7 @@ A phone-first, live, social bingo game for one cruise at a time. The card's prom
 
 ### The card & play
 
-**Board**: One Player's frozen 5×5 card for the Event — 24 sampled prompts plus the free centre. Private to its owner; dealt once and never reshuffled. _Avoid_: Card (fine informally), grid
+**Board**: One Player's frozen 5×5 card — 24 sampled prompts plus the free centre. Private to its owner; dealt once and, once you have marked a square, never re-dealt. The one exception is a [Reshuffle](#days--pools): while a card is still pristine it may be traded whole for a fresh deal, 3 times per cruise. _Avoid_: Card (fine informally), grid
 
 **Square**: One of the 25 positions on a Board. Carries a Prompt's text and whether it's been marked. _Avoid_: Cell, tile, space
 

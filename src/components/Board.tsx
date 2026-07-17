@@ -1808,7 +1808,10 @@ export default function Board() {
           decodes the card in front of them and goes first; this announces a
           feature and can wait for the next render — its dismissal writes the
           key, which re-renders Board and lets this through. */}
-      {cells.length > 0 && coachSeen && <LaunchIntro />}
+      {/* `hasDays` too: Reshuffle is a daily-cards feature, so a legacy Event
+          (single Board, no `days[]` schedule) must never be told about a chip it
+          can never show. */}
+      {hasDays && cells.length > 0 && coachSeen && <LaunchIntro />}
       {/* `board-area` is the retint scope (daily-cards-spec § "Day switcher"):
           `data-theme` here — set ONLY when the Event carries a Day schedule —
           follows the VIEWED Day and cascades the theme token set (themes.css)
