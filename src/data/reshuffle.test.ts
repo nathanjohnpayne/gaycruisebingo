@@ -4,9 +4,10 @@ import type { Cell, DayDef, EventDoc, ItemDoc } from '../types';
 // Covers specs/reshuffle.md — the `reshuffleBoard` write path (#378). Proves the
 // deal SOURCE (the same frozen Day Snapshot, never a live query), the exclusion
 // posture (kept cards only — the discarded card's Prompts return to the pool),
-// the batch SHAPE (exactly two docs: board + counter), the eligibility refusals,
-// and that no other Player's card is touched. The sampling/stratification math
-// itself is proven in src/game/logic.test.ts.
+// the write SHAPE (exactly two docs, board + counter, in ONE transaction), the
+// eligibility refusals, that it FAILS rather than queues offline, and that no
+// other Player's card is touched. The sampling/stratification math itself is
+// proven in src/game/logic.test.ts.
 
 const EVENT_ID = 'test-event';
 
@@ -21,6 +22,11 @@ const H = vi.hoisted(() => ({
   setDoc: vi.fn(async (..._args: unknown[]) => {}),
   batchSet: vi.fn(),
   batchCommit: vi.fn(async () => {}),
+  txSet: vi.fn(),
+  // `runTransaction` REJECTS offline rather than queueing — that failure mode is
+  // the whole contract (Codex P1 on #383). `offline: true` makes this double
+  // behave like the real SDK does with no connection.
+  offline: false,
 }));
 
 vi.mock('../firebase', () => ({
@@ -50,7 +56,14 @@ vi.mock('firebase/firestore', () => {
     writeBatch: () => ({ set: H.batchSet, commit: H.batchCommit }),
     addDoc: vi.fn(),
     increment: vi.fn(),
-    runTransaction: vi.fn(),
+    runTransaction: async (_db: unknown, fn: (tx: unknown) => Promise<unknown>) => {
+      if (H.offline) throw new Error('Failed to get document because the client is offline.');
+      const tx = {
+        get: async (ref: { args?: unknown[] }) => route(ref),
+        set: H.txSet,
+      };
+      return fn(tx);
+    },
     setDoc: H.setDoc,
     updateDoc: vi.fn(),
     deleteField: vi.fn(),
@@ -134,7 +147,7 @@ const day = (index: number, over: Partial<DayDef> = {}): DayDef =>
 
 /** The cells the batch wrote for the day board. */
 const writtenBoard = () => {
-  const call = H.batchSet.mock.calls.find((c) => {
+  const call = H.txSet.mock.calls.find((c) => {
     const a = ((c[0] as { args?: unknown[] }).args ?? []).filter((x) => typeof x === 'string');
     return a[2] === 'days' && a[4] === 'boards';
   });
@@ -142,7 +155,7 @@ const writtenBoard = () => {
 };
 
 const writtenPlayer = () => {
-  const call = H.batchSet.mock.calls.find((c) => {
+  const call = H.txSet.mock.calls.find((c) => {
     const a = ((c[0] as { args?: unknown[] }).args ?? []).filter((x) => typeof x === 'string');
     return a[2] === 'players';
   });
@@ -158,14 +171,13 @@ beforeEach(() => {
   // Day 1 holds a pristine card dealt from the first 24 snapshot ids.
   H.dayBoards.set(1, { uid: 'u1', seed: 111, cells: cardFrom(SNAPSHOT_IDS.slice(0, 24)) });
   H.getDoc.mockImplementation(async (ref: { args?: unknown[] }) => route(ref));
-  H.batchCommit.mockResolvedValue(undefined);
+  H.offline = false;
 });
 
 describe('reshuffleBoard — the happy path', () => {
   it('writes exactly TWO docs: the day board and the counter — nothing else', async () => {
     await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
-    expect(H.batchSet).toHaveBeenCalledTimes(2);
-    expect(H.batchCommit).toHaveBeenCalledTimes(1);
+    expect(H.txSet).toHaveBeenCalledTimes(2);
   });
 
   it('returns the resulting spend and bumps the counter by exactly 1', async () => {
@@ -238,7 +250,7 @@ describe('reshuffleBoard — the exclusion is computed from KEPT cards only', ()
 
   it('never touches another Player\'s card', async () => {
     await reshuffleBoard({ uid: 'u1', dayIndex: 1 });
-    for (const call of H.batchSet.mock.calls) {
+    for (const call of H.txSet.mock.calls) {
       const a = ((call[0] as { args?: unknown[] }).args ?? []).filter((x) => typeof x === 'string');
       expect(a).not.toContain('u2');
     }
@@ -249,7 +261,7 @@ describe('reshuffleBoard — refusals', () => {
   it('refuses a card that is not pristine', async () => {
     H.dayBoards.set(1, { uid: 'u1', seed: 111, cells: cardFrom(SNAPSHOT_IDS.slice(0, 24), 0) });
     await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/pristine/);
-    expect(H.batchCommit).not.toHaveBeenCalled();
+    expect(H.txSet).not.toHaveBeenCalled();
   });
 
   it('refuses a card holding a PENDING mark — a Claim is queued against it', async () => {
@@ -262,13 +274,13 @@ describe('reshuffleBoard — refusals', () => {
   it('refuses once the allowance is spent', async () => {
     H.player = { uid: 'u1', reshufflesUsed: 3 };
     await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/reshuffles left/);
-    expect(H.batchCommit).not.toHaveBeenCalled();
+    expect(H.txSet).not.toHaveBeenCalled();
   });
 
   it('refuses a LOCKED Day', async () => {
     H.event = { days: [day(0), day(1, { unlockAt: FUTURE })], settings: {} };
     await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/locked/);
-    expect(H.batchCommit).not.toHaveBeenCalled();
+    expect(H.txSet).not.toHaveBeenCalled();
   });
 
   it('refuses a Day whose snapshot is not yet stamped (waking)', async () => {
@@ -354,5 +366,28 @@ describe('joinAndDeal — seeding the allowance', () => {
     H.player = { uid: 'u1', joinedAt: 1, bingoCount: 0, squaresMarked: 0, firstBingoAt: null, blackout: false, reshufflesUsed: 2 };
     await joinAndDeal(user);
     expect(joinedPlayerWrite()).not.toHaveProperty('reshufflesUsed');
+  });
+});
+
+describe('reshuffleBoard — offline', () => {
+  // The Codex P1 on #383. A `writeBatch` would QUEUE here and apply optimistically
+  // to the local cache while its commit promise pends forever: the Player sees the
+  // replacement card, starts marking it, and the whole thing rolls back when the
+  // drain hits a server that now denies it. `runTransaction` is the primitive whose
+  // failure mode matches the contract — it rejects rather than buffering, so the
+  // reshuffle either lands against fresh server state or changes nothing at all.
+  it('REJECTS rather than queueing, and writes nothing', async () => {
+    H.offline = true;
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow(/offline/i);
+    expect(H.txSet).not.toHaveBeenCalled();
+    expect(H.batchSet).not.toHaveBeenCalled();
+  });
+
+  // The online gate on the chip is a hint, never the enforcement: navigator.onLine
+  // reports the link, not reachability, and captive ship wifi reads as online. The
+  // write path must be safe on its own.
+  it('is not reliant on the caller having checked connectivity first', async () => {
+    H.offline = true;
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1 })).rejects.toThrow();
   });
 });

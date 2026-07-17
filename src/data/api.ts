@@ -590,47 +590,41 @@ export function reshuffleSeed(
  * returns the card to pristine — the cascade performed by the player, visibly,
  * through mechanics that already exist.
  *
- * ONLINE-ONLY, unlike every other write in this file. `setMark` is deliberately a
- * fire-and-forget batch that queues durably offline (ADR 0006); this one is
- * awaited, because the Board replace and the counter increment MUST land together
- * or not at all — the rules bind them in one batch (`getAfter`), so a queued
- * reshuffle draining hours later against a card the Player has since marked would
- * be denied at drain time and silently lose them the card they thought they had.
- * The chip is gated on `online` upstream; this await is what surfaces a failure
- * as a real rejection the caller can report rather than a pend that never settles.
+ * ONLINE-ONLY, unlike every other write in this file — and enforced by
+ * `runTransaction`, NOT by the `online` gate on the chip and NOT by awaiting a
+ * batch. That distinction is the whole point, and getting it wrong is subtle
+ * enough that the first cut of this function did (Codex P1 on #383):
+ *
+ * `setMark` is deliberately a fire-and-forget `writeBatch` because a batch QUEUES
+ * durably offline (ADR 0006) — a Mark made in a ship-wifi dead zone must survive.
+ * A reshuffle needs the exact opposite, and a batch cannot give it: offline, the
+ * batch is still persisted and applied OPTIMISTICALLY to the local cache while its
+ * commit promise merely pends forever. Awaiting it does not prevent the queue; it
+ * just never resolves. So the Player would see the replacement card, start marking
+ * it, and only later — when the drain hits a server that now denies the write
+ * (another tab marked the old card; the Day rolled) — have it rolled back
+ * underneath them, with any offline Mark computed against a card that never
+ * existed. `navigator.onLine` cannot close that window either: it reports the
+ * link, not reachability, and captive ship wifi reads as online (see useOnline).
+ *
+ * `runTransaction` is the primitive whose failure mode matches the contract: it
+ * REQUIRES a server round trip and REJECTS offline rather than buffering, so a
+ * reshuffle either lands atomically against fresh server state or fails loudly and
+ * changes nothing. Its re-read on contention is a bonus: two tabs racing a
+ * reshuffle re-run against the committed counter instead of double-spending, and
+ * the rules' `getAfter()` pairing works inside a transaction exactly as in a batch.
  */
 export async function reshuffleBoard(params: {
   uid: string;
   dayIndex: number;
 }): Promise<number> {
   const { uid, dayIndex } = params;
-  const [boardSnap, playerSnap, eventSnap] = await Promise.all([
-    getDoc(rawDayBoard(dayIndex, uid)),
-    getDoc(rawPlayer(uid)),
-    getDoc(rawEvent()),
-  ]);
-
-  if (!boardSnap.exists()) throw new Error('reshuffleBoard: no Day Card to reshuffle.');
-  const board = boardSnap.data() as { cells?: Cell[]; seed?: number };
-  const currentCells = board.cells ?? [];
-
-  // Pristine is the eligibility window. Checked here as well as in the rules
-  // because the rules' denial is a PERMISSION_DENIED the Player would see as a
-  // broken button; this turns the same contract into a refusal the caller can
-  // explain. `isPristine` (not `countMarked`) is the predicate the rules mirror
-  // — see its doc comment for why a pending Mark is not pristine.
-  if (!isPristine(currentCells)) {
-    throw new Error('reshuffleBoard: the card is no longer pristine.');
-  }
-
-  const used =
-    typeof (playerSnap.data() as Partial<PlayerDoc> | undefined)?.reshufflesUsed === 'number'
-      ? (playerSnap.data() as PlayerDoc).reshufflesUsed
-      : 0;
-  if (used >= RESHUFFLE_ALLOWANCE) {
-    throw new Error('reshuffleBoard: no cruise reshuffles left.');
-  }
-
+  // The UNCONTENDED reads stay outside the transaction: the Event schedule, the
+  // Day Snapshot's items, and the Player's OTHER Day Cards (the exclusion set) are
+  // not being written here, so re-reading them on every transaction retry would
+  // buy nothing and cost a round trip each. The two docs this actually writes —
+  // the Board and the Player row — are read INSIDE, where contention matters.
+  const eventSnap = await getDoc(rawEvent());
   const eventData = eventSnap.exists() ? (eventSnap.data() as Partial<EventDoc>) : null;
   const days = Array.isArray(eventData?.days) ? (eventData.days as DayDef[]) : [];
   const day = days[dayIndex];
@@ -691,30 +685,50 @@ export async function reshuffleBoard(params: {
   const spicyRatio =
     typeof eventData?.settings?.spicyRatio === 'number' ? eventData.settings.spicyRatio : 0.4;
 
-  const nextUsed = used + 1;
-  const seed = reshuffleSeed(uid, dayIndex, nextUsed, board.seed ?? 0);
-  const cells = dealBoard(pool, day.freeText ?? FREE_TEXT, seed, spicyRatio, {
-    excludeIds,
-    stratify,
-  });
+  // Everything contended happens in here, and it REJECTS offline rather than
+  // queueing — see the doc comment above for why that failure mode is the feature.
+  // Reads before writes (Firestore's transaction contract); eligibility is judged
+  // against what the transaction itself read, so a retry re-judges rather than
+  // committing a verdict formed against stale state.
+  const boardRef = rawDayBoard(dayIndex, uid);
+  const playerRef = rawPlayer(uid);
+  return runTransaction(db, async (tx) => {
+    const [boardSnap, playerSnap] = await Promise.all([tx.get(boardRef), tx.get(playerRef)]);
 
-  // ONE batch: the rules' `getAfter()` pairing requires the counter write to be
-  // present alongside the Board replace, so these can never be split.
-  const batch = writeBatch(db);
-  batch.set(rawDayBoard(dayIndex, uid), {
-    uid,
-    dayIndex,
-    seed,
-    createdAt: Date.now(),
-    cells,
+    if (!boardSnap.exists()) throw new Error('reshuffleBoard: no Day Card to reshuffle.');
+    const board = boardSnap.data() as { cells?: Cell[]; seed?: number };
+
+    // Pristine is the eligibility window. Checked here as well as in the rules
+    // because a rules denial reaches the Player as a bare PERMISSION_DENIED — a
+    // button that looks broken; this turns the same contract into a refusal the
+    // caller can explain. `isPristine` (not `countMarked`) is the predicate the
+    // rules mirror — see its doc comment for why a pending Mark is not pristine.
+    if (!isPristine(board.cells ?? [])) {
+      throw new Error('reshuffleBoard: the card is no longer pristine.');
+    }
+
+    const player = playerSnap.exists() ? (playerSnap.data() as Partial<PlayerDoc>) : undefined;
+    const used = typeof player?.reshufflesUsed === 'number' ? player.reshufflesUsed : 0;
+    if (used >= RESHUFFLE_ALLOWANCE) {
+      throw new Error('reshuffleBoard: no cruise reshuffles left.');
+    }
+
+    const nextUsed = used + 1;
+    const seed = reshuffleSeed(uid, dayIndex, nextUsed, board.seed ?? 0);
+    const cells = dealBoard(pool, day.freeText ?? FREE_TEXT, seed, spicyRatio, {
+      excludeIds,
+      stratify,
+    });
+
+    // Both writes in the ONE transaction: the rules' `getAfter()` pairing requires
+    // the counter write to be present alongside the Board replace, so these can
+    // never be split. An explicit counter value, NOT `increment(1)` — the rules
+    // assert `after == before + 1` against `before`, and the transaction's re-read
+    // is what keeps that value fresh under contention.
+    tx.set(boardRef, { uid, dayIndex, seed, createdAt: Date.now(), cells });
+    tx.set(playerRef, { reshufflesUsed: nextUsed }, { merge: true });
+    return nextUsed;
   });
-  // An explicit value, NOT `increment(1)`: the rules assert `after == before + 1`
-  // against a value read in this same call, and an explicit write makes a
-  // concurrent second reshuffle (another tab) fail the rules check rather than
-  // silently double-spend. A denial is the correct outcome there.
-  batch.set(rawPlayer(uid), { reshufflesUsed: nextUsed }, { merge: true });
-  await batch.commit();
-  return nextUsed;
 }
 
 /**

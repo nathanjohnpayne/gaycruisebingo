@@ -7,7 +7,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { deleteField, doc, setDoc, writeBatch } from 'firebase/firestore';
+import { deleteField, doc, runTransaction, setDoc, writeBatch } from 'firebase/firestore';
 
 // specs/reshuffle.md — the Reshuffle write gate (#378).
 //
@@ -186,6 +186,53 @@ describe('reshuffle — the board-side pairing gate', () => {
 
   it('DENIES a reshuffle that leaves the counter UNCHANGED', async () => {
     await assertFails(reshuffle(ALICE, { nextUsed: 0 }));
+  });
+});
+
+// `reshuffleBoard` commits via runTransaction, not writeBatch (Codex P1 on #383 —
+// a batch queues offline, a transaction rejects). The `getAfter()` pairing is
+// documented for both, but "documented" is what the day-agnostic unroll was too:
+// this exercises the ACTUAL production shape against the emulator so the rule is
+// proven on the path the app really takes, not merely on a cousin of it.
+describe('reshuffle — the pairing holds through a TRANSACTION (the production path)', () => {
+  it('ALLOWS a pristine reshuffle + paired +1 committed in one transaction', async () => {
+    const d = db(ALICE);
+    await assertSucceeds(
+      runTransaction(d, async (tx) => {
+        const boardRef = doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`);
+        const playerRef = doc(d, `events/${EVENT}/players/${ALICE}`);
+        await tx.get(boardRef);
+        await tx.get(playerRef);
+        tx.set(boardRef, board(ALICE, UNLOCKED_DAY, 4242));
+        tx.set(playerRef, { reshufflesUsed: 1 }, { merge: true });
+      }),
+    );
+  });
+
+  it('DENIES a transactional board reshuffle with NO counter write', async () => {
+    const d = db(ALICE);
+    await assertFails(
+      runTransaction(d, async (tx) => {
+        const boardRef = doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`);
+        await tx.get(boardRef);
+        tx.set(boardRef, board(ALICE, UNLOCKED_DAY, 4242));
+      }),
+    );
+  });
+
+  it('DENIES a transactional reshuffle past the allowance', async () => {
+    await seedCounter(3);
+    const d = db(ALICE);
+    await assertFails(
+      runTransaction(d, async (tx) => {
+        const boardRef = doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`);
+        const playerRef = doc(d, `events/${EVENT}/players/${ALICE}`);
+        await tx.get(boardRef);
+        await tx.get(playerRef);
+        tx.set(boardRef, board(ALICE, UNLOCKED_DAY, 4242));
+        tx.set(playerRef, { reshufflesUsed: 4 }, { merge: true });
+      }),
+    );
   });
 });
 
