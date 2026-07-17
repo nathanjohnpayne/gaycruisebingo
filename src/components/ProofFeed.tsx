@@ -686,8 +686,15 @@ function FeedWhoListSheet({
         return;
       }
       if (event.key !== 'Tab') return;
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
-      if (!focusable || focusable.length === 0) return;
+      // Exclude DISABLED controls from the trap's focusable set (Codex P2 on
+      // #392): a Doubt button disabled while the viewer's identity loads (or a
+      // raise is in flight) is skipped by native Tab, so treating it as the
+      // first/last stop would strand focus on Close and let Shift+Tab escape the
+      // dialog. The row buttons are the only ever-disabled controls here.
+      const focusable = [
+        ...(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? []),
+      ].filter((el) => !el.hasAttribute('disabled'));
+      if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       if (event.shiftKey && (document.activeElement === first || document.activeElement === titleRef.current)) {
