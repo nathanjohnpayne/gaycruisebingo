@@ -225,6 +225,55 @@ describe('AuthContext deal-error hardening', () => {
     vi.unstubAllGlobals();
   });
 
+  it('routes the iPadOS desktop-UA masquerade (MacIntel + touch points) to redirect sign-in (#347)', async () => {
+    // iPadOS Safari reports a Mac platform/UA; maxTouchPoints > 1 is the
+    // accepted discriminator (real Macs report 0). See prefersRedirectSignIn.
+    vi.stubGlobal('navigator', {
+      ...window.navigator,
+      onLine: true,
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15',
+      platform: 'MacIntel',
+      maxTouchPoints: 5,
+    });
+    const authMock = mockedAuth as { config?: { authDomain?: string } };
+    authMock.config = { authDomain: window.location.hostname };
+
+    mount();
+    await userEvent.click(screen.getByText('signin'));
+
+    expect(mocks.signInWithRedirect).toHaveBeenCalledTimes(1);
+    expect(mocks.signInWithPopup).not.toHaveBeenCalled();
+
+    delete authMock.config;
+    sessionStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps popup sign-in on a real Mac (MacIntel, no touch points) (#347)', async () => {
+    // The documented tradeoff boundary: only a TOUCH-reporting MacIntel matches
+    // the masquerade clause — a conventional Mac stays on the popup path.
+    vi.stubGlobal('navigator', {
+      ...window.navigator,
+      onLine: true,
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15',
+      platform: 'MacIntel',
+      maxTouchPoints: 0,
+    });
+    const authMock = mockedAuth as { config?: { authDomain?: string } };
+    authMock.config = { authDomain: window.location.hostname };
+
+    mount();
+    await userEvent.click(screen.getByText('signin'));
+
+    expect(mocks.signInWithPopup).toHaveBeenCalledTimes(1);
+    expect(mocks.signInWithRedirect).not.toHaveBeenCalled();
+
+    delete authMock.config;
+    vi.unstubAllGlobals();
+  });
+
   it('coalesces repeated sign-in calls into one Firebase auth transaction', async () => {
     const popup = deferred<Record<string, never>>();
     mocks.signInWithPopup.mockReturnValueOnce(popup.promise);
@@ -378,6 +427,36 @@ describe('AuthContext deal-error hardening', () => {
     vi.unstubAllGlobals();
   });
 
+  it('cancels the armed settle timer when the browser goes offline mid-window (#356)', async () => {
+    vi.useFakeTimers();
+    const replace = vi.fn();
+    vi.stubGlobal('location', {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    });
+
+    mount(); // online signed-out boot: the 3s bound arms
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS / 2);
+
+    // Mid-window offline transition. This pins the effect-CLEANUP path — the
+    // spec's "an offline transition cancels the timer" — as distinct from both
+    // booting offline (the timer never arms) and the fire-time isOnline()
+    // re-check: navigator.onLine stays true here (only the event fires), so if
+    // the cleanup failed to clear the pending timeout, the callback would pass
+    // its live probe and navigate, failing this test.
+    await act(async () => {
+      window.dispatchEvent(new Event('offline'));
+    });
+    await vi.advanceTimersByTimeAsync(WEB_APP_AUTH_SETTLE_TIMEOUT_MS);
+    expect(replace).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
   it('suppresses the timeout handoff when Firebase restores the current User first', async () => {
     vi.useFakeTimers();
     const replace = vi.fn();
@@ -440,6 +519,33 @@ describe('AuthContext deal-error hardening', () => {
     await act(async () => void (await emitAuth(null)));
     expect(replace).toHaveBeenCalledOnce();
     expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/card');
+
+    vi.unstubAllGlobals();
+  });
+
+  it('hands off a mid-session sign-out to the CURRENT route, not the mount-time one (#376)', async () => {
+    const replace = vi.fn();
+    const location = {
+      hostname: 'gaycruisebingo.web.app',
+      pathname: '/card',
+      search: '',
+      hash: '',
+      replace,
+    };
+    vi.stubGlobal('location', location);
+
+    mount();
+    await act(async () => void (await emitAuth(FAKE_USER)));
+
+    // The signed-in session navigates before signing out; the handoff target
+    // must be computed from the live location at navigation time, so the
+    // canonical origin receives the route the Player was actually on.
+    location.pathname = '/more';
+    location.search = '?tab=stats';
+
+    await act(async () => void (await emitAuth(null)));
+    expect(replace).toHaveBeenCalledOnce();
+    expect(replace).toHaveBeenCalledWith('https://gaycruisebingo.firebaseapp.com/more?tab=stats');
 
     vi.unstubAllGlobals();
   });
