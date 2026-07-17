@@ -10,7 +10,7 @@
 // the cruise champion + cruise-wide First to BINGO + per-Day honors, and a
 // mark made on the farewell Day itself (ceremonial) never moves any of the three.
 import { test, expect, type Page } from '@playwright/test';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { seedDailyEvent, dismissCoach, readDealtDayGrid, MAIN_A_INDEX, TODAY_INDEX, FAREWELL_INDEX } from './support/daily';
 import { joinViaSharedLink, signedInUid } from './support/join';
@@ -66,7 +66,13 @@ async function completeMiddleRowBingo(page: Page): Promise<string[]> {
 test.describe('pre-freeze: no podium', () => {
   let testEnv: RulesTestEnvironment;
   test.beforeAll(async () => {
-    ({ testEnv } = await seedDailyEvent()); // no frozenAt — the pre-freeze state
+    // `farewellUnlocked` + no frozenAt: the scheduler-lag window — the clock
+    // has passed the farewell's unlockAt (so its card deals and the goodbye
+    // banner renders) but the D10 08:00 `frozenAt` stamp has not landed yet.
+    // This is the ONLY reachable state with a dealt farewell card and no
+    // freeze stamp, and it pins the sharper contract: the podium is gated on
+    // `frozenAt` itself, never on the farewell Day merely being open.
+    ({ testEnv } = await seedDailyEvent({ farewellUnlocked: true }));
   });
   test.afterAll(async () => {
     await testEnv?.cleanup();
@@ -76,10 +82,12 @@ test.describe('pre-freeze: no podium', () => {
     await joinViaSharedLink(page);
     await waitForBoardServerConfirmed(page);
     await dismissCoach(page);
-    // Not frozen: default view is still "today" (TODAY_INDEX), not the farewell pin.
-    await expect(page.getByRole('tab').nth(TODAY_INDEX)).toHaveAttribute('aria-selected', 'true');
-
-    await page.getByRole('tab').nth(FAREWELL_INDEX).click();
+    // In the scheduler-lag window the farewell is the most-recent unlock, so
+    // `defaultViewedIndex` opens it as "today" — through the ordinary
+    // latest-unlock rule, NOT the freeze pin (`farewellPinIndex` stays null
+    // until `frozenAt` lands). The podium must still be absent: it is gated on
+    // `frozenAt` itself, never on the farewell Day merely being open.
+    await expect(page.getByRole('tab').nth(FAREWELL_INDEX)).toHaveAttribute('aria-selected', 'true');
     await readDealtDayGrid(page);
     await expect(page.locator('.tutorial-banner-farewell')).toBeVisible();
     await expect(page.locator('.farewell-podium')).toHaveCount(0);
@@ -90,7 +98,13 @@ test.describe('pre-freeze: no podium', () => {
 test.describe('post-freeze: podium + ceremonial farewell marks', () => {
   let testEnv: RulesTestEnvironment;
   test.beforeAll(async () => {
-    ({ testEnv } = await seedDailyEvent({ frozenAt: Date.now() })); // D10 08:00 already fired
+    // NOT frozen at seed time (#317): the standings the podium displays must be
+    // EARNED first, and the app's freeze semantics (#265/#278) stop every
+    // non-ceremonial stats fold the moment the event is frozen — seeding
+    // `frozenAt` up front made the two Players' marks below fold NOTHING, so
+    // the squaresMarked 5/4 ground truth could never be reached. Play happens
+    // pre-freeze; the test then stamps the D10 08:00 transition itself.
+    ({ testEnv } = await seedDailyEvent());
   });
   test.afterAll(async () => {
     await testEnv?.cleanup();
@@ -99,10 +113,11 @@ test.describe('post-freeze: podium + ceremonial farewell marks', () => {
   test('the farewell view opens WITH the podium by default once frozen, and the frozen standings then survive a farewell-Day mark', async ({
     browser,
   }) => {
-    // Two independent Players, two BINGOs, several Firestore round trips, and
-    // two Celebration dismissals — comfortably over the 30s default given the
-    // local emulator's write latency under this suite's serial single-worker run.
-    test.setTimeout(90_000);
+    // Two independent Players, two BINGOs, several Firestore round trips, two
+    // Celebration dismissals, and a mid-test freeze + reload — comfortably over
+    // the 30s default given the local emulator's write latency under this
+    // suite's serial single-worker run.
+    test.setTimeout(120_000);
     const ctxA = await browser.newContext();
     const ctxB = await browser.newContext();
     const pageA = await ctxA.newPage(); // will be the CHAMPION (more squares)
@@ -115,11 +130,9 @@ test.describe('post-freeze: podium + ceremonial farewell marks', () => {
       const uidB = await signedInUid(pageB);
       await waitForBoardServerConfirmed(pageB);
       await dismissCoach(pageB);
-      // Frozen: default view is the farewell pin — confirm that FIRST (the
-      // "opens WITH the podium" behavior), then navigate off it to play.
-      await expect(pageB.getByRole('tab').nth(FAREWELL_INDEX)).toHaveAttribute('aria-selected', 'true');
-      await readDealtDayGrid(pageB);
-      await expect(pageB.locator('.farewell-podium')).toHaveCount(0); // no standings yet — nothing to show
+      // Not yet frozen: default view is today, and the farewell Day is still
+      // locked — no podium anywhere (the pre-freeze describe pins that state).
+      await expect(pageB.getByRole('tab').nth(TODAY_INDEX)).toHaveAttribute('aria-selected', 'true');
       await pageB.getByRole('tab').nth(MAIN_A_INDEX).click();
       await completeMiddleRowBingo(pageB);
 
@@ -148,12 +161,38 @@ test.describe('post-freeze: podium + ceremonial farewell marks', () => {
             ok = (a.data()?.squaresMarked ?? 0) === 5 && (b.data()?.squaresMarked ?? 0) === 4;
           });
           return ok;
-        }, { timeout: 15_000 })
+        }, {
+          // Two Players' worth of marks (a bingo line + one extra for A, a
+          // bingo line for B), each chained per-uid through markChains
+          // (src/data/api.ts) — a generous timeout under a busy shared
+          // emulator, not a weaker assertion.
+          timeout: 30_000,
+        })
         .toBe(true);
 
-      // Back to the farewell tab: the podium now renders live (no reload —
-      // FarewellPodium's `players` prop is a subscription).
-      await pageA.getByRole('tab').nth(FAREWELL_INDEX).click();
+      // THE D10 08:00 TRANSITION, exactly the state the scheduled run
+      // (functions/src/unlockDay.ts) leaves behind: `frozenAt` stamped and the
+      // farewell Day's `unlockAt` in the past (its snapshot is already stamped
+      // by the seed). Stamped HERE — after the standings were earned — because
+      // the freeze stops every further non-ceremonial stats fold by design.
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        const snap = await getDoc(doc(ctx.firestore(), 'events', EVENT_ID));
+        const days = (snap.data() as { days: Array<{ index: number }> }).days;
+        await updateDoc(doc(ctx.firestore(), 'events', EVENT_ID), {
+          frozenAt: Date.now(),
+          days: days.map((d) => (d.index === FAREWELL_INDEX ? { ...d, unlockAt: Date.now() - 1000 } : d)),
+        });
+      });
+
+      // "Opens WITH the podium by default once frozen": a fresh open lands on
+      // the farewell pin (farewellPinIndex reads frozenAt at mount) with the
+      // podium up. The reload is the deterministic "fresh open".
+      await pageA.reload();
+      await expect(pageA.getByRole('navigation', { name: 'Primary' })).toBeVisible({ timeout: 15_000 });
+      await expect(pageA.getByRole('tab').nth(FAREWELL_INDEX)).toHaveAttribute('aria-selected', 'true', {
+        timeout: 15_000,
+      });
+      await readDealtDayGrid(pageA); // the farewell card deals lazily on this first post-freeze open
       const podium = pageA.locator('.farewell-podium');
       await expect(podium).toBeVisible({ timeout: 15_000 });
       await expect(podium.locator('.farewell-podium-champion .farewell-podium-name')).toHaveText(/./); // populated

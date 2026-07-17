@@ -10,7 +10,7 @@
 // d15-claim-sheet-photo.spec.ts already pins as a genuine, deterministic
 // local-stack gap (production Storage host vs. the emulator's), so this claim
 // round trip is provably real rather than blocked on that same gap.
-import { test, expect } from '@playwright/test';
+import { test, expect, type BrowserContext } from '@playwright/test';
 import { doc, updateDoc, getDoc, collection, getDocs, query, where } from 'firebase/firestore';
 import type { RulesTestEnvironment } from '@firebase/rules-unit-testing';
 import { seedDailyEvent, dismissCoach, readDealtDayGrid, LOCKED_INDEX, TODAY_INDEX } from './support/daily';
@@ -222,12 +222,27 @@ test.describe('Admin — Proof & Claims panel', () => {
   test('admin_confirmed: a text (Callout) proof lands pending and does NOT count until an Admin confirms it; reject discards it', async ({
     browser,
   }) => {
+    // Two independent Players, an admin promote, a claim submit/confirm AND a
+    // second submit/reject — comfortably over the 30s default given the local
+    // emulator's write latency under this suite's serial single-worker run.
+    test.setTimeout(60_000);
     // A separate seed (own testEnv) so this test's claim-mode flip and marks
     // never interact with the panel-round-trip test above.
     const { testEnv: env } = await seedDailyEvent();
+    // Declared OUTSIDE the try so the finally can close them (#317): these two
+    // contexts used to leak — the finally only ran env.cleanup() — leaving two
+    // ZOMBIE pages (admin on /more, player on the Card) open for the REST OF
+    // THE SUITE, each with a live signed-in Firestore client on the shared
+    // emulator. Every later spec's clearFirestore+reseed then fired those
+    // clients' listeners against the fresh world, and their retried creates /
+    // re-deals materialized stray users/players docs MID-TEST in other specs —
+    // the union run's cross-spec poisoning (e.g. a phantom second Leaderboard
+    // row in x-e2e-happy-path, 'already-exists' commit spam in the logs).
+    let ctxAdmin: BrowserContext | undefined;
+    let ctxPlayer: BrowserContext | undefined;
     try {
-      const ctxAdmin = await browser.newContext();
-      const ctxPlayer = await browser.newContext();
+      ctxAdmin = await browser.newContext();
+      ctxPlayer = await browser.newContext();
       const adminPage = await ctxAdmin.newPage();
       const playerPage = await ctxPlayer.newPage();
 
@@ -295,12 +310,15 @@ test.describe('Admin — Proof & Claims panel', () => {
       await expect(pendingClaimsSection.locator('.row').filter({ hasText: promptText })).toHaveCount(0, { timeout: 10_000 });
 
       // Confirmed: the claim doc flips, the Square is credited, and the Proof
-      // (created 'pending'/admin-only) is published 'active'.
+      // (created 'pending'/admin-only) is published 'active'. confirmClaim
+      // (src/data/admin.ts) is its own runTransaction, independent of a
+      // Player's markChains, but still a real emulator round trip — a
+      // generous timeout under a busy shared emulator, not a weaker assertion.
       await expect
         .poll(async () => {
           const snap = await readPlayer(env, playerUid);
           return snap.squaresMarked ?? 0;
-        }, { timeout: 10_000 })
+        }, { timeout: 25_000 })
         .toBe(1);
       await env.withSecurityRulesDisabled(async (ctx) => {
         const claimSnap = await getDocs(query(collection(ctx.firestore(), 'events', EVENT_ID, 'claims'), where('uid', '==', playerUid)));
@@ -339,6 +357,11 @@ test.describe('Admin — Proof & Claims panel', () => {
       });
       await adminPage.screenshot({ path: `${SHOTS}/admin-claim-rejected.png`, fullPage: true });
     } finally {
+      // Best-effort teardown (CodeRabbit, PR #339): one close throwing must
+      // not skip the other close or env.cleanup() — a surviving signed-in
+      // context is exactly the zombie-listener class this suite fix hunts.
+      await ctxAdmin?.close().catch(() => {});
+      await ctxPlayer?.close().catch(() => {});
       await env.cleanup();
     }
   });

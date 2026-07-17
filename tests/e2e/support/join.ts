@@ -2,7 +2,10 @@
 // URL (the "shared link" — no invite code, no admin-issued token, see
 // CONTEXT.md), accept the 18+ acknowledgement, and sign in. Shared by both
 // x-e2e-happy-path cases so the join flow is asserted in exactly one place.
-import { expect, type Page } from '@playwright/test';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { expect, type Page, type Route } from '@playwright/test';
 
 /**
  * Drive the Firebase Auth Emulator's account-chooser popup that
@@ -15,18 +18,99 @@ import { expect, type Page } from '@playwright/test';
  * Player in. Selectors are the widget's own stable ids/classes.
  */
 async function completeEmulatorSignIn(popup: Page): Promise<void> {
-  // "Add new account" can be visible-but-inert for a beat: the widget wires its
-  // click handlers in an inline <script> that runs only after an external
-  // material-components script loads, so a click that lands before that is a
-  // no-op. Retry the toggle until the add-account form (its autogen button)
-  // actually appears, then fill a random valid identity and submit.
+  // #317: "Add new account" is visible-but-inert until the widget's handlers
+  // wire up — its inline <script> (node_modules/firebase-tools .../widget_ui.js)
+  // sits immediately after a classic, non-async/non-deferred <script src> that
+  // fetches material-components-web from a CDN, so the browser blocks on that
+  // fetch+execute before running the inline script that actually attaches
+  // `.js-new-account`'s click listener — a click before then is a silent
+  // no-op. The CDN requests themselves are stubbed out per-context (see
+  // stubAuthWidgetCdn below), so the popup's `load` event — which cannot fire
+  // until that whole chain has run — is both DETERMINISTIC and fast: wait for
+  // it first. (The previous 15s blind-retry budget fired clicks that were
+  // no-ops pre-wiring and could still lose the race under load — the single
+  // largest contributor to the union suite's mass sign-in failures.) A short
+  // retry stays as a safety net for anything unforeseen once handlers are
+  // confirmed wired.
+  await popup.waitForLoadState('load', { timeout: 30_000 });
   const autogen = popup.locator('#autogen-button');
   await expect(async () => {
     if (!(await autogen.isVisible())) await popup.locator('.js-new-account').click();
-    await expect(autogen).toBeVisible({ timeout: 1000 });
-  }).toPass({ timeout: 15000 });
+    await expect(autogen).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 10_000 });
   await autogen.click(); // fill a random valid identity
   await popup.locator('#sign-in').click(); // submit → popup closes, sign-in resolves
+}
+
+// Contexts whose auth-widget CDN stub is already registered — context.route
+// registrations stack, so joining twice from one context must not re-add it.
+const cdnStubbedContexts = new WeakSet<object>();
+
+// Disk cache for the gapi scripts the sign-in flow REQUIRES (see
+// stubAuthWidgetCdn): keyed by URL hash under node_modules/.cache so it
+// survives across tests, runs, and contexts, and never enters version control.
+const GAPI_CACHE_DIR = path.join(process.cwd(), 'node_modules', '.cache', 'gcb-e2e-gapi');
+
+async function cacheThroughGapi(route: Route): Promise<void> {
+  const request = route.request();
+  if (request.method() !== 'GET') return route.fallback();
+  const url = request.url();
+  const key = createHash('sha1').update(url).digest('hex');
+  const file = path.join(GAPI_CACHE_DIR, key);
+  if (existsSync(file)) {
+    // An unreadable entry falls through to a fresh fetch (and is removed so
+    // the next run doesn't trip on it again) rather than failing the sign-in.
+    try {
+      return route.fulfill({ status: 200, contentType: 'text/javascript', body: readFileSync(file) });
+    } catch {
+      try { rmSync(file, { force: true }); } catch { /* best-effort */ }
+    }
+  }
+  const response = await route.fetch(); // real network — first run only
+  const body = await response.body();
+  if (response.ok()) {
+    try {
+      mkdirSync(GAPI_CACHE_DIR, { recursive: true });
+      // Atomic publish (CodeRabbit, PR #339): write a private temp file and
+      // rename it into place, so an interrupted or concurrent run can never
+      // leave a truncated script that every later sign-in would blindly reuse
+      // (renames within a directory are atomic on POSIX).
+      const tmp = `${file}.tmp-${process.pid}`;
+      writeFileSync(tmp, body);
+      renameSync(tmp, file);
+    } catch {
+      // Cache write is best-effort — worst case the next run re-fetches.
+    }
+  }
+  return route.fulfill({ response });
+}
+
+/**
+ * Make the Auth Emulator sign-in flow hermetic-after-warm-up (#317). Two
+ * distinct external dependencies stall it when the uplink flakes (observed:
+ * repeated TLS handshake failures mid-suite left one popup blank-white and
+ * another sign-in's popup never even OPENING, 60–120s test timeouts):
+ *
+ * 1. The account-chooser widget hard-codes BLOCKING <script>/<link> tags to
+ *    unpkg.com / fonts.googleapis.com. Purely cosmetic — the widget's inline
+ *    handler-wiring script guards every use with `window.mdc &&` — so those
+ *    are fulfilled with empty 200s outright.
+ * 2. The emulator's auth relay iframe (firebase-tools handlers.js) REQUIRES
+ *    real gapi (`apis.google.com/js/api.js` + the modules gapi.load pulls in)
+ *    to deliver the auth event back to the app — signInWithPopup cannot even
+ *    open its popup until that iframe initializes, and an empty stub would
+ *    break sign-in outright (the emulator itself alerts "check your Internet
+ *    connection" on gapi timeout). Those are served through a disk cache:
+ *    fetched from the network once ever, then replayed locally forever after.
+ */
+async function stubAuthWidgetCdn(page: Page): Promise<void> {
+  const ctx = page.context();
+  if (cdnStubbedContexts.has(ctx)) return;
+  cdnStubbedContexts.add(ctx);
+  await ctx.route(/^https:\/\/(unpkg\.com|fonts\.googleapis\.com|fonts\.gstatic\.com)\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/plain', body: '' }),
+  );
+  await ctx.route(/^https:\/\/(apis\.google\.com|www\.gstatic\.com)\//, cacheThroughGapi);
 }
 
 /** Best-effort dismiss of the analytics disclosure banner — it never blocks
@@ -46,6 +130,7 @@ async function dismissConsentNotice(page: Page): Promise<void> {
  * Primary tab bar) renders, i.e. `App.tsx` has moved past `<SignIn />`.
  */
 export async function joinViaSharedLink(page: Page): Promise<void> {
+  await stubAuthWidgetCdn(page); // popups inherit the context's routes
   await page.goto('/');
   await dismissConsentNotice(page);
 

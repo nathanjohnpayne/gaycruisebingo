@@ -21,7 +21,12 @@ test.describe('tutorial days', () => {
   let testEnv: RulesTestEnvironment;
 
   test.beforeAll(async () => {
-    ({ testEnv } = await seedDailyEvent());
+    // `farewellUnlocked`: the farewell test below needs a DEALT farewell card,
+    // which only exists once that Day's `unlockAt` has passed. That state
+    // freezes the stats fold (standingsFrozen's fail-closed D10 semantics —
+    // see support/daily.ts), which is fine here: these tests assert banners
+    // and chips, never player stats.
+    ({ testEnv } = await seedDailyEvent({ farewellUnlocked: true }));
   });
   test.afterAll(async () => {
     await testEnv?.cleanup();

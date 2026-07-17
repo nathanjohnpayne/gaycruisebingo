@@ -18,6 +18,7 @@ import {
   TODAY_INDEX,
 } from './support/daily';
 import { joinViaSharedLink, signedInUid } from './support/join';
+import { userAttested } from './support/seed';
 import {
   LINE_INDICES_EXCLUDING_CENTER,
   claimCellByText,
@@ -69,7 +70,13 @@ test.describe('daily scoring', () => {
 
   test('dayStats do not inflate on tab switch; honors pin per-Day; cruise-wide excludes tutorial', async ({
     page,
+    context,
   }) => {
+    // 11 sequential marks across 3 Days, each chained per-uid through
+    // src/data/api.ts's markChains, then two generous poll windows below —
+    // comfortably over the 30s default given the local emulator's write
+    // latency under this suite's serial single-worker full run.
+    test.setTimeout(90_000);
     await joinViaSharedLink(page);
     const uid = await signedInUid(page);
     await waitForBoardServerConfirmed(page);
@@ -120,16 +127,65 @@ test.describe('daily scoring', () => {
       expect(embarkFirst! < mainFirst!).toBe(true); // tutorial bingo happened first
       expect(p.firstBingoAt).toBe(mainFirst); // …but the cruise honor is the MAIN one
       expect(p.firstBingoAt).not.toBe(embarkFirst);
-    }).toPass({ timeout: 20_000 });
+      // 11 marks (3 + two 4-square lines) all landed above BEFORE this poll
+      // started, chained sequentially per-uid (src/data/api.ts's markChains) —
+      // a generous timeout gives that whole chain room to drain under a busy
+      // shared emulator, without weakening what is asserted.
+    }).toPass({ timeout: 40_000 });
 
-    // The Leaderboard's "Daily First to BINGO" strip pins an honor on EVERY Day a
-    // bingo landed — tutorial Day included (its exclusion is ONLY cruise-wide).
-    await page.getByRole('link', { name: 'Ranks' }).click();
-    const honors = page.locator('.lb-honors .lb-honor');
-    await expect(honors).toHaveCount(2, { timeout: 15_000 });
-    const honorDays = await page.locator('.lb-honors .lb-honor-day').allTextContents();
-    expect(honorDays.join(' ')).toMatch(/Day 1/); // embark (dayIndex 0 → "Day 1")
-    expect(honorDays.join(' ')).toMatch(/Day 2/); // main A (dayIndex 1 → "Day 2")
-    await page.screenshot({ path: `${SHOTS}/scoring-honors.png`, fullPage: true });
+    // The Leaderboard's "Daily First to BINGO" strip: since #264, a daily event
+    // renders one chip for EVERY seeded Day, in Day order — "—" until someone
+    // bingoes that Day — labeled "<emoji> D<n>" (Leaderboard.tsx dayChipLabel).
+    // Tutorial Days included: their exclusion is ONLY cruise-wide.
+    //
+    // Read the Ranks view from a FRESH PAGE in the same context — the same
+    // origin storage, so the SAME signed-in Player (no second join) — never by
+    // re-navigating this test's own long-lived page: late in a full-suite run
+    // that page's Firestore channel can stall serving a brand-new collection
+    // listen, leaving the Leaderboard behind its loading gate indefinitely
+    // (#317's "loading gate never clears" shape), and no in-page recovery
+    // unsticks it. A new page gets a fresh renderer and Firestore client
+    // while keeping the Player's auth; retried because the first load can
+    // still race the emulator under end-of-run load.
+    //
+    // The cold load discards in-memory state, so the 18+ attestation must be
+    // SERVER-confirmed first — `signIn()` persists it via a Firestore
+    // transaction that starts only after the signed-in shell renders, and a
+    // load that outruns it lands on the #23 re-prompt gate instead of the app
+    // (the same documented wait d15-coach-overlay.spec.ts and
+    // x-e2e-happy-path.spec.ts take before their own reloads).
+    //
+    // This cold load is ALSO the regression probe for the Avatar crash this
+    // suite exposed (#317): the persistent cache can replay a transiently
+    // identity-less Player row (dealDayCard's dayStats seed racing
+    // joinAndDeal's identity merge) as the fresh page's first roster
+    // snapshot, and `Avatar` used to throw on the missing displayName —
+    // unmounting the whole app into a blank page on every reload.
+    await expect.poll(async () => userAttested(testEnv, uid), { timeout: 15_000 }).toBe(true);
+    const lbPage = await context.newPage();
+    await expect(async () => {
+      await lbPage.goto('/leaderboard', { timeout: 15_000 });
+      await expect(lbPage.locator('.lb-filters')).toBeVisible({ timeout: 10_000 });
+    }).toPass({ timeout: 60_000 });
+    const honors = lbPage.locator('.lb-honors .lb-honor');
+    await expect(honors).toHaveCount(5, { timeout: 15_000 }); // one chip per seeded Day
+    const honorDays = await lbPage.locator('.lb-honors .lb-honor-day').allTextContents();
+    expect(honorDays[0]).toMatch(/D1$/); // embark (dayIndex 0)
+    expect(honorDays[1]).toMatch(/D2$/); // main A (dayIndex 1)
+    // Days 0 (embark, tutorial) and 1 (main A) both pin THIS Player's honor;
+    // the un-bingoed Days (today, farewell, locked) stay unclaimed ("—").
+    // Retried as one unit: the names resolve from the day-meta pins (or the
+    // roster-derived fallback once `dayMetasLoaded`), which can land a beat
+    // after the strip itself first renders.
+    await expect(async () => {
+      const honorNames = await lbPage.locator('.lb-honors .lb-honor-name').allTextContents();
+      expect(honorNames).toHaveLength(5);
+      expect(honorNames[0]).not.toBe('—');
+      expect(honorNames[1]).not.toBe('—');
+      expect(honorNames[0]).toBe(honorNames[1]); // the same sole Player
+      expect(honorNames.slice(2)).toEqual(['—', '—', '—']);
+    }).toPass({ timeout: 15_000 });
+    await lbPage.screenshot({ path: `${SHOTS}/scoring-honors.png`, fullPage: true });
+    await lbPage.close();
   });
 });
