@@ -44,8 +44,7 @@ Day 4's snapshot stamps at 08:00. If the scheduler fires on OLD code (deploy mis
 
 - Given Day 4 unlocks with the new code and ratio 0.5, when I deal, my card has 12 easy embark squares + 12 main squares (≈5 spicy), the free center, and normal tally/proof behavior on every square including easy repeats from Day 1.
 - Given Days 1–3, nothing changed—boards, marks, tallies, stats identical.
-- Given an admin sets easyMixRatio to 0.25 before Day 5's unlock, Day 5 cards deal 6 easy
-  + 18 main without a deploy.
+- Given an admin sets easyMixRatio to 0.25 before Day 5's unlock, Day 5 cards deal 6 easy + 18 main without a deploy.
 - Given a reshuffle on Day 4, the fresh card obeys the same mix.
 
 ## Definition of Done
