@@ -202,6 +202,29 @@
   .tabavatar{width:15px;height:15px;border-radius:50%;background:var(--dim);
     display:inline-block;border:1.5px solid var(--primary)}
 
+  /* admin hub + detail chrome */
+  .sheethead{position:sticky;top:0;display:flex;align-items:center;gap:10px;
+    padding:12px 14px;background:var(--panel);border-bottom:1px solid var(--border);z-index:5}
+  .shback{display:flex;align-items:center;color:var(--primary);font-weight:700;font-size:12px;gap:2px}
+  .shtitle{flex:1;font-weight:800;font-size:14px;color:var(--ink)}
+  .shdone{border:1px solid var(--primary);background:var(--primary);color:var(--on-gradient);
+    border-radius:10px;padding:4px 12px;font-size:11.5px;font-weight:800}
+  .qbadge{background:var(--primary);color:var(--on-gradient);border-radius:10px;
+    font-size:10.5px;padding:2px 8px;font-weight:800;flex:0 0 auto}
+  /* slider */
+  .slwrap{padding:16px 4px 6px;position:relative}
+  .sltrack{position:relative;height:6px;border-radius:3px;background:var(--border)}
+  .slfill{position:absolute;left:0;top:0;bottom:0;width:50%;border-radius:3px;
+    background:linear-gradient(90deg,var(--primary),var(--secondary))}
+  .slthumb{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:22px;height:22px;border-radius:50%;background:var(--ink);
+    border:3px solid var(--primary);box-shadow:0 2px 8px rgba(0,0,0,.5)}
+  .slbubble{position:absolute;left:50%;transform:translateX(-50%);top:-26px;
+    background:var(--primary);color:var(--on-gradient);font-size:10px;font-weight:800;
+    padding:2px 8px;border-radius:8px;white-space:nowrap}
+  .sldets{display:flex;justify-content:space-between;font-size:9px;color:var(--dim);
+    padding:6px 2px 0}
+
   /* reshuffle */
   .reshuf{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);
     border-radius:10px;padding:3px 8px;font-size:10.5px;color:var(--dim);background:var(--panel);
@@ -681,67 +704,108 @@
     <p class="cap"><b>⋯ More menu</b>Profile relocates here from the top bar and the More tab wears your avatar (identity stays glanceable; the header keeps only brand + today's port/theme). Order: profile, theme (with a new "auto: match the day" default), text size (S/M/L—squares auto-fit, so Large never overflows), Play (schedule, suggest-a-square, tutorial replay, install), Support (bug report, 18+ advisory/acceptable use), Admin (admins only, with pending-approvals badge), sign out last. Prompts and Admin leave the tab bar and mount here—bottom bar becomes Card · Feed · Ranks · More.</p>
   </div>
 
-  <!-- Admin -->
-  <div class="unit">
+  <!-- Admin hub -->
+  <div class="unit" id="frame-admin-hub">
     <div class="mini" data-theme="neon-playground">
-      <div class="hdr">
-        <div class="title">ADMIN</div>
-        <div class="today"><div class="port">Approvals · Schedule</div><div class="theme">Pool · Bans · Reports</div></div>
+      <div class="sheethead"><div class="shtitle">Admin</div><span class="shdone">Done</span></div>
+      <div class="board" style="gap:8px">
+        <div class="menurow"><span class="mi"><svg data-lucide="shield-alert" class="lucide lucide-shield-alert" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> <path d="M12 8v4" /> <path d="M12 16h.01" /> </svg></span><div class="grow">Review queue<span class="who">Reports 2 · Approvals 3 · Claims 2—one inbox, oldest first</span></div><span class="qbadge">7</span><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="menurow"><span class="mi"><svg data-lucide="wrench" class="lucide lucide-wrench" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z" /> </svg></span><div class="grow">Game settings<span class="who">Claim mode · photo source · EXIF · AI screen · auto-hide · easy mix · default theme</span></div><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="menurow"><span class="mi"><svg data-lucide="calendar-days" class="lucide lucide-calendar-days" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M8 2v4" /> <path d="M16 2v4" /> <rect width="18" height="18" x="3" y="4" rx="2" /> <path d="M3 10h18" /> <path d="M8 14h.01" /> <path d="M12 14h.01" /> <path d="M16 14h.01" /> <path d="M8 18h.01" /> <path d="M12 18h.01" /> <path d="M16 18h.01" /> </svg></span><div class="grow">Schedule<span class="who">10 days · next unlock Sat 8:00 · unlock now / re-snapshot live here</span></div><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="menurow"><span class="mi"><svg data-lucide="lightbulb" class="lucide lucide-lightbulb" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5" /> <path d="M9 18h6" /> <path d="M10 22h4" /> </svg></span><div class="grow">Prompt pool<span class="who">115 prompts · curated add · 3 pending</span></div><span class="qbadge">3</span><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="menurow"><span class="mi"><svg data-lucide="log-out" class="lucide lucide-log-out" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m16 17 5-5-5-5" /> <path d="M21 12H9" /> <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /> </svg></span><div class="grow">Players<span class="who">Banned roster · 0 banned</span></div><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
+        <div class="note">Done (sticky, always visible), backdrop tap, or swipe down—dismiss from anywhere. No more scrolling to find Close.</div>
       </div>
+      <div class="tabs">
+        <div class="tab"><span>▦</span>Card</div>
+        <div class="tab"><span>◉</span>Feed</div>
+        <div class="tab"><span>♛</span>Ranks</div>
+        <div class="tab on"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>Admin hub—one screen, five doors</b>Replaces the three-tab, six-section scroll. Cards carry live badges (the review inbox total is the headline). Every admin surface—hub and details—shares the sticky header contract: Done at top right closes admin entirely from any depth; backdrop tap and swipe-down also dismiss; content scrolls under the header. Routes: /more/admin/&lt;section&gt;, so browser back works too.</p>
+  </div>
+
+  <!-- Admin: review queue detail -->
+  <div class="unit" id="frame-admin-queue">
+    <div class="mini" data-theme="neon-playground">
+      <div class="sheethead"><span class="shback"><svg data-lucide="chevron-left" class="lucide lucide-chevron-left" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m15 18-6-6 6-6" /> </svg> Admin</span><div class="shtitle">Review queue</div><span class="shdone">Done</span></div>
       <div class="board" style="gap:7px">
-        <div class="secthead">Pending items · 3</div>
-        <div class="row"><div class="grow">"Fall asleep in full harness"<span class="who">@marco · 2h ago · 🔞 spicy</span></div><span class="btn ok">Approve</span><span class="btn">Reject</span></div>
-        <div class="row"><div class="grow">"Miss the ship in Palermo"<span class="who">@dan_atl · 5h ago · tame</span></div><span class="btn ok">Approve</span><span class="btn">Reject</span></div>
-        <div class="row"><div class="grow">"Meet your Grindr wallpaper IRL"<span class="who">@jj · 6h ago · 🔞 spicy</span></div><span class="btn ok">Approve</span><span class="btn">Reject</span></div>
-        <div class="note">Approved items join every not-yet-unlocked Day at its 8:00 snapshot.</div>
-        <div class="secthead">Schedule · theme per night</div>
+        <div class="secthead">Reports · 2</div>
+        <div class="row"><div class="grow">Proof on "Poppers spill"<span class="who">3 reports · auto-hidden · @jj's photo</span></div><span class="btn ok">Restore</span><span class="btn">Remove</span></div>
+        <div class="row"><div class="grow">"Meet your Grindr wallpaper IRL"<span class="who">4 reports · prompt · hidden</span></div><span class="btn ok">Restore</span><span class="btn">Remove</span></div>
+        <div class="secthead">Approvals · 3</div>
+        <div class="row"><div class="grow">"Fall asleep in full harness"<span class="who">@marco · 2h · 🔞 spicy</span></div><span class="btn ok">Approve</span><span class="btn">Reject</span></div>
+        <div class="row"><div class="grow">"Miss the ship in Valletta"<span class="who">@dan_atl · 5h · tame</span></div><span class="btn ok">Approve</span><span class="btn">Reject</span></div>
+        <div class="secthead">Pending claims · 2 <span class="pill">admin-confirmed mode only</span></div>
+        <div class="row"><div class="grow">Theo · "Dance-floor k-hole"<span class="who">Day 3 · 40m ago</span></div><span class="btn ok">Confirm</span><span class="btn">Reject</span></div>
+        <div class="note">One inbox, oldest first, every triage action in thumb reach. Empty state: "All clear. Go enjoy the boat."</div>
+      </div>
+      <div class="tabs">
+        <div class="tab"><span>▦</span>Card</div>
+        <div class="tab"><span>◉</span>Feed</div>
+        <div class="tab"><span>♛</span>Ranks</div>
+        <div class="tab on"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>Review queue—the merged inbox</b>Reports, pending approvals, and pending claims (when admin-confirmed mode is on) become ONE triage surface, replacing three sections scattered across two tabs. The hub badge is this queue's total.</p>
+  </div>
+
+  <!-- Admin: game settings detail (Easy mix slider) -->
+  <div class="unit" id="frame-admin-settings">
+    <div class="mini" data-theme="neon-playground">
+      <div class="sheethead"><span class="shback"><svg data-lucide="chevron-left" class="lucide lucide-chevron-left" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m15 18-6-6 6-6" /> </svg> Admin</span><div class="shtitle">Game settings</div><span class="shdone">Done</span></div>
+      <div class="board" style="gap:8px">
+        <div class="secthead">Easy mix</div>
+        <div class="menurow" style="display:block">
+          <div class="grow">Share of each card from the easy pool<span class="who">Applies from the next 8:00 unlock · reshuffles inherit it</span></div>
+          <div class="slwrap">
+            <div class="sltrack"><div class="slfill"></div><div class="slthumb"><span class="slbubble">50% · 12 of 24 squares</span></div></div>
+            <div class="sldets"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>
+          </div>
+        </div>
+        <div class="secthead">Claims &amp; proof</div>
+        <div class="seg"><span class="segbtn on">Honor</span><span class="segbtn">Proof-to-mark</span><span class="segbtn">Admin-confirmed</span></div>
+        <div class="menurow"><span class="rdo on"></span><div class="grow">Camera or library<span class="who">Library picks wear a 🖼️ badge on the Feed</span></div></div>
+        <div class="menurow"><span class="rdo"></span><div class="grow">Camera only<span class="who">Live-proof ceremony</span></div></div>
+        <div class="menurow"><div class="grow">Strip location data (EXIF)</div><span class="tgl"></span></div>
+        <div class="menurow"><div class="grow">AI image screen</div><span class="tgl"></span></div>
+        <div class="menurow"><div class="grow">Auto-hide after reports</div><span class="dd">4 ▾</span></div>
+        <div class="secthead">Appearance</div>
+        <div class="menurow"><div class="grow">Default theme<span class="who">What new players see first</span></div><span class="dd">🌈 Neon Playground ▾</span></div>
+      </div>
+      <div class="tabs">
+        <div class="tab"><span>▦</span>Card</div>
+        <div class="tab"><span>◉</span>Feed</div>
+        <div class="tab"><span>♛</span>Ranks</div>
+        <div class="tab on"><span><i class="tabavatar"></i></span>More</div>
+      </div>
+    </div>
+    <p class="cap"><b>Game settings—every dial in one place, Easy mix as a slider</b>The slider replaces the shipped 0/25/50 step buttons: full 0–100% range with detents, value bubble showing the square math ("50% · 12 of 24"), commits on release (optimistic write, like the other settings). Claim mode, photo source, EXIF, AI screen, auto-hide, and default theme all move here from the old Moderation scroll.</p>
+  </div>
+
+  <!-- Admin: schedule detail -->
+  <div class="unit" id="frame-admin-schedule">
+    <div class="mini" data-theme="neon-playground">
+      <div class="sheethead"><span class="shback"><svg data-lucide="chevron-left" class="lucide lucide-chevron-left" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m15 18-6-6 6-6" /> </svg> Admin</span><div class="shtitle">Schedule</div><span class="shdone">Done</span></div>
+      <div class="board" style="gap:7px">
         <div class="schedrow">Wed 15 · Trieste <span class="pill">tutorial</span><span class="dd dis">🛳️ Welcome Aboard</span></div>
         <div class="schedrow">Thu 16 · Split <span class="pill">2 parties</span><span class="dd dis">🌍 Uniforms w/o Borders ✓</span></div>
         <div class="schedrow">Fri 17 · Sea Day <span class="pill">2 parties</span><span class="dd dis">💖 Neon Pink Playground ✓</span></div>
         <div class="schedrow">Sat 18 · Valletta <span class="pill">2 parties</span><span class="dd">💦 Sporty Splash ▾</span></div>
+        <div class="row"><div class="grow">Day 4 · Sat 8:00<span class="who">Deploy-race fallbacks—admin-triggered, server-guarded</span></div><span class="btn ok">Unlock now</span><span class="btn">Re-snapshot</span></div>
         <div class="schedrow">Sun 19 · Palermo<span class="dd">🌌 Under the Stars ▾</span></div>
         <div class="schedrow">Mon 20 · Naples<span class="dd">🏛️ Glamiators ▾</span></div>
-        <div class="note">Past / unlocked days frozen; future themes editable. Reusable per event for future cruises.</div>
+        <div class="note">Rows expand to edit theme + the two-event Tonight line (future days only). Unlock now / Re-snapshot live with the day they act on—no more hunting.</div>
       </div>
       <div class="tabs">
-        <div class="tab"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
-        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
-        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
-        <div class="tab on"><span>⋯</span>More</div>
-      </div>
-    </div>
-    <p class="cap"><b>Admin—Approvals &amp; Schedule</b>Player submissions land as <i>pending</i> (invisible, never dealt) until approved. The Day schedule below carries the real 2026 mapping, editable for future days and future cruises.</p>
-  </div>
-
-  <!-- Admin: Proof & claims -->
-  <div class="unit">
-    <div class="mini" data-theme="neon-playground">
-      <div class="hdr">
-        <div class="title">ADMIN</div>
-        <div class="today"><div class="port">Proof &amp; Claims</div><div class="theme">Approvals · Schedule · Pool</div></div>
-      </div>
-      <div class="board" style="gap:7px">
-        <div class="secthead">Claim mode</div>
-        <div class="seg"><span class="segbtn on">Honor</span><span class="segbtn">Proof-to-mark</span><span class="segbtn">Admin-confirmed</span></div>
-        <div class="note">A friction knob, not a trust level—marks are self-recorded either way.</div>
-        <div class="secthead">Photo proof source · #190</div>
-        <div class="menurow"><span class="rdo on"></span><div class="grow">Camera or library<span class="who">Native picker: take a photo or choose an existing one. Library picks wear a 🖼️ badge on the Feed.</span></div></div>
-        <div class="menurow"><span class="rdo"></span><div class="grow">Camera only<span class="who">Live proof, in the moment—the current behavior. For events that want ceremony.</span></div></div>
-        <div class="secthead">Photo handling</div>
-        <div class="menurow"><div class="grow">Strip location data (EXIF/GPS)<span class="who">Re-encode on upload so geotags never leave the phone</span></div><span class="tgl"></span></div>
-        <div class="menurow"><div class="grow">AI screen for illegal/extreme images<span class="who">The existing vision gate; flagged proofs hide pending review</span></div><span class="tgl"></span></div>
-        <div class="secthead">Reports &amp; claims</div>
-        <div class="menurow"><div class="grow">Auto-hide after reports<span class="who">Proofs and prompts hide at this report count</span></div><span class="dd">3 ▾</span></div>
-        <div class="menurow"><div class="grow">Pending claims<span class="who">Admin-confirmed mode only—confirm or reject marks</span></div><span class="badge">2</span><span class="chev"><svg data-lucide="chevron-right" class="lucide lucide-chevron-right" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m9 18 6-6-6-6" /> </svg></span></div>
-      </div>
-      <div class="tabs">
-        <div class="tab"><span><svg data-lucide="grid-3x3" class="lucide lucide-grid-3x3" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="18" height="18" x="3" y="3" rx="2" /> <path d="M3 9h18" /> <path d="M3 15h18" /> <path d="M9 3v18" /> <path d="M15 3v18" /> </svg></span>Card</div>
-        <div class="tab"><span><svg data-lucide="radio" class="lucide lucide-radio" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16.247 7.761a6 6 0 0 1 0 8.478" /> <path d="M19.075 4.933a10 10 0 0 1 0 14.134" /> <path d="M4.925 19.067a10 10 0 0 1 0-14.134" /> <path d="M7.753 16.239a6 6 0 0 1 0-8.478" /> <circle cx="12" cy="12" r="2" /> </svg></span>Feed</div>
-        <div class="tab"><span><svg data-lucide="trophy" class="lucide lucide-trophy" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M10 14.66v1.626a2 2 0 0 1-.976 1.696A5 5 0 0 0 7 21.978" /> <path d="M14 14.66v1.626a2 2 0 0 0 .976 1.696A5 5 0 0 1 17 21.978" /> <path d="M18 9h1.5a1 1 0 0 0 0-5H18" /> <path d="M4 22h16" /> <path d="M6 9a6 6 0 0 0 12 0V3a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1z" /> <path d="M6 9H4.5a1 1 0 0 1 0-5H6" /> </svg></span>Ranks</div>
+        <div class="tab"><span>▦</span>Card</div>
+        <div class="tab"><span>◉</span>Feed</div>
+        <div class="tab"><span>♛</span>Ranks</div>
         <div class="tab on"><span><i class="tabavatar"></i></span>More</div>
       </div>
     </div>
-    <p class="cap"><b>Admin—Proof &amp; Claims panel</b>The #190 photo-source policy as an event setting (recommended default: camera or library, badged for transparency), plus the knobs that already exist in the backend but have no UI: the vision gate, the report auto-hide threshold, claim mode, and the pending-claims queue. New: EXIF stripping.</p>
+    <p class="cap"><b>Schedule—days with their actions attached</b>Same editor as built (theme dropdown, Tonight text, locked once unlocked), under the new chrome; the Unlock-now and Re-snapshot fallbacks anchor to the specific day instead of floating in a tab. Prompt pool and Players follow this same detail pattern (not drawn—list + curated add form, and the banned roster, unchanged in content).</p>
   </div>
 
   <!-- Ranks -->
