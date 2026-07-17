@@ -217,15 +217,19 @@ export interface DealOptions {
 
 /**
  * Apply the no-repeat exclusion with the pool-exhaustion reset: drop every id in
- * `excludeIds`, but if that would leave fewer than `MIN_POOL` Prompts to deal
+ * `excludeIds`, but if that would leave fewer than `requiredCount` Prompts to deal
  * from, discard the exclusion and return the full pool (the cruise has cycled
- * through the pool; repeats resume rather than starving the card). Returns the
- * original array reference when there is nothing to exclude.
+ * through this pool's required share; repeats resume rather than starving the card).
+ * Returns the original array reference when there is nothing to exclude.
  */
-function applyExclusion(pool: DealItem[], excludeIds?: ReadonlySet<string>): DealItem[] {
+function applyExclusion(
+  pool: DealItem[],
+  excludeIds?: ReadonlySet<string>,
+  requiredCount: number = MIN_POOL,
+): DealItem[] {
   if (!excludeIds || excludeIds.size === 0) return pool;
   const remaining = pool.filter((p) => !excludeIds.has(p.id));
-  return remaining.length >= MIN_POOL ? remaining : pool;
+  return remaining.length >= requiredCount ? remaining : pool;
 }
 
 /** Deal a frozen 5x5 board: 24 sampled prompts + free center (index 12). */
@@ -261,10 +265,7 @@ export function dealBoard(
     // exclusion applies to the MAIN half ONLY — easy (embark) repeats across days are
     // intentional (per-day tallies), so embark items are never excluded.
     const embarkItems = pool.filter((p) => p.pool === 'embark');
-    const mainUsable = applyExclusion(
-      pool.filter((p) => p.pool !== 'embark'),
-      opts.excludeIds,
-    );
+    const mainItems = pool.filter((p) => p.pool !== 'embark');
     const requestedEasy = Number.isFinite(opts.easyMixRatio)
       ? Math.min(1, Math.max(0, opts.easyMixRatio as number))
       : 0;
@@ -274,6 +275,8 @@ export function dealBoard(
     // deal falls through to today's all-main stratified draw — Days 1–3 stay
     // byte-for-byte untouched even with easyMixRatio set on the event.
     const easyCount = embarkItems.length > 0 ? Math.round(24 * requestedEasy) : 0;
+    const mainCount = 24 - easyCount;
+    const mainUsable = applyExclusion(mainItems, opts.excludeIds, mainCount);
     // A full board needs 24 non-free squares. At easyCount 0 the deal is main-only, so
     // the thin-pool guard is the main pool alone — preserving the pre-existing throw;
     // with a mix the two pools backfill each other, so the guard is their union.

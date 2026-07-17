@@ -134,6 +134,22 @@ describe('easy mix — exclusion applies to the MAIN half only', () => {
     for (const id of excludeIds) expect(ids).not.toContain(id);
   });
 
+  it('keeps using unseen MAIN prompts until the main half is exhausted', () => {
+    // 12 unseen main prompts remain — enough for a 50/50 card's main half, but below
+    // the old 24-prompt reset floor. The exclusion must still hold until this half's
+    // own requirement is exhausted, so Day 5 cannot repeat main prompts prematurely.
+    const pool = [...mainPool(0, 100), ...embarkPool(20)];
+    const by = classifier(pool);
+    const unseenMainIds = new Set(Array.from({ length: 12 }, (_, i) => `mt${i}`));
+    const excludedMainIds = new Set(Array.from({ length: 88 }, (_, i) => `mt${i + 12}`));
+
+    const ids = dealtIds(pool, 19, { stratify: true, easyMixRatio: 0.5, excludeIds: excludedMainIds });
+    const main = ids.filter((id) => id && by.get(id)?.pool === 'main');
+    expect(main).toHaveLength(12);
+    expect(main.every((id) => id != null && unseenMainIds.has(id))).toBe(true);
+    for (const id of excludedMainIds) expect(ids).not.toContain(id);
+  });
+
   it('ignores an excluded EMBARK prompt — easy-half repeats across days are intentional', () => {
     const pool = [...mainPool(10, 30), ...embarkPool(16)];
     // Excluding embark ids must not change the deal at all (embark is never excluded).

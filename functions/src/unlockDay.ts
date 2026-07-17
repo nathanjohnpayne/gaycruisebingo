@@ -284,6 +284,7 @@ interface CollectionRef extends QueryRef {
 }
 interface Transaction {
   get(ref: DocRef): Promise<DocSnapshot>;
+  get(ref: QueryRef): Promise<{ docs: DocSnapshot[] }>;
   update(ref: DocRef, data: Record<string, unknown>): void;
 }
 /** The minimal admin-SDK Firestore surface the scheduler uses. */
@@ -636,13 +637,6 @@ export async function manualUnlockNow(
 
 export type ResnapshotResult = 'resnapshotted' | 'has-boards' | 'not-due' | 'no-event' | 'no-day';
 
-/** How many Day Cards already exist for a Day (events/{id}/days/{i}/boards). Zero is
- *  the ONLY state in which a re-snapshot is safe — see `resnapshotDayIfNoBoards`. */
-async function dayBoardCount(db: AdminFirestore, eventId: string, dayIndex: number): Promise<number> {
-  const snap = await db.collection(`events/${eventId}/days/${dayIndex}/boards`).get();
-  return snap.docs.length;
-}
-
 /**
  * The easy-mix deploy-race fallback (specs/easy-mix.md § "Deploy race"): OVERWRITE one
  * Day's `snapshotItemIds` with the current active pool — main + embark for a main day —
@@ -658,13 +652,10 @@ async function dayBoardCount(db: AdminFirestore, eventId: string, dayIndex: numb
  * board exists the re-stamp is DENIED (`'has-boards'`).
  *
  * Admin-gated exactly like `manualUnlockNow` (a non-admin caller trips
- * `UnlockPermissionError`). The zero-boards check is a read before the write, not a
- * transactional invariant (the injected surface can't query a subcollection inside a
- * transaction), so a deal landing in the sub-second window between the check and the
- * overwrite is theoretically possible — but the fallback is designed to be run by an
- * admin at 08:00 BEFORE play opens, which is exactly when the board count is zero and
- * stable. In practice the deploy lands tonight and the scheduler stamps both pools on
- * its own, leaving this as pure insurance.
+ * `UnlockPermissionError`). The zero-boards check is read inside the same transaction
+ * that overwrites the Day, so a concurrent card deal that creates a board forces the
+ * transaction to retry and then return `'has-boards'` instead of splitting one Day
+ * across two snapshots.
  */
 export async function resnapshotDayIfNoBoards(
   db: AdminFirestore,
@@ -683,8 +674,6 @@ export async function resnapshotDayIfNoBoards(
   const day = days.find((d) => d.index === dayIndex);
   if (!day) return 'no-day';
   if (day.unlockAt > now) return 'not-due';
-  // The guard: a re-snapshot is permitted ONLY while no card has been dealt.
-  if ((await dayBoardCount(db, eventId, dayIndex)) > 0) return 'has-boards';
 
   const items = await queryActiveItems(db, eventId);
   const snapshotItemIds = activeSnapshotIds(items, {
@@ -703,8 +692,14 @@ export async function resnapshotDayIfNoBoards(
     const i = arr.findIndex((d) => d.index === dayIndex);
     if (i < 0) return 'no-day';
     if (arr[i].unlockAt > now) return 'not-due';
+    // Transactional guard: a re-snapshot is permitted ONLY while no card has been
+    // dealt. Reading the boards query here serializes the overwrite against a
+    // concurrent deal creating `events/{id}/days/{i}/boards/{uid}`.
+    if ((await tx.get(db.collection(`events/${eventId}/days/${dayIndex}/boards`))).docs.length > 0) {
+      return 'has-boards';
+    }
     // OVERWRITE — the deliberate difference from stampDaySnapshot's never-overwrite
-    // guard. The zero-boards check above is what makes this safe.
+    // guard. The transactional zero-boards check above is what makes this safe.
     arr[i] = { ...arr[i], snapshotItemIds };
     tx.update(eventRef, { days: arr });
     return 'resnapshotted';

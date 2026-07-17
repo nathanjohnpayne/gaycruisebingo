@@ -35,6 +35,7 @@ function makeDb(seed: {
   items?: StoredItem[];
   /** Board docs keyed by dayIndex — presence is all `dayBoardCount` reads. */
   boards?: Record<number, Array<{ id: string }>>;
+  beforeTransactionGet?: (path: string, boards: Record<number, Array<{ id: string }>>) => void;
 }): AdminFirestore & { readEvent(): EventLike } {
   const docs: Record<string, Record<string, unknown> | undefined> = {
     [`events/${seed.eventId}`]: { ...seed.event } as Record<string, unknown>,
@@ -48,6 +49,7 @@ function makeDb(seed: {
     data: () => docs[path],
   });
   const docRef = (path: string) => ({
+    __path: path,
     get: async () => snapshotOf(path),
     set: async (data: Record<string, unknown>) => {
       docs[path] = { ...data };
@@ -67,7 +69,9 @@ function makeDb(seed: {
       where(field: string, op: string, value: unknown): typeof api;
       get(): Promise<{ docs: Array<{ exists: boolean; id: string; data: () => Record<string, unknown> }> }>;
       doc(id?: string): ReturnType<typeof docRef>;
+      __path: string;
     } = {
+      __path: path,
       where(field, _op, value) {
         filters.push([field, value]);
         return api;
@@ -88,7 +92,10 @@ function makeDb(seed: {
     collection: (path: string) => collectionRef(path) as never,
     async runTransaction<T>(fn: (tx: never) => Promise<T>): Promise<T> {
       const tx = {
-        get: async (ref: { get(): Promise<unknown> }) => ref.get(),
+        get: async (ref: { __path?: string; get(): Promise<unknown> }) => {
+          seed.beforeTransactionGet?.(ref.__path ?? '', boards);
+          return ref.get();
+        },
         update: (_ref: unknown, data: Record<string, unknown>) => {
           const current = (docs[`events/${seed.eventId}`] ?? {}) as Record<string, unknown>;
           docs[`events/${seed.eventId}`] = { ...current, ...data };
@@ -183,6 +190,21 @@ describe('resnapshotDayIfNoBoards — the guarded deploy-race fallback', () => {
       event: event(['m1']),
       items,
       boards: { 3: [{ id: 'player-uid' }] }, // a card is already dealt
+    });
+    const result = await resnapshotDayIfNoBoards(db, admin, 'e1', 3, { now: () => D4_UNLOCK + 1 });
+    expect(result).toBe('has-boards');
+    const day = db.readEvent().days!.find((d) => d.index === 3)!;
+    expect(day.snapshotItemIds).toEqual(['m1']); // untouched
+  });
+
+  it('is DENIED if a board appears before the transactional overwrite', async () => {
+    const db = makeDb({
+      eventId: 'e1',
+      event: event(['m1']),
+      items,
+      beforeTransactionGet(path, boards) {
+        if (path === 'events/e1/days/3/boards') boards[3] = [{ id: 'racing-player' }];
+      },
     });
     const result = await resnapshotDayIfNoBoards(db, admin, 'e1', 3, { now: () => D4_UNLOCK + 1 });
     expect(result).toBe('has-boards');
