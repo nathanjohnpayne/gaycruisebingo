@@ -1683,6 +1683,112 @@ a {
   color: var(--accent);
 }
 
+/* ---------- admin console chrome (specs/admin-console-ia.md) ----------
+   Every admin surface — hub and details — shares one AdminSheet: a sticky
+   header (back · title · Done) the content scrolls UNDER, inside the
+   .more-panel scrollport. The sheet's own padding moves to the body so the
+   header can span edge to edge and stay opaque over scrolling content. */
+.admin-sheet {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.admin-sheet-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  border-radius: 18px 18px 0 0;
+  /* Vertical pointer drags must reach the swipe-down-dismiss handler instead
+     of becoming scroll gestures — the header is the sheet's grab area. */
+  touch-action: none;
+}
+.admin-sheet-title {
+  flex: 1;
+  margin-bottom: 0;
+  text-align: center;
+  outline: none;
+}
+.admin-sheet-back {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 64px;
+  padding: 4px 6px 4px 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.admin-sheet-back svg {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
+}
+/* Balances the Done button when no back affordance renders (the hub), so the
+   title stays visually centered. */
+.admin-sheet-spacer {
+  flex: none;
+  min-width: 64px;
+}
+.admin-sheet-done {
+  flex: none;
+  min-width: 64px;
+}
+.admin-sheet-body {
+  padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
+}
+/* On the narrow sheet, wide controls stack UNDER their row's copy instead of
+   squeezing it into a sliver column (the wireframes' settings layout): rows
+   may wrap, and a segmented control takes the full row when it does. */
+.admin-sheet-body .row {
+  flex-wrap: wrap;
+}
+.admin-sheet-body .row .seg {
+  flex-basis: 100%;
+}
+
+/* The Easy mix slider (specs/admin-console-ia.md § "Easy mix slider"): full
+   0-100% range, detent labels under the track, and a value bubble translating
+   the ratio to squares. Stacks under its row's name/sub copy. */
+.easymix-row {
+  display: block;
+}
+.easymix {
+  margin-top: 10px;
+}
+.easymix-bubble {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 2px 10px;
+  border: 1px solid var(--primary);
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.easymix input[type='range'] {
+  display: block;
+  width: 100%;
+  accent-color: var(--primary);
+}
+.easymix-detent-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--dim);
+}
+
 /* ---------- sign-in ---------- */
 .signin {
   max-width: 440px;

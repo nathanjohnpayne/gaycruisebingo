@@ -109,7 +109,7 @@ describe('TabBar (specs/d15-icons-lucide.md)', () => {
 describe('More menu row icons (specs/d15-icons-lucide.md)', () => {
   it('gives every sub-panel row a leading icon and a trailing chevron; Install/Sign out get an icon but no chevron', async () => {
     const { default: More } = await import('./More');
-    render(<More />);
+    render(<MemoryRouter initialEntries={['/more']}><More /></MemoryRouter>);
 
     for (const name of ['Cruise schedule', 'Suggest a square', 'How to play', 'Admin']) {
       const row = screen.getByRole('button', { name: new RegExp(name) });
@@ -128,7 +128,7 @@ describe('More menu row icons (specs/d15-icons-lucide.md)', () => {
 
   it('gives the Theme section header a leading Palette icon', async () => {
     const { default: More } = await import('./More');
-    const { container } = render(<More />);
+    const { container } = render(<MemoryRouter initialEntries={['/more']}><More /></MemoryRouter>);
     const themeHeading = Array.from(container.querySelectorAll('h3')).find((h) => h.textContent?.includes('Theme'));
     expect(themeHeading?.querySelector('svg.more-section-icon')).toBeTruthy();
   });

@@ -66,8 +66,11 @@ describe('route table (mirrors App.tsx\'s TABS -> <Route> mapping)', () => {
     return renderToStaticMarkup(
       <MemoryRouter initialEntries={[path]}>
         <Routes>
+          {/* Mirrors App.tsx exactly: the `more` route alone mounts with a
+              splat so the admin console's sub-routes (/more/admin[/section],
+              specs/admin-console-ia.md) nest inside the frozen mount point. */}
           {TABS.map((tab) => (
-            <Route key={tab.id} path={tab.path} element={<div data-tab={tab.id} />} />
+            <Route key={tab.id} path={tab.id === 'more' ? `${tab.path}/*` : tab.path} element={<div data-tab={tab.id} />} />
           ))}
           <Route path="*" element={<Navigate to={FALLBACK_PATH} replace />} />
         </Routes>
@@ -88,6 +91,12 @@ describe('route table (mirrors App.tsx\'s TABS -> <Route> mapping)', () => {
       expect(html).toContain(`data-tab="${id}"`);
     });
   }
+
+  it('mounts the "more" mount point for the admin sub-routes (/more/admin[/section])', () => {
+    for (const path of ['/more/admin', '/more/admin/settings']) {
+      expect(renderRoutesAt(path)).toContain('data-tab="more"');
+    }
+  });
 
   it('mounts none of the known tabs for an unrecognized path (defers to the "/" redirect)', () => {
     const html = renderRoutesAt('/this-route-does-not-exist');

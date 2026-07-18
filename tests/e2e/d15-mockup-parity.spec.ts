@@ -310,15 +310,23 @@ test('structural parity — every screen against the wireframes', async ({ page 
     await expect(page.locator('.more-row-title', { hasText: /^Admin$/ })).toHaveCount(0);
   });
 
-  await test.step('admin: three tabs; Proof & Claims defaults — EXIF strip ON', async () => {
+  await test.step('admin: hub-and-detail IA (admin-console-ia); Game settings defaults — EXIF strip ON', async () => {
     await grantAdmin(testEnv, uid);
     const adminRow = page.getByRole('button', { name: /Admin/ });
     await expect(adminRow.first()).toBeVisible();
     await adminRow.first().click();
-    for (const tab of ['Moderation', 'Approvals', 'Schedule']) {
-      await expect(page.locator('.seg').getByRole('button', { name: tab, exact: true })).toBeVisible();
+    // The hub: five section cards, sticky header with Done.
+    const hub = page.getByRole('dialog', { name: 'Admin' });
+    await expect(hub).toBeVisible();
+    for (const card of ['Review queue', 'Game settings', 'Schedule', 'Prompt pool', 'Players']) {
+      await expect(hub.getByRole('button', { name: card })).toBeVisible();
     }
-    // Proof & Claims (Moderation tab hosts the panel).
+    await expect(hub.getByRole('button', { name: 'Done' })).toBeVisible();
+
+    // Game settings detail: the claims/proof knobs under the new chrome.
+    await hub.getByRole('button', { name: 'Game settings' }).click();
+    const settings = page.getByRole('dialog', { name: 'Game settings' });
+    await expect(settings).toBeVisible();
     await expect(page.getByText('Claim mode')).toBeVisible();
     await expect(page.getByText('Photo proof source')).toBeVisible();
     const stripRow = page.locator('.row', { hasText: 'Strip location data' });
@@ -327,10 +335,29 @@ test('structural parity — every screen against the wireframes', async ({ page 
     await expect(stripRow.locator('input[type="checkbox"]')).toBeChecked();
     await expect(page.getByText('AI image screen')).toBeVisible();
     await expect(page.getByText('Auto-hide after reports')).toBeVisible();
-    // Schedule editor: locked vs editable rows.
-    await page.locator('.seg').getByRole('button', { name: 'Schedule', exact: true }).click();
+    // The Easy mix slider with its squares bubble (admin-console-ia).
+    await expect(page.getByRole('slider', { name: 'Easy mix percentage' })).toBeVisible();
+    await expect(page.getByText(/of 24 squares/)).toBeVisible();
+
+    // ‹ Admin backs out to the hub; Schedule detail: locked vs editable rows,
+    // with a sticky Done visible without scrolling on this taller-than-viewport
+    // surface (the dismissal contract's AC). `exact` — a bare "Admin" substring
+    // would also match the Claim-mode row's "Admin-confirmed" segment.
+    await settings.getByRole('button', { name: 'Admin', exact: true }).click();
+    await hub.getByRole('button', { name: 'Schedule' }).click();
+    await expect(page.getByRole('dialog', { name: 'Schedule' })).toBeVisible();
     await expect(page.getByText('locked — already unlocked or past').first()).toBeVisible();
     await expect(page.getByText('editable until unlock').first()).toBeVisible();
+    const done = page.getByRole('dialog', { name: 'Schedule' }).getByRole('button', { name: 'Done' });
+    await expect(done).toBeVisible();
+    const box = await done.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y).toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(852);
+    // Done closes the entire admin from this depth, back to More.
+    await done.click();
+    await expect(page.getByRole('dialog', { name: 'Schedule' })).toHaveCount(0);
+    await expect(page.getByText(/Auto: match the day/)).toBeVisible();
   });
 });
 
@@ -439,7 +466,16 @@ test.describe('visual baselines (393×852, emulator fixture)', () => {
     const adminRow = page.getByRole('button', { name: /Admin/ });
     await expect(adminRow.first()).toBeVisible();
     await adminRow.first().click();
+    // The admin-console-ia parity set: hub, Game settings, Review queue.
+    const hub = page.getByRole('dialog', { name: 'Admin' });
+    await expect(hub.getByRole('button', { name: 'Players' })).toBeVisible();
+    await shot('admin-hub.png');
+    await hub.getByRole('button', { name: 'Game settings' }).click();
     await expect(page.getByText('Claim mode')).toBeVisible();
-    await shot('admin-proof-claims.png');
+    await shot('admin-settings.png');
+    await page.getByRole('dialog', { name: 'Game settings' }).getByRole('button', { name: 'Admin', exact: true }).click();
+    await hub.getByRole('button', { name: 'Review queue' }).click();
+    await expect(page.getByRole('dialog', { name: 'Review queue' })).toBeVisible();
+    await shot('admin-queue.png');
   });
 });

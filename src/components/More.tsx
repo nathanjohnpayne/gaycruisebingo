@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogOut, ChevronRight, ALargeSmall } from 'lucide-react';
+import { Navigate, matchPath, useLocation, useNavigate } from 'react-router-dom';
+import { FALLBACK_PATH } from './tabs';
+import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogOut, ALargeSmall } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useEventDoc, useMyUser, usePendingItemCount } from '../hooks/useData';
 import { useInstallPrompt } from '../hooks/useInstallPrompt';
@@ -8,10 +10,12 @@ import { THEMES } from '../theme/themes';
 import { eventTitle, shortSailRange } from '../format';
 import { todaysDayTheme } from '../theme/autoTheme';
 import { track } from '../analytics';
+import { MoreRow } from './MoreRow';
 import ProfileEditor from './ProfileEditor';
 import ThemeSwitcher from './ThemeSwitcher';
 import ItemPool from './ItemPool';
 import Admin from './Admin';
+import { adminSectionFromPath } from './admin/route';
 import BugReport from './BugReport';
 import AcceptableUse from './AcceptableUse';
 import CoachOverlay from './CoachOverlay';
@@ -43,7 +47,20 @@ export default function More() {
   const { count: pendingCount } = usePendingItemCount(isAdmin);
   const { standalone, deferred, showIOSHint, install } = useInstallPrompt();
 
-  const [panel, setPanel] = useState<null | 'schedule' | 'suggest' | 'howToPlay' | 'coach' | 'admin'>(null);
+  const [panel, setPanel] = useState<null | 'schedule' | 'suggest' | 'howToPlay' | 'coach'>(null);
+  // The admin console is ROUTE-driven, not panel-state-driven
+  // (specs/admin-console-ia.md): /more/admin[/section] renders it as an overlay
+  // on top of this menu, so the browser/PWA back button walks detail → hub →
+  // More for free. The other panels stay local state — they have no deep-link
+  // or history contract.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const adminOpen = adminSectionFromPath(location.pathname) !== null;
+  // The /more/* splat exists ONLY for the admin sub-routes — any other /more
+  // subpath (a typo, a stale link) defers to the app's own unrecognized-route
+  // fallback instead of silently rendering this menu (Codex P2, PR #410,
+  // preserving the w0-app-shell route-table contract).
+  const unknownSubpath = !matchPath('/more', location.pathname) && !adminOpen;
   // Today's resolved Day theme for the Theme subtitle (#270) — the same
   // unlock-based resolution Auto itself uses (theme/autoTheme.ts).
   const todayThemeId = todaysDayTheme(event);
@@ -51,6 +68,8 @@ export default function More() {
   const closePanel = () => setPanel(null);
 
   const showInstallRow = !standalone && (!!deferred || showIOSHint);
+
+  if (unknownSubpath) return <Navigate to={FALLBACK_PATH} replace />;
 
   return (
     <div className="more">
@@ -135,7 +154,10 @@ export default function More() {
               icon={Wrench}
               title="Admin"
               badge={pendingCount > 0 ? pendingCount : undefined}
-              onClick={() => setPanel('admin')}
+              // adminPops seeds the console's history discipline: one pop from
+              // the hub reaches this More entry, so Done can pop the whole
+              // admin run instead of pushing (see Admin.tsx).
+              onClick={() => navigate('/more/admin', { state: { adminPops: 1 } })}
             />
           </div>
         </div>
@@ -194,11 +216,11 @@ export default function More() {
         // than nesting inside it — see specs/d15-coach-overlay.md.
         <CoachOverlay forceOpen onDismiss={closePanel} />
       )}
-      {panel === 'admin' && isAdmin && (
-        <MorePanel title="Admin" onClose={closePanel}>
-          <Admin />
-        </MorePanel>
-      )}
+      {/* Admin renders its own AdminSheet chrome (sticky header, Done, the
+          full dismissal contract) — MorePanel's bottom-Close chrome is exactly
+          what specs/admin-console-ia.md replaces. It self-guards on isAdmin
+          (a non-admin deep link gets a dismissible "Admins only." sheet). */}
+      {adminOpen && <Admin />}
     </div>
   );
 }
@@ -239,40 +261,6 @@ function TextSizeSwitcher() {
         </button>
       ))}
     </div>
-  );
-}
-
-/**
- * One tappable row in the menu: a leading Lucide icon (daily-cards-spec
- * § "Iconography — Lucide" › More menu), title, optional subtitle, optional
- * count badge, and a trailing `chevron-right` — every `MoreRow` opens a
- * sub-panel, so the chevron is unconditional here (the quiet Sign-out row
- * and the Install row are plain `<button>`s outside this helper and don't
- * get one, since neither navigates to a sub-panel).
- */
-function MoreRow({
-  icon: Icon,
-  title,
-  sub,
-  badge,
-  onClick,
-}: {
-  icon: typeof Palette;
-  title: string;
-  sub?: string;
-  badge?: number;
-  onClick: () => void;
-}) {
-  return (
-    <button type="button" className="more-row" onClick={onClick}>
-      <Icon className="more-row-icon" aria-hidden="true" />
-      <span className="more-row-text">
-        <span className="more-row-title">{title}</span>
-        {sub && <span className="more-row-sub">{sub}</span>}
-      </span>
-      {typeof badge === 'number' && <span className="pill more-badge">{badge}</span>}
-      <ChevronRight className="more-row-chevron" aria-hidden="true" />
-    </button>
   );
 }
 

@@ -7,7 +7,7 @@ Feature: a frozen, stable set of route mount points — Card / Feed / Ranks / Pr
 - `src/components/tabs.ts` is the single source of truth for the tab set: `TABS` (id, label, path, `end`, `adminOnly`) and `FALLBACK_PATH`.
 - `src/components/TabBar.tsx` renders `TABS` (filtered by `visibleTabs(isAdmin)`) as `NavLink`s inside `.tabs`, a bottom-fixed bar.
 - `src/components/Nav.tsx` renders the top identity bar (brand, avatar, sign-out) plus `TabBar`, sourcing `isAdmin` from the signed-in Player's Event-admin membership.
-- `src/App.tsx` maps every `TABS` entry to its page component via an exhaustive `Record<TabId, ReactElement>` and renders one `<Route>` per tab plus a `*` → `FALLBACK_PATH` catch-all.
+- `src/App.tsx` maps every `TABS` entry to its page component via an exhaustive `Record<TabId, ReactElement>` and renders one `<Route>` per tab plus a `*` → `FALLBACK_PATH` catch-all. The `more` route alone mounts with a splat (`/more/*`) so the admin console's real sub-routes (`specs/admin-console-ia.md`) nest inside the frozen mount point — the tab SET is unchanged.
 - While the signed-in auth/attestation bootstrap is unresolved, `App.tsx` renders the shared animated `LoadingState` with state-specific copy instead of a static "Loading…" string.
 
 ## Acceptance criteria

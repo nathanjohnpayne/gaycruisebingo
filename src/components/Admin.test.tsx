@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import type { DayDef, EventDoc, ItemDoc } from '../types';
 
 // specs/d15-approvals.md, component layer (RTL-jsdom). Drives the REAL Admin
@@ -124,6 +125,16 @@ vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user }) }));
 
 import Admin from './Admin';
 
+// The console is route-driven now (specs/admin-console-ia.md): each surface
+// mounts at /more/admin[/section], so every render pins the section under test
+// via the router instead of clicking the retired sub-tabs.
+const renderAdmin = (path = '/more/admin') =>
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <Admin />
+    </MemoryRouter>,
+  );
+
 const pendingItem = (id: string, over: Partial<ItemDoc> = {}): ItemDoc =>
   ({
     id,
@@ -166,20 +177,19 @@ beforeEach(() => {
   H.pendingItems = [];
 });
 
-describe('Admin Approvals tab (specs/d15-approvals.md)', () => {
-  it('defaults to Moderation; the Approvals queue is reachable by clicking the Approvals sub-tab', () => {
+describe('Admin Approvals group (specs/d15-approvals.md, re-housed in the Review queue)', () => {
+  it('is not on the hub; the hub card opens the Review queue where the pending row lists', () => {
     H.pendingItems = [pendingItem('p1', { text: 'Awaiting review', createdBy: 'alice' })];
-    render(<Admin />);
+    renderAdmin('/more/admin');
 
-    expect(screen.queryByText('Awaiting review')).toBeNull(); // not shown on Moderation by default
-    fireEvent.click(screen.getByRole('button', { name: 'Approvals' }));
+    expect(screen.queryByText('Awaiting review')).toBeNull(); // the hub shows cards, not queue rows
+    fireEvent.click(screen.getByRole('button', { name: /Review queue/ }));
     expect(screen.getByText('Awaiting review')).toBeInTheDocument();
   });
 
   it('lists pending items with submitter attribution', () => {
     H.pendingItems = [pendingItem('p1', { text: 'A spicy dare', createdBy: 'alice-uid' })];
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Approvals' }));
+    renderAdmin('/more/admin/queue');
 
     expect(screen.getByText('A spicy dare')).toBeInTheDocument();
     expect(screen.getByText(/alice-uid/)).toBeInTheDocument();
@@ -187,8 +197,7 @@ describe('Admin Approvals tab (specs/d15-approvals.md)', () => {
 
   it('Approve invokes approveItem(id, adminUid)', () => {
     H.pendingItems = [pendingItem('p1', { text: 'Approve me' })];
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Approvals' }));
+    renderAdmin('/more/admin/queue');
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
     expect(H.approveItem).toHaveBeenCalledWith('p1', 'admin-uid');
@@ -196,8 +205,7 @@ describe('Admin Approvals tab (specs/d15-approvals.md)', () => {
 
   it('Reject invokes rejectItem(id, adminUid)', () => {
     H.pendingItems = [pendingItem('p1', { text: 'Reject me' })];
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Approvals' }));
+    renderAdmin('/more/admin/queue');
 
     fireEvent.click(screen.getByTitle('Reject'));
     expect(H.rejectItem).toHaveBeenCalledWith('p1', 'admin-uid');
@@ -205,26 +213,31 @@ describe('Admin Approvals tab (specs/d15-approvals.md)', () => {
 
   it('bulk-approve ("Approve all") invokes bulkApproveItems with every listed row', () => {
     H.pendingItems = [pendingItem('p1', { text: 'Row one' }), pendingItem('p2', { text: 'Row two' })];
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Approvals' }));
+    renderAdmin('/more/admin/queue');
 
     fireEvent.click(screen.getByRole('button', { name: 'Approve all' }));
     expect(H.bulkApproveItems).toHaveBeenCalledWith(H.pendingItems, 'admin-uid');
   });
 
-  it('an empty pending queue shows "Nothing pending review." and no Approve all control', () => {
+  it('an empty Approvals group shows "Nothing pending review." and no Approve all control', () => {
     H.pendingItems = [];
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Approvals' }));
+    // A report keeps the queue non-empty overall, so the per-group empty state
+    // (not the whole-inbox "All clear") renders.
+    H.items = [pendingItem('r1', { text: 'Reported prompt', status: 'active', reportCount: 2 })];
+    renderAdmin('/more/admin/queue');
 
     expect(screen.getByText(/nothing pending review/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Approve all' })).toBeNull();
   });
 
+  it('an entirely empty inbox shows the wireframes’ "All clear. Go enjoy the boat."', () => {
+    renderAdmin('/more/admin/queue');
+    expect(screen.getByText(/All clear\. Go enjoy the boat\./)).toBeInTheDocument();
+  });
+
   it('the spicy checkbox toggle invokes setItemSpicy(id, checked)', () => {
     H.pendingItems = [pendingItem('p1', { text: 'Toggle me', spicy: false })];
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Approvals' }));
+    renderAdmin('/more/admin/queue');
 
     const row = screen.getByText('Toggle me').closest('.row') as HTMLElement;
     fireEvent.click(within(row).getByRole('checkbox'));
@@ -232,14 +245,13 @@ describe('Admin Approvals tab (specs/d15-approvals.md)', () => {
   });
 });
 
-describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
+describe('Admin Schedule surface (specs/d15-admin-schedule.md, at /more/admin/schedule)', () => {
   it('shows exactly the seeded Days in order, one row per Day', () => {
     H.event = {
       ...H.event,
       days: [dayDef({ index: 0, date: '2026-07-15', port: 'Trieste', portEmoji: '🇮🇹' }), dayDef({ index: 1 })],
     } as unknown as EventDoc;
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    renderAdmin('/more/admin/schedule');
 
     expect(screen.getByText(/Day 1 · 2026-07-15 · 🇮🇹 Trieste/)).toBeInTheDocument();
     expect(screen.getByText(/Day 2 · 2026-07-16 · 🇭🇷 Split/)).toBeInTheDocument();
@@ -248,8 +260,7 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
   it("a future Day's theme dropdown is enabled and invokes setDayTheme(days, dayIndex, theme) on change", () => {
     const days = [dayDef({ index: 0, unlockAt: Date.now() + 3600_000 })];
     H.event = { ...H.event, days } as unknown as EventDoc;
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    renderAdmin('/more/admin/schedule');
 
     const select = screen.getByLabelText('Day 1 theme') as HTMLSelectElement;
     expect(select.disabled).toBe(false);
@@ -260,8 +271,7 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
   it("a past/unlocked Day's theme dropdown is disabled", () => {
     const days = [dayDef({ index: 0, unlockAt: Date.now() - 3600_000 })];
     H.event = { ...H.event, days } as unknown as EventDoc;
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    renderAdmin('/more/admin/schedule');
 
     const select = screen.getByLabelText('Day 1 theme') as HTMLSelectElement;
     expect(select.disabled).toBe(true);
@@ -277,8 +287,7 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
       dayDef({ index: 2, tutorial: true, pool: 'embark', tonight: ['⛵ Sail-Away Party', '🎉 Welcome Party'] }),
     ];
     H.event = { ...H.event, days } as unknown as EventDoc;
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    renderAdmin('/more/admin/schedule');
 
     const twoPartyRow = screen.getByText(/Day 1 ·/).closest('.row') as HTMLElement;
     expect(within(twoPartyRow).getByText('2 parties')).toBeInTheDocument();
@@ -292,8 +301,7 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
   it("a future Day's Tonight line is editable and invokes setDayTonight(days, dayIndex, tonight) on blur", () => {
     const days = [dayDef({ index: 0, unlockAt: Date.now() + 3600_000, tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] })];
     H.event = { ...H.event, days } as unknown as EventDoc;
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    renderAdmin('/more/admin/schedule');
 
     const input = screen.getByLabelText('Day 1 tonight') as HTMLInputElement;
     expect(input.disabled).toBe(false);
@@ -307,8 +315,7 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
     H.setDayTonight.mockRejectedValueOnce(new Error('locked'));
     const days = [dayDef({ index: 0, unlockAt: Date.now() + 3600_000, tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] })];
     H.event = { ...H.event, days } as unknown as EventDoc;
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    renderAdmin('/more/admin/schedule');
 
     const input = screen.getByLabelText('Day 1 tonight') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '💦 Splash T-Dance · 🏋️ Get Sporty' } });
@@ -321,8 +328,7 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
   it('rejects one- or three-entry Tonight drafts before calling setDayTonight', () => {
     const days = [dayDef({ index: 0, unlockAt: Date.now() + 3600_000, tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] })];
     H.event = { ...H.event, days } as unknown as EventDoc;
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    renderAdmin('/more/admin/schedule');
 
     const input = screen.getByLabelText('Day 1 tonight') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '💦 Splash T-Dance' } });
@@ -339,8 +345,7 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
   it("a past/unlocked Day's Tonight line is disabled (corrected via the owner migration, not the editor)", () => {
     const days = [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] })];
     H.event = { ...H.event, days } as unknown as EventDoc;
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    renderAdmin('/more/admin/schedule');
 
     const input = screen.getByLabelText('Day 1 tonight') as HTMLInputElement;
     expect(input.disabled).toBe(true);
@@ -359,8 +364,7 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
       dayDef({ index: 2, unlockAt: Date.now() - 3600_000, snapshotItemIds: ['item-1'] }),
     ];
     H.event = { ...H.event, days } as unknown as EventDoc;
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    renderAdmin('/more/admin/schedule');
 
     expect(screen.getAllByRole('button', { name: 'Unlock now' })).toHaveLength(1);
     const dueRow = screen.getByText(/Day 1 ·/).closest('.row') as HTMLElement;
@@ -379,19 +383,15 @@ describe('Admin Schedule tab (specs/d15-admin-schedule.md)', () => {
     H.unlockDayNow.mockRejectedValue(new Error('permission-denied'));
     const days = [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, snapshotItemIds: undefined })];
     H.event = { ...H.event, days } as unknown as EventDoc;
-    render(<Admin />);
-    fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    renderAdmin('/more/admin/schedule');
 
     fireEvent.click(screen.getByRole('button', { name: 'Unlock now' }));
     expect(await screen.findByText('permission-denied')).toBeInTheDocument();
   });
 });
 
-describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
-  // Scope every query to the panel's own `.admin-section` — the page also has
-  // an unrelated "Pending claims" section sharing this row's label text.
-  const panel = () => screen.getByText('Proof & Claims').closest('.admin-section') as HTMLElement;
-  const row = (label: string) => within(panel()).getByText(label).closest('.row') as HTMLElement;
+describe('Admin Game settings (specs/d15-admin-proof-claims.md rows, re-housed at /more/admin/settings)', () => {
+  const row = (label: string) => screen.getByText(label).closest('.row') as HTMLElement;
 
   it('renders its knob rows reflecting current EventDoc values, with the ADR 0001 caption and no "verified" language', () => {
     H.event = {
@@ -400,7 +400,7 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
       settings: { reportHideThreshold: 6, photoProofSource: 'camera_only', stripPhotoExif: false, visionGate: false },
     } as unknown as EventDoc;
     H.claims = [{ id: 'c1', displayName: 'Alice', itemText: 'Do a thing' } as never];
-    render(<Admin />);
+    renderAdmin('/more/admin/settings');
     expect(within(row('Claim mode')).getByRole('button', { name: 'Proof-to-mark' })).toHaveClass('on');
     expect(within(row('Claim mode')).getByText('A friction knob, not a trust level.')).toBeInTheDocument();
     expect(within(row('Photo proof source')).getByRole('button', { name: 'Camera only' })).toHaveClass('on');
@@ -409,14 +409,14 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
     // #268: the setting is live now — the old 'presentational' caveat is gone.
     expect(row('AI image screen').textContent).toMatch(/live setting/i);
     expect(within(row('Auto-hide after reports')).getByText('6')).toBeInTheDocument();
-    // #269 (the wireframes' caption): the Pending-claims row is admin_confirmed-
-    // mode-only — absent here (proof_required).
-    expect(within(panel()).queryByText('Pending claims')).toBeNull();
-    expect(panel().textContent).not.toMatch(/verified/i);
+    // The claims queue lives in the Review queue now (admin-console-ia) — the
+    // settings surface never renders a Pending-claims row.
+    expect(screen.queryByText('Pending claims')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/verified/i);
   });
 
   it('each control writes via its data/admin.ts function on change, exercising the settings defaults when unset', () => {
-    render(<Admin />); // H.event.settings has no photoProofSource/stripPhotoExif/visionGate — exercises defaults
+    renderAdmin('/more/admin/settings'); // H.event.settings has no photoProofSource/stripPhotoExif/visionGate — exercises defaults
     expect(within(row('Photo proof source')).getByRole('button', { name: 'Camera or library' })).toHaveClass('on');
     expect((within(row('Strip location data')).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
     expect((within(row('AI image screen')).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
@@ -433,7 +433,7 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
 
   it('the report-threshold stepper reads the current value and +/- invoke setReportHideThreshold', () => {
     H.event = { ...H.event, settings: { reportHideThreshold: 4 } } as unknown as EventDoc;
-    render(<Admin />);
+    renderAdmin('/more/admin/settings');
     const stepperRow = row('Auto-hide after reports');
     expect(within(stepperRow).getByText('4')).toBeInTheDocument();
     fireEvent.click(within(stepperRow).getByRole('button', { name: 'Increase auto-hide threshold' }));
@@ -442,44 +442,123 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
     expect(H.setReportHideThreshold).toHaveBeenCalledWith(3);
   });
 
-  it('the Easy mix control (specs/easy-mix.md) is a 10%-step slider that writes each distinct step on change, deduped', () => {
-    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.3 } } as unknown as EventDoc;
-    render(<Admin />);
-    const mixRow = row('Easy mix');
-    const slider = within(mixRow).getByRole('slider') as HTMLInputElement;
+  it('the Easy mix slider (specs/admin-console-ia.md) reflects easyMixRatio, shows the squares bubble, and commits on release', () => {
+    // A stored 0.25 sits on the 5% grid — thumb, bubble, and aria-valuetext agree.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.25 } } as unknown as EventDoc;
+    renderAdmin('/more/admin/settings');
+    const slider = screen.getByRole('slider', { name: 'Easy mix percentage' }) as HTMLInputElement;
     expect(slider.min).toBe('0');
     expect(slider.max).toBe('100');
-    expect(slider.step).toBe('10');
-    expect(slider.value).toBe('30');
-    expect(within(mixRow).getByText('30%')).toBeInTheDocument();
+    expect(slider.step).toBe('5');
+    expect(slider.value).toBe('25');
+    expect(screen.getByText('25% · 6 of 24 squares')).toBeInTheDocument();
+    expect(slider).toHaveAttribute('aria-valuetext', '25% · 6 of 24 squares');
+    // The ticket's sublabel, verbatim.
+    expect(screen.getByText('Applies from the next 8:00 unlock · reshuffles inherit it.')).toBeInTheDocument();
 
-    // A value change (as assistive tech / click-to-position dispatches, with no pointer
-    // release) writes immediately, as a 0..1 ratio.
+    // Dragging updates the bubble live but does NOT write until release.
     fireEvent.change(slider, { target: { value: '50' } });
-    expect(within(mixRow).getByText('50%')).toBeInTheDocument();
+    expect(screen.getByText('50% · 12 of 24 squares')).toBeInTheDocument();
+    expect(slider).toHaveAttribute('aria-valuetext', '50% · 12 of 24 squares');
+    expect(H.setEasyMixRatio).not.toHaveBeenCalled();
+
+    // Release commits once, as a 0..1 ratio; a repeat release at the same
+    // position dedups against the last REQUESTED ratio (not the stale prop).
+    fireEvent.pointerUp(slider);
+    expect(H.setEasyMixRatio).toHaveBeenCalledTimes(1);
     expect(H.setEasyMixRatio).toHaveBeenCalledWith(0.5);
-
-    // Re-emitting the same value does NOT write again — dedup is against the last
-    // requested ratio, not the (still-async-stale) event value.
-    fireEvent.change(slider, { target: { value: '50' } });
+    fireEvent.pointerUp(slider);
     expect(H.setEasyMixRatio).toHaveBeenCalledTimes(1);
   });
 
-  it('the Easy mix slider defaults to 50% when easyMixRatio is unset', () => {
-    render(<Admin />); // H.event.settings has no easyMixRatio
-    const slider = within(row('Easy mix')).getByRole('slider') as HTMLInputElement;
+  it('the Easy mix slider defaults to 50%, never writes on an untouched release, and commits AT-only changes on blur', () => {
+    renderAdmin('/more/admin/settings'); // H.event.settings has no easyMixRatio
+    const slider = screen.getByRole('slider', { name: 'Easy mix percentage' }) as HTMLInputElement;
     expect(slider.value).toBe('50');
-    expect(within(row('Easy mix')).getByText('50%')).toBeInTheDocument();
+
+    // Untouched release: nothing to write.
+    fireEvent.pointerUp(slider);
+    expect(H.setEasyMixRatio).not.toHaveBeenCalled();
+
+    // Keyboard: the arrow's change + keyup commits the 5%-step value.
+    fireEvent.change(slider, { target: { value: '55' } });
+    fireEvent.keyUp(slider, { key: 'ArrowRight' });
+    expect(H.setEasyMixRatio).toHaveBeenCalledTimes(1);
+    expect(H.setEasyMixRatio).toHaveBeenCalledWith(0.55);
+
+    // Assistive tech: a value change with NO pointerup/keyup persists on blur;
+    // a blur after an already-committed value writes nothing more.
+    fireEvent.change(slider, { target: { value: '70' } });
+    fireEvent.blur(slider);
+    expect(H.setEasyMixRatio).toHaveBeenCalledTimes(2);
+    expect(H.setEasyMixRatio).toHaveBeenCalledWith(0.7);
+    fireEvent.blur(slider);
+    expect(H.setEasyMixRatio).toHaveBeenCalledTimes(2);
   });
 
-  it('the Easy mix slider snaps a legacy off-grid ratio to the nearest 10% and does not write on load', () => {
-    // A 0.25 left by the old stepper shows as 30% (nearest step, matching the native
-    // thumb) — but merely rendering it must not silently rewrite the stored value.
-    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.25 } } as unknown as EventDoc;
-    render(<Admin />);
-    const slider = within(row('Easy mix')).getByRole('slider') as HTMLInputElement;
+  it('ignores the echo of its own write mid-adjustment — only an external change re-syncs the thumb', () => {
+    // Commit 40%, keep adjusting to 30% (no release yet), then let the 0.4
+    // write echo back off the subscription: the thumb must stay at 30, not
+    // yank back to 40 (the rapid-keyboard race the e2e walk caught).
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.5 } } as unknown as EventDoc;
+    const { rerender } = renderAdmin('/more/admin/settings');
+    const slider = screen.getByRole('slider', { name: 'Easy mix percentage' }) as HTMLInputElement;
+    fireEvent.change(slider, { target: { value: '40' } });
+    fireEvent.keyUp(slider, { key: 'ArrowLeft' });
+    expect(H.setEasyMixRatio).toHaveBeenCalledWith(0.4);
+    fireEvent.change(slider, { target: { value: '30' } });
+
+    // The 0.4 echo arrives while the user is mid-adjustment at 30.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.4 } } as unknown as EventDoc;
+    rerender(
+      <MemoryRouter initialEntries={['/more/admin/settings']}>
+        <Admin />
+      </MemoryRouter>,
+    );
     expect(slider.value).toBe('30');
-    expect(within(row('Easy mix')).getByText('30%')).toBeInTheDocument();
+
+    // A genuinely EXTERNAL change (another admin) does re-sync.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.75 } } as unknown as EventDoc;
+    rerender(
+      <MemoryRouter initialEntries={['/more/admin/settings']}>
+        <Admin />
+      </MemoryRouter>,
+    );
+    expect(slider.value).toBe('75');
+  });
+
+  it('applies an external change skipped while focused once the slider blurs without a write', () => {
+    // Codex P2 (PR #410): while the input is focused the re-sync effect skips
+    // EVERY prop change; blur must reconcile a skipped external value when the
+    // user made no adjustment of their own — else the thumb is stale forever.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.5 } } as unknown as EventDoc;
+    const { rerender } = renderAdmin('/more/admin/settings');
+    const slider = screen.getByRole('slider', { name: 'Easy mix percentage' }) as HTMLInputElement;
+    slider.focus();
+
+    // Another admin lands 0.75 while this one is focused: skipped for now.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.75 } } as unknown as EventDoc;
+    rerender(
+      <MemoryRouter initialEntries={['/more/admin/settings']}>
+        <Admin />
+      </MemoryRouter>,
+    );
+    expect(slider.value).toBe('50');
+
+    // Blur with no local adjustment: no write, and the external value applies.
+    fireEvent.blur(slider);
+    expect(H.setEasyMixRatio).not.toHaveBeenCalled();
+    expect(slider.value).toBe('75');
+  });
+
+  it('normalizes a legacy off-grid ratio to the 5% grid for display without rewriting the stored value', () => {
+    // 0.33 → 35 on the 5% grid; the untouched release must not write 0.35.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.33 } } as unknown as EventDoc;
+    renderAdmin('/more/admin/settings');
+    const slider = screen.getByRole('slider', { name: 'Easy mix percentage' }) as HTMLInputElement;
+    expect(slider.value).toBe('35');
+    expect(screen.getByText(/35% · 8 of 24 squares/)).toBeInTheDocument();
+    fireEvent.pointerUp(slider);
     expect(H.setEasyMixRatio).not.toHaveBeenCalled();
   });
 
@@ -487,7 +566,7 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
   // BOTH steps must clamp to a floor of 1, not just decrement (Codex P2, PR #245).
   it('the stepper floors at 1 on both steps for an already-negative threshold', () => {
     H.event = { ...H.event, settings: { reportHideThreshold: -2 } } as unknown as EventDoc;
-    render(<Admin />);
+    renderAdmin('/more/admin/settings');
     const stepperRow = row('Auto-hide after reports');
     const decrement = within(stepperRow).getByRole('button', { name: 'Decrease auto-hide threshold' }) as HTMLButtonElement;
     expect(decrement.disabled).toBe(true);
@@ -497,26 +576,30 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
     expect(H.setReportHideThreshold).toHaveBeenCalledWith(1);
   });
 
-  it("the Pending claims row's count matches usePendingClaims() and its jump link targets #admin-pending-claims", () => {
-    // #269: the row renders in admin_confirmed mode only.
+  it('the claims queue lives in the Review queue, admin-confirmed mode only, with its count in the group heading', () => {
+    // #269's mode gate, re-housed (admin-console-ia): the group renders in
+    // admin_confirmed mode only — the old count/jump-link row is superseded by
+    // the hub badge and the queue's own heading count.
     H.event = { ...H.event, claimMode: 'admin_confirmed' } as unknown as EventDoc;
     H.claims = [
       { id: 'c1', displayName: 'Alice', itemText: 'Do a thing' } as never,
       { id: 'c2', displayName: 'Bob', itemText: 'Do another thing' } as never,
     ];
-    render(<Admin />);
-    const pendingRow = row('Pending claims');
-    expect(within(pendingRow).getByText('2')).toBeInTheDocument();
-    expect(within(pendingRow).getByRole('link', { name: /jump to queue/i })).toHaveAttribute(
-      'href',
-      '#admin-pending-claims',
-    );
+    const { unmount } = renderAdmin('/more/admin/queue');
+    expect(screen.getByText('Pending claims (2)')).toBeInTheDocument();
+    expect(screen.getByText('Alice')).toBeInTheDocument();
+    unmount();
+
+    // Outside admin_confirmed the group vanishes entirely.
+    H.event = { ...H.event, claimMode: 'honor' } as unknown as EventDoc;
+    renderAdmin('/more/admin/queue');
+    expect(screen.queryByText(/Pending claims/)).toBeNull();
   });
 });
 
-describe('Admin curated pools (#269)', () => {
+describe('Admin curated pools (#269, at /more/admin/pool)', () => {
   it('the add form writes an active prompt into the chosen pool via adminAddItem', async () => {
-    render(<Admin />);
+    renderAdmin('/more/admin/pool');
     const input = screen.getByLabelText('New prompt text') as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'Final soft-serve encore' } });
     fireEvent.change(screen.getByLabelText('Pool'), { target: { value: 'farewell' } });
@@ -526,7 +609,7 @@ describe('Admin curated pools (#269)', () => {
   });
 
   it('forces embark/farewell prompt additions to stay tame even after 🔞 was checked on main', async () => {
-    render(<Admin />);
+    renderAdmin('/more/admin/pool');
     const input = screen.getByLabelText('New prompt text') as HTMLInputElement;
     const spicy = screen.getByRole('checkbox', { name: /🔞/ }) as HTMLInputElement;
     fireEvent.change(input, { target: { value: 'Embark icebreaker' } });
@@ -546,7 +629,7 @@ describe('Admin curated pools (#269)', () => {
     H.items = [
       { id: 'i1', text: 'Original wording', createdBy: 'u1', createdAt: 1, isFreeSpace: false, status: 'active', reportCount: 0, spicy: false, pool: 'embark' } as unknown as ItemDoc,
     ];
-    render(<Admin />);
+    renderAdmin('/more/admin/pool');
     // The row's sub line names its pool — the curated pools are visible.
     expect(screen.getByText(/active · embark/)).toBeInTheDocument();
     fireEvent.click(screen.getAllByTitle('Edit text')[0]);

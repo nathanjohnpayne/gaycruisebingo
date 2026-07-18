@@ -55,8 +55,14 @@ export default function App() {
       <BugReportProvider>
         <Nav />
         <Routes>
+          {/* The More tab alone mounts with a splat (specs/admin-console-ia.md):
+              the admin console lives at REAL sub-routes (/more/admin[/section])
+              rendered by More itself, so the browser/PWA back button walks
+              admin detail → hub → More. The TAB SET is unchanged — this is
+              sub-navigation inside the frozen `more` mount point, not a new
+              tab (./components/tabs stays the one source of truth). */}
           {TABS.map((tab) => (
-            <Route key={tab.id} path={tab.path} element={pages[tab.id]} />
+            <Route key={tab.id} path={tab.id === 'more' ? `${tab.path}/*` : tab.path} element={pages[tab.id]} />
           ))}
           <Route path="*" element={<Navigate to={FALLBACK_PATH} replace />} />
         </Routes>
