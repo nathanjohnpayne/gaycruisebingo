@@ -62,8 +62,13 @@ export default function AdminSheet({
         return;
       }
       if (e.key !== 'Tab') return;
-      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
-      if (!focusable || focusable.length === 0) return;
+      // Disabled controls cannot take focus — including them as first/last
+      // makes the wrap a no-op and lets Tab escape the modal (CodeRabbit,
+      // PR #410; same filter as the Feed who-list sheet).
+      const focusable = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR) ?? [],
+      ).filter((el) => !el.hasAttribute('disabled'));
+      if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       // The title also holds focus (tabIndex=-1, the landing spot) but is

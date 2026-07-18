@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { EventDoc, ItemDoc, ProofDoc } from '../types';
 
 // specs/admin-console-ia.md, component layer (RTL-jsdom). Drives the REAL
@@ -86,12 +86,19 @@ vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: H.user }) }));
 import Admin from './Admin';
 
 // A location probe alongside the console so navigation assertions can read
-// where the router actually landed (Done → /more, back → the hub). The console
-// renders unconditionally under /more/* here — More's own render gate
-// (adminSectionFromPath) is pinned in d15-more-menu.test.tsx.
+// where the router actually landed (Done → /more, back → the hub), plus a
+// browser-back trigger so history-shape assertions can walk the real stack.
+// The console renders unconditionally under /more/* here — More's own render
+// gate (adminSectionFromPath) is pinned in d15-more-menu.test.tsx.
 function LocationProbe() {
   const location = useLocation();
-  return <div data-testid="location">{location.pathname}</div>;
+  const navigate = useNavigate();
+  return (
+    <>
+      <div data-testid="location">{location.pathname}</div>
+      <button data-testid="browser-back" onClick={() => navigate(-1)} />
+    </>
+  );
 }
 
 const renderAt = (path: string) =>
@@ -247,6 +254,36 @@ describe('AdminSheet dismissal contract (specs/admin-console-ia.md)', () => {
     fireEvent.click(screen.getByRole('dialog', { name: 'Admin' }));
     expect(at()).toBe('/more/admin');
     fireEvent.click(document.querySelector('.sheet-backdrop') as HTMLElement);
+    expect(at()).toBe('/more');
+  });
+
+  it('Done pops the whole admin run when entered from More — browser Back cannot reopen it', () => {
+    // The More row seeds adminPops: 1 (More.tsx); each hub → detail push
+    // increments it, and Done pops that many entries in one go.
+    render(
+      <MemoryRouter
+        initialEntries={[{ pathname: '/more' }, { pathname: '/more/admin', state: { adminPops: 1 } }]}
+        initialIndex={1}
+      >
+        <Routes>
+          <Route
+            path="/more/*"
+            element={
+              <>
+                <Admin />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByText('Game settings').closest('.more-row') as HTMLElement);
+    expect(at()).toBe('/more/admin/settings');
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(at()).toBe('/more');
+    // The hub and detail entries were POPPED, not buried — Back stays put.
+    fireEvent.click(screen.getByTestId('browser-back'));
     expect(at()).toBe('/more');
   });
 

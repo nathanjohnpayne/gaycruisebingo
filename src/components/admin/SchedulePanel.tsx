@@ -178,10 +178,15 @@ function ScheduleRow({
   // Local draft so typing doesn't fight the subscribed doc; committed on blur.
   const [tonightDraft, setTonightDraft] = useState(() => joinTonight(day.tonight));
   const [tonightError, setTonightError] = useState('');
+  // Keyed on the NORMALIZED line, not the array reference: Firestore re-emits
+  // equal entries as a fresh array on unrelated event-doc writes, and an
+  // identity dep would wipe in-progress typing on every such echo
+  // (CodeRabbit, PR #410).
+  const tonightPersisted = joinTonight(day.tonight);
   useEffect(() => {
-    setTonightDraft(joinTonight(day.tonight));
+    setTonightDraft(tonightPersisted);
     setTonightError('');
-  }, [day.tonight]);
+  }, [tonightPersisted]);
   const commitTonight = async () => {
     if (locked) return;
     const next = splitTonight(tonightDraft);
@@ -264,7 +269,11 @@ export default function SchedulePanel({ days }: { days: DayDef[] }) {
       .filter((t) => t > Date.now())
       .sort((a, b) => a - b)[0];
     if (nextUnlock == null) return;
-    const timer = setTimeout(() => setNow(Date.now()), nextUnlock - Date.now());
+    // A delay past the 32-bit timer ceiling (~24.8 days) would overflow and
+    // fire immediately, re-arming this effect in a tight loop for a far-future
+    // schedule (CodeRabbit, PR #410). A clamped early fire just re-runs the
+    // effect, which re-arms with the remaining delay.
+    const timer = setTimeout(() => setNow(Date.now()), Math.min(nextUnlock - Date.now(), 2_147_483_647));
     return () => clearTimeout(timer);
   }, [days, now]);
   return (

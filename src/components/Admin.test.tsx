@@ -527,6 +527,30 @@ describe('Admin Game settings (specs/d15-admin-proof-claims.md rows, re-housed a
     expect(slider.value).toBe('75');
   });
 
+  it('applies an external change skipped while focused once the slider blurs without a write', () => {
+    // Codex P2 (PR #410): while the input is focused the re-sync effect skips
+    // EVERY prop change; blur must reconcile a skipped external value when the
+    // user made no adjustment of their own — else the thumb is stale forever.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.5 } } as unknown as EventDoc;
+    const { rerender } = renderAdmin('/more/admin/settings');
+    const slider = screen.getByRole('slider', { name: 'Easy mix percentage' }) as HTMLInputElement;
+    slider.focus();
+
+    // Another admin lands 0.75 while this one is focused: skipped for now.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.75 } } as unknown as EventDoc;
+    rerender(
+      <MemoryRouter initialEntries={['/more/admin/settings']}>
+        <Admin />
+      </MemoryRouter>,
+    );
+    expect(slider.value).toBe('50');
+
+    // Blur with no local adjustment: no write, and the external value applies.
+    fireEvent.blur(slider);
+    expect(H.setEasyMixRatio).not.toHaveBeenCalled();
+    expect(slider.value).toBe('75');
+  });
+
   it('normalizes a legacy off-grid ratio to the 5% grid for display without rewriting the stored value', () => {
     // 0.33 → 35 on the 5% grid; the untouched release must not write 0.35.
     H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.33 } } as unknown as EventDoc;

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, matchPath, useLocation, useNavigate } from 'react-router-dom';
+import { FALLBACK_PATH } from './tabs';
 import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogOut, ChevronRight, ALargeSmall } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useEventDoc, useMyUser, usePendingItemCount } from '../hooks/useData';
@@ -54,6 +55,11 @@ export default function More() {
   const location = useLocation();
   const navigate = useNavigate();
   const adminOpen = adminSectionFromPath(location.pathname) !== null;
+  // The /more/* splat exists ONLY for the admin sub-routes — any other /more
+  // subpath (a typo, a stale link) defers to the app's own unrecognized-route
+  // fallback instead of silently rendering this menu (Codex P2, PR #410,
+  // preserving the w0-app-shell route-table contract).
+  const unknownSubpath = !matchPath('/more', location.pathname) && !adminOpen;
   // Today's resolved Day theme for the Theme subtitle (#270) — the same
   // unlock-based resolution Auto itself uses (theme/autoTheme.ts).
   const todayThemeId = todaysDayTheme(event);
@@ -61,6 +67,8 @@ export default function More() {
   const closePanel = () => setPanel(null);
 
   const showInstallRow = !standalone && (!!deferred || showIOSHint);
+
+  if (unknownSubpath) return <Navigate to={FALLBACK_PATH} replace />;
 
   return (
     <div className="more">
@@ -145,7 +153,10 @@ export default function More() {
               icon={Wrench}
               title="Admin"
               badge={pendingCount > 0 ? pendingCount : undefined}
-              onClick={() => navigate('/more/admin')}
+              // adminPops seeds the console's history discipline: one pop from
+              // the hub reaches this More entry, so Done can pop the whole
+              // admin run instead of pushing (see Admin.tsx).
+              onClick={() => navigate('/more/admin', { state: { adminPops: 1 } })}
             />
           </div>
         </div>

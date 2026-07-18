@@ -99,12 +99,26 @@ export function EasyMixSlider({ value, onChange }: { value: number; onChange: (r
     setPct(snapped);
     if (inputRef.current) inputRef.current.value = String(snapped);
   }, [value]);
-  const commit = (next: number) => {
+  // True when a write was actually requested — blur uses it to decide whether
+  // a focus-skipped EXTERNAL update should now win.
+  const commit = (next: number): boolean => {
     const ratio = next / 100;
-    if (ratio !== lastCommitted.current) {
-      lastCommitted.current = ratio;
-      onChange(ratio);
-    }
+    if (ratio === lastCommitted.current) return false;
+    lastCommitted.current = ratio;
+    onChange(ratio);
+    return true;
+  };
+  // Blur ends the interaction: commit the thumb (the AT path), and if that was
+  // a no-op, apply any external change the focus guard skipped — otherwise the
+  // thumb would stay stale until remount (Codex P2, PR #410). When the commit
+  // DID write, the user's own adjustment wins and its echo settles the state.
+  const onBlurCommit = (next: number) => {
+    if (commit(next)) return;
+    const snapped = snapPct(value);
+    if (snapped / 100 === lastCommitted.current) return;
+    lastCommitted.current = snapped / 100;
+    setPct(snapped);
+    if (inputRef.current) inputRef.current.value = String(snapped);
   };
   return (
     <div className="easymix">
@@ -124,7 +138,7 @@ export function EasyMixSlider({ value, onChange }: { value: number; onChange: (r
         onChange={(e) => setPct(Number(e.target.value))}
         onPointerUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
         onKeyUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
-        onBlur={(e) => commit(Number((e.target as HTMLInputElement).value))}
+        onBlur={(e) => onBlurCommit(Number((e.target as HTMLInputElement).value))}
       />
       <datalist id="easymix-detents">
         {EASY_MIX_DETENTS.map((v) => (
@@ -179,9 +193,14 @@ export default function GameSettings({ event }: { event: EventDoc | null | undef
             <div className="name">Claim mode</div>
             <div className="sub">A friction knob, not a trust level.</div>
           </div>
-          <div className="seg">
+          <div className="seg" role="group" aria-label="Claim mode">
             {modes.map((m) => (
-              <button key={m} className={'seg-btn' + (event?.claimMode === m ? ' on' : '')} onClick={() => setClaimMode(m)}>
+              <button
+                key={m}
+                className={'seg-btn' + (event?.claimMode === m ? ' on' : '')}
+                aria-pressed={event?.claimMode === m}
+                onClick={() => setClaimMode(m)}
+              >
                 {modeLabel[m]}
               </button>
             ))}
@@ -192,11 +211,19 @@ export default function GameSettings({ event }: { event: EventDoc | null | undef
             <div className="name">Photo proof source</div>
             <div className="sub">Camera only is today's live-proof-ceremony override; Camera or library is the recommended default.</div>
           </div>
-          <div className="seg">
-            <button className={'seg-btn' + (photoSource === 'camera_or_library' ? ' on' : '')} onClick={() => setPhotoProofSource('camera_or_library')}>
+          <div className="seg" role="group" aria-label="Photo proof source">
+            <button
+              className={'seg-btn' + (photoSource === 'camera_or_library' ? ' on' : '')}
+              aria-pressed={photoSource === 'camera_or_library'}
+              onClick={() => setPhotoProofSource('camera_or_library')}
+            >
               Camera or library
             </button>
-            <button className={'seg-btn' + (photoSource === 'camera_only' ? ' on' : '')} onClick={() => setPhotoProofSource('camera_only')}>
+            <button
+              className={'seg-btn' + (photoSource === 'camera_only' ? ' on' : '')}
+              aria-pressed={photoSource === 'camera_only'}
+              onClick={() => setPhotoProofSource('camera_only')}
+            >
               Camera only
             </button>
           </div>
@@ -207,7 +234,13 @@ export default function GameSettings({ event }: { event: EventDoc | null | undef
             <div className="sub">Worth having regardless of the photo-source choice — library photos are far more likely to carry geotags than live captures.</div>
           </div>
           <label style={{ fontSize: 12 }}>
-            <input type="checkbox" checked={stripExif} onChange={(e) => setStripPhotoExif(e.target.checked)} /> On
+            <input
+              type="checkbox"
+              checked={stripExif}
+              aria-label="Strip location data"
+              onChange={(e) => setStripPhotoExif(e.target.checked)}
+            />{' '}
+            On
           </label>
         </div>
         <div className="row">
@@ -216,7 +249,13 @@ export default function GameSettings({ event }: { event: EventDoc | null | undef
             <div className="sub">Flags proofs for review via the existing moderation function. Live setting (#268): a deployed scanner consults it per upload — no redeploy needed. The deploy-time env flag remains the master kill-switch for whether the scanner exists at all.</div>
           </div>
           <label style={{ fontSize: 12 }}>
-            <input type="checkbox" checked={visionGate} onChange={(e) => setVisionGate(e.target.checked)} /> On
+            <input
+              type="checkbox"
+              checked={visionGate}
+              aria-label="AI image screen"
+              onChange={(e) => setVisionGate(e.target.checked)}
+            />{' '}
+            On
           </label>
         </div>
         <div className="row">

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import type { EventDoc } from '../types';
 
 // Covers specs/d15-more-menu.md (#208) — the full More tab: profile, theme,
@@ -139,6 +139,18 @@ describe('More menu (specs/d15-more-menu.md)', () => {
     expect(supportIdx).toBeGreaterThan(-1);
     expect(adminIdx).toBeGreaterThan(supportIdx);
     expect(signOutIdx).toBeGreaterThan(adminIdx);
+  });
+
+  it('redirects an unknown /more subpath to the Card fallback (the splat exists only for admin sub-routes)', () => {
+    render(
+      <MemoryRouter initialEntries={['/more/bogus']}>
+        <Routes>
+          <Route path="/more/*" element={<More />} />
+          <Route path="/" element={<div data-testid="card-home" />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByTestId('card-home')).toBeInTheDocument();
   });
 
   it('calls signOutUser() from useAuth() when Sign out is tapped', async () => {

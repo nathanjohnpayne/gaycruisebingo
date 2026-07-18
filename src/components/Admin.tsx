@@ -37,9 +37,31 @@ const SECTION_TITLES: Record<AdminSection, string> = {
   players: 'Players',
 };
 
+/**
+ * The admin gate shell. Only the event doc (readable by any signed-in player)
+ * is subscribed HERE — the admin-only queue/item/proof/claim subscriptions
+ * live in `AdminConsole`, which mounts only once `isAdmin` holds. A non-admin
+ * deep link therefore gets the dismissible "Admins only." sheet without ever
+ * opening a listener `firestore.rules` would deny (Codex P2, PR #410: the old
+ * console relied on More's own gate for this; the route-driven mount cannot).
+ */
 export default function Admin() {
   const { user } = useAuth();
   const { data: event } = useEventDoc();
+  const navigate = useNavigate();
+
+  const isAdmin = !!(user && event?.admins?.includes(user.uid));
+  if (!isAdmin || !user) {
+    return (
+      <AdminSheet title="Admin" onDone={() => navigate('/more', { replace: true })}>
+        <div className="center muted">Admins only.</div>
+      </AdminSheet>
+    );
+  }
+  return <AdminConsole userUid={user.uid} event={event} />;
+}
+
+function AdminConsole({ userUid, event }: { userUid: string; event: ReturnType<typeof useEventDoc>['data'] }) {
   const { claims } = usePendingClaims();
   const { flagged } = useReportedProofs();
   const { items } = useAllItems();
@@ -48,21 +70,30 @@ export default function Admin() {
   const navigate = useNavigate();
 
   const section = adminSectionFromPath(location.pathname) ?? 'hub';
-  // Done closes the ENTIRE admin from any depth; `‹ Admin` backs a detail out
-  // to the hub. Both are pushes, so the browser back button still walks the
-  // real history (detail → hub → More) independently.
-  const done = () => navigate('/more');
-  const back = () => navigate('/more/admin');
-  const openSection = (s: AdminSection) => navigate(`/more/admin/${s}`);
-
-  const isAdmin = !!(user && event?.admins?.includes(user.uid));
-  if (!isAdmin) {
-    return (
-      <AdminSheet title="Admin" onDone={done}>
-        <div className="center muted">Admins only.</div>
-      </AdminSheet>
-    );
-  }
+  // History discipline (Codex + CodeRabbit P2/Major, PR #410): dismissal must
+  // never leave admin entries UNDER the new location, or browser Back after
+  // Done/`‹ Admin` walks straight back into what was just dismissed.
+  //
+  // `adminPops` rides each admin entry's history state: the number of pops
+  // that reach the pre-admin entry (More pushes it as 1; each hub → detail
+  // push increments). Done POPS the whole admin run in one go. A deep link
+  // has no such state (the admin entries were not pushed by this app run) —
+  // there Done REPLACES the current entry with More instead, never navigating
+  // out of the app. `‹ Admin` consumes the detail entry (navigate(-1)) in the
+  // normal hub → detail flow; a deep-linked detail — the FIRST entry in this
+  // document's history (`location.key === 'default'`) — replaces itself with
+  // the hub.
+  const adminPops = (location.state as { adminPops?: number } | null)?.adminPops;
+  const done = () => {
+    if (adminPops != null) navigate(-adminPops);
+    else navigate('/more', { replace: true });
+  };
+  const back = () => {
+    if (location.key === 'default') navigate('/more/admin', { replace: true });
+    else navigate(-1);
+  };
+  const openSection = (s: AdminSection) =>
+    navigate(`/more/admin/${s}`, { state: adminPops != null ? { adminPops: adminPops + 1 } : undefined });
 
   // The community auto-hide threshold (ADR 0004 Phase 0). Content whose
   // reportCount has REACHED it is already gone from every Player's Feed/pool
@@ -121,7 +152,7 @@ export default function Admin() {
           reports={reports}
           pendingItems={pendingItems}
           claims={claims}
-          adminUid={user.uid}
+          adminUid={userUid}
         />
       )}
       {section === 'settings' && <GameSettings event={event} />}
@@ -132,7 +163,7 @@ export default function Admin() {
           threshold={threshold}
           pendingCount={pendingCount}
           lockedSnapshotItemIds={lockedSnapshotItemIds}
-          adminUid={user.uid}
+          adminUid={userUid}
         />
       )}
       {section === 'players' && <PlayersPanel bannedUids={bannedUids} />}

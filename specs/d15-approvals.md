@@ -61,11 +61,11 @@ Runner: `npm test` (Vitest, jsdom). Test: `src/components/ItemPool.test.tsx`.
 - A submission calls `addItem` (the write itself lands `pending`, pinned at the data layer above); the "goes to admin review" caption renders.
 - A submitter's own pending item (`useMyPendingItems`) renders in their list, tagged "pending review".
 
-### Component — Admin Approvals tab
+### Component — Admin Approvals group (re-housed in the Review queue by `admin-console-ia`)
 
 Runner: `npm test` (Vitest, jsdom). Test: `src/components/Admin.test.tsx`.
 
-- The Approvals tab lists pending items with submitter attribution.
+- The Approvals group lists pending items with submitter attribution.
 - Approve invokes the write with `active` + `approvedBy`/`approvedAt`.
 - Reject invokes the write with `rejected`.
 - Bulk-approve approves every listed row in one action.
