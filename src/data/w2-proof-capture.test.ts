@@ -22,13 +22,14 @@ const EVENT_ID = 'med-2026'; // src/firebase.ts default when VITE_EVENT_ID is un
 type Ref = { __kind: 'doc' | 'collection'; id?: string; path: string };
 type Snap = { data: () => unknown };
 
-const { txGet, txSet, txDelete, runTx, uploadSpy, deleteStorageSpy } = vi.hoisted(() => ({
+const { txGet, txSet, txDelete, runTx, uploadSpy, deleteStorageSpy, purgeCacheSpy } = vi.hoisted(() => ({
   txGet: vi.fn(),
   txSet: vi.fn(),
   txDelete: vi.fn(),
   runTx: vi.fn(),
   uploadSpy: vi.fn(),
   deleteStorageSpy: vi.fn(),
+  purgeCacheSpy: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'med-2026', storage: {} }));
@@ -36,6 +37,11 @@ vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'med-2026', storage: {} }));
 // never touch a real bucket (uploadProofMedia is exercised for real against the
 // emulator by tests/rules/w0-storage-rules.test.ts).
 vi.mock('./storage', () => ({ uploadProofMedia: uploadSpy, deleteStoragePath: deleteStorageSpy }));
+// #373: deleteProof's post-commit local-cache purge — spied so the wiring
+// tests below can assert WHEN/WITH-WHAT it's called without touching a real
+// `caches` bucket (the purge helper itself is unit-tested for real against a
+// stubbed `caches` global in proofMediaCache.test.ts).
+vi.mock('./proofMediaCache', () => ({ purgeProofMediaFromCaches: purgeCacheSpy }));
 
 let autoSeq = 0;
 vi.mock('firebase/firestore', () => ({
@@ -96,6 +102,7 @@ beforeEach(() => {
     path: `proofs/${EVENT_ID}/u1/UPLOADED.jpg`,
     url: `https://firebasestorage.googleapis.com/v0/b/b/o/proofs%2F${EVENT_ID}%2Fu1%2FUPLOADED.jpg?alt=media`,
   });
+  purgeCacheSpy.mockResolvedValue(undefined);
   runTx.mockImplementation((_db: unknown, fn: (tx: unknown) => unknown) =>
     fn({ get: txGet, set: txSet, delete: txDelete }),
   );
@@ -542,5 +549,65 @@ describe('deleteProof — resolves the backing cell by the proof doc cellIndex (
     // It never unmarked the cell, so it must NOT touch the Tally marker either —
     // the drained bare Mark owns the cell and its own marker (accepted residual).
     expect(txDelete.mock.calls.find((c) => (c[0] as Ref).path.includes('/tally/'))).toBeUndefined();
+  });
+});
+
+// #373 (follow-up to #369): deleteProof's Storage delete is the authoritative
+// revocation, but the deleting device may itself have the proof's media sitting
+// in the `proof-media` service-worker cache. deleteProof purges that local copy
+// AFTER the transaction commits — never from inside the retryable callback,
+// and never in a way a purge rejection could fail the delete.
+describe('deleteProof — purges the deleting device’s own cached copy after commit (#373)', () => {
+  it('calls the purge helper with the proof doc’s own mediaURL, after the transaction commits', async () => {
+    const mediaURL = `https://firebasestorage.googleapis.com/v0/b/b/o/proofs%2F${EVENT_ID}%2Fu1%2FP.jpg?alt=media&token=t`;
+    proofState = { uid: 'u1', cellIndex: 5, storagePath: `proofs/${EVENT_ID}/u1/P.jpg`, mediaURL };
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 9, proofId: 'P', status: 'confirmed' };
+    boardState = { cells: board };
+
+    await deleteProof('P', `proofs/${EVENT_ID}/u1/P.jpg`);
+
+    expect(purgeCacheSpy).toHaveBeenCalledTimes(1);
+    expect(purgeCacheSpy).toHaveBeenCalledWith(mediaURL);
+    // "After commit": the purge fires once the transaction's own writes (the
+    // proof doc's tx.delete) have already been issued, not before/during.
+    expect(Math.min(...purgeCacheSpy.mock.invocationCallOrder)).toBeGreaterThan(
+      Math.max(...txDelete.mock.invocationCallOrder),
+    );
+  });
+
+  it('purges with the mediaURL even when the backing cell was already clobbered by a bare-Mark drain', async () => {
+    // Mirrors the accepted-residual case above: the cell/board/player writes are
+    // skipped, but the proof doc (and its media) is still gone from Storage, so
+    // the local cache purge must still run.
+    const mediaURL = `https://firebasestorage.googleapis.com/v0/b/b/o/proofs%2F${EVENT_ID}%2Fu1%2FP.jpg?alt=media&token=t`;
+    proofState = { uid: 'u1', cellIndex: 5, storagePath: null, mediaURL };
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 9, proofId: null, status: 'confirmed' };
+    boardState = { cells: board };
+
+    await deleteProof('P');
+
+    expect(purgeCacheSpy).toHaveBeenCalledWith(mediaURL);
+  });
+
+  it('is not called when the transaction fails — nothing was committed to purge for', async () => {
+    proofState = { uid: 'u1', cellIndex: 5, storagePath: null, mediaURL: 'https://firebasestorage.googleapis.com/x' };
+    runTx.mockRejectedValueOnce(new Error('aborted'));
+
+    await expect(deleteProof('P')).rejects.toThrow('aborted');
+
+    expect(purgeCacheSpy).not.toHaveBeenCalled();
+  });
+
+  it('purges with undefined (a no-op in the real helper) when the proof doc has no mediaURL — e.g. a text-only Proof', async () => {
+    proofState = { uid: 'u1', cellIndex: 5, storagePath: null };
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 9, proofId: 'P', status: 'confirmed' };
+    boardState = { cells: board };
+
+    await deleteProof('P');
+
+    expect(purgeCacheSpy).toHaveBeenCalledWith(undefined);
   });
 });

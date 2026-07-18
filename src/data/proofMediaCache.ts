@@ -43,3 +43,31 @@ export const PROOF_MEDIA_CACHE_NAME = 'proof-media';
  */
 export const PROOF_MEDIA_CACHE_MAX_ENTRIES = 200;
 export const PROOF_MEDIA_CACHE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
+
+/**
+ * Purge a single proof media URL from the `proof-media` service-worker cache
+ * on THIS device (#373, follow-up to #369). deleteProof's Storage delete is
+ * the authoritative revocation of a proof's media — the object is gone from
+ * the bucket the moment that call resolves — but the CacheFirst route above
+ * means a device that already fetched the image keeps serving its cached
+ * copy for up to PROOF_MEDIA_CACHE_MAX_AGE_SECONDS / until evicted by the
+ * PROOF_MEDIA_CACHE_MAX_ENTRIES cap. This purges the DELETING device's own
+ * copy so it stops rendering a proof it just deleted; it is local-only and
+ * best-effort by design (ADR 0001-style: cache purge is flavour, not
+ * enforcement) — it cannot reach into another device's cache or into any
+ * HTTP cache sitting in front of the CacheFirst route, and it must never be
+ * allowed to fail the delete it rides alongside. Every failure mode
+ * (unsupported `caches`, a missing/renamed cache bucket, a rejected
+ * `cache.delete`) is swallowed silently.
+ */
+export async function purgeProofMediaFromCaches(mediaURL: string | null | undefined): Promise<void> {
+  if (!mediaURL) return;
+  if (typeof caches === 'undefined') return;
+  try {
+    const cache = await caches.open(PROOF_MEDIA_CACHE_NAME);
+    await cache.delete(mediaURL);
+  } catch {
+    // Best-effort, local-only purge (see doc comment above): swallow every
+    // failure. The Storage delete already happened; this must never throw.
+  }
+}

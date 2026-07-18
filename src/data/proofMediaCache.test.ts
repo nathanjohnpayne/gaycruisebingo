@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   PROOF_MEDIA_CACHE_CONTROL,
   PROOF_MEDIA_URL_PATTERN,
   PROOF_MEDIA_CACHE_MAX_AGE_SECONDS,
   PROOF_MEDIA_CACHE_MAX_ENTRIES,
+  PROOF_MEDIA_CACHE_NAME,
+  purgeProofMediaFromCaches,
 } from './proofMediaCache';
 
 // #363 (specs/w2-proof-capture.md § Feed, specs/w1-pwa.md): the constants the
@@ -61,5 +63,61 @@ describe('proof-media cache policy constants (#363)', () => {
     expect(PROOF_MEDIA_CACHE_MAX_ENTRIES).toBeGreaterThan(0);
     expect(PROOF_MEDIA_CACHE_MAX_AGE_SECONDS).toBeGreaterThan(0);
     expect(PROOF_MEDIA_CACHE_MAX_AGE_SECONDS).toBeLessThanOrEqual(365 * 24 * 60 * 60);
+  });
+});
+
+// #373 (follow-up to #369): deleteProof's Storage delete is the authoritative
+// revocation of a proof's media — this purge only stops the DELETING device's
+// own already-fetched copy from continuing to render out of the CacheFirst
+// `proof-media` cache. It is local-only and best-effort by design, so every
+// failure mode must be swallowed rather than propagated (a failed purge must
+// never fail the delete it rides alongside).
+describe('purgeProofMediaFromCaches — best-effort local purge of the deleting device’s own cached copy (#373)', () => {
+  const cacheDelete = vi.fn();
+  const cachesOpen = vi.fn();
+
+  beforeEach(() => {
+    cacheDelete.mockReset().mockResolvedValue(true);
+    cachesOpen.mockReset().mockResolvedValue({ delete: cacheDelete });
+    vi.stubGlobal('caches', { open: cachesOpen });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('opens the proof-media cache bucket and deletes the exact mediaURL', async () => {
+    const url = 'https://firebasestorage.googleapis.com/v0/b/b/o/proofs%2Fe%2Fu%2Fp.jpg?alt=media&token=t';
+    await purgeProofMediaFromCaches(url);
+
+    expect(cachesOpen).toHaveBeenCalledWith(PROOF_MEDIA_CACHE_NAME);
+    expect(cacheDelete).toHaveBeenCalledWith(url);
+  });
+
+  it('no-ops (never opens a cache) when the URL is missing, null, or empty', async () => {
+    await purgeProofMediaFromCaches(undefined);
+    await purgeProofMediaFromCaches(null);
+    await purgeProofMediaFromCaches('');
+
+    expect(cachesOpen).not.toHaveBeenCalled();
+  });
+
+  it('no-ops when `caches` is unsupported (e.g. Safari private mode, non-SW context)', async () => {
+    vi.stubGlobal('caches', undefined);
+
+    await expect(purgeProofMediaFromCaches('https://firebasestorage.googleapis.com/x')).resolves.toBeUndefined();
+    expect(cachesOpen).not.toHaveBeenCalled();
+  });
+
+  it('swallows a caches.open rejection rather than throwing', async () => {
+    cachesOpen.mockRejectedValueOnce(new Error('quota exceeded'));
+
+    await expect(purgeProofMediaFromCaches('https://firebasestorage.googleapis.com/x')).resolves.toBeUndefined();
+  });
+
+  it('swallows a cache.delete rejection rather than throwing', async () => {
+    cacheDelete.mockRejectedValueOnce(new Error('boom'));
+
+    await expect(purgeProofMediaFromCaches('https://firebasestorage.googleapis.com/x')).resolves.toBeUndefined();
   });
 });
