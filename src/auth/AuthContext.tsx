@@ -217,38 +217,26 @@ function isPoolShortfall(err: unknown): boolean {
   return /\b24 prompts\b/.test(raw);
 }
 
-// Firestore error codes that are NOT a transient connectivity blip: a rules
-// denial, a schema/shape mismatch, or a data-integrity fault that will keep
-// failing on reconnect. The #403 swallow keeps a cached card up through a
-// CONNECTION problem — but it must NOT hide one of these PERMANENT failures
-// behind the cached Board forever (Codex #408 P2, CodeRabbit #408): those want
-// the retry/error surface so a real misconfiguration is visible, not silently
-// masked. `data-loss` / `out-of-range` / `not-found` are included alongside the
-// rules/shape codes for that reason.
-//
-// The DEFAULT for anything else — an explicit timeout, a bare network error with
-// no code, or a genuinely transient Firestore code (`unavailable`,
-// `deadline-exceeded`, …) — is transient/swallow-eligible. This is a DELIBERATE
-// default-allow (not default-deny): the feature's goal is that a returning Player
-// never loses a working card to a connection blip, and the real ship-wifi blips
-// (and our own timeout) are frequently uncoded, so default-denying uncoded errors
-// would re-introduce the exact bug #403 fixes. The asymmetry is intentional — a
-// false-swallow only ever keeps a still-playable cached card on screen (and the
-// swallow fires ONLY when `hasCachedCard` confirms one), whereas a false-surface
-// tears a good card down; a first-timer with no cached card surfaces every error
-// regardless, and permanent codes are carved out above for observability.
-const PERMANENT_DEAL_ERROR_CODES = new Set([
-  'permission-denied',
-  'failed-precondition',
-  'invalid-argument',
-  'unimplemented',
-  'not-found',
-  'out-of-range',
-  'data-loss',
+// Only known transient deal failures are swallow-eligible behind an actual
+// cached card. Unknown coded Firestore/Firebase errors and generic programming
+// exceptions surface, so the cached-card fallback cannot hide permanent or
+// unclassified failures indefinitely (CodeRabbit #408). Uncoded ship-wifi
+// failures and our own `withTimeout` rejection are still allowed explicitly:
+// those are the connection blips #403 exists to preserve a cached card through.
+const TRANSIENT_DEAL_ERROR_CODES = new Set([
+  'aborted',
+  'auth/network-request-failed',
+  'cancelled',
+  'deadline-exceeded',
+  'resource-exhausted',
+  'unavailable',
 ]);
+const TRANSIENT_UNCODED_DEAL_ERROR = /\b(deal timed out|timed? out|timeout|network|offline|failed to fetch)\b/i;
 function isTransientDealError(err: unknown): boolean {
   const code = (err as { code?: unknown })?.code;
-  return !(typeof code === 'string' && PERMANENT_DEAL_ERROR_CODES.has(code));
+  if (typeof code === 'string') return TRANSIENT_DEAL_ERROR_CODES.has(code);
+  const message = err instanceof Error ? err.message : String(err);
+  return TRANSIENT_UNCODED_DEAL_ERROR.test(message);
 }
 
 // Player-facing copy for a deal failure. The main case (ADR 0003/0004) is
