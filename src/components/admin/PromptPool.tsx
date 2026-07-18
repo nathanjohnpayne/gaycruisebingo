@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { isReportHidden } from '../../hooks/useData';
 import { adminAddItem, adminUpdateItemText, hideItem, restoreItem, deleteItem } from '../../data/admin';
+import AsyncButton from './AsyncButton';
 import type { ItemDoc } from '../../types';
 
 /**
@@ -13,14 +14,20 @@ function AdminAddItemForm({ adminUid }: { adminUid: string | undefined }) {
   const [spicy, setSpicy] = useState(false);
   const [pool, setPool] = useState<'main' | 'embark' | 'farewell'>('main');
   const [busy, setBusy] = useState(false);
+  // #411 (specs/admin-async-feedback.md): a rejected add surfaces inline
+  // instead of vanishing — the draft text is kept so a retry is one tap.
+  const [failed, setFailed] = useState(false);
   const spicyAllowed = pool === 'main';
   const effectiveSpicy = spicyAllowed && spicy;
   const submit = async () => {
     if (!adminUid || !text.trim() || busy) return;
     setBusy(true);
+    setFailed(false);
     try {
       await adminAddItem(adminUid, text, effectiveSpicy, pool);
       setText('');
+    } catch {
+      setFailed(true);
     } finally {
       setBusy(false);
     }
@@ -63,6 +70,11 @@ function AdminAddItemForm({ adminUid }: { adminUid: string | undefined }) {
       <button className="btn" disabled={busy || !text.trim()} onClick={() => void submit()}>
         Add
       </button>
+      {failed && (
+        <span className="pill pill-error" role="alert">
+          Didn’t add — try again.
+        </span>
+      )}
     </div>
   );
 }
@@ -86,7 +98,14 @@ function AdminItemRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(it.text);
+  // #411: a rejected text save keeps the editor OPEN with the draft intact and
+  // an inline alert, instead of silently closing as if it had committed. One
+  // state serves both commit paths (the Save button and Enter in the input),
+  // and `busy` guards re-entry — a double Save/Enter before the write settles
+  // must not issue a duplicate concurrent write (Codex P2, PR #412).
+  const [saveState, setSaveState] = useState<'idle' | 'busy' | 'error'>('idle');
   const save = async () => {
+    if (saveState === 'busy') return;
     // Save-time re-check (Codex P2): the Day can unlock mid-edit — the row's
     // prop refreshes on the event re-render, so bail rather than committing a
     // now-frozen prompt's text.
@@ -94,8 +113,14 @@ function AdminItemRow({
       setEditing(false);
       return;
     }
-    if (draft.trim() && draft.trim() !== it.text) await adminUpdateItemText(it.id, draft);
-    setEditing(false);
+    setSaveState('busy');
+    try {
+      if (draft.trim() && draft.trim() !== it.text) await adminUpdateItemText(it.id, draft);
+      setSaveState('idle');
+      setEditing(false);
+    } catch {
+      setSaveState('error');
+    }
   };
   return (
     <div className="row">
@@ -128,9 +153,14 @@ function AdminItemRow({
       </div>
       {editing ? (
         <>
-          <button className="btn" onClick={() => void save()}>
+          <button className="btn" disabled={saveState === 'busy'} onClick={() => void save()}>
             Save
           </button>
+          {saveState === 'error' && (
+            <span className="pill pill-error" role="alert">
+              Didn’t save — try again.
+            </span>
+          )}
           <button className="iconbtn" title="Cancel" onClick={() => setEditing(false)}>
             ✕
           </button>
@@ -152,17 +182,17 @@ function AdminItemRow({
         </button>
       )}
       {it.status === 'hidden' ? (
-        <button className="btn" onClick={() => restoreItem(it.id)}>
+        <AsyncButton onAction={() => restoreItem(it.id)}>
           Restore
-        </button>
+        </AsyncButton>
       ) : (
-        <button className="btn" onClick={() => hideItem(it.id)}>
+        <AsyncButton onAction={() => hideItem(it.id)}>
           Hide
-        </button>
+        </AsyncButton>
       )}
-      <button className="iconbtn" title="Delete" onClick={() => deleteItem(it.id)}>
+      <AsyncButton className="iconbtn" title="Delete" onAction={() => deleteItem(it.id)}>
         🗑
-      </button>
+      </AsyncButton>
     </div>
   );
 }

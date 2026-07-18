@@ -17,6 +17,7 @@ import {
   unbanUser,
 } from '../../data/admin';
 import { deleteProof } from '../../data/proofs';
+import AsyncButton from './AsyncButton';
 import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../../game/logic';
 import type { ClaimDoc, DayDef, EventDoc, ItemDoc, ProofDoc } from '../../types';
 
@@ -63,17 +64,16 @@ export function BanControl({
   // gated); an admin uid can never be in bannedUids in the first place.
   if (isSystemAuthor(uid) || admins.includes(uid)) return null;
   return isBanned(uid, bannedUids) ? (
-    <button className="btn" title="Un-mute this player's content" onClick={() => unbanUser(uid)}>
+    <AsyncButton title="Un-mute this player's content" onAction={() => unbanUser(uid)}>
       Unban author
-    </button>
+    </AsyncButton>
   ) : (
-    <button
-      className="btn"
+    <AsyncButton
       title="Mute this player's content on this event (moderation, not anti-cheat)"
-      onClick={() => banUser(uid)}
+      onAction={() => banUser(uid)}
     >
       Ban author
-    </button>
+    </AsyncButton>
   );
 }
 
@@ -119,24 +119,24 @@ function ProofQueueRow({
         </div>
       </div>
       {autoHidden && (
-        <button className="btn" onClick={() => clearProofReports(p.id)}>
+        <AsyncButton onAction={() => clearProofReports(p.id)}>
           Clear reports
-        </button>
+        </AsyncButton>
       )}
       {p.status === 'hidden' ? (
-        <button className="btn" onClick={() => restoreProof(p.id)}>
+        <AsyncButton onAction={() => restoreProof(p.id)}>
           Restore
-        </button>
+        </AsyncButton>
       ) : (
-        <button className="btn" onClick={() => hideProof(p.id)}>
+        <AsyncButton onAction={() => hideProof(p.id)}>
           Hide
-        </button>
+        </AsyncButton>
       )}
       <BanControl uid={p.uid} bannedUids={bannedUids} admins={admins} />
-      <button
+      <AsyncButton
         className="iconbtn"
         title="Delete"
-        onClick={() =>
+        onAction={() =>
           deleteProof(p.id, p.storagePath, {
             daily: !!days?.length,
             tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
@@ -149,7 +149,7 @@ function ProofQueueRow({
         }
       >
         🗑
-      </button>
+      </AsyncButton>
     </div>
   );
 }
@@ -180,23 +180,23 @@ function ItemQueueRow({
         <div className="sub">prompt · {it.status}</div>
       </div>
       {autoHidden && (
-        <button className="btn" onClick={() => clearItemReports(it.id)}>
+        <AsyncButton onAction={() => clearItemReports(it.id)}>
           Clear reports
-        </button>
+        </AsyncButton>
       )}
       {it.status === 'hidden' ? (
-        <button className="btn" onClick={() => restoreItem(it.id)}>
+        <AsyncButton onAction={() => restoreItem(it.id)}>
           Restore
-        </button>
+        </AsyncButton>
       ) : (
-        <button className="btn" onClick={() => hideItem(it.id)}>
+        <AsyncButton onAction={() => hideItem(it.id)}>
           Hide
-        </button>
+        </AsyncButton>
       )}
       <BanControl uid={it.createdBy} bannedUids={bannedUids} admins={admins} />
-      <button className="iconbtn" title="Delete" onClick={() => deleteItem(it.id)}>
+      <AsyncButton className="iconbtn" title="Delete" onAction={() => deleteItem(it.id)}>
         🗑
-      </button>
+      </AsyncButton>
     </div>
   );
 }
@@ -235,12 +235,12 @@ function ApprovalQueueRow({
         />{' '}
         🔞 Spicy
       </label>
-      <button className="btn primary" onClick={() => approveItem(it.id, adminUid)}>
+      <AsyncButton className="btn primary" onAction={() => approveItem(it.id, adminUid)}>
         Approve
-      </button>
-      <button className="iconbtn" title="Reject" onClick={() => rejectItem(it.id, adminUid)}>
+      </AsyncButton>
+      <AsyncButton className="iconbtn" title="Reject" onAction={() => rejectItem(it.id, adminUid)}>
         ✕
-      </button>
+      </AsyncButton>
     </div>
   );
 }
@@ -328,9 +328,9 @@ export default function ReviewQueue({
           </p>
         )}
         {!!pendingItems.length && (
-          <button className="btn" onClick={() => bulkApproveItems(pendingItems, adminUid)}>
+          <AsyncButton onAction={() => bulkApproveItems(pendingItems, adminUid)}>
             Approve all
-          </button>
+          </AsyncButton>
         )}
         <div className="list">
           {pendingItems.map((it) => (
@@ -352,12 +352,12 @@ export default function ReviewQueue({
                   <div className="name">{c.displayName}</div>
                   <div className="sub">{c.itemText}</div>
                 </div>
-                <button className="btn" onClick={() => confirmClaim(c, adminUid)}>
+                <AsyncButton onAction={() => confirmClaim(c, adminUid)}>
                   Confirm
-                </button>
-                <button className="iconbtn" title="Reject" onClick={() => rejectClaim(c, adminUid)}>
+                </AsyncButton>
+                <AsyncButton className="iconbtn" title="Reject" onAction={() => rejectClaim(c, adminUid)}>
                   ✕
-                </button>
+                </AsyncButton>
               </div>
             ))}
           </div>
