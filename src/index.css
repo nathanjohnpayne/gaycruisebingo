@@ -1709,6 +1709,15 @@ a {
   gap: 8px;
   margin-left: auto;
 }
+/* Once latched the line stays mounted so a lingering "Unlocked." confirmation
+   survives eligibility flipping false. But if a Day is stamped externally
+   before any tap — nothing left to confirm and no anomaly — don't leave an
+   empty bordered line: hide it until it carries an anomaly or a rendered
+   action/message again. (`:has` is already used elsewhere in this file; where
+   unsupported this rule is simply dropped, leaving the prior behavior.) */
+.schedule-row-repair:not(:has(.schedule-row-anomaly)):not(:has(.schedule-row-actions > *)) {
+  display: none;
+}
 /* Report queue: the moderation triage surface, called out from the rest of the
    console so it reads as the first thing an Admin acts on. `.pill-hidden` marks a
    row the ADR 0004 Phase 0 community auto-hide has already removed from every
