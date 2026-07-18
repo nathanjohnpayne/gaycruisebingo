@@ -29,13 +29,23 @@ import type { DayDef, ThemeId } from '../../types';
  * message even after `visible` goes false; only a truly untouched (`idle`)
  * row that has scrolled out of "due" renders nothing.
  */
-function UnlockNowButton({ dayIndex, visible }: { dayIndex: number; visible: boolean }) {
+function UnlockNowButton({
+  dayIndex,
+  visible,
+  onActivate,
+}: {
+  dayIndex: number;
+  visible: boolean;
+  // Tap signal for the parent's anomaly latch (#418) — see ResnapshotButton.
+  onActivate: () => void;
+}) {
   const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
 
   if (!visible && state === 'idle') return null;
 
   const onClick = async () => {
+    onActivate();
     setState('busy');
     setMessage(null);
     try {
@@ -72,11 +82,32 @@ function UnlockNowButton({ dayIndex, visible }: { dayIndex: number; visible: boo
  * Days, and Days 1-3 intentionally stay untouched); the zero-boards and Day-4 boundary
  * safety is the SERVER's, so the button is always safe to show.
  * Admin-gate is the enclosing Admin console (it gates every section on `isAdmin`).
+ *
+ * `visible` mirrors `UnlockNowButton`'s sticky mount (#415): a SUCCESSFUL
+ * re-snapshot writes `snapshotEasyMixRatio`, which flips the parent's
+ * provenance-gated `canResnapshot` false on the event-doc echo — if that
+ * unmounted this component, the "Re-snapshotted with both pools." confirmation
+ * would vanish on the very success it confirms. So the component stays mounted
+ * and keeps its last result; only the button itself follows `visible`.
+ * `onActivate` tells the parent a tap happened, so the row latches the anomaly
+ * text beside the result (#418, the mockup's resolved state).
  */
-function ResnapshotButton({ dayIndex }: { dayIndex: number }) {
+function ResnapshotButton({
+  dayIndex,
+  visible,
+  onActivate,
+}: {
+  dayIndex: number;
+  visible: boolean;
+  onActivate: () => void;
+}) {
   const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
   const [message, setMessage] = useState<string | null>(null);
+
+  if (!visible && state === 'idle') return null;
+
   const onClick = async () => {
+    onActivate();
     setState('busy');
     setMessage(null);
     try {
@@ -98,14 +129,16 @@ function ResnapshotButton({ dayIndex }: { dayIndex: number }) {
   };
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <button
-        className="btn"
-        onClick={onClick}
-        disabled={state === 'busy'}
-        title="Deploy-race fallback: re-stamp this Day's snapshot with the easy-mix pools (only if no cards dealt yet)"
-      >
-        {state === 'busy' ? 'Re-snapshotting…' : 'Re-snapshot'}
-      </button>
+      {visible && (
+        <button
+          className="btn"
+          onClick={onClick}
+          disabled={state === 'busy'}
+          title="Deploy-race fallback: re-stamp this Day's snapshot with the easy-mix pools (only if no cards dealt yet)"
+        >
+          {state === 'busy' ? 'Re-snapshotting…' : 'Re-snapshot'}
+        </button>
+      )}
       {/* Result as plain text, not a pill (#416) — see UnlockNowButton. */}
       {message && <span className="schedule-row-result">{message}</span>}
     </span>
@@ -191,7 +224,27 @@ function ScheduleRow({
   // The easy-mix re-snapshot fallback only makes sense for a MAIN Day that has already
   // unlocked AND been stamped (a stamped-but-maybe-main-only snapshot); an unstamped Day
   // uses "Unlock now" above, and tutorial Days never mix. Server enforces zero-boards.
-  const canResnapshot = day.index >= 3 && day.pool === 'main' && day.unlockAt <= now && day.snapshotItemIds != null;
+  // Provenance gate (#415): every post-easy-mix stamp path freezes
+  // `snapshotEasyMixRatio` (always a number) with a main Day's snapshot, so a
+  // stamped main Day WITHOUT it is structurally a pre-easy-mix snapshot — the
+  // deploy race this fallback exists for. Gating on its absence keeps the
+  // "Snapshot predates the easy-mix deploy" line off healthy modern snapshots
+  // (Codex, PR #414), and a successful re-snapshot self-heals: the ratio
+  // appears on the echo and the line retires.
+  const canResnapshot =
+    day.index >= 3 &&
+    day.pool === 'main' &&
+    day.unlockAt <= now &&
+    day.snapshotItemIds != null &&
+    day.snapshotEasyMixRatio == null;
+  // Tap latches (#418, the mockup's resolved state): once a fallback is TAPPED,
+  // its anomaly text stays for the row's lifetime, so the result reads beside
+  // its context ("Missed the 8:00 unlock — Unlocked.") after eligibility flips
+  // false on the event-doc echo. An EXTERNAL resolution (scheduler catches up,
+  // another admin acts — no tap here) latches nothing: the anomaly retires with
+  // its eligibility and the empty-line guard keeps the row single-line.
+  const [resnapshotTapped, setResnapshotTapped] = useState(false);
+  const [unlockTapped, setUnlockTapped] = useState(false);
   // Sticky mount for the repair line: show it once a fallback has been relevant,
   // then KEEP it for the row's lifetime. `UnlockNowButton` deliberately holds
   // its "Unlocked." confirmation after `dueForManualUnlock` flips false, and on
@@ -277,11 +330,23 @@ function ScheduleRow({
           so the confirmation survives eligibility flipping false. */}
       {recoveryEverShown && (
         <div className="schedule-row-repair" role="group" aria-label={`Day ${day.index + 1} repair`}>
-          {canResnapshot && <span className="schedule-row-anomaly">{RESNAPSHOT_ANOMALY}</span>}
-          {dueForManualUnlock && <span className="schedule-row-anomaly">{UNLOCK_ANOMALY}</span>}
+          {(canResnapshot || resnapshotTapped) && (
+            <span className="schedule-row-anomaly">{RESNAPSHOT_ANOMALY}</span>
+          )}
+          {(dueForManualUnlock || unlockTapped) && (
+            <span className="schedule-row-anomaly">{UNLOCK_ANOMALY}</span>
+          )}
           <span className="schedule-row-actions">
-            {canResnapshot && <ResnapshotButton dayIndex={day.index} />}
-            <UnlockNowButton dayIndex={day.index} visible={dueForManualUnlock} />
+            <ResnapshotButton
+              dayIndex={day.index}
+              visible={canResnapshot}
+              onActivate={() => setResnapshotTapped(true)}
+            />
+            <UnlockNowButton
+              dayIndex={day.index}
+              visible={dueForManualUnlock}
+              onActivate={() => setUnlockTapped(true)}
+            />
           </span>
         </div>
       )}
