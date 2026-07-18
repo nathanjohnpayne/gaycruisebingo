@@ -431,6 +431,20 @@ describe('Admin Schedule repair line (#413, specs/admin-console-ia.md § "Schedu
     expect(screen.queryByText('Missed the 8:00 unlock')).toBeNull();
   });
 
+  it('a healthy modern snapshot (frozen ratio present) shows NO deploy-race repair line (#415 provenance gate)', () => {
+    // Every post-easy-mix stamp freezes snapshotEasyMixRatio with a main Day's
+    // snapshot — its presence proves the snapshot does NOT predate the deploy.
+    const days = [
+      dayDef({ index: 3, unlockAt: Date.now() - 3600_000, pool: 'main', snapshotItemIds: ['item-1'], snapshotEasyMixRatio: 0.5 }),
+    ];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    renderAdmin('/more/admin/schedule');
+
+    expect(screen.queryByRole('group', { name: 'Day 4 repair' })).toBeNull();
+    expect(screen.queryByText('Snapshot predates the easy-mix deploy')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Re-snapshot' })).toBeNull();
+  });
+
   it('the result message stays inside the row after a Re-snapshot tap', async () => {
     H.resnapshotDayNow.mockResolvedValue('resnapshotted');
     const days = [dayDef({ index: 3, unlockAt: Date.now() - 3600_000, pool: 'main', snapshotItemIds: ['item-1'] })];
@@ -460,6 +474,87 @@ describe('Admin Schedule repair line (#413, specs/admin-console-ia.md § "Schedu
     const result = await within(repair).findByText('Unlocked.');
     expect(result).toHaveClass('schedule-row-result');
     expect(result).not.toHaveClass('pill');
+  });
+
+  it('a TAPPED unlock keeps its anomaly beside the result after the stamp echoes back (#418, the drawn resolved state)', async () => {
+    H.unlockDayNow.mockResolvedValue('stamped');
+    H.event = {
+      ...H.event,
+      days: [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, snapshotItemIds: undefined })],
+    } as unknown as EventDoc;
+    const view = renderAdmin('/more/admin/schedule');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unlock now' }));
+    expect(await screen.findByText('Unlocked.')).toBeInTheDocument();
+
+    // The stamp echoes back through the subscribed event doc: no longer due,
+    // the button retires — but the tapped row keeps anomaly + confirmation.
+    H.event = {
+      ...H.event,
+      days: [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, snapshotItemIds: ['item-1'] })],
+    } as unknown as EventDoc;
+    view.rerender(
+      <MemoryRouter initialEntries={['/more/admin/schedule']}>
+        <Admin />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Missed the 8:00 unlock')).toBeInTheDocument();
+    expect(screen.getByText('Unlocked.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unlock now' })).toBeNull();
+  });
+
+  it('an EXTERNALLY resolved Day (no tap) latches nothing — anomaly and buttons retire with eligibility (#418)', () => {
+    H.event = {
+      ...H.event,
+      days: [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, snapshotItemIds: undefined })],
+    } as unknown as EventDoc;
+    const view = renderAdmin('/more/admin/schedule');
+    expect(screen.getByText('Missed the 8:00 unlock')).toBeInTheDocument();
+
+    // The scheduler catches up on its own; this admin never tapped.
+    H.event = {
+      ...H.event,
+      days: [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, snapshotItemIds: ['item-1'] })],
+    } as unknown as EventDoc;
+    view.rerender(
+      <MemoryRouter initialEntries={['/more/admin/schedule']}>
+        <Admin />
+      </MemoryRouter>,
+    );
+
+    expect(screen.queryByText('Missed the 8:00 unlock')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Unlock now' })).toBeNull();
+    expect(screen.queryByText('Unlocked.')).toBeNull();
+  });
+
+  it('a successful re-snapshot keeps anomaly + confirmation after the ratio echoes back and the button retires (#415 self-heal, #418 latch)', async () => {
+    H.resnapshotDayNow.mockResolvedValue('resnapshotted');
+    H.event = {
+      ...H.event,
+      days: [dayDef({ index: 3, unlockAt: Date.now() - 3600_000, pool: 'main', snapshotItemIds: ['item-1'] })],
+    } as unknown as EventDoc;
+    const view = renderAdmin('/more/admin/schedule');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Re-snapshot' }));
+    expect(await screen.findByText('Re-snapshotted with both pools.')).toBeInTheDocument();
+
+    // The overwrite freezes snapshotEasyMixRatio; on the echo the provenance
+    // gate flips false and the button retires — sticky mount keeps the
+    // confirmation, the tap latch keeps its context.
+    H.event = {
+      ...H.event,
+      days: [dayDef({ index: 3, unlockAt: Date.now() - 3600_000, pool: 'main', snapshotItemIds: ['item-1', 'item-2'], snapshotEasyMixRatio: 0.5 })],
+    } as unknown as EventDoc;
+    view.rerender(
+      <MemoryRouter initialEntries={['/more/admin/schedule']}>
+        <Admin />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Snapshot predates the easy-mix deploy')).toBeInTheDocument();
+    expect(screen.getByText('Re-snapshotted with both pools.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Re-snapshot' })).toBeNull();
   });
 });
 
