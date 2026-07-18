@@ -40,7 +40,7 @@ Every cell of `{boot-offline, boot-online} × {cache-attested, cache-unknown, sa
 | Online | cache-unknown | stays | after read confirms | once iff confirms & no board | released after read | if server NULL | server settles def. | cleared on authoritative settle; re-set iff the deal fails with NO cached card to fall back on (#403) |
 | Online | same-session-attested | stays | yes (sticky) | once, iff no board | released | no | sticky wins over NULL | cleared on authoritative settle; re-set iff the deal fails with NO cached card to fall back on (#403) |
 | Online | any | → offline mid-bootstrap | render iff cache-attested, else HELD | no (offline) | released via cache path (not stranded) | no (offline) | superseded; late online resolve dropped | cleared iff cache-attested, else left retryable |
-| Online (bootstrap fails) | — | stays | no — error panel | no | released | no | — | SET (genuine online failure) |
+| Online (bootstrap fails) | — | stays | error panel, UNLESS an optimistic-sticky attest with a cached board renders it | no | released | no | — | SET — UNLESS an optimistic-only attest whose `hasCachedBoard` succeeds suppresses `failDeal` (returning cached-board User) |
 | Online (deal fails, connection) | — | stays | cached Board stays if a card exists, else error panel | no | released | no | — | swallowed iff a cached card exists (#403), else SET |
 | Retry (`retryDeal`) | offline | — | via cache-first | no (offline) | via cache path | no | — | cleared iff cache-attested, else retryable; NEVER awaits the txn (finding A) |
 | Retry (`retryDeal`) | online + authoritative | — | — | deals in place | — | — | — | cleared on deal success, re-set on deal failure |

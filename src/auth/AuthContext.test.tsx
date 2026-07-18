@@ -191,6 +191,15 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.hasCachedCard).not.toHaveBeenCalled();
   });
 
+  it('SURFACES a data-loss failure even when a card is cached (CodeRabbit #408 — expanded permanent set)', async () => {
+    mocks.hasCachedCard.mockResolvedValue(true);
+    mocks.joinAndDeal.mockRejectedValue(Object.assign(new Error('data loss'), { code: 'data-loss' }));
+    mount();
+    await signInUser();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/connection/i);
+    expect(mocks.hasCachedCard).not.toHaveBeenCalled();
+  });
+
   it('keeps the card after a SETTLED deal, then a later re-deal blip is swallowed via the cached card (#403)', async () => {
     // First deal settles and writes a card, which the persistent cache now holds
     // (hasCachedCard → true). A later re-deal that fails on a blip is swallowed
