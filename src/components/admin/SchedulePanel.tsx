@@ -1,0 +1,290 @@
+import { useEffect, useState } from 'react';
+import { setDayTheme, setDayTonight, unlockDayNow, resnapshotDayNow } from '../../data/admin';
+import { dayDueForManualUnlock } from '../../game/logic';
+import { THEMES } from '../../theme/themes';
+import type { DayDef, ThemeId } from '../../types';
+
+/**
+ * The Admin console's manual "unlock now" fallback (#249, daily-cards-spec §
+ * "Unlock mechanics": "a manual admin 'unlock now' button covers function
+ * failure"). Renders ONLY inside a `ScheduleRow` whose Day is
+ * `dayDueForManualUnlock` — a Day that's still locked, or already
+ * snapshot-stamped, has nothing for this button to fix. Calls
+ * `unlockDayNow`, the SAME admin-gated callable the 08:00/20:00 scheduler
+ * beats invoke internally, so a forced unlock can never diverge from the
+ * scheduled path's semantics; the Admin-gate itself is enforced server-side
+ * (the callable throws `permission-denied` for a non-admin uid) — this
+ * button only ever renders inside the Schedule surface, which the enclosing
+ * `Admin` component already gates on `isAdmin` before mounting ANY section,
+ * so there's no separate client-side admin check to duplicate here.
+ *
+ * `visible` (the parent's live `dayDueForManualUnlock`) controls only the
+ * BUTTON itself, not the whole component: once a click lands, the
+ * already-subscribed `useEventDoc` listener refreshes `day.snapshotItemIds`
+ * and `visible` flips false almost immediately (an emulator/production round
+ * trip is fast) — if that unmounted this component entirely, an admin would
+ * see the "Unlocked." confirmation for at most a flicker, or not at all, on
+ * the SAME success it needed the confirmation for. So this stays mounted
+ * (`ScheduleRow` always renders it) and keeps showing its last result
+ * message even after `visible` goes false; only a truly untouched (`idle`)
+ * row that has scrolled out of "due" renders nothing.
+ */
+function UnlockNowButton({ dayIndex, visible }: { dayIndex: number; visible: boolean }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
+  const [message, setMessage] = useState<string | null>(null);
+
+  if (!visible && state === 'idle') return null;
+
+  const onClick = async () => {
+    setState('busy');
+    setMessage(null);
+    try {
+      const result = await unlockDayNow(dayIndex);
+      setState('done');
+      setMessage(result === 'stamped' ? 'Unlocked.' : `Already handled (${result}).`);
+    } catch (err) {
+      setState('error');
+      setMessage(err instanceof Error ? err.message : 'Unlock failed—try again.');
+    }
+  };
+
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {visible && (
+        <button className="btn" onClick={onClick} disabled={state === 'busy'}>
+          {state === 'busy' ? 'Unlocking…' : 'Unlock now'}
+        </button>
+      )}
+      {message && <span className="pill">{message}</span>}
+    </span>
+  );
+}
+
+/**
+ * The easy-mix deploy-race fallback control (specs/easy-mix.md § "Deploy race"). If the
+ * 08:00 scheduler stamped Day 4 on the pre-easy-mix build, its snapshot carries the main
+ * pool alone and no card can mix. This re-stamps the Day's snapshot with BOTH pools —
+ * but the callable (`resnapshotDayNow` → `resnapshotDayIfNoBoards`) only overwrites while
+ * ZERO cards have been dealt; once any board exists it returns `has-boards` and changes
+ * nothing. Rendered only for an unlocked MAIN Day (the mix never applies to tutorial
+ * Days, and Days 1-3 intentionally stay untouched); the zero-boards and Day-4 boundary
+ * safety is the SERVER's, so the button is always safe to show.
+ * Admin-gate is the enclosing Admin console (it gates every section on `isAdmin`).
+ */
+function ResnapshotButton({ dayIndex }: { dayIndex: number }) {
+  const [state, setState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
+  const [message, setMessage] = useState<string | null>(null);
+  const onClick = async () => {
+    setState('busy');
+    setMessage(null);
+    try {
+      const result = await resnapshotDayNow(dayIndex);
+      setState('done');
+      setMessage(
+        result === 'resnapshotted'
+          ? 'Re-snapshotted with both pools.'
+          : result === 'has-boards'
+            ? 'Denied — cards already dealt.'
+            : result === 'not-recoverable'
+              ? 'Denied — early Days stay untouched.'
+            : `No change (${result}).`,
+      );
+    } catch (err) {
+      setState('error');
+      setMessage(err instanceof Error ? err.message : 'Re-snapshot failed—try again.');
+    }
+  };
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <button
+        className="btn"
+        onClick={onClick}
+        disabled={state === 'busy'}
+        title="Deploy-race fallback: re-stamp this Day's snapshot with the easy-mix pools (only if no cards dealt yet)"
+      >
+        {state === 'busy' ? 'Re-snapshotting…' : 'Re-snapshot'}
+      </button>
+      {message && <span className="pill">{message}</span>}
+    </span>
+  );
+}
+
+/**
+ * One row in the Schedule editor (#221, daily-cards-spec § "Admin console" / §
+ * "Itinerary and schedule"): a single Day's date + port (read-only display)
+ * and a theme `<select>`. Date/port are shown for context only — this ticket
+ * scopes the write surface to `theme`, matching the spec ("the schedule stays
+ * admin-editable... changing a locked-future Day's theme is safe, changing an
+ * already-unlocked Day is disallowed"); `days[]` length is fixed at seed, so
+ * there is no row add/remove here. The lock is CLIENT-SIDE convenience only —
+ * `firestore.rules` (`daysThemeLockOk`) is what actually denies a locked
+ * Day's write; a direct-SDK caller bypassing this disabled control still gets
+ * rejected server-side. An `UnlockNowButton` (#249) additionally renders when
+ * the Day is `dayDueForManualUnlock` — unlocked but not yet snapshot-stamped,
+ * the state a lagging/failed 08:00 scheduler run leaves behind. The Unlock-now
+ * and Re-snapshot fallbacks anchor to the specific Day's row they act on
+ * (specs/admin-console-ia.md § "Schedule").
+ */
+// The "Tonight:" line's two events are stored as a `string[]`; the editor round-
+// trips them through one text field joined by the same " · " the day bar renders,
+// so an admin edits the line exactly as players see it. Split tolerates either
+// bullet spacing and drops empty segments; the DayBar render guard copes with any
+// count, so a mid-edit line never throws.
+const TONIGHT_SEP = ' · ';
+function joinTonight(tonight: string[] | undefined): string {
+  return (Array.isArray(tonight) ? tonight : []).join(TONIGHT_SEP);
+}
+function splitTonight(text: string): string[] {
+  return text
+    .split(/\s*·\s*/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+// Best-effort admin chrome (schedule correction 2026-07-17): a "2 parties" pill
+// on Days whose two Tonight events are BOTH parties, vs a headline show/concert
+// + party. There is no structured party/show flag on the model (tonight is free
+// text), so "party" is inferred from the data's own convention — a headline
+// show/concert leads with 🎭 or 🎤 (AirOtic, Solea Pfeiffer, Persephone, HAYLA);
+// everything else is a party. Purely cosmetic: a mis-inferred pill never affects
+// dealing, scoring, or the stored line.
+const SHOW_LEAD_EMOJI = ['🎭', '🎤'];
+function isPartyEvent(event: string): boolean {
+  const trimmed = event.trim();
+  return trimmed.length > 0 && !SHOW_LEAD_EMOJI.some((e) => trimmed.startsWith(e));
+}
+function isTwoPartyDay(day: DayDef): boolean {
+  const tonight = Array.isArray(day.tonight) ? day.tonight : [];
+  return !day.tutorial && tonight.length === 2 && tonight.every(isPartyEvent);
+}
+
+function ScheduleRow({
+  day,
+  now,
+  onChangeTheme,
+  onChangeTonight,
+}: {
+  day: DayDef;
+  now: number;
+  onChangeTheme: (dayIndex: number, theme: ThemeId) => void;
+  onChangeTonight: (dayIndex: number, tonight: string[]) => Promise<void>;
+}) {
+  const locked = day.unlockAt <= now;
+  const dueForManualUnlock = dayDueForManualUnlock(day, now);
+  // The easy-mix re-snapshot fallback only makes sense for a MAIN Day that has already
+  // unlocked AND been stamped (a stamped-but-maybe-main-only snapshot); an unstamped Day
+  // uses "Unlock now" above, and tutorial Days never mix. Server enforces zero-boards.
+  const canResnapshot = day.index >= 3 && day.pool === 'main' && day.unlockAt <= now && day.snapshotItemIds != null;
+  // Local draft so typing doesn't fight the subscribed doc; committed on blur.
+  const [tonightDraft, setTonightDraft] = useState(() => joinTonight(day.tonight));
+  const [tonightError, setTonightError] = useState('');
+  useEffect(() => {
+    setTonightDraft(joinTonight(day.tonight));
+    setTonightError('');
+  }, [day.tonight]);
+  const commitTonight = async () => {
+    if (locked) return;
+    const next = splitTonight(tonightDraft);
+    if (next.length !== 2 || next.some((entry) => entry.trim().length === 0)) {
+      setTonightError('Tonight needs exactly two entries.');
+      return;
+    }
+    setTonightError('');
+    if (joinTonight(next) === joinTonight(day.tonight)) return;
+    try {
+      await onChangeTonight(day.index, next);
+    } catch {
+      setTonightDraft(joinTonight(day.tonight));
+      setTonightError('Tonight save failed. Reload the schedule and try again.');
+    }
+  };
+  return (
+    <div className="row">
+      <div className="grow">
+        <div className="name">
+          Day {day.index + 1} · {day.date} · {day.portEmoji} {day.port}
+          {day.tutorial ? (
+            <span className="pill">tutorial</span>
+          ) : (
+            isTwoPartyDay(day) && <span className="pill">2 parties</span>
+          )}
+        </div>
+        <div className="sub">{locked ? 'locked — already unlocked or past' : 'editable until unlock'}</div>
+        <input
+          className="tonight-input"
+          aria-label={`Day ${day.index + 1} tonight`}
+          value={tonightDraft}
+          disabled={locked}
+          placeholder="e.g. 🪖 Dog Tag T-Dance · ✈️ Duty Free"
+          onChange={(e) => setTonightDraft(e.target.value)}
+          onBlur={() => void commitTonight()}
+        />
+        {tonightError ? <div className="error" role="alert">{tonightError}</div> : null}
+      </div>
+      {canResnapshot && <ResnapshotButton dayIndex={day.index} />}
+      <UnlockNowButton dayIndex={day.index} visible={dueForManualUnlock} />
+      <select
+        aria-label={`Day ${day.index + 1} theme`}
+        value={day.theme}
+        disabled={locked}
+        onChange={(e) => onChangeTheme(day.index, e.target.value as ThemeId)}
+      >
+        {THEMES.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.emoji} {t.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/**
+ * The Schedule surface (#221, re-housed by specs/admin-console-ia.md): the ten
+ * seeded Days as rows, in order, each with a theme dropdown disabled once its
+ * Day has unlocked. `days` comes straight from the already-subscribed
+ * `useEventDoc()` Event doc — no separate listener — and `setDayTheme` is
+ * handed the FULL current array so it can write back a targeted single-element
+ * replacement (see `data/admin`'s doc comment for why `days` can't be updated
+ * by dot-path). Content is unchanged from the old Schedule tab; only the
+ * chrome around it moved.
+ */
+export default function SchedulePanel({ days }: { days: DayDef[] }) {
+  // Advance `now` exactly when the EARLIEST still-locked Day unlocks, mirroring
+  // the Board's unlock timer (Codex P2, PR #230): without it an admin who leaves
+  // the Schedule surface open across an `unlockAt` rollover would keep a just-
+  // unlocked row's dropdown enabled until an unrelated re-render, letting them
+  // start a write the server rule now (correctly) rejects. The timer re-renders
+  // the row disabled at the moment its Day locks. Depends on `days` so it
+  // re-arms as the schedule changes, not on every render.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const nextUnlock = days
+      .map((d) => d.unlockAt)
+      .filter((t) => t > Date.now())
+      .sort((a, b) => a - b)[0];
+    if (nextUnlock == null) return;
+    const timer = setTimeout(() => setNow(Date.now()), nextUnlock - Date.now());
+    return () => clearTimeout(timer);
+  }, [days, now]);
+  return (
+    <div className="admin-section">
+      {!days.length && (
+        <p className="muted" style={{ fontSize: 12 }}>
+          No Days seeded yet.
+        </p>
+      )}
+      <div className="list">
+        {days.map((d) => (
+          <ScheduleRow
+            key={d.index}
+            day={d}
+            now={now}
+            onChangeTheme={(dayIndex, theme) => setDayTheme(days, dayIndex, theme)}
+            onChangeTonight={(dayIndex, tonight) => setDayTonight(days, dayIndex, tonight)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}

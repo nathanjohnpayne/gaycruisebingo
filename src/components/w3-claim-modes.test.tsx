@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import type { User } from 'firebase/auth';
 import type { BoardDoc, Cell, ClaimDoc, EventDoc, PlayerDoc } from '../types';
 
@@ -71,6 +72,7 @@ vi.mock('../hooks/useData', () => ({
   usePendingClaims: () => ({ claims: H.pendingClaims, loading: false }),
   useReportedProofs: () => ({ flagged: [], loading: false }),
   useAllItems: () => ({ items: [], loading: false }),
+  usePendingItems: () => ({ items: [], loading: false }),
   isReportHidden: () => false,
   // Admin.tsx imports these ban predicates from useData (#108/#122); this mock
   // replaces the whole module, so they must be provided or Admin loads with the
@@ -120,6 +122,15 @@ vi.mock('../data/proofs', () => ({ deleteProof: vi.fn() }));
 
 import Admin from './Admin';
 import ConfirmWinMoments from './ConfirmWinMoments';
+
+// The claim-mode control lives in Game settings and the claims queue in the
+// Review queue (specs/admin-console-ia.md) — render at the section route.
+const renderAdmin = (path: string) =>
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <Admin />
+    </MemoryRouter>,
+  );
 import { resetConfirmStates } from '../data/moments';
 
 // The confirm-path listener state is MODULE-scope + uid-keyed (survives unmounts by
@@ -207,7 +218,7 @@ describe('Admin — Claim Mode control (specs/w3-claim-modes.md)', () => {
   });
 
   it('labels the three modes Honor / Proof-to-mark / Admin-confirmed — never "Verified" — and marks the active one', () => {
-    render(<Admin />);
+    renderAdmin('/more/admin/settings');
     expect(screen.getByRole('button', { name: 'Honor' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Proof-to-mark' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Admin-confirmed' })).toBeInTheDocument();
@@ -218,7 +229,7 @@ describe('Admin — Claim Mode control (specs/w3-claim-modes.md)', () => {
   });
 
   it('writes the chosen mode when an Admin picks it', () => {
-    render(<Admin />);
+    renderAdmin('/more/admin/settings');
     fireEvent.click(screen.getByRole('button', { name: 'Admin-confirmed' }));
     expect(H.setClaimMode).toHaveBeenCalledWith('admin_confirmed');
     fireEvent.click(screen.getByRole('button', { name: 'Proof-to-mark' }));
@@ -226,8 +237,11 @@ describe('Admin — Claim Mode control (specs/w3-claim-modes.md)', () => {
   });
 
   it('confirms and rejects a pending Claim as the acting Admin', () => {
+    // The claims group renders in admin_confirmed mode only (the one mode where
+    // pending claims exist at all) — the Review queue's mode gate.
+    H.event = { ...(H.event as object), claimMode: 'admin_confirmed' } as Partial<EventDoc>;
     H.pendingClaims = [claim({ status: 'pending', resolvedBy: null })];
-    render(<Admin />);
+    renderAdmin('/more/admin/queue');
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     expect(H.confirmClaim).toHaveBeenCalledWith(expect.objectContaining({ id: 'c1' }), 'admin1');
     fireEvent.click(screen.getByTitle('Reject'));

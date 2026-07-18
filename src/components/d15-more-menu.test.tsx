@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 import type { EventDoc } from '../types';
 
 // Covers specs/d15-more-menu.md (#208) — the full More tab: profile, theme,
@@ -75,7 +76,7 @@ import More from './More';
 describe('More menu (specs/d15-more-menu.md)', () => {
   it('renders every section/row in spec order for a non-admin Player, with no Admin row', () => {
     H.event = { ...H.event, admins: [] };
-    const { container } = render(<More />);
+    const { container } = render(<MemoryRouter initialEntries={['/more']}><More /></MemoryRouter>);
 
     const order = [
       'Profile card',
@@ -106,14 +107,14 @@ describe('More menu (specs/d15-more-menu.md)', () => {
 
   it('shows no Admin row for a signed-in Player who is not in event.admins', () => {
     H.event = { ...H.event, admins: ['someone-else'] };
-    render(<More />);
+    render(<MemoryRouter initialEntries={['/more']}><More /></MemoryRouter>);
     expect(screen.queryByRole('button', { name: 'Admin' })).toBeNull();
   });
 
   it('shows an Admin row with no badge for an admin with zero pending items', () => {
     H.event = { ...H.event, admins: ['player-uid'] };
     H.pendingCount = 0;
-    render(<More />);
+    render(<MemoryRouter initialEntries={['/more']}><More /></MemoryRouter>);
     const adminRow = screen.getByRole('button', { name: 'Admin' });
     expect(adminRow).toBeInTheDocument();
     expect(screen.queryByText('0')).toBeNull();
@@ -122,7 +123,7 @@ describe('More menu (specs/d15-more-menu.md)', () => {
   it('badges the Admin row with the pending-approvals count for an admin', () => {
     H.event = { ...H.event, admins: ['player-uid'] };
     H.pendingCount = 3;
-    render(<More />);
+    render(<MemoryRouter initialEntries={['/more']}><More /></MemoryRouter>);
     const adminRow = screen.getByRole('button', { name: /Admin/ });
     expect(adminRow).toHaveTextContent('3');
   });
@@ -130,7 +131,7 @@ describe('More menu (specs/d15-more-menu.md)', () => {
   it('places Admin between Support and Sign out when present', () => {
     H.event = { ...H.event, admins: ['player-uid'] };
     H.pendingCount = 0;
-    const { container } = render(<More />);
+    const { container } = render(<MemoryRouter initialEntries={['/more']}><More /></MemoryRouter>);
     const text = container.textContent ?? '';
     const supportIdx = text.indexOf('18+ guidelines (row)');
     const adminIdx = text.indexOf('Admin');
@@ -144,7 +145,7 @@ describe('More menu (specs/d15-more-menu.md)', () => {
     H.event = { ...H.event, admins: [] };
     const { default: userEvent } = await import('@testing-library/user-event');
     const user = userEvent.setup();
-    render(<More />);
+    render(<MemoryRouter initialEntries={['/more']}><More /></MemoryRouter>);
     await user.click(screen.getByRole('button', { name: 'Sign out' }));
     expect(H.signOutUser).toHaveBeenCalled();
   });
@@ -163,7 +164,7 @@ describe('More menu — "How to play" replays the coach overlay (#214)', () => {
 
     const { default: userEvent } = await import('@testing-library/user-event');
     const user = userEvent.setup();
-    render(<More />);
+    render(<MemoryRouter initialEntries={['/more']}><More /></MemoryRouter>);
     await user.click(screen.getByRole('button', { name: /How to play/ }));
     // #270: How to play opens the Welcome Aboard WALKTHROUGH panel first; the
     // badge-legend coach overlay is one tap further.

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogOut, ChevronRight, ALargeSmall } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useEventDoc, useMyUser, usePendingItemCount } from '../hooks/useData';
@@ -12,6 +13,7 @@ import ProfileEditor from './ProfileEditor';
 import ThemeSwitcher from './ThemeSwitcher';
 import ItemPool from './ItemPool';
 import Admin from './Admin';
+import { adminSectionFromPath } from './admin/route';
 import BugReport from './BugReport';
 import AcceptableUse from './AcceptableUse';
 import CoachOverlay from './CoachOverlay';
@@ -43,7 +45,15 @@ export default function More() {
   const { count: pendingCount } = usePendingItemCount(isAdmin);
   const { standalone, deferred, showIOSHint, install } = useInstallPrompt();
 
-  const [panel, setPanel] = useState<null | 'schedule' | 'suggest' | 'howToPlay' | 'coach' | 'admin'>(null);
+  const [panel, setPanel] = useState<null | 'schedule' | 'suggest' | 'howToPlay' | 'coach'>(null);
+  // The admin console is ROUTE-driven, not panel-state-driven
+  // (specs/admin-console-ia.md): /more/admin[/section] renders it as an overlay
+  // on top of this menu, so the browser/PWA back button walks detail → hub →
+  // More for free. The other panels stay local state — they have no deep-link
+  // or history contract.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const adminOpen = adminSectionFromPath(location.pathname) !== null;
   // Today's resolved Day theme for the Theme subtitle (#270) — the same
   // unlock-based resolution Auto itself uses (theme/autoTheme.ts).
   const todayThemeId = todaysDayTheme(event);
@@ -135,7 +145,7 @@ export default function More() {
               icon={Wrench}
               title="Admin"
               badge={pendingCount > 0 ? pendingCount : undefined}
-              onClick={() => setPanel('admin')}
+              onClick={() => navigate('/more/admin')}
             />
           </div>
         </div>
@@ -194,11 +204,11 @@ export default function More() {
         // than nesting inside it — see specs/d15-coach-overlay.md.
         <CoachOverlay forceOpen onDismiss={closePanel} />
       )}
-      {panel === 'admin' && isAdmin && (
-        <MorePanel title="Admin" onClose={closePanel}>
-          <Admin />
-        </MorePanel>
-      )}
+      {/* Admin renders its own AdminSheet chrome (sticky header, Done, the
+          full dismissal contract) — MorePanel's bottom-Close chrome is exactly
+          what specs/admin-console-ia.md replaces. It self-guards on isAdmin
+          (a non-admin deep link gets a dismissible "Admins only." sheet). */}
+      {adminOpen && <Admin />}
     </div>
   );
 }
@@ -248,9 +258,10 @@ function TextSizeSwitcher() {
  * count badge, and a trailing `chevron-right` — every `MoreRow` opens a
  * sub-panel, so the chevron is unconditional here (the quiet Sign-out row
  * and the Install row are plain `<button>`s outside this helper and don't
- * get one, since neither navigates to a sub-panel).
+ * get one, since neither navigates to a sub-panel). Exported for the admin
+ * hub's section cards (specs/admin-console-ia.md), which share this chrome.
  */
-function MoreRow({
+export function MoreRow({
   icon: Icon,
   title,
   sub,

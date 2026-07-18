@@ -151,6 +151,15 @@ const player = (uid: string, displayName: string, firstBingoAt: number | null): 
   reshufflesUsed: 0,
 });
 
+// The queue rows live in the Review queue (/more/admin/queue) and the banned
+// roster in the Players detail (/more/admin/players) — specs/admin-console-ia.md.
+const renderAdmin = (path: string) =>
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <Admin />
+    </MemoryRouter>,
+  );
+
 const queue = () => document.querySelector('.admin-section.queue') as HTMLElement;
 const bannedSection = () =>
   (Array.from(document.querySelectorAll('.admin-section')).find((s) =>
@@ -177,7 +186,7 @@ beforeEach(() => {
 describe('Admin ban control (specs/w2-ban-console.md)', () => {
   it('offers Ban author on a queue Proof row and calls banUser with the Proof owner uid', () => {
     H.flagged = [proof('p1', 'author-uid', 2)];
-    render(<Admin />);
+    renderAdmin('/more/admin/queue');
 
     const q = within(queue());
     fireEvent.click(q.getByRole('button', { name: 'Ban author' }));
@@ -190,7 +199,7 @@ describe('Admin ban control (specs/w2-ban-console.md)', () => {
     // only PUBLIC reads filter; the console must reach banned content to unban it.
     H.event = { ...H.event, bannedUids: ['author-uid'] } as EventDoc;
     H.flagged = [proof('p1', 'author-uid', 2, { displayName: 'Banned Betty' })];
-    render(<Admin />);
+    renderAdmin('/more/admin/queue');
 
     const q = within(queue());
     expect(q.getByText('Banned Betty')).toBeInTheDocument(); // still reachable
@@ -201,7 +210,7 @@ describe('Admin ban control (specs/w2-ban-console.md)', () => {
 
   it('offers Ban author on a queue Prompt row and calls banUser with createdBy', () => {
     H.items = [item('i1', 'prompt-author', 3)];
-    render(<Admin />);
+    renderAdmin('/more/admin/queue');
 
     const q = within(queue());
     fireEvent.click(q.getByRole('button', { name: 'Ban author' }));
@@ -212,7 +221,7 @@ describe('Admin ban control (specs/w2-ban-console.md)', () => {
     // A banned Player whose prompts/proofs are all deleted has no queue row, yet
     // must still be un-bannable: the roster section is the reachable surface.
     H.event = { ...H.event, bannedUids: ['ghost-uid'] } as EventDoc;
-    render(<Admin />);
+    renderAdmin('/more/admin/players');
 
     const section = within(bannedSection());
     expect(section.getByText('ghost-uid')).toBeInTheDocument();
@@ -221,7 +230,7 @@ describe('Admin ban control (specs/w2-ban-console.md)', () => {
   });
 
   it('shows an empty Banned players section when no one is banned', () => {
-    render(<Admin />);
+    renderAdmin('/more/admin/players');
     expect(within(bannedSection()).getByText(/no one is banned/i)).toBeInTheDocument();
   });
 
@@ -233,7 +242,7 @@ describe('Admin ban control (specs/w2-ban-console.md)', () => {
       item('i-seed', 'seed', 3, { text: 'Seeded default prompt' }),
       item('i-real', 'real-player-uid', 3, { text: 'Player prompt' }),
     ];
-    render(<Admin />);
+    renderAdmin('/more/admin/queue');
 
     // Scope to the queue (the prompt text also appears in the bottom Prompts list).
     const q = within(queue());
@@ -252,7 +261,7 @@ describe('Admin ban control (specs/w2-ban-console.md)', () => {
       item('i-admin', 'co-admin-uid', 3, { text: 'Co-admin prompt' }),
       item('i-player', 'real-player-uid', 3, { text: 'Player prompt' }),
     ];
-    render(<Admin />);
+    renderAdmin('/more/admin/queue');
 
     const q = within(queue());
     const adminRow = q.getByText('Co-admin prompt').closest('.row') as HTMLElement;

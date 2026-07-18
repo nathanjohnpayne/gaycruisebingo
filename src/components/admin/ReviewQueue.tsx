@@ -1,0 +1,368 @@
+import { isReportHidden, isBanned, isSystemAuthor } from '../../hooks/useData';
+import {
+  confirmClaim,
+  rejectClaim,
+  hideProof,
+  restoreProof,
+  clearProofReports,
+  hideItem,
+  restoreItem,
+  deleteItem,
+  clearItemReports,
+  approveItem,
+  rejectItem,
+  bulkApproveItems,
+  setItemSpicy,
+  banUser,
+  unbanUser,
+} from '../../data/admin';
+import { deleteProof } from '../../data/proofs';
+import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../../game/logic';
+import type { ClaimDoc, DayDef, EventDoc, ItemDoc, ProofDoc } from '../../types';
+
+// One report row, tagged so the render can branch to the per-kind affordances
+// (Proof vs Prompt writes) while a single list orders across both kinds.
+// Ordered OLDEST-FIRST (createdAt asc) per the merged-inbox contract
+// (specs/admin-console-ia.md § "Review queue"), superseding the old report
+// queue's most-reported-first sort — triage order is now arrival order, the
+// same order the Approvals and Pending-claims groups already use.
+export type QueueRow =
+  | { kind: 'proof'; sortAt: number; proof: ProofDoc }
+  | { kind: 'item'; sortAt: number; item: ItemDoc };
+
+/**
+ * Ban / Unban the AUTHOR of a queued row (#108). Banning is an admin action on the
+ * CURRENT event: it adds/removes the content owner's uid on the event doc's
+ * `bannedUids` roster (`data/admin` banUser/unbanUser → arrayUnion/arrayRemove), the
+ * ADR 0004 Phase 0 presentational hide/mute the #113 rules landed. It is a
+ * MODERATION / DISPUTE tool, NOT anti-cheat (ADR 0001) and NOT hard access
+ * revocation (server-authoritative enforcement is #43/#44) — a banned Player's
+ * content is filtered from every PUBLIC/player surface (the read hooks + the deal
+ * path), yet stays reachable HERE so an Admin can review it and unban. The label
+ * reflects the current banned state.
+ */
+export function BanControl({
+  uid,
+  bannedUids,
+  admins,
+}: {
+  uid: string;
+  bannedUids: string[];
+  admins: string[];
+}) {
+  // Two kinds of author are NOT bannable, so no Ban control renders for them:
+  //  - System/sentinel authors ('seed', the createdBy on every seeded default
+  //    Prompt) — Codex P1, PR #122: a single Ban click would add 'seed' to
+  //    bannedUids and hide the ENTIRE default pool from useItems AND the deal path.
+  //  - Fellow ADMINS — Codex P2, PR #122 round 2: #113's rules REJECT any resulting
+  //    bannedUids that overlaps `admins` (firestore.rules `!bannedUids.hasAny(admins)`,
+  //    pinned in tests/rules/w2-banned-uids.test.ts), so offering Ban on an
+  //    admin-authored row is a doomed action that can only fail with a permission
+  //    error. Suppress it so the admin never sees an action that cannot succeed.
+  // A banned sentinel stays recoverable via the Players section's Unban (not
+  // gated); an admin uid can never be in bannedUids in the first place.
+  if (isSystemAuthor(uid) || admins.includes(uid)) return null;
+  return isBanned(uid, bannedUids) ? (
+    <button className="btn" title="Un-mute this player's content" onClick={() => unbanUser(uid)}>
+      Unban author
+    </button>
+  ) : (
+    <button
+      className="btn"
+      title="Mute this player's content on this event (moderation, not anti-cheat)"
+      onClick={() => banUser(uid)}
+    >
+      Ban author
+    </button>
+  );
+}
+
+/**
+ * One reported-Proof row in the Reports group. `Clear reports` lifts the ADR
+ * 0004 Phase 0 community auto-hide by zeroing reportCount — rendered ONLY when the
+ * row is actually auto-hidden (the only state with a hide to lift; Codex P2, PR
+ * #107 finding 3). It is distinct from Restore, which lifts the `status` hard-hide,
+ * so a doubly-hidden row (status hidden AND over threshold) shows both. `Ban author`
+ * mutes the Proof's owner across the event (#108); the row stays reachable after.
+ */
+function ProofQueueRow({
+  proof: p,
+  threshold,
+  bannedUids,
+  admins,
+  days,
+  frozenAt,
+}: {
+  proof: ProofDoc;
+  threshold: number | undefined;
+  bannedUids: string[];
+  admins: string[];
+  // The Event's Day schedule (#246): present ⇒ daily-cards mode, so a proof
+  // deletion unmarks the DAY-SCOPED board for the Proof's own `dayIndex`.
+  days: DayDef[] | undefined;
+  // The scheduler's freeze stamp (#265) — folded with the schedule through
+  // standingsFrozen at delete time.
+  frozenAt?: number;
+}) {
+  const autoHidden = isReportHidden(p.reportCount, threshold);
+  return (
+    <div className="row">
+      <div className="grow">
+        <div className="name">
+          {p.displayName}
+          <span className="pill">{p.reportCount} ⚑</span>
+          {p.visionFlag && <span className="pill">{p.visionFlag}</span>}
+          {autoHidden && <span className="pill pill-hidden">auto-hidden</span>}
+        </div>
+        <div className="sub">
+          proof · {p.type} · {p.itemText}
+        </div>
+      </div>
+      {autoHidden && (
+        <button className="btn" onClick={() => clearProofReports(p.id)}>
+          Clear reports
+        </button>
+      )}
+      {p.status === 'hidden' ? (
+        <button className="btn" onClick={() => restoreProof(p.id)}>
+          Restore
+        </button>
+      ) : (
+        <button className="btn" onClick={() => hideProof(p.id)}>
+          Hide
+        </button>
+      )}
+      <BanControl uid={p.uid} bannedUids={bannedUids} admins={admins} />
+      <button
+        className="iconbtn"
+        title="Delete"
+        onClick={() =>
+          deleteProof(p.id, p.storagePath, {
+            daily: !!days?.length,
+            tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
+            // #265 (Codex P2 on #278 round 3): the admin moderation delete
+            // observes the same freeze/ceremonial gates as the player's own —
+            // evaluated inside the transaction via the getter.
+            ceremonialDayIndexes: days ? [...ceremonialDayIndexSet(days)] : undefined,
+            statsFrozen: () => standingsFrozen({ frozenAt, days: days ?? [] }),
+          })
+        }
+      >
+        🗑
+      </button>
+    </div>
+  );
+}
+
+/** One reported-Prompt row in the Reports group — the Prompt-side twin of
+ * `ProofQueueRow`, with the same `Clear reports` auto-hide lift (finding 3) and the
+ * same `Ban author` control (#108), keyed on the Prompt's `createdBy` owner. */
+function ItemQueueRow({
+  item: it,
+  threshold,
+  bannedUids,
+  admins,
+}: {
+  item: ItemDoc;
+  threshold: number | undefined;
+  bannedUids: string[];
+  admins: string[];
+}) {
+  const autoHidden = isReportHidden(it.reportCount, threshold);
+  return (
+    <div className="row">
+      <div className="grow">
+        <div className="name">
+          {it.text}
+          <span className="pill">{it.reportCount} ⚑</span>
+          {autoHidden && <span className="pill pill-hidden">auto-hidden</span>}
+        </div>
+        <div className="sub">prompt · {it.status}</div>
+      </div>
+      {autoHidden && (
+        <button className="btn" onClick={() => clearItemReports(it.id)}>
+          Clear reports
+        </button>
+      )}
+      {it.status === 'hidden' ? (
+        <button className="btn" onClick={() => restoreItem(it.id)}>
+          Restore
+        </button>
+      ) : (
+        <button className="btn" onClick={() => hideItem(it.id)}>
+          Hide
+        </button>
+      )}
+      <BanControl uid={it.createdBy} bannedUids={bannedUids} admins={admins} />
+      <button className="iconbtn" title="Delete" onClick={() => deleteItem(it.id)}>
+        🗑
+      </button>
+    </div>
+  );
+}
+
+/**
+ * One row in the Approvals group (#210, daily-cards-spec § "Item pools and the
+ * approval flow"): a pending main-pool Prompt with submitter attribution, a
+ * spicy toggle, and Approve/Reject. `spicy` is client-editable here (via a
+ * plain `updateDoc` through `data/admin`'s isAdmin-unconstrained write arm) so
+ * an admin can correct a submitter's 🔞 tagging BEFORE approving it into the
+ * live pool — after approval the spicy ratio sampling (`dealBoard`) already
+ * treats it as authoritative, so getting it right pre-approve matters.
+ */
+function ApprovalQueueRow({
+  item: it,
+  adminUid,
+  onToggleSpicy,
+}: {
+  item: ItemDoc;
+  adminUid: string;
+  onToggleSpicy: (id: string, spicy: boolean) => void;
+}) {
+  return (
+    <div className="row">
+      <div className="grow">
+        <div className="name" style={{ fontWeight: 500 }}>
+          {it.text}
+        </div>
+        <div className="sub">submitted by {it.createdBy}</div>
+      </div>
+      <label style={{ fontSize: 12 }}>
+        <input
+          type="checkbox"
+          checked={it.spicy}
+          onChange={(e) => onToggleSpicy(it.id, e.target.checked)}
+        />{' '}
+        🔞 Spicy
+      </label>
+      <button className="btn primary" onClick={() => approveItem(it.id, adminUid)}>
+        Approve
+      </button>
+      <button className="iconbtn" title="Reject" onClick={() => rejectItem(it.id, adminUid)}>
+        ✕
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The merged review inbox (specs/admin-console-ia.md § "Review queue"): Reports,
+ * Approvals, and — in admin-confirmed claim mode only — Pending claims become
+ * ONE triage surface, each group oldest-first, every triage action on the row.
+ * It replaces the old Moderation report queue, the Approvals tab, and the
+ * Moderation Pending-claims section; the write paths are exactly the ones those
+ * surfaces used. The hub's Review-queue badge is this surface's total.
+ */
+export default function ReviewQueue({
+  event,
+  reports,
+  pendingItems,
+  claims,
+  adminUid,
+}: {
+  event: EventDoc | null | undefined;
+  /** Reported Proofs + Prompts, merged and sorted oldest-first by the caller. */
+  reports: QueueRow[];
+  /** Pending approvals — `usePendingItems` already sorts oldest-first. */
+  pendingItems: ItemDoc[];
+  /** Pending claims — `usePendingClaims` already sorts oldest-first. */
+  claims: ClaimDoc[];
+  adminUid: string;
+}) {
+  const threshold = event?.settings?.reportHideThreshold;
+  const bannedUids = event?.bannedUids ?? [];
+  const admins = event?.admins ?? [];
+  const claimsVisible = event?.claimMode === 'admin_confirmed';
+  const total = reports.length + pendingItems.length + (claimsVisible ? claims.length : 0);
+
+  if (!total) {
+    return (
+      <p className="muted" style={{ fontSize: 13 }}>
+        All clear. Go enjoy the boat.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      {/* Reports — ADR 0004 Phase 0: any row tagged "auto-hidden" has crossed
+          reportHideThreshold and already self-hid on every Player's Feed/pool
+          with no Admin action; it stays reachable here so an Admin can hide
+          (hard), restore, or delete it. The community hide is presentational
+          and bypassable by design — server-authoritative removal is #43. */}
+      <div className="admin-section queue">
+        <h3>Reports{reports.length ? ` (${reports.length})` : ''}</h3>
+        {!reports.length && <p className="muted" style={{ fontSize: 12 }}>Nothing reported.</p>}
+        <div className="list">
+          {reports.map((entry) =>
+            entry.kind === 'proof' ? (
+              <ProofQueueRow
+                key={`proof-${entry.proof.id}`}
+                proof={entry.proof}
+                threshold={threshold}
+                bannedUids={bannedUids}
+                admins={admins}
+                days={event?.days}
+                frozenAt={event?.frozenAt}
+              />
+            ) : (
+              <ItemQueueRow
+                key={`item-${entry.item.id}`}
+                item={entry.item}
+                threshold={threshold}
+                bannedUids={bannedUids}
+                admins={admins}
+              />
+            ),
+          )}
+        </div>
+      </div>
+
+      {/* Approvals (#210): the pending main-pool queue, oldest-first, with the
+          bulk-approve control for taste. */}
+      <div className="admin-section">
+        <h3>Approvals{pendingItems.length ? ` (${pendingItems.length})` : ''}</h3>
+        {!pendingItems.length && (
+          <p className="muted" style={{ fontSize: 12 }}>
+            Nothing pending review.
+          </p>
+        )}
+        {!!pendingItems.length && (
+          <button className="btn" onClick={() => bulkApproveItems(pendingItems, adminUid)}>
+            Approve all
+          </button>
+        )}
+        <div className="list">
+          {pendingItems.map((it) => (
+            <ApprovalQueueRow key={it.id} item={it} adminUid={adminUid} onToggleSpicy={setItemSpicy} />
+          ))}
+        </div>
+      </div>
+
+      {/* Pending claims — admin-confirmed mode only (#269, the wireframes'
+          caption): in the other claim modes there is no claims queue at all. */}
+      {claimsVisible && (
+        <div className="admin-section">
+          <h3>Pending claims{claims.length ? ` (${claims.length})` : ''}</h3>
+          {!claims.length && <p className="muted" style={{ fontSize: 12 }}>Nothing to confirm.</p>}
+          <div className="list">
+            {claims.map((c) => (
+              <div key={c.id} className="row">
+                <div className="grow">
+                  <div className="name">{c.displayName}</div>
+                  <div className="sub">{c.itemText}</div>
+                </div>
+                <button className="btn" onClick={() => confirmClaim(c, adminUid)}>
+                  Confirm
+                </button>
+                <button className="iconbtn" title="Reject" onClick={() => rejectClaim(c, adminUid)}>
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
