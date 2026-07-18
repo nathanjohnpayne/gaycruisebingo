@@ -43,7 +43,7 @@ Every control of the pre-redesign console exists in exactly one new home:
 | Moderation · Proof & Claims (claim mode, photo source, EXIF, AI screen, auto-hide) | **Game settings** › Claims & proof |
 | Moderation · Easy mix | **Game settings** › Easy mix — as the slider below |
 | Moderation · Default theme | **Game settings** › Appearance |
-| Schedule tab (rows, tonight editor, Unlock now, Re-snapshot) | **Schedule** — content unchanged; the Unlock-now/Re-snapshot controls stay anchored to their Day's row |
+| Schedule tab (rows, tonight editor, Unlock now, Re-snapshot) | **Schedule** — content unchanged; the Unlock-now/Re-snapshot fallbacks fold into a per-Day repair line (#413, below) instead of sitting inline between the Day content and the dropdown |
 | Moderation · Prompts (+ curated add form) | **Prompt pool** |
 | Moderation · Banned players | **Players** |
 
@@ -65,6 +65,8 @@ The Proof & Claims panel's "Pending claims" count-plus-jump-link row (`#admin-pe
 
 `src/components/admin/SchedulePanel.tsx`, `PromptPool.tsx`, `PlayersPanel.tsx` — the old Schedule tab, Prompts section (+ curated add), and Banned players section, content and write paths unchanged, under the new chrome.
 
+**Schedule — per-Day repair line (#413, mockup `plans/daily-cards-wireframes.html` § `#frame-admin-schedule`).** Every Day row keeps one uniform shape: a top line of `info (grow) + theme <select>`, the dropdown trailing on every row and never shifting. The once-a-cruise recovery fallbacks no longer render inline between the Day content and the dropdown (which lopsided the one eligible row). A Day that needs one grows a full-width **repair line** inside its own row — a `role="group"` `aria-label="Day N repair"` element below the Tonight field — stating the anomaly in plain words with the quiet fix button at the trailing edge, and carrying the button's own result/denial message beside the anomaly after a tap: the easy-mix deploy race (`canResnapshot`) reads "Snapshot predates the easy-mix deploy" → `Re-snapshot`; a missed scheduler beat (`dayDueForManualUnlock`) reads "Missed the 8:00 unlock" → `Unlock now`. The line is mounted stickily — once a fallback has ever been relevant for the row's lifetime it stays, so `UnlockNowButton`'s "Unlocked." confirmation survives eligibility flipping false. An ineligible Day renders no repair line. Presentation-only: `resnapshotDayNow` / `unlockDayNow`, their eligibility checks, and their result messages are exactly as built. `#frame-admin-schedule` is a visual reference (not a `toHaveScreenshot` baseline in the parity walk).
+
 ### Orchestration
 
 `src/components/Admin.tsx` shrinks to the orchestrator: it owns the same subscriptions the tabbed console held (`useEventDoc`, `usePendingClaims`, `useReportedProofs`, `useAllItems`, plus the Approvals tab's `usePendingItems`), derives the badge math once, resolves the section from the URL, and renders it inside `AdminSheet`.
@@ -80,6 +82,6 @@ The Proof & Claims panel's "Pending claims" count-plus-jump-link row (`#admin-pe
 ## Test coverage
 
 - `src/components/admin-console-ia.test.tsx` (RTL-jsdom) — hub renders five cards with correct badge math; card → detail → back → hub; Done from a detail closes admin entirely (lands on `/more`); the sticky header is present on every surface; the Review queue shows the claims group only in admin-confirmed mode and orders groups oldest-first; the slider commits on release with the correct ratio, dedups a repeat release, and renders the squares bubble while dragging; Escape, backdrop, and header swipe-down dismiss.
-- `src/components/Admin.test.tsx`, `w2-admin-console.test.tsx`, `w2-ban-console.test.tsx`, `w3-claim-modes.test.tsx`, `d15-more-menu.test.tsx` — the pre-existing per-section behavior pins, re-anchored to the new surfaces (each renders `<Admin />` at its section route under a `MemoryRouter`).
+- `src/components/Admin.test.tsx`, `w2-admin-console.test.tsx`, `w2-ban-console.test.tsx`, `w3-claim-modes.test.tsx`, `d15-more-menu.test.tsx` — the pre-existing per-section behavior pins, re-anchored to the new surfaces (each renders `<Admin />` at its section route under a `MemoryRouter`). `Admin.test.tsx`'s "Admin Schedule repair line (#413)" block pins the repair-line pattern: a re-snapshot-eligible and a due-for-unlock Day each grow a `Day N repair` group carrying the right anomaly text and fallback button, the top line holds no buttons (theme select is the trailing control), an ineligible Day renders no repair line, and a fallback's result message stays inside the row after a tap.
 - `tests/e2e/d15-mockup-parity.spec.ts` — hub + settings + queue structural walk and screenshots at 393×852; a taller-than-viewport detail (Prompt pool) still shows Done without scrolling.
 - No new rules/functions tests — nothing server-side changes.
