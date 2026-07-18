@@ -1704,13 +1704,17 @@ a {
   font-size: 12px;
 }
 /* Fix button(s) — plus any result/denial message they carry — trail the line;
-   on a narrow sheet they wrap under the anomaly instead of squeezing it. */
+   on a narrow sheet they wrap under the anomaly instead of squeezing it.
+   min/max width so a long message can shrink inside the flex line instead of
+   widening the wrapper past the row (CodeRabbit, PR #417). */
 .schedule-row-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
 }
 /* Once latched the line stays mounted so a lingering "Unlocked." confirmation
    survives eligibility flipping false. But if a Day is stamped externally
@@ -1741,10 +1745,16 @@ a {
   color: var(--ink);
   opacity: 0.85;
   font-size: 12px;
+  /* An arbitrary err.message can carry one long unbroken token; let it shrink
+     and break instead of widening the line (CodeRabbit, PR #417). */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 /* Each fallback's own button+message wrapper: let a long denial wrap under
    its button (never truncate), keeping the pair right-aligned in the line. */
 .schedule-row-actions > span {
+  min-width: 0;
+  max-width: 100%;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
