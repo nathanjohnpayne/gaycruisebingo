@@ -1,9 +1,6 @@
 # Schedule: quiet the repair line's controls
 
-**Track:** admin/UI · **Phase:** 0 · **Size:** XS · **Epic:** Daily Cards (admin console)
-**Depends on:** `plans/schedule-recovery-strip-ticket.md` (the repair line itself — in flight; land this after it merges, on its merged class/markup structure).
-**Refs:** `specs/admin-console-ia.md` § Schedule. Presentation-only — no callable, gating, or message-content change; ideally CSS-only.
-**Target mockup:** `plans/daily-cards-wireframes.html` § `#frame-admin-schedule` — the two drawn states: pending (Valletta: anomaly + compact quiet button) and resolved (Palermo: "Missed the 8:00 unlock" with "Unlocked." as plain text where the button was).
+**Track:** admin/UI · **Phase:** 0 · **Size:** XS · **Epic:** Daily Cards (admin console) **Depends on:** `plans/schedule-recovery-strip-ticket.md` (the repair line itself — in flight; land this after it merges, on its merged class/markup structure). **Refs:** `specs/admin-console-ia.md` § Schedule. Presentation-only — no callable, gating, or message-content change; ideally CSS-only. **Target mockup:** `plans/daily-cards-wireframes.html` § `#frame-admin-schedule` — the two drawn states: pending (Valletta: anomaly + compact quiet button) and resolved (Palermo: "Missed the 8:00 unlock" with "Unlocked." as plain text where the button was).
 
 ## Problem
 

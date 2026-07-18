@@ -55,7 +55,9 @@ function UnlockNowButton({ dayIndex, visible }: { dayIndex: number; visible: boo
           {state === 'busy' ? 'Unlocking…' : 'Unlock now'}
         </button>
       )}
-      {message && <span className="pill">{message}</span>}
+      {/* Result as plain text, not a pill (#416): the line's words are the
+          interface — two pills side by side read as two competing actions. */}
+      {message && <span className="schedule-row-result">{message}</span>}
     </span>
   );
 }
@@ -104,7 +106,8 @@ function ResnapshotButton({ dayIndex }: { dayIndex: number }) {
       >
         {state === 'busy' ? 'Re-snapshotting…' : 'Re-snapshot'}
       </button>
-      {message && <span className="pill">{message}</span>}
+      {/* Result as plain text, not a pill (#416) — see UnlockNowButton. */}
+      {message && <span className="schedule-row-result">{message}</span>}
     </span>
   );
 }

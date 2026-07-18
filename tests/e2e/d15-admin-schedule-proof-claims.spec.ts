@@ -130,7 +130,8 @@ test.describe('Admin — Schedule editor', () => {
     await page.screenshot({ path: `${SHOTS}/admin-schedule-unlock-now-due.png`, fullPage: true });
 
     await unlockBtn.click();
-    await expect(dueRow.locator('.pill')).toHaveText('Unlocked.', { timeout: 10_000 });
+    // The result is plain text in the repair line, not a pill (#416).
+    await expect(dueRow.locator('.schedule-row-result')).toHaveText('Unlocked.', { timeout: 10_000 });
     await page.screenshot({ path: `${SHOTS}/admin-schedule-unlock-now-done.png`, fullPage: true });
 
     // Ground truth: the callable actually stamped the Day's Snapshot.
