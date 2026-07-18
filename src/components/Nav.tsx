@@ -24,11 +24,11 @@ import TabBar from './TabBar';
 export default function Nav() {
   const { user } = useAuth();
   const { data: event } = useEventDoc(!!user);
-  // The identity is calendar-based in the event timezone, so it rolls over at
-  // midnight (and flips pre-cruise → embark on sail day) while a tab stays
-  // open. A minute tick is the simplest rollover-safe clock here: unlike
-  // main.tsx's next-unlockAt timer, the boundary is a timezone-local midnight,
-  // and a 60s interval on this one tiny component is cheaper than tz math.
+  // The identity rolls over on its own while a tab stays open, at two kinds of
+  // boundary: mid-cruise it flips at each Day's 08:00 unlock (shared with the
+  // day switcher), and at event-tz midnight for the pre-cruise → embark and
+  // post-cruise flips. A minute tick is the simplest clock that catches both
+  // without tz math, and a 60s interval on this one tiny component is cheap.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 60_000);

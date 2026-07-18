@@ -28,14 +28,24 @@ describe('headerDayIdentity — the header is a "where are we" instrument', () =
     });
   });
 
-  it('mid-cruise shows that calendar day, from midnight — not gated on the 8:00 unlock', () => {
+  it('mid-cruise names the latest UNLOCKED Day — gated on the 8:00 unlock, in lockstep with the board', () => {
+    // Noon on Day 2 (Split, 2026-07-16): its card unlocked at 08:00, so the
+    // header names it.
     expect(headerDayIdentity(EVENT, cest(2026, 7, 16))).toEqual({
       port: '🇭🇷 Split',
       theme: '🌍 Uniforms Without Borders',
     });
-    // 06:00 on Day 3 (Sea Day, corrected 2026-07-17): the Day Card is still
-    // locked (unlocks 8:00) but the header already names today's identity.
+    // 06:00 on Day 3 (Sea Day, corrected 2026-07-17): its card is still locked
+    // (unlocks 08:00), so the header stays on yesterday's unlocked Day (Split)
+    // — matching the board's default Day — instead of leading it to the Sea Day
+    // at calendar midnight.
     expect(headerDayIdentity(EVENT, cest(2026, 7, 17, 6))).toEqual({
+      port: '🇭🇷 Split',
+      theme: '🌍 Uniforms Without Borders',
+    });
+    // 08:00 on the Sea Day: the card unlocks and the header rolls to it in the
+    // same beat as the board.
+    expect(headerDayIdentity(EVENT, cest(2026, 7, 17, 8))).toEqual({
       port: '🌊 Sea Day',
       theme: '💖 Neon Pink Playground',
     });
@@ -64,12 +74,16 @@ describe('headerDayIdentity — the header is a "where are we" instrument', () =
     });
   });
 
-  it('resolves the date in the EVENT timezone, not UTC', () => {
-    // 2026-07-15T22:30Z is already 00:30 on Jul 16 in Europe/Rome — Split, not
-    // Trieste. A UTC-based resolver would still say Trieste.
-    expect(headerDayIdentity(EVENT, Date.UTC(2026, 6, 15, 22, 30))).toEqual({
-      port: '🇭🇷 Split',
-      theme: '🌍 Uniforms Without Borders',
+  it('resolves the pre-cruise boundary in the EVENT timezone, not UTC', () => {
+    // 2026-07-14T22:30Z is already 00:30 on Jul 15 (embark day) in Europe/Rome,
+    // so the header has crossed from the pre-cruise "Sails Jul 15" copy into the
+    // embark identity (Trieste). A UTC-based resolver would still read Jul 14
+    // and show "Sails Jul 15". (The mid-cruise pick is now pure `unlockAt` vs
+    // `now` epoch math, so it needs no timezone; only this calendar boundary
+    // does.)
+    expect(headerDayIdentity(EVENT, Date.UTC(2026, 6, 14, 22, 30))).toEqual({
+      port: '🇮🇹 Trieste',
+      theme: '🛳️ Welcome Aboard',
     });
   });
 
