@@ -274,6 +274,43 @@ describe('AuthContext deal-error hardening', () => {
     vi.unstubAllGlobals();
   });
 
+  it('uses one top-level redirect instead of a popup in an installed desktop PWA (#395)', async () => {
+    // The same real Mac as above (MacIntel, no touch points → prefersRedirectSignIn
+    // is false), but INSTALLED as a Chrome/Edge desktop app: it runs in a
+    // standalone window (display-mode: standalone) with no address bar, where the
+    // OAuth popup is silently blocked and never appears. isStandaloneApp() is the
+    // only differing input from the browser-tab case, and it flips the flow to the
+    // same same-origin redirect the mobile tab uses.
+    vi.stubGlobal('navigator', {
+      ...window.navigator,
+      onLine: true,
+      userAgent:
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      platform: 'MacIntel',
+      maxTouchPoints: 0,
+    });
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query === '(display-mode: standalone)',
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }));
+    const authMock = mockedAuth as { config?: { authDomain?: string } };
+    authMock.config = { authDomain: window.location.hostname };
+
+    mount();
+    await userEvent.click(screen.getByText('signin'));
+
+    expect(mocks.signInWithRedirect).toHaveBeenCalledTimes(1);
+    expect(mocks.signInWithRedirect).toHaveBeenCalledWith(mockedAuth, expect.anything());
+    expect(mocks.signInWithPopup).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(PENDING_REDIRECT_ATTESTATION_KEY)).not.toBeNull();
+
+    delete authMock.config;
+    sessionStorage.clear();
+    vi.unstubAllGlobals();
+  });
+
   it('coalesces repeated sign-in calls into one Firebase auth transaction', async () => {
     const popup = deferred<Record<string, never>>();
     mocks.signInWithPopup.mockReturnValueOnce(popup.promise);
