@@ -191,29 +191,29 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.hasCachedCard).not.toHaveBeenCalled();
   });
 
-  it('keeps the card after a SETTLED deal, then a later re-deal blip is swallowed with no cache read (#403 fast path)', async () => {
-    // First deal settles (a card exists) → dealtOrJoinedRef latches true. A later
-    // re-deal that fails on a blip is swallowed via that ref, WITHOUT consulting
-    // the cache probe at all, and never shows the error panel.
+  it('keeps the card after a SETTLED deal, then a later re-deal blip is swallowed via the cached card (#403)', async () => {
+    // First deal settles and writes a card, which the persistent cache now holds
+    // (hasCachedCard → true). A later re-deal that fails on a blip is swallowed
+    // against that cached card, so the error panel never appears.
     mocks.joinAndDeal.mockResolvedValueOnce(true).mockRejectedValue(new Error('network request failed'));
+    mocks.hasCachedCard.mockResolvedValue(true); // the just-dealt card is in cache
     mount();
     await signInUser();
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 
     // Re-run the deal in place (Retry drives runDeal when online + authoritative);
-    // the second call rejects but is swallowed via the settled-this-session ref.
+    // the second call rejects but is swallowed against the cached card.
     await userEvent.click(screen.getByText('retry'));
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(mocks.hasCachedCard).not.toHaveBeenCalled();
   });
 
-  it('resets the card-fallback latch across an account switch, so a new no-card account still sees the retry (Codex #408 P2)', async () => {
-    // Account A deals successfully (latch → true). Account B signs in on the same
-    // device with NO cached card; its deal fails transiently. The latch must have
-    // been reset on the auth change, so B surfaces the retry rather than being
-    // stranded behind A's stale latch.
+  it('a new no-card account after an account switch still sees the retry (Codex #408 P2)', async () => {
+    // Account A deals successfully. Account B signs in on the same device with NO
+    // cached card (hasCachedCard → false) and its deal fails transiently. Because
+    // the fallback is a per-account cached-card probe (no AuthProvider-lifetime
+    // latch), B surfaces the retry rather than inheriting A's success.
     mocks.joinAndDeal.mockResolvedValueOnce(true).mockRejectedValue(new Error('network request failed'));
     mount();
     await signInUser(); // account A deals
@@ -244,6 +244,32 @@ describe('AuthContext deal-error hardening', () => {
         await vi.advanceTimersByTimeAsync(DEAL_TIMEOUT_MS);
       });
       expect(screen.getByRole('alert')).toHaveTextContent(/connection/i);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the stale error when a TIMED-OUT deal later succeeds, so the late card is not hidden (Codex #408 P2)', async () => {
+    vi.useFakeTimers();
+    try {
+      // A first-timer's deal exceeds the bound (error surfaces), then the original
+      // joinAndDeal — which withTimeout could not cancel — eventually succeeds. The
+      // late-success net must clear the stale error so the now-written card shows.
+      const deal = deferred<boolean>();
+      mocks.joinAndDeal.mockReturnValue(deal.promise);
+      mount();
+      await act(async () => void (await emitAuth(FAKE_USER)));
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DEAL_TIMEOUT_MS);
+      });
+      expect(screen.getByRole('alert')).toBeInTheDocument(); // timed out → retry surface
+
+      await act(async () => {
+        deal.settle(true); // the underlying deal finally lands
+        await Promise.resolve();
+      });
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument(); // late success clears it
     } finally {
       vi.useRealTimers();
     }

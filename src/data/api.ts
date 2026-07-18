@@ -287,15 +287,24 @@ export async function hasCachedBoard(uid: string): Promise<boolean> {
  * player row can be cached from the Leaderboard query or another tab/device while
  * NO board was ever loaded here, and swallowing on the row alone would strand the
  * Player on Board's indefinite "Dealing…" state with the retry surface gone. A
- * cached CARD is what guarantees `Board` has something to render. Cache miss /
- * read error → `false`, exactly like `hasCachedBoard`.
+ * cached CARD is what guarantees `Board` has something to render.
+ *
+ * SCOPED to the ACTIVE event (Codex #408 round 2, P2): the collection group spans
+ * every `events/{id}/**` tree, so a cached board from a PRIOR `EVENT_ID` (a past
+ * cruise) for the same uid must not read as a current card — that would swallow a
+ * first-deal failure for the NEW event and leave the Player with no retry. Match
+ * the current `events/${EVENT_ID}/` ancestor path AND the uid. Cache miss / read
+ * error → `false`, exactly like `hasCachedBoard`.
  */
 export async function hasCachedCard(uid: string): Promise<boolean> {
   try {
+    const prefix = `events/${EVENT_ID}/`;
     const snap = await getDocsFromCache(collectionGroup(db, 'boards'));
-    return snap.docs.some((d) => (d.data() as { uid?: unknown }).uid === uid);
+    return snap.docs.some(
+      (d) => d.ref.path.startsWith(prefix) && (d.data() as { uid?: unknown }).uid === uid,
+    );
   } catch {
-    return false; // no local card in this device's cache
+    return false; // no local card for the active event in this device's cache
   }
 }
 

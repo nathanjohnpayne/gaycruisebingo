@@ -327,14 +327,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Monotonic id of the latest deal attempt; runDeal captures it and re-checks
   // before each setState so a superseded attempt's late result is dropped (P2).
   const dealAttemptRef = useRef(0);
-  // Whether THIS device has a dealt card to fall back on (#403): set true once a
-  // deal SETTLES (a fresh board OR an existing-board no-op — both prove a card),
-  // and read by runDeal's catch to keep a cached Board on screen through a
-  // transient re-deal failure instead of tearing it down. The cache probe
-  // (hasCachedJoin/hasCachedBoard) covers a cold reload where no deal has settled
-  // yet this session; this ref is the zero-latency fast path for a blip AFTER a
-  // successful deal.
-  const dealtOrJoinedRef = useRef(false);
   // Monotonic id of the latest auth change, captured before the awaited
   // ensureUserProfile so a retired account's slower bootstrap can't flip
   // profileReady true for the account that already replaced it. A SEPARATE ref
@@ -570,12 +562,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // clear its stale state so a late result can't clobber the incoming User (P2).
       const profileAttempt = (profileAttemptRef.current += 1);
       dealAttemptRef.current += 1;
-      // Reset the card-fallback latch for the incoming account (Codex #408, P2):
-      // it is AuthProvider-lifetime state, so without this a prior account's
-      // settled deal would leave it true and the swallow path would hide a NEW
-      // account's genuine no-card deal failure behind an empty Board with no
-      // retry. A returning boarded account re-sets it as soon as its deal settles.
-      dealtOrJoinedRef.current = false;
       clearDealError();
       setDealing(false);
       // The incoming User's profile bootstrap has not settled yet (#77), so the
@@ -689,15 +675,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const runDeal = useCallback(async (u: User) => {
     const attempt = (dealAttemptRef.current += 1);
     setDealing(true);
+    // Bound the deal (#403): joinAndDeal is a network read+write that never
+    // completes offline and can HANG on flaky wifi. A timeout rejects into the
+    // catch below (classified as a connection failure, not pool-shortfall — the
+    // message carries no "24 prompts"), so a stalled deal recovers instead of
+    // stranding `dealing` true forever.
+    //
+    // withTimeout rejects the RACE but cannot cancel joinAndDeal (Codex #408 P2):
+    // a first-timer's deal that exceeds DEAL_TIMEOUT_MS, surfaces the retryable
+    // error, then LATER succeeds would leave its now-written card hidden behind the
+    // stale dealError (the deal effect won't re-run on the late write). So attach a
+    // late-success net to the ORIGINAL promise: if it eventually resolves and this
+    // attempt is still current, clear the error so the card shows without a manual
+    // retry. Guarded by the attempt so a superseded deal never clobbers; the
+    // rejection arm is a no-op (the catch below already owns a real failure).
+    const dealPromise = joinAndDeal(u);
+    void dealPromise.then(
+      () => {
+        if (dealAttemptRef.current === attempt) clearDealError();
+      },
+      () => {},
+    );
     try {
-      // Bound the deal (#403): joinAndDeal is a network read+write that never
-      // completes offline and can HANG on flaky wifi. A timeout rejects into the
-      // catch below (classified as a connection failure, not pool-shortfall — the
-      // message carries no "24 prompts"), so a stalled deal recovers via the cache
-      // fallback instead of stranding `dealing` true forever.
-      const dealt = await withTimeout(joinAndDeal(u), DEAL_TIMEOUT_MS, 'Deal timed out');
+      const dealt = await withTimeout(dealPromise, DEAL_TIMEOUT_MS, 'Deal timed out');
       if (dealAttemptRef.current !== attempt) return;
-      dealtOrJoinedRef.current = true; // a settled deal proves a card exists locally
       clearDealError();
       // Record `join_event` ONLY on an actual join — a NEW board (Codex #117 round
       // 8, finding B). runDeal re-fires on every online/authority flip, and
@@ -713,27 +714,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // re-deal blip (the deal effect re-fires on every reconnect, and daily-mode
       // joinAndDeal re-reads the event + re-writes the player row even for an
       // ALREADY-joined Player) would otherwise kick a Player off their working card.
-      // So when the Player has an ACTUAL cached card to fall back on — a deal
-      // settled this session (`dealtOrJoinedRef`), or a cached legacy/day board
-      // from a prior one (`hasCachedCard`) — SWALLOW the error: clear any stale one
-      // and leave the cached Board up. Only a genuine no-card case (a first-timer
-      // whose very first deal failed) still surfaces the retryable DealError.
-      // Two failures are EXCLUDED so they always surface: a pool-shortfall (not a
-      // connection issue — PoolRecoveryWatcher auto-recovers it on the reason), and
-      // a PERMANENT Firestore failure (permission-denied / failed-precondition /…,
-      // Codex #408 P2 — a rules/schema misconfiguration must not be hidden behind
-      // the cached Board forever; it wants the retry/error surface so it is visible).
+      // So when the Player has an ACTUAL cached card to fall back on
+      // (`hasCachedCard`) — SWALLOW the error: clear any stale one and leave the
+      // cached Board up. Only a genuine no-card case (a first-timer whose very first
+      // deal failed) still surfaces the retryable DealError. The probe is a cached
+      // CARD, never a joined player row (Codex #408 P2): the row can be cached from
+      // the Leaderboard / another tab while no board was ever loaded here, and it
+      // reflects a card dealt THIS session too (the write lands in cache before its
+      // server ack), so no separate session latch is needed — a per-session ref
+      // could not tell a daily identity-row merge from a real card, nor survive an
+      // account switch. Two failures are EXCLUDED so they always surface: a
+      // pool-shortfall (not a connection issue — PoolRecoveryWatcher auto-recovers
+      // it on the reason), and a PERMANENT Firestore failure (permission-denied /
+      // failed-precondition /…, Codex #408 P2 — a rules/schema misconfiguration must
+      // not be hidden behind the cached Board forever; it wants the retry surface).
       if (!isPoolShortfall(err) && isTransientDealError(err)) {
-        // A genuine CARD in cache (not merely a joined player row): the player row
-        // can be cached from the Leaderboard/another tab while no board was ever
-        // loaded here, and swallowing then would strand the Player on Board's
-        // indefinite "Dealing…" state with no retry (Codex #408 P2).
-        const hasCard = dealtOrJoinedRef.current || (await hasCachedCard(u.uid));
+        const hasCard = await hasCachedCard(u.uid);
         // Re-check the supersede guard after the awaited cache probe (P2): a
         // sign-out / account switch mid-probe must still drop this result.
         if (dealAttemptRef.current !== attempt) return;
         if (hasCard) {
-          dealtOrJoinedRef.current = true;
           clearDealError();
           return;
         }
