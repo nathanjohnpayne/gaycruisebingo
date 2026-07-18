@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   readAdultAttestation: vi.fn(),
   readAdultAttestationFromCache: vi.fn(),
   hasCachedBoard: vi.fn(),
+  hasCachedJoin: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
   // A tiny external store standing in for the live pool subscription: the mocked
@@ -63,6 +64,7 @@ vi.mock('../data/api', () => ({
   readAdultAttestationFromServer: mocks.readAdultAttestation,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
   hasCachedBoard: mocks.hasCachedBoard,
+  hasCachedJoin: mocks.hasCachedJoin,
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));
@@ -203,6 +205,9 @@ beforeEach(() => {
   mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
   mocks.readAdultAttestation.mockResolvedValue(1);
   mocks.hasCachedBoard.mockResolvedValue(false);
+  // No cached card by default (#403): a connection failure surfaces its retry
+  // surface here rather than being swallowed, so the watcher assertions hold.
+  mocks.hasCachedJoin.mockResolvedValue(false);
   mocks.attestAdult.mockResolvedValue(undefined);
   mocks.signInWithPopup.mockResolvedValue({});
   mocks.signOut.mockResolvedValue(undefined);

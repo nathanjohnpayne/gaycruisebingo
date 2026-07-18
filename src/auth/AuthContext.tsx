@@ -12,6 +12,7 @@ import {
   attestAdult,
   ensureUserProfile,
   hasCachedBoard,
+  hasCachedJoin,
   joinAndDeal,
   readAdultAttestationFromCache,
   readAdultAttestationFromServer,
@@ -38,6 +39,16 @@ function isOnline(): boolean {
 // whole app on its loading screen. Bound that gate and hand failures to the
 // existing retry surface; never fall back to cached authority or render the Board.
 export const AUTH_BOOTSTRAP_TIMEOUT_MS = 10_000;
+// The deal (joinAndDeal) is a network-bound read+write that, unlike the bootstrap
+// above, was previously UNBOUNDED (#403): on captive/ship Wi-Fi a hung getDoc or
+// commit could keep `dealing` true with no fallback. Bound it so a stalled deal
+// REJECTS (classified as a connection failure, never pool-shortfall) and the
+// recovery in `runDeal` runs instead of spinning. Generous relative to the 10s
+// bootstrap because the legacy join also runs the active-pool query + a batch
+// commit; the goal is to distinguish a HUNG deal from a merely slow one, not to
+// fail slow-but-working wifi (a false timeout for a returning Player is swallowed
+// by the cache fallback anyway, and for a first-timer just re-arms the retry).
+export const DEAL_TIMEOUT_MS = 20_000;
 // Local auth persistence normally settles immediately; live mobile smoke showed
 // the blocked custom-domain bootstrap never settled. Three seconds leaves ample
 // room for a slow device without preserving an unbounded signed-out stall.
@@ -131,10 +142,10 @@ function trackSignInFailure(err: unknown): void {
   });
 }
 
-function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+function withTimeout<T>(work: Promise<T>, timeoutMs: number, label = 'Auth bootstrap timed out'): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error('Auth bootstrap timed out')), timeoutMs);
+    timer = setTimeout(() => reject(new Error(label)), timeoutMs);
   });
   return Promise.race([work, timeout]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);
@@ -296,6 +307,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Monotonic id of the latest deal attempt; runDeal captures it and re-checks
   // before each setState so a superseded attempt's late result is dropped (P2).
   const dealAttemptRef = useRef(0);
+  // Whether THIS device has a dealt card to fall back on (#403): set true once a
+  // deal SETTLES (a fresh board OR an existing-board no-op — both prove a card),
+  // and read by runDeal's catch to keep a cached Board on screen through a
+  // transient re-deal failure instead of tearing it down. The cache probe
+  // (hasCachedJoin/hasCachedBoard) covers a cold reload where no deal has settled
+  // yet this session; this ref is the zero-latency fast path for a blip AFTER a
+  // successful deal.
+  const dealtOrJoinedRef = useRef(false);
   // Monotonic id of the latest auth change, captured before the awaited
   // ensureUserProfile so a retired account's slower bootstrap can't flip
   // profileReady true for the account that already replaced it. A SEPARATE ref
@@ -645,8 +664,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const attempt = (dealAttemptRef.current += 1);
     setDealing(true);
     try {
-      const dealt = await joinAndDeal(u);
+      // Bound the deal (#403): joinAndDeal is a network read+write that never
+      // completes offline and can HANG on flaky wifi. A timeout rejects into the
+      // catch below (classified as a connection failure, not pool-shortfall — the
+      // message carries no "24 prompts"), so a stalled deal recovers via the cache
+      // fallback instead of stranding `dealing` true forever.
+      const dealt = await withTimeout(joinAndDeal(u), DEAL_TIMEOUT_MS, 'Deal timed out');
       if (dealAttemptRef.current !== attempt) return;
+      dealtOrJoinedRef.current = true; // a settled deal proves a card exists locally
       clearDealError();
       // Record `join_event` ONLY on an actual join — a NEW board (Codex #117 round
       // 8, finding B). runDeal re-fires on every online/authority flip, and
@@ -655,6 +680,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (dealt) track('join_event');
     } catch (err) {
       if (dealAttemptRef.current !== attempt) return;
+      // A CONNECTION-class failure must not tear down a card the Player already has
+      // (#403). The Board renders from the persistent Firestore cache independently
+      // of this deal, and App swaps that cached Board for the full-screen DealError
+      // the instant `dealError` is set — so a transient re-deal blip (the deal
+      // effect re-fires on every reconnect, and daily-mode joinAndDeal re-reads the
+      // event + re-writes the player row even for an ALREADY-joined Player) would
+      // otherwise kick a Player off their working card. So when the Player has a
+      // card to fall back on — a deal settled this session (`dealtOrJoinedRef`), or
+      // a cached join/board from a prior one — SWALLOW the connection error: clear
+      // any stale one and leave the cached Board up. Daily-mode day-card gaps are
+      // handled by Board's own per-day retry, the correct granular surface. Only a
+      // genuine no-card case (a first-timer whose very first deal failed) still
+      // surfaces the retryable DealError. Pool-shortfall ALWAYS surfaces — it is not
+      // a connection issue, and PoolRecoveryWatcher auto-recovers it on the reason.
+      if (!isPoolShortfall(err)) {
+        const hasCard =
+          dealtOrJoinedRef.current || (await hasCachedJoin(u.uid)) || (await hasCachedBoard(u.uid));
+        // Re-check the supersede guard after the awaited cache probes (P2): a
+        // sign-out / account switch mid-probe must still drop this result.
+        if (dealAttemptRef.current !== attempt) return;
+        if (hasCard) {
+          dealtOrJoinedRef.current = true;
+          clearDealError();
+          return;
+        }
+      }
       failDeal(err);
     } finally {
       if (dealAttemptRef.current === attempt) setDealing(false);

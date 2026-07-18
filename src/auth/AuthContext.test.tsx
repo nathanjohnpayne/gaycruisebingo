@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   AuthProvider,
+  DEAL_TIMEOUT_MS,
   PENDING_REDIRECT_ATTESTATION_KEY,
   WEB_APP_AUTH_SETTLE_TIMEOUT_MS,
   useAuth,
@@ -23,6 +24,8 @@ const mocks = vi.hoisted(() => ({
   attestAdult: vi.fn(),
   readAdultAttestation: vi.fn(),
   readAdultAttestationFromCache: vi.fn(),
+  hasCachedBoard: vi.fn(),
+  hasCachedJoin: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
 }));
@@ -50,7 +53,8 @@ vi.mock('../data/api', () => ({
   // point it at the same spy this suite already configures for the settled read.
   readAdultAttestationFromServer: mocks.readAdultAttestation,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
-  hasCachedBoard: vi.fn().mockResolvedValue(true),
+  hasCachedBoard: mocks.hasCachedBoard,
+  hasCachedJoin: mocks.hasCachedJoin,
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));
@@ -104,6 +108,11 @@ beforeEach(() => {
   // path these tests exercise.
   mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
   mocks.readAdultAttestation.mockResolvedValue(1);
+  // Default: NO cached card on this device — so a connection-class deal failure
+  // surfaces the retryable error (the first-timer case). The #403 swallow tests
+  // override these to model a returning Player who already has a card.
+  mocks.hasCachedBoard.mockResolvedValue(false);
+  mocks.hasCachedJoin.mockResolvedValue(false);
   mocks.attestAdult.mockResolvedValue(undefined);
   mocks.getRedirectResult.mockResolvedValue(null);
   mocks.signInWithPopup.mockResolvedValue({});
@@ -131,11 +140,82 @@ describe('AuthContext deal-error hardening', () => {
     expect(mocks.track).toHaveBeenCalledWith('join_event');
   });
 
-  it('surfaces a non-guard deal failure with connection-worded fallback copy', async () => {
+  it('surfaces a non-guard deal failure with connection-worded fallback copy when there is NO cached card (first-timer)', async () => {
+    // #403: the connection error is only fatal for the Card tab when the Player
+    // has no card to fall back on — the default here (hasCachedBoard/Join → false).
+    // A returning Player with a cached card takes the swallow path instead (below).
     mocks.joinAndDeal.mockRejectedValue(new Error('network request failed'));
     mount();
     await signInUser();
     expect(await screen.findByRole('alert')).toHaveTextContent(/connection/i);
+  });
+
+  it('SWALLOWS a connection deal failure when a cached board exists — the Player keeps their card, no error panel (#403)', async () => {
+    // A returning Player: the deal re-fires on load and fails on a transient blip,
+    // but their board is in the persistent cache — so the DealError panel must NOT
+    // replace it. hasCachedBoard resolves true; no alert is ever shown.
+    mocks.hasCachedBoard.mockResolvedValue(true);
+    mocks.joinAndDeal.mockRejectedValue(new Error('network request failed'));
+    mount();
+    await signInUser();
+
+    await waitFor(() => expect(screen.getByTestId('dealing')).toHaveTextContent('idle'));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('SWALLOWS a connection deal failure when the Player already joined (cached player row, daily mode) (#403)', async () => {
+    // Daily mode writes no legacy board (hasCachedBoard stays false); the cached
+    // JOIN row is the mode-agnostic returning-Player signal that keeps the card up.
+    mocks.hasCachedJoin.mockResolvedValue(true);
+    mocks.joinAndDeal.mockRejectedValue(new Error('network request failed'));
+    mount();
+    await signInUser();
+
+    await waitFor(() => expect(screen.getByTestId('dealing')).toHaveTextContent('idle'));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('keeps the card after a SETTLED deal, then a later re-deal blip is swallowed with no cache read (#403 fast path)', async () => {
+    // First deal settles (a card exists) → dealtOrJoinedRef latches true. A later
+    // re-deal that fails on a blip is swallowed via that ref, WITHOUT consulting
+    // the cache probes at all, and never shows the error panel.
+    mocks.joinAndDeal.mockResolvedValueOnce(true).mockRejectedValue(new Error('network request failed'));
+    mount();
+    await signInUser();
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    // Re-run the deal in place (Retry drives runDeal when online + authoritative);
+    // the second call rejects but is swallowed via the settled-this-session ref.
+    await userEvent.click(screen.getByText('retry'));
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(mocks.hasCachedBoard).not.toHaveBeenCalled();
+    expect(mocks.hasCachedJoin).not.toHaveBeenCalled();
+  });
+
+  it('bounds a HUNG deal with DEAL_TIMEOUT_MS and surfaces the retryable error for a first-timer (#403)', async () => {
+    vi.useFakeTimers();
+    // try/finally so a failed assertion still restores real timers (a leaked fake
+    // clock would hang every later test); and assert synchronously — `findBy*`
+    // polls on real timers and would hang while the fake clock is installed.
+    try {
+      // The deal never settles (captive-wifi hang) and there is no cached card.
+      mocks.joinAndDeal.mockReturnValue(new Promise<boolean>(() => {}));
+      mount();
+      await act(async () => void (await emitAuth(FAKE_USER)));
+
+      // Before the bound elapses: no error panel (the deal is still in flight).
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+      // The bound elapses → the deal rejects → the first-timer sees the retry surface.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DEAL_TIMEOUT_MS);
+      });
+      expect(screen.getByRole('alert')).toHaveTextContent(/connection/i);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fires track('login', { method: 'google' }) on Google sign-in", async () => {

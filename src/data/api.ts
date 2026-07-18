@@ -267,6 +267,30 @@ export async function hasCachedBoard(uid: string): Promise<boolean> {
 }
 
 /**
+ * Cache-only probe for whether this device has already seen the current User's
+ * JOINED player row (`players/{uid}` carrying a numeric `joinedAt`).
+ *
+ * This is the mode-agnostic "returning Player" signal the deal-failure recovery
+ * path uses (#403): a joined Player already has a card surface to render from the
+ * persistent cache — the legacy `boards/{uid}`, or the lazily-dealt day card
+ * `days/{d}/boards/{uid}` that `Board` retries on its own — so a transient
+ * connection failure while re-running `joinAndDeal` must NOT tear that cached card
+ * down for the full-screen DealError. Unlike `hasCachedBoard` (the legacy board
+ * path only, which the day-scoped schedule no longer writes), the player row is
+ * written by BOTH the daily and legacy join branches, so it is the one cached
+ * signal that also covers the current day-scoped model. Cache miss / read error →
+ * `false` (treat as no local join), exactly like `hasCachedBoard`.
+ */
+export async function hasCachedJoin(uid: string): Promise<boolean> {
+  try {
+    const snap = await getDocFromCache(rawPlayer(uid));
+    return snap.exists() && typeof (snap.data() as { joinedAt?: unknown }).joinedAt === 'number';
+  } catch {
+    return false; // not in this device's cache → no local join
+  }
+}
+
+/**
  * Deal a frozen board + create the player row the first time a user joins.
  *
  * Returns `true` when it dealt a NEW board (an actual join), `false` when the
