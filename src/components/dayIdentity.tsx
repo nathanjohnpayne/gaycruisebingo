@@ -1,18 +1,27 @@
 import { THEMES } from '../theme/themes';
 import type { EventDoc } from '../types';
+import { defaultViewedIndex } from './DaySwitcher';
 
 /**
  * The header's two "where are we" lines (daily-cards-spec § "Header"): always
  * TODAY's port and theme — the header is a "where are we" instrument; the
- * board chrome communicates the viewed Day. Resolution is calendar-based in
- * the EVENT timezone (not unlock-based): on the morning of a port day the
- * header already names that port even though the Day Card unlocks at 8:00,
- * because the ship is there — `todaysDayTheme` (unlock-based) keeps owning the
- * Auto theme, which should not flip before the card does.
+ * board chrome communicates the *viewed* Day, which the header never follows.
+ *
+ * "Today" mid-cruise is the latest UNLOCKED Day — the SAME notion the day
+ * switcher and the Auto theme use (`dayStates`/`defaultViewedIndex` in
+ * `./DaySwitcher`, `todaysDayTheme` in `theme/autoTheme.ts`) — so the header
+ * and the board's default Day roll to a new port together at the 08:00 unlock.
+ * Resolving this calendar-based instead made the header lead the board by up to
+ * eight hours on a port morning (00:00 → the card's 08:00 unlock): the header
+ * named the new port while the board still showed yesterday's locked Day, which
+ * read as a header/board mismatch. The pre-cruise "Sails …" and post-cruise
+ * "Until next year" boundaries stay calendar-based in the EVENT timezone — the
+ * embark Day is unlocked from event open (`unlockAt: 0`), so an unlock-based
+ * boundary could never surface the pre-cruise countdown.
  *
  * States, per the spec:
  *   pre-cruise  → "Sails Jul 15" / the embark Day's theme line
- *   during      → "🇭🇷 Split"    / "🏋️ Get Sporty" (today's Day)
+ *   during      → "🇭🇷 Split"    / "🏋️ Get Sporty" (today's unlocked Day)
  *   post-cruise → "Barcelona"   / "👋 Until next year"
  *
  * Pure and Firestore-free like `theme/autoTheme.ts`, so the states are
@@ -103,12 +112,12 @@ export function headerDayIdentity(
     // Spec copy is the bare port ("Barcelona"), no flag — the cruise is over.
     return { port: last.port, theme: '👋 Until next year' };
   }
-  // Latest Day whose date has started — an exact date match on a contiguous
-  // schedule, and the right fallback across any hand-edited gap.
-  let current = first;
-  for (const d of ordered) {
-    if (d.date <= today) current = d;
-    else break;
-  }
+  // Mid-cruise: name the latest UNLOCKED Day, delegating "which Day is today"
+  // to the day switcher's `defaultViewedIndex` so the header and the board's
+  // default Day are guaranteed to name the same port — they roll over together
+  // at the 08:00 unlock instead of the header leading from calendar midnight.
+  // `defaultViewedIndex` is >= 0 here (the embark Day's `unlockAt: 0` is always
+  // unlocked), so the `?? first` is only a defensive fallback.
+  const current = ordered[defaultViewedIndex(ordered, now)] ?? first;
   return { port: `${current.portEmoji} ${current.port}`.trim(), theme: themeLine(current.theme) };
 }

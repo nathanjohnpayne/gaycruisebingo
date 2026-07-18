@@ -1,6 +1,7 @@
 import { collection, doc, increment, runTransaction, updateDoc } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
 import { uploadProofMedia, deleteStoragePath } from './storage';
+import { purgeProofMediaFromCaches } from './proofMediaCache';
 import { markerDisplayName } from './attribution';
 import { completedLines, countMarked, isBlackout, foldDayStat, type DayStats } from '../game/logic';
 import type { Cell, ClaimMode, ProofDoc, ProofType } from '../types';
@@ -355,10 +356,18 @@ export async function deleteProof(
   // doc so the media isn't orphaned.
   if (storagePath) await deleteStoragePath(storagePath);
 
+  // Captured from the proof doc the transaction reads, so the post-commit
+  // purge below (#373) targets the SAME media the Storage delete above just
+  // revoked. Declared outside the callback because a Firestore transaction
+  // can retry: each attempt reassigns it, so only the committed attempt's
+  // value survives to the purge call.
+  let mediaURL: string | null | undefined;
+
   await runTransaction(db, async (tx) => {
     const proofRef = rawProof(id);
     const proofSnap = await tx.get(proofRef);
     const proof = proofSnap.data() as ProofDoc | undefined;
+    mediaURL = proof?.mediaURL;
 
     if (proof) {
       // A deleted proof must not leave its square marked-but-uncredited (in
@@ -445,4 +454,13 @@ export async function deleteProof(
 
     tx.delete(proofRef);
   });
+
+  // Fire-and-forget, AFTER commit (never inside the retryable transaction
+  // callback above — a callback re-run on conflict would fire this on every
+  // attempt, not just the committed one). purgeProofMediaFromCaches already
+  // swallows every failure internally, so this is never awaited in a way
+  // that could let a purge rejection propagate to deleteProof's caller — the
+  // Storage delete above is the authoritative revocation regardless of
+  // whether this device's own cache purge succeeds (#373).
+  void purgeProofMediaFromCaches(mediaURL);
 }
