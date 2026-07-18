@@ -1696,7 +1696,10 @@ a {
 }
 .schedule-row-anomaly {
   flex: 1;
-  min-width: 0;
+  /* A floor before wrap (#416): without it, a long result message beside the
+     quiet button crushes the anomaly into a one-word-per-line sliver column.
+     Below the floor the actions wrap to their own full-width line instead. */
+  min-width: min(100%, 15em);
   color: var(--dim);
   font-size: 12px;
 }
@@ -1717,6 +1720,33 @@ a {
    unsupported this rule is simply dropped, leaving the prior behavior.) */
 .schedule-row-repair:not(:has(.schedule-row-anomaly)):not(:has(.schedule-row-actions > *)) {
   display: none;
+}
+/* Quiet variant for the repair line's controls (#416, mockup
+   #frame-admin-schedule's two drawn states): a once-a-cruise repair never
+   wears the app's primary all-caps pill. The button is compact — the line's
+   own text size — sentence case, hairline border, transparent, no glow; the
+   result/denial message is plain near-ink text (`.schedfix .done` in the
+   wireframe: ink @ .85), not a second pill. Scoped under the repair line;
+   the global `.btn` is untouched. */
+.schedule-row-actions .btn {
+  font-size: 12px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  background: none;
+  box-shadow: none;
+  text-transform: none;
+  letter-spacing: normal;
+}
+.schedule-row-result {
+  color: var(--ink);
+  opacity: 0.85;
+  font-size: 12px;
+}
+/* Each fallback's own button+message wrapper: let a long denial wrap under
+   its button (never truncate), keeping the pair right-aligned in the line. */
+.schedule-row-actions > span {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 /* Report queue: the moderation triage surface, called out from the rest of the
    console so it reads as the first thing an Admin acts on. `.pill-hidden` marks a

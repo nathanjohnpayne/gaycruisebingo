@@ -442,6 +442,25 @@ describe('Admin Schedule repair line (#413, specs/admin-console-ia.md § "Schedu
     expect(H.resnapshotDayNow).toHaveBeenCalledWith(3);
     expect(await within(row).findByText('Re-snapshotted with both pools.')).toBeInTheDocument();
   });
+
+  it('the controls are the quiet variant (#416): sentence-case DOM labels and a plain-text (non-pill) result', async () => {
+    H.unlockDayNow.mockResolvedValue('stamped');
+    const days = [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, snapshotItemIds: undefined })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    renderAdmin('/more/admin/schedule');
+
+    // Sentence case lives in the MARKUP — the quiet variant sets
+    // text-transform: none, so all-caps must not be baked into the label.
+    const repair = screen.getByRole('group', { name: 'Day 1 repair' });
+    expect(within(repair).getByRole('button', { name: 'Unlock now' }).textContent).toBe('Unlock now');
+
+    fireEvent.click(within(repair).getByRole('button', { name: 'Unlock now' }));
+    // The result renders as plain text in the line — near-ink, no pill chrome
+    // (two pills side by side would read as two competing actions).
+    const result = await within(repair).findByText('Unlocked.');
+    expect(result).toHaveClass('schedule-row-result');
+    expect(result).not.toHaveClass('pill');
+  });
 });
 
 describe('Admin Game settings (specs/d15-admin-proof-claims.md rows, re-housed at /more/admin/settings)', () => {
