@@ -151,7 +151,12 @@
   .schedfix{flex-basis:100%;display:flex;align-items:center;gap:7px;
     padding:4px 0 1px 12px;font-size:9.5px;color:var(--dim)}
   .schedfix svg.lucide{width:11px;height:11px;color:var(--accent);flex:0 0 auto}
-  .schedfix .btn{margin-left:auto;white-space:nowrap}
+  /* repair-line controls are the QUIET variant: compact, sentence case, hairline
+     border, no glow — never the app's primary all-caps pill. The result renders
+     as plain text in the line, not a second pill. */
+  .schedfix .btn{margin-left:auto;white-space:nowrap;border-color:var(--border);
+    background:none;font-size:10px;padding:2px 8px;text-transform:none;box-shadow:none}
+  .schedfix .done{margin-left:auto;color:var(--ink);opacity:.85}
 
   /* lock overlay */
   .lockwrap{position:relative}
@@ -801,9 +806,9 @@
         <div class="schedrow">Thu 16 · Split <span class="pill">2 parties</span><span class="dd dis">🌍 Uniforms w/o Borders ✓</span></div>
         <div class="schedrow">Fri 17 · Sea Day <span class="pill">2 parties</span><span class="dd dis">💖 Neon Pink Playground ✓</span></div>
         <div class="schedrow" style="flex-wrap:wrap">Sat 18 · Valletta <span class="pill">2 parties</span><span class="dd">💦 Sporty Splash ▾</span><span class="schedfix"><svg data-lucide="triangle-alert" class="lucide lucide-triangle-alert" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>Snapshot predates the easy-mix deploy<span class="btn">Re-snapshot</span></span></div>
-        <div class="schedrow">Sun 19 · Palermo<span class="dd">🌌 Under the Stars ▾</span></div>
+        <div class="schedrow" style="flex-wrap:wrap">Sun 19 · Palermo<span class="dd">🌌 Under the Stars ▾</span><span class="schedfix"><svg data-lucide="triangle-alert" class="lucide lucide-triangle-alert" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>Missed the 8:00 unlock<span class="done">Unlocked.</span></span></div>
         <div class="schedrow">Mon 20 · Naples<span class="dd">🏛️ Glamiators ▾</span></div>
-        <div class="note">Every day keeps the same one-line shape—theme dropdown trailing, never shifting. A day that needs a rare admin fallback grows a second line inside its own row: the anomaly in plain words plus the quiet fix. Shown: the easy-mix deploy race → Re-snapshot. The scheduler-missed case reads "Missed the 8:00 unlock" → Unlock now, same line, same spot. After a tap the line shows the result ("Re-snapshotted with both pools." / "Denied — cards already dealt.").</div>
+        <div class="note">Every day keeps the same one-line shape—theme dropdown trailing, never shifting. A day that needs a rare admin fallback grows a second line inside its own row: the anomaly in plain words plus the quiet fix. Two states drawn: pending (Valletta—anomaly + compact button) and resolved (Palermo—result as plain text where the button was). Repair-line controls use the quiet variant: sentence case, hairline border, no glow, roughly the line's own text size—never the primary all-caps pill, and never a pill for the result.</div>
       </div>
       <div class="tabs">
         <div class="tab"><span>▦</span>Card</div>
@@ -812,7 +817,7 @@
         <div class="tab on"><span><i class="tabavatar"></i></span>More</div>
       </div>
     </div>
-    <p class="cap"><b>Schedule—repair line inside the day that needs it</b>Same editor as built (theme dropdown, Tonight text, locked once unlocked), under the new chrome. A day needing a rare fallback (Re-snapshot after the easy-mix deploy race, Unlock now after a missed scheduler beat) grows a second line inside its own row: the anomaly stated plainly, the quiet button at the line's end. Rows keep one uniform shape—dropdown trailing everywhere, no floating buttons, no extra chrome ("Recovery" labels, icons-as-headers) for a once-a-cruise action. Prompt pool and Players follow this same detail pattern (not drawn—list + curated add form, and the banned roster, unchanged in content).</p>
+    <p class="cap"><b>Schedule—repair line inside the day that needs it</b>Same editor as built (theme dropdown, Tonight text, locked once unlocked), under the new chrome. A day needing a rare fallback (Re-snapshot after the easy-mix deploy race, Unlock now after a missed scheduler beat) grows a second line inside its own row: the anomaly stated plainly, the quiet button at the line's end. The controls are deliberately understated—compact, sentence case, hairline border, no glow; the result ("Unlocked.", "Denied — cards already dealt.") replaces the button as plain text, not a pill. Rows keep one uniform shape—dropdown trailing everywhere, no floating buttons, no extra chrome for a once-a-cruise action. Prompt pool and Players follow this same detail pattern (not drawn—list + curated add form, and the banned roster, unchanged in content).</p>
   </div>
 
   <!-- Ranks -->
