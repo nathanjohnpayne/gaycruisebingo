@@ -76,24 +76,30 @@ function AdminConsole({ userUid, event }: { userUid: string; event: ReturnType<t
   //
   // `adminPops` rides each admin entry's history state: the number of pops
   // that reach the pre-admin entry (More pushes it as 1; each hub → detail
-  // push increments). Done POPS the whole admin run in one go. A deep link
-  // has no such state (the admin entries were not pushed by this app run) —
-  // there Done REPLACES the current entry with More instead, never navigating
-  // out of the app. `‹ Admin` consumes the detail entry (navigate(-1)) in the
-  // normal hub → detail flow; a deep-linked detail — the FIRST entry in this
-  // document's history (`location.key === 'default'`) — replaces itself with
-  // the hub.
+  // push increments). Done POPS the whole admin run in one go, and `‹ Admin`
+  // consumes the detail entry (navigate(-1)). A deep link has no such state
+  // (its admin entry was not pushed by this app run) — there the whole
+  // session REPLACES in place (see openSection below), Done replaces with
+  // More, and `‹ Admin` replaces back to the hub, never navigating out of
+  // the app.
   const adminPops = (location.state as { adminPops?: number } | null)?.adminPops;
   const done = () => {
     if (adminPops != null) navigate(-adminPops);
     else navigate('/more', { replace: true });
   };
   const back = () => {
-    if (location.key === 'default') navigate('/more/admin', { replace: true });
-    else navigate(-1);
+    if (adminPops != null) navigate(-1);
+    else navigate('/more/admin', { replace: true });
   };
+  // Without adminPops (a deep-link origin), intra-admin navigation REPLACES:
+  // the whole admin session occupies its single deep-linked history entry, so
+  // Done's replace-with-/more leaves no admin entry underneath for browser
+  // Back to reopen (Phase 4b P2, PR #410). The tradeoff — browser Back from a
+  // deep-linked detail leaves the app instead of walking to the hub — matches
+  // the entry's real provenance; the in-app flow (adminPops present) keeps
+  // full push/pop history.
   const openSection = (s: AdminSection) =>
-    navigate(`/more/admin/${s}`, { state: adminPops != null ? { adminPops: adminPops + 1 } : undefined });
+    navigate(`/more/admin/${s}`, adminPops != null ? { state: { adminPops: adminPops + 1 } } : { replace: true });
 
   // The community auto-hide threshold (ADR 0004 Phase 0). Content whose
   // reportCount has REACHED it is already gone from every Player's Feed/pool

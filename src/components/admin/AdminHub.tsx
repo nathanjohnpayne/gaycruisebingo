@@ -1,5 +1,5 @@
 import { ShieldAlert, Wrench, CalendarDays, Lightbulb, Users } from 'lucide-react';
-import { MoreRow } from '../More';
+import { MoreRow } from '../MoreRow';
 import type { AdminSection } from './route';
 import type { EventDoc } from '../../types';
 
@@ -9,8 +9,9 @@ import type { EventDoc } from '../../types';
  * Replaces the old three-tab, six-section scroll. The Review-queue badge is
  * the merged inbox's total (reports + approvals + claims-in-admin-confirmed-
  * mode); the Prompt-pool badge is the pending-approvals count the More menu's
- * Admin row already surfaces. Rows reuse the More menu's `MoreRow` chrome so
- * the hub reads as the same kind of surface.
+ * Admin row already surfaces. Rows reuse the shared `MoreRow`
+ * chrome so the hub reads as the same kind of surface (its own module, so the
+ * hub never imports the whole More screen — Phase 4b P1, PR #410).
  */
 export default function AdminHub({
   event,

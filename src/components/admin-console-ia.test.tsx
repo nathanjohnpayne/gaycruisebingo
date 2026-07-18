@@ -287,6 +287,19 @@ describe('AdminSheet dismissal contract (specs/admin-console-ia.md)', () => {
     expect(at()).toBe('/more');
   });
 
+  it('a deep-link admin session occupies ONE history entry — Done leaves no admin entry for Back to reopen', () => {
+    // Deep-linked hub (no adminPops): opening a detail REPLACES in place, so
+    // after Done replaces with /more the stack holds no admin entry at all
+    // (Phase 4b P2, PR #410).
+    renderAt('/more/admin');
+    fireEvent.click(screen.getByText('Game settings').closest('.more-row') as HTMLElement);
+    expect(at()).toBe('/more/admin/settings');
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(at()).toBe('/more');
+    fireEvent.click(screen.getByTestId('browser-back'));
+    expect(at()).toBe('/more');
+  });
+
   it('a swipe-down on the header dismisses; a short drag does not', () => {
     renderAt('/more/admin/schedule');
     const head = document.querySelector('.admin-sheet-head') as HTMLElement;

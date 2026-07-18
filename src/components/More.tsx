@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Navigate, matchPath, useLocation, useNavigate } from 'react-router-dom';
 import { FALLBACK_PATH } from './tabs';
-import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogOut, ChevronRight, ALargeSmall } from 'lucide-react';
+import { Palette, CalendarDays, Lightbulb, GraduationCap, Download, Wrench, LogOut, ALargeSmall } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useEventDoc, useMyUser, usePendingItemCount } from '../hooks/useData';
 import { useInstallPrompt } from '../hooks/useInstallPrompt';
@@ -10,6 +10,7 @@ import { THEMES } from '../theme/themes';
 import { eventTitle, shortSailRange } from '../format';
 import { todaysDayTheme } from '../theme/autoTheme';
 import { track } from '../analytics';
+import { MoreRow } from './MoreRow';
 import ProfileEditor from './ProfileEditor';
 import ThemeSwitcher from './ThemeSwitcher';
 import ItemPool from './ItemPool';
@@ -260,41 +261,6 @@ function TextSizeSwitcher() {
         </button>
       ))}
     </div>
-  );
-}
-
-/**
- * One tappable row in the menu: a leading Lucide icon (daily-cards-spec
- * § "Iconography — Lucide" › More menu), title, optional subtitle, optional
- * count badge, and a trailing `chevron-right` — every `MoreRow` opens a
- * sub-panel, so the chevron is unconditional here (the quiet Sign-out row
- * and the Install row are plain `<button>`s outside this helper and don't
- * get one, since neither navigates to a sub-panel). Exported for the admin
- * hub's section cards (specs/admin-console-ia.md), which share this chrome.
- */
-export function MoreRow({
-  icon: Icon,
-  title,
-  sub,
-  badge,
-  onClick,
-}: {
-  icon: typeof Palette;
-  title: string;
-  sub?: string;
-  badge?: number;
-  onClick: () => void;
-}) {
-  return (
-    <button type="button" className="more-row" onClick={onClick}>
-      <Icon className="more-row-icon" aria-hidden="true" />
-      <span className="more-row-text">
-        <span className="more-row-title">{title}</span>
-        {sub && <span className="more-row-sub">{sub}</span>}
-      </span>
-      {typeof badge === 'number' && <span className="pill more-badge">{badge}</span>}
-      <ChevronRight className="more-row-chevron" aria-hidden="true" />
-    </button>
   );
 }
 
