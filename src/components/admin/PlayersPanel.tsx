@@ -1,4 +1,5 @@
 import { unbanUser } from '../../data/admin';
+import AsyncButton from './AsyncButton';
 
 /**
  * The Players surface (specs/admin-console-ia.md § "Players"): the current
@@ -24,9 +25,9 @@ export default function PlayersPanel({ bannedUids }: { bannedUids: string[] }) {
                 <div className="name">{uid}</div>
                 <div className="sub">content hidden from players (moderation, not anti-cheat)</div>
               </div>
-              <button className="btn" onClick={() => unbanUser(uid)}>
+              <AsyncButton onAction={() => unbanUser(uid)}>
                 Unban
-              </button>
+              </AsyncButton>
             </div>
           ))}
         </div>

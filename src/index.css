@@ -1682,6 +1682,11 @@ a {
   border-color: var(--accent);
   color: var(--accent);
 }
+/* A failed moderation write's inline alert (#411, specs/admin-async-feedback.md). */
+.pill-error {
+  border-color: var(--danger, #ff6b7a);
+  color: var(--danger, #ff6b7a);
+}
 
 /* ---------- admin console chrome (specs/admin-console-ia.md) ----------
    Every admin surface — hub and details — shares one AdminSheet: a sticky

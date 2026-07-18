@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { isReportHidden } from '../../hooks/useData';
 import { adminAddItem, adminUpdateItemText, hideItem, restoreItem, deleteItem } from '../../data/admin';
+import AsyncButton from './AsyncButton';
 import type { ItemDoc } from '../../types';
 
 /**
@@ -13,14 +14,20 @@ function AdminAddItemForm({ adminUid }: { adminUid: string | undefined }) {
   const [spicy, setSpicy] = useState(false);
   const [pool, setPool] = useState<'main' | 'embark' | 'farewell'>('main');
   const [busy, setBusy] = useState(false);
+  // #411 (specs/admin-async-feedback.md): a rejected add surfaces inline
+  // instead of vanishing — the draft text is kept so a retry is one tap.
+  const [failed, setFailed] = useState(false);
   const spicyAllowed = pool === 'main';
   const effectiveSpicy = spicyAllowed && spicy;
   const submit = async () => {
     if (!adminUid || !text.trim() || busy) return;
     setBusy(true);
+    setFailed(false);
     try {
       await adminAddItem(adminUid, text, effectiveSpicy, pool);
       setText('');
+    } catch {
+      setFailed(true);
     } finally {
       setBusy(false);
     }
@@ -63,6 +70,11 @@ function AdminAddItemForm({ adminUid }: { adminUid: string | undefined }) {
       <button className="btn" disabled={busy || !text.trim()} onClick={() => void submit()}>
         Add
       </button>
+      {failed && (
+        <span className="pill pill-error" role="alert">
+          Didn’t add — try again.
+        </span>
+      )}
     </div>
   );
 }
@@ -86,6 +98,10 @@ function AdminItemRow({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(it.text);
+  // #411: a rejected text save keeps the editor OPEN with the draft intact and
+  // an inline alert, instead of silently closing as if it had committed. One
+  // state serves both commit paths (the Save button and Enter in the input).
+  const [saveFailed, setSaveFailed] = useState(false);
   const save = async () => {
     // Save-time re-check (Codex P2): the Day can unlock mid-edit — the row's
     // prop refreshes on the event re-render, so bail rather than committing a
@@ -94,8 +110,13 @@ function AdminItemRow({
       setEditing(false);
       return;
     }
-    if (draft.trim() && draft.trim() !== it.text) await adminUpdateItemText(it.id, draft);
-    setEditing(false);
+    setSaveFailed(false);
+    try {
+      if (draft.trim() && draft.trim() !== it.text) await adminUpdateItemText(it.id, draft);
+      setEditing(false);
+    } catch {
+      setSaveFailed(true);
+    }
   };
   return (
     <div className="row">
@@ -131,6 +152,11 @@ function AdminItemRow({
           <button className="btn" onClick={() => void save()}>
             Save
           </button>
+          {saveFailed && (
+            <span className="pill pill-error" role="alert">
+              Didn’t save — try again.
+            </span>
+          )}
           <button className="iconbtn" title="Cancel" onClick={() => setEditing(false)}>
             ✕
           </button>
@@ -152,17 +178,17 @@ function AdminItemRow({
         </button>
       )}
       {it.status === 'hidden' ? (
-        <button className="btn" onClick={() => restoreItem(it.id)}>
+        <AsyncButton onAction={() => restoreItem(it.id)}>
           Restore
-        </button>
+        </AsyncButton>
       ) : (
-        <button className="btn" onClick={() => hideItem(it.id)}>
+        <AsyncButton onAction={() => hideItem(it.id)}>
           Hide
-        </button>
+        </AsyncButton>
       )}
-      <button className="iconbtn" title="Delete" onClick={() => deleteItem(it.id)}>
+      <AsyncButton className="iconbtn" title="Delete" onAction={() => deleteItem(it.id)}>
         🗑
-      </button>
+      </AsyncButton>
     </div>
   );
 }
