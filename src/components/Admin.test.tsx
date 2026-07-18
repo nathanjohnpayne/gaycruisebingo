@@ -442,31 +442,26 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
     expect(H.setReportHideThreshold).toHaveBeenCalledWith(3);
   });
 
-  it('the Easy mix control (specs/easy-mix.md) is a 0–100% slider in 10% steps that commits on release', () => {
-    // A stored 0.25 renders faithfully on the slider; the next drag snaps to the grid.
-    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.25 } } as unknown as EventDoc;
+  it('the Easy mix control (specs/easy-mix.md) is a 10%-step slider that writes each distinct step on change, deduped', () => {
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.3 } } as unknown as EventDoc;
     render(<Admin />);
     const mixRow = row('Easy mix');
     const slider = within(mixRow).getByRole('slider') as HTMLInputElement;
     expect(slider.min).toBe('0');
     expect(slider.max).toBe('100');
     expect(slider.step).toBe('10');
-    expect(slider.value).toBe('25');
-    expect(within(mixRow).getByText('25%')).toBeInTheDocument();
-
-    // Dragging updates the shown % but does NOT write until release.
-    fireEvent.change(slider, { target: { value: '30' } });
+    expect(slider.value).toBe('30');
     expect(within(mixRow).getByText('30%')).toBeInTheDocument();
-    expect(H.setEasyMixRatio).not.toHaveBeenCalled();
 
-    // Release commits once, as a 0..1 ratio.
-    fireEvent.pointerUp(slider);
-    expect(H.setEasyMixRatio).toHaveBeenCalledTimes(1);
-    expect(H.setEasyMixRatio).toHaveBeenCalledWith(0.3);
+    // A value change (as assistive tech / click-to-position dispatches, with no pointer
+    // release) writes immediately, as a 0..1 ratio.
+    fireEvent.change(slider, { target: { value: '50' } });
+    expect(within(mixRow).getByText('50%')).toBeInTheDocument();
+    expect(H.setEasyMixRatio).toHaveBeenCalledWith(0.5);
 
-    // A second release at the same position does NOT write again — dedup is against
-    // the last requested ratio, not the (still-async-stale) event value.
-    fireEvent.pointerUp(slider);
+    // Re-emitting the same value does NOT write again — dedup is against the last
+    // requested ratio, not the (still-async-stale) event value.
+    fireEvent.change(slider, { target: { value: '50' } });
     expect(H.setEasyMixRatio).toHaveBeenCalledTimes(1);
   });
 
@@ -475,6 +470,17 @@ describe('Admin Proof & Claims panel (specs/d15-admin-proof-claims.md)', () => {
     const slider = within(row('Easy mix')).getByRole('slider') as HTMLInputElement;
     expect(slider.value).toBe('50');
     expect(within(row('Easy mix')).getByText('50%')).toBeInTheDocument();
+  });
+
+  it('the Easy mix slider snaps a legacy off-grid ratio to the nearest 10% and does not write on load', () => {
+    // A 0.25 left by the old stepper shows as 30% (nearest step, matching the native
+    // thumb) — but merely rendering it must not silently rewrite the stored value.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.25 } } as unknown as EventDoc;
+    render(<Admin />);
+    const slider = within(row('Easy mix')).getByRole('slider') as HTMLInputElement;
+    expect(slider.value).toBe('30');
+    expect(within(row('Easy mix')).getByText('30%')).toBeInTheDocument();
+    expect(H.setEasyMixRatio).not.toHaveBeenCalled();
   });
 
   // Legacy negative threshold (isReportHidden treats non-positive as "no filtering"):

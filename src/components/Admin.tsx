@@ -605,33 +605,32 @@ function ReportThresholdStepper({ value, onChange }: { value: number; onChange: 
   );
 }
 
+/** Snap a 0..1 ratio to the slider's 10% grid, matching where a native range (step 10)
+ *  puts its thumb — so a legacy off-grid value (e.g. a 0.25 from the old stepper) shows
+ *  a consistent percent (30%) instead of a label that disagrees with the thumb. */
+const easyMixPct = (ratio: number) => Math.round(ratio * 10) * 10;
+
 /**
  * The "Easy mix" dial (specs/easy-mix.md): a 0–100% slider in 10% increments writing
- * `settings.easyMixRatio`. Local state gives the thumb optimistic, lag-free motion
- * during a drag (a controlled input bound directly to the async Firestore value would
- * stick), and the value is COMMITTED once on release (pointer/key up) — so one
- * adjustment is one write, never a transient value per intermediate 10% step. Re-syncs
- * to the event doc whenever the committed value changes elsewhere (another admin, or
- * first load). The stored ratio may be any 0..1 value (e.g. a legacy 0.25 from the old
- * stepper); it renders faithfully and the next drag snaps to the 10% grid.
+ * `settings.easyMixRatio`. Local `pct` state gives the thumb optimistic, lag-free
+ * motion and lets the shown percent snap to the grid; it re-syncs to the event doc when
+ * the value changes elsewhere (another admin, or first load).
+ *
+ * Commits on EVERY value change, not only on pointer/key release: assistive tech and
+ * click-to-position adjust a native range by dispatching `change` alone, so a
+ * release-gated write would silently drop those (an a11y hole). The write is deduped
+ * against the LAST REQUESTED ratio (a ref, not the async-stale `value` prop, which lags
+ * until Firestore round-trips), so a mouse drag is one write per distinct 10% step and a
+ * repeat of the current value is a no-op. The ref is seeded with the true stored ratio,
+ * so merely rendering a legacy off-grid value never writes — only a deliberate move does.
  */
 function EasyMixSlider({ value, onChange }: { value: number; onChange: (ratio: number) => void }) {
-  const [pct, setPct] = useState(Math.round(value * 100));
-  // Dedup against the LAST REQUESTED ratio, not the `value` prop: `onChange` writes
-  // Firestore asynchronously, so `value` stays stale until the write round-trips — a
-  // second release at the same position would otherwise write the same ratio again.
+  const [pct, setPct] = useState(() => easyMixPct(value));
   const lastCommitted = useRef(value);
   useEffect(() => {
-    setPct(Math.round(value * 100));
+    setPct(easyMixPct(value));
     lastCommitted.current = value;
   }, [value]);
-  const commit = (next: number) => {
-    const ratio = next / 100;
-    if (ratio !== lastCommitted.current) {
-      lastCommitted.current = ratio;
-      onChange(ratio);
-    }
-  };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       <input
@@ -641,9 +640,15 @@ function EasyMixSlider({ value, onChange }: { value: number; onChange: (ratio: n
         step={10}
         value={pct}
         aria-label="Easy mix percentage"
-        onChange={(e) => setPct(Number(e.target.value))}
-        onPointerUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
-        onKeyUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
+        onChange={(e) => {
+          const next = Number(e.target.value);
+          setPct(next);
+          const ratio = next / 100;
+          if (ratio !== lastCommitted.current) {
+            lastCommitted.current = ratio;
+            onChange(ratio);
+          }
+        }}
       />
       <span style={{ minWidth: 40, textAlign: 'right' }}>{pct}%</span>
     </div>
