@@ -12,7 +12,7 @@ import {
   attestAdult,
   ensureUserProfile,
   hasCachedBoard,
-  hasCachedJoin,
+  hasCachedCard,
   joinAndDeal,
   readAdultAttestationFromCache,
   readAdultAttestationFromServer,
@@ -215,6 +215,26 @@ const AuthContext = createContext<AuthContextValue>({
 function isPoolShortfall(err: unknown): boolean {
   const raw = err instanceof Error ? err.message : String(err);
   return /\b24 prompts\b/.test(raw);
+}
+
+// Firestore error codes that are NOT a transient connectivity blip: a rules
+// denial or a schema/shape mismatch that will keep failing on reconnect. The
+// #403 swallow keeps a cached card up through a CONNECTION problem — but it must
+// NOT hide one of these PERMANENT failures behind the cached Board forever (Codex
+// #408, P2): those want the retry/error surface so a real misconfiguration is
+// visible, not silently masked. Everything else — an explicit timeout, a bare
+// network error with no code, or a genuinely transient Firestore code
+// (`unavailable`, `deadline-exceeded`, …) — is treated as transient and stays
+// swallow-eligible, so the ship-wifi blip this fix targets still keeps the card.
+const PERMANENT_DEAL_ERROR_CODES = new Set([
+  'permission-denied',
+  'failed-precondition',
+  'invalid-argument',
+  'unimplemented',
+]);
+function isTransientDealError(err: unknown): boolean {
+  const code = (err as { code?: unknown })?.code;
+  return !(typeof code === 'string' && PERMANENT_DEAL_ERROR_CODES.has(code));
 }
 
 // Player-facing copy for a deal failure. The main case (ADR 0003/0004) is
@@ -550,6 +570,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // clear its stale state so a late result can't clobber the incoming User (P2).
       const profileAttempt = (profileAttemptRef.current += 1);
       dealAttemptRef.current += 1;
+      // Reset the card-fallback latch for the incoming account (Codex #408, P2):
+      // it is AuthProvider-lifetime state, so without this a prior account's
+      // settled deal would leave it true and the swallow path would hide a NEW
+      // account's genuine no-card deal failure behind an empty Board with no
+      // retry. A returning boarded account re-sets it as soon as its deal settles.
+      dealtOrJoinedRef.current = false;
       clearDealError();
       setDealing(false);
       // The incoming User's profile bootstrap has not settled yet (#77), so the
@@ -680,24 +706,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (dealt) track('join_event');
     } catch (err) {
       if (dealAttemptRef.current !== attempt) return;
-      // A CONNECTION-class failure must not tear down a card the Player already has
-      // (#403). The Board renders from the persistent Firestore cache independently
-      // of this deal, and App swaps that cached Board for the full-screen DealError
-      // the instant `dealError` is set — so a transient re-deal blip (the deal
-      // effect re-fires on every reconnect, and daily-mode joinAndDeal re-reads the
-      // event + re-writes the player row even for an ALREADY-joined Player) would
-      // otherwise kick a Player off their working card. So when the Player has a
-      // card to fall back on — a deal settled this session (`dealtOrJoinedRef`), or
-      // a cached join/board from a prior one — SWALLOW the connection error: clear
-      // any stale one and leave the cached Board up. Daily-mode day-card gaps are
-      // handled by Board's own per-day retry, the correct granular surface. Only a
-      // genuine no-card case (a first-timer whose very first deal failed) still
-      // surfaces the retryable DealError. Pool-shortfall ALWAYS surfaces — it is not
-      // a connection issue, and PoolRecoveryWatcher auto-recovers it on the reason.
-      if (!isPoolShortfall(err)) {
-        const hasCard =
-          dealtOrJoinedRef.current || (await hasCachedJoin(u.uid)) || (await hasCachedBoard(u.uid));
-        // Re-check the supersede guard after the awaited cache probes (P2): a
+      // A TRANSIENT connection failure must not tear down a card the Player already
+      // has (#403). The Board renders from the persistent Firestore cache
+      // independently of this deal, and App swaps that cached Board for the
+      // full-screen DealError the instant `dealError` is set — so a transient
+      // re-deal blip (the deal effect re-fires on every reconnect, and daily-mode
+      // joinAndDeal re-reads the event + re-writes the player row even for an
+      // ALREADY-joined Player) would otherwise kick a Player off their working card.
+      // So when the Player has an ACTUAL cached card to fall back on — a deal
+      // settled this session (`dealtOrJoinedRef`), or a cached legacy/day board
+      // from a prior one (`hasCachedCard`) — SWALLOW the error: clear any stale one
+      // and leave the cached Board up. Only a genuine no-card case (a first-timer
+      // whose very first deal failed) still surfaces the retryable DealError.
+      // Two failures are EXCLUDED so they always surface: a pool-shortfall (not a
+      // connection issue — PoolRecoveryWatcher auto-recovers it on the reason), and
+      // a PERMANENT Firestore failure (permission-denied / failed-precondition /…,
+      // Codex #408 P2 — a rules/schema misconfiguration must not be hidden behind
+      // the cached Board forever; it wants the retry/error surface so it is visible).
+      if (!isPoolShortfall(err) && isTransientDealError(err)) {
+        // A genuine CARD in cache (not merely a joined player row): the player row
+        // can be cached from the Leaderboard/another tab while no board was ever
+        // loaded here, and swallowing then would strand the Player on Board's
+        // indefinite "Dealing…" state with no retry (Codex #408 P2).
+        const hasCard = dealtOrJoinedRef.current || (await hasCachedCard(u.uid));
+        // Re-check the supersede guard after the awaited cache probe (P2): a
         // sign-out / account switch mid-probe must still drop this result.
         if (dealAttemptRef.current !== attempt) return;
         if (hasCard) {

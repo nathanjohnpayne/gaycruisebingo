@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
   readAdultAttestationFromServer: vi.fn(),
   readAdultAttestationFromCache: vi.fn(),
   hasCachedBoard: vi.fn(),
-  hasCachedJoin: vi.fn(),
+  hasCachedCard: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
   // Mutable so the reconnect handler / attest() read the signed-in User (Firebase
@@ -50,7 +50,7 @@ vi.mock('../data/api', () => ({
   readAdultAttestationFromServer: mocks.readAdultAttestationFromServer,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
   hasCachedBoard: mocks.hasCachedBoard,
-  hasCachedJoin: mocks.hasCachedJoin,
+  hasCachedCard: mocks.hasCachedCard,
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));
@@ -173,7 +173,7 @@ beforeEach(() => {
   mocks.readAdultAttestation.mockResolvedValue(1);
   mocks.readAdultAttestationFromCache.mockRejectedValue(new Error('cache miss'));
   mocks.hasCachedBoard.mockResolvedValue(false); // default: no local board (first-time)
-  mocks.hasCachedJoin.mockResolvedValue(false); // default: no cached join either (#403)
+  mocks.hasCachedCard.mockResolvedValue(false); // default: no cached card either (#403)
   mocks.attestAdult.mockResolvedValue(undefined);
   mocks.joinAndDeal.mockResolvedValue(undefined);
   mocks.signInWithPopup.mockResolvedValue({});

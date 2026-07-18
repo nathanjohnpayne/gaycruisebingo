@@ -10,8 +10,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 type Ref = { __kind: 'doc' | 'collection'; id?: string; path: string };
 
-const { addDocMock } = vi.hoisted(() => ({
+const { addDocMock, getDocsFromCacheMock } = vi.hoisted(() => ({
   addDocMock: vi.fn((..._args: unknown[]) => Promise.resolve({ id: 'new-item' })),
+  getDocsFromCacheMock: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'med-2026' }));
@@ -23,16 +24,23 @@ vi.mock('firebase/firestore', async (importOriginal) => {
       __kind: 'collection',
       path: segments.join('/'),
     }),
+    collectionGroup: (_db: unknown, id: string): Ref => ({ __kind: 'collection', path: id }),
     doc: (_a: unknown, ...rest: string[]): Ref => ({
       __kind: 'doc',
       id: rest[rest.length - 1],
       path: rest.join('/'),
     }),
     addDoc: (...args: unknown[]) => addDocMock(...args),
+    getDocsFromCache: (...args: unknown[]) => getDocsFromCacheMock(...args),
   };
 });
 
-import { addItem } from './api';
+import { addItem, hasCachedCard } from './api';
+
+// A cached QuerySnapshot stand-in: only `.docs[].data()` is read by hasCachedCard.
+const snapshotOf = (uids: (string | undefined)[]) => ({
+  docs: uids.map((uid) => ({ data: () => (uid === undefined ? {} : { uid }) })),
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -63,5 +71,23 @@ describe('addItem — main-pool submissions land pending (specs/d15-approvals.md
   it('a blank/whitespace-only submission never calls addDoc', async () => {
     await addItem('u1', '   ');
     expect(addDocMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('hasCachedCard — cached-card probe for the #403 deal-failure fallback', () => {
+  it('is true when a cached board (legacy or day) carries this uid', async () => {
+    // Mixed cache: another Player's board plus this Player's day card.
+    getDocsFromCacheMock.mockResolvedValueOnce(snapshotOf(['other-uid', 'me']));
+    expect(await hasCachedCard('me')).toBe(true);
+  });
+
+  it('is false when no cached board matches this uid (row-only / other players)', async () => {
+    getDocsFromCacheMock.mockResolvedValueOnce(snapshotOf(['someone-else', undefined]));
+    expect(await hasCachedCard('me')).toBe(false);
+  });
+
+  it('is false (fail-closed) when the cache read throws — no local card', async () => {
+    getDocsFromCacheMock.mockRejectedValueOnce(new Error('no cache'));
+    expect(await hasCachedCard('me')).toBe(false);
   });
 });

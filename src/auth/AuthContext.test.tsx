@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => ({
   readAdultAttestation: vi.fn(),
   readAdultAttestationFromCache: vi.fn(),
   hasCachedBoard: vi.fn(),
-  hasCachedJoin: vi.fn(),
+  hasCachedCard: vi.fn(),
   joinAndDeal: vi.fn(),
   track: vi.fn(),
 }));
@@ -54,7 +54,7 @@ vi.mock('../data/api', () => ({
   readAdultAttestationFromServer: mocks.readAdultAttestation,
   readAdultAttestationFromCache: mocks.readAdultAttestationFromCache,
   hasCachedBoard: mocks.hasCachedBoard,
-  hasCachedJoin: mocks.hasCachedJoin,
+  hasCachedCard: mocks.hasCachedCard,
   joinAndDeal: mocks.joinAndDeal,
 }));
 vi.mock('../analytics', () => ({ track: mocks.track }));
@@ -112,7 +112,7 @@ beforeEach(() => {
   // surfaces the retryable error (the first-timer case). The #403 swallow tests
   // override these to model a returning Player who already has a card.
   mocks.hasCachedBoard.mockResolvedValue(false);
-  mocks.hasCachedJoin.mockResolvedValue(false);
+  mocks.hasCachedCard.mockResolvedValue(false);
   mocks.attestAdult.mockResolvedValue(undefined);
   mocks.getRedirectResult.mockResolvedValue(null);
   mocks.signInWithPopup.mockResolvedValue({});
@@ -142,7 +142,7 @@ describe('AuthContext deal-error hardening', () => {
 
   it('surfaces a non-guard deal failure with connection-worded fallback copy when there is NO cached card (first-timer)', async () => {
     // #403: the connection error is only fatal for the Card tab when the Player
-    // has no card to fall back on — the default here (hasCachedBoard/Join → false).
+    // has no card to fall back on — the default here (hasCachedCard → false).
     // A returning Player with a cached card takes the swallow path instead (below).
     mocks.joinAndDeal.mockRejectedValue(new Error('network request failed'));
     mount();
@@ -150,35 +150,51 @@ describe('AuthContext deal-error hardening', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/connection/i);
   });
 
-  it('SWALLOWS a connection deal failure when a cached board exists — the Player keeps their card, no error panel (#403)', async () => {
+  it('SWALLOWS a transient deal failure when a cached card exists — the Player keeps their card, no error panel (#403)', async () => {
     // A returning Player: the deal re-fires on load and fails on a transient blip,
-    // but their board is in the persistent cache — so the DealError panel must NOT
-    // replace it. hasCachedBoard resolves true; no alert is ever shown.
-    mocks.hasCachedBoard.mockResolvedValue(true);
+    // but a legacy/day board is in the persistent cache — so the DealError panel
+    // must NOT replace it. hasCachedCard resolves true; no alert is ever shown.
+    mocks.hasCachedCard.mockResolvedValue(true);
     mocks.joinAndDeal.mockRejectedValue(new Error('network request failed'));
     mount();
     await signInUser();
 
     await waitFor(() => expect(screen.getByTestId('dealing')).toHaveTextContent('idle'));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(mocks.hasCachedCard).toHaveBeenCalledWith(FAKE_USER.uid);
   });
 
-  it('SWALLOWS a connection deal failure when the Player already joined (cached player row, daily mode) (#403)', async () => {
-    // Daily mode writes no legacy board (hasCachedBoard stays false); the cached
-    // JOIN row is the mode-agnostic returning-Player signal that keeps the card up.
-    mocks.hasCachedJoin.mockResolvedValue(true);
+  it('does NOT swallow when only a player row is cached but no card is (Codex #408 P2)', async () => {
+    // hasCachedCard is deliberately stronger than a cached join row: a player row
+    // can be cached (Leaderboard / another tab) with no board here. With no cached
+    // CARD, a transient failure must surface the retry — not strand the Player on
+    // Board's indefinite "Dealing…" with the retry gone.
+    mocks.hasCachedCard.mockResolvedValue(false);
     mocks.joinAndDeal.mockRejectedValue(new Error('network request failed'));
     mount();
     await signInUser();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/connection/i);
+  });
 
-    await waitFor(() => expect(screen.getByTestId('dealing')).toHaveTextContent('idle'));
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  it('SURFACES a PERMANENT (permission-denied) deal failure even when a card is cached (Codex #408 P2)', async () => {
+    // The swallow is for TRANSIENT connection problems only. A rules/schema
+    // misconfiguration (permission-denied) must not be hidden behind the cached
+    // Board forever — it surfaces the retry/error so the failure is visible.
+    mocks.hasCachedCard.mockResolvedValue(true);
+    mocks.joinAndDeal.mockRejectedValue(
+      Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' }),
+    );
+    mount();
+    await signInUser();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/connection/i);
+    // A permanent failure never consults the cache — it surfaces straight away.
+    expect(mocks.hasCachedCard).not.toHaveBeenCalled();
   });
 
   it('keeps the card after a SETTLED deal, then a later re-deal blip is swallowed with no cache read (#403 fast path)', async () => {
     // First deal settles (a card exists) → dealtOrJoinedRef latches true. A later
     // re-deal that fails on a blip is swallowed via that ref, WITHOUT consulting
-    // the cache probes at all, and never shows the error panel.
+    // the cache probe at all, and never shows the error panel.
     mocks.joinAndDeal.mockResolvedValueOnce(true).mockRejectedValue(new Error('network request failed'));
     mount();
     await signInUser();
@@ -190,8 +206,23 @@ describe('AuthContext deal-error hardening', () => {
     await userEvent.click(screen.getByText('retry'));
     await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(mocks.hasCachedBoard).not.toHaveBeenCalled();
-    expect(mocks.hasCachedJoin).not.toHaveBeenCalled();
+    expect(mocks.hasCachedCard).not.toHaveBeenCalled();
+  });
+
+  it('resets the card-fallback latch across an account switch, so a new no-card account still sees the retry (Codex #408 P2)', async () => {
+    // Account A deals successfully (latch → true). Account B signs in on the same
+    // device with NO cached card; its deal fails transiently. The latch must have
+    // been reset on the auth change, so B surfaces the retry rather than being
+    // stranded behind A's stale latch.
+    mocks.joinAndDeal.mockResolvedValueOnce(true).mockRejectedValue(new Error('network request failed'));
+    mount();
+    await signInUser(); // account A deals
+    await waitFor(() => expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    await act(async () => void (await emitAuth({ uid: 'sailor-2', displayName: 'Other', photoURL: null })));
+    // Account B has no cached card and its deal fails → the retry surface shows.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/connection/i);
   });
 
   it('bounds a HUNG deal with DEAL_TIMEOUT_MS and surfaces the retryable error for a first-timer (#403)', async () => {

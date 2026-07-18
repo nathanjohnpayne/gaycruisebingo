@@ -1,12 +1,14 @@
 import {
   addDoc,
   collection,
+  collectionGroup,
   deleteField,
   doc,
   getDoc,
   getDocFromCache,
   getDocFromServer,
   getDocs,
+  getDocsFromCache,
   increment,
   query,
   runTransaction,
@@ -267,26 +269,33 @@ export async function hasCachedBoard(uid: string): Promise<boolean> {
 }
 
 /**
- * Cache-only probe for whether this device has already seen the current User's
- * JOINED player row (`players/{uid}` carrying a numeric `joinedAt`).
+ * Cache-only probe for whether this device has an ACTUAL dealt CARD for the
+ * current User — a legacy `events/{EVENT_ID}/boards/{uid}` OR any day card
+ * `events/{EVENT_ID}/days/{d}/boards/{uid}`, both of which carry a `uid` field.
  *
- * This is the mode-agnostic "returning Player" signal the deal-failure recovery
- * path uses (#403): a joined Player already has a card surface to render from the
- * persistent cache — the legacy `boards/{uid}`, or the lazily-dealt day card
- * `days/{d}/boards/{uid}` that `Board` retries on its own — so a transient
- * connection failure while re-running `joinAndDeal` must NOT tear that cached card
- * down for the full-screen DealError. Unlike `hasCachedBoard` (the legacy board
- * path only, which the day-scoped schedule no longer writes), the player row is
- * written by BOTH the daily and legacy join branches, so it is the one cached
- * signal that also covers the current day-scoped model. Cache miss / read error →
- * `false` (treat as no local join), exactly like `hasCachedBoard`.
+ * This is the mode-agnostic "there is a card to render offline" signal the
+ * deal-failure recovery path uses (#403): a transient connection failure while
+ * re-running `joinAndDeal` must NOT tear a cached card down for the full-screen
+ * DealError. It scans the `boards` collection GROUP from the persistent cache and
+ * matches this uid in memory — no `where` clause, so no server index is involved,
+ * and it is evaluated purely against local cache (a `getDocsFromCache` never
+ * touches the network). The cached `boards` set is tiny: a device only ever loads
+ * ITS OWN boards (nothing subscribes to other Players' boards — the Leaderboard
+ * reads `players`, not `boards`).
+ *
+ * Deliberately stronger than a cached `players/{uid}` row (Codex #408, P2): the
+ * player row can be cached from the Leaderboard query or another tab/device while
+ * NO board was ever loaded here, and swallowing on the row alone would strand the
+ * Player on Board's indefinite "Dealing…" state with the retry surface gone. A
+ * cached CARD is what guarantees `Board` has something to render. Cache miss /
+ * read error → `false`, exactly like `hasCachedBoard`.
  */
-export async function hasCachedJoin(uid: string): Promise<boolean> {
+export async function hasCachedCard(uid: string): Promise<boolean> {
   try {
-    const snap = await getDocFromCache(rawPlayer(uid));
-    return snap.exists() && typeof (snap.data() as { joinedAt?: unknown }).joinedAt === 'number';
+    const snap = await getDocsFromCache(collectionGroup(db, 'boards'));
+    return snap.docs.some((d) => (d.data() as { uid?: unknown }).uid === uid);
   } catch {
-    return false; // not in this device's cache → no local join
+    return false; // no local card in this device's cache
   }
 }
 
