@@ -69,6 +69,13 @@ function snapPct(ratio: number): number {
  * value, so an untouched release never rewrites the stored setting.
  */
 export function EasyMixSlider({ value, onChange }: { value: number; onChange: (ratio: number) => void }) {
+  // The input is deliberately UNCONTROLLED: the browser owns the thumb during
+  // interaction. A controlled `value={pct}` loses keystrokes under load — any
+  // interleaved re-render (this surface re-renders on every event-doc echo of
+  // the OTHER settings writes) snaps the DOM value back to the last committed
+  // React state mid-keystroke, eating arrow presses (caught by the e2e
+  // keyboard walk). `pct` state drives only the bubble/aria text.
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const [pct, setPct] = useState(snapPct(value));
   // Dedup against the LAST REQUESTED ratio, not the `value` prop: `onChange`
   // writes Firestore asynchronously, so `value` stays stale until the write
@@ -76,8 +83,21 @@ export function EasyMixSlider({ value, onChange }: { value: number; onChange: (r
   // the same ratio again.
   const lastCommitted = useRef(snapPct(value) / 100);
   useEffect(() => {
-    setPct(snapPct(value));
-    lastCommitted.current = snapPct(value) / 100;
+    // Never re-sync while the admin is MID-ADJUSTMENT (input focused): with
+    // several commits in flight — a rapid keyboard walk writes once per keyup
+    // — the echo of write N−1 differs from the LAST requested ratio, so an
+    // equality check alone misreads it as external and yanks the thumb back
+    // mid-sequence (caught by the e2e keyboard walk). Echoes settle to the
+    // final write once the interaction ends.
+    if (inputRef.current && document.activeElement === inputRef.current) return;
+    const snapped = snapPct(value);
+    // Our OWN write echoing back off the subscription must not touch the
+    // thumb either — only an EXTERNAL change (another admin, or a first load
+    // with a different value) re-syncs the input and bubble.
+    if (snapped / 100 === lastCommitted.current) return;
+    lastCommitted.current = snapped / 100;
+    setPct(snapped);
+    if (inputRef.current) inputRef.current.value = String(snapped);
   }, [value]);
   const commit = (next: number) => {
     const ratio = next / 100;
@@ -92,11 +112,12 @@ export function EasyMixSlider({ value, onChange }: { value: number; onChange: (r
         {squaresPhrase(pct)}
       </div>
       <input
+        ref={inputRef}
         type="range"
         min={0}
         max={100}
         step={EASY_MIX_STEP}
-        value={pct}
+        defaultValue={pct}
         list="easymix-detents"
         aria-label="Easy mix percentage"
         aria-valuetext={squaresPhrase(pct)}

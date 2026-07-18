@@ -28,6 +28,15 @@ async function becomeAdminAndOpenPanel(page: import('@playwright/test').Page, te
   const adminRow = page.getByRole('button', { name: /^Admin/ });
   await expect(adminRow).toBeVisible({ timeout: 10_000 });
   await adminRow.click();
+  // Lands on the hub (specs/admin-console-ia.md): /more/admin, five cards.
+  await expect(page.getByRole('dialog', { name: 'Admin' })).toBeVisible();
+}
+
+// Open a detail surface from the hub by its card title; the sheet re-titles to
+// the section (the dialog's accessible name), which is the settle signal.
+async function openAdminSection(page: import('@playwright/test').Page, title: string) {
+  await page.getByRole('dialog', { name: 'Admin' }).getByRole('button', { name: title }).click();
+  await expect(page.getByRole('dialog', { name: title })).toBeVisible();
 }
 
 test.describe('Admin — Schedule editor', () => {
@@ -48,12 +57,12 @@ test.describe('Admin — Schedule editor', () => {
     await dismissCoach(page);
     await becomeAdminAndOpenPanel(page, testEnv, uid);
 
-    // Scoped to the Admin dialog + exact text: unscoped, "Schedule" also
+    // Scoped to the Admin hub dialog: unscoped, "Schedule" also
     // substring-matches the More menu's OWN "Cruise schedule" row (still in
     // the DOM behind this dialog), which is a different, read-only panel.
-    const adminDialog = page.getByRole('dialog', { name: 'Admin' });
-    await adminDialog.getByRole('button', { name: 'Schedule', exact: true }).click();
-    await expect(page.getByRole('heading', { name: /^Schedule/ })).toBeVisible();
+    // (No `exact` — a hub card's accessible name includes its subtitle.)
+    await page.getByRole('dialog', { name: 'Admin' }).getByRole('button', { name: 'Schedule' }).click();
+    await expect(page.getByRole('dialog', { name: 'Schedule' })).toBeVisible();
     await page.screenshot({ path: `${SHOTS}/admin-schedule-tab.png`, fullPage: true });
 
     // The LOCKED Day (index 4, seeded with a future unlockAt) — its select is
@@ -110,8 +119,7 @@ test.describe('Admin — Schedule editor', () => {
       });
     });
 
-    const adminDialog = page.getByRole('dialog', { name: 'Admin' });
-    await adminDialog.getByRole('button', { name: 'Schedule', exact: true }).click();
+    await openAdminSection(page, 'Schedule');
 
     const dueRow = page.locator('.row').filter({ hasText: `Day ${LOCKED_INDEX + 1}` });
     const unlockBtn = dueRow.getByRole('button', { name: 'Unlock now' });
@@ -162,8 +170,9 @@ test.describe('Admin — Proof & Claims panel', () => {
     await waitForBoardServerConfirmed(page);
     await dismissCoach(page);
     await becomeAdminAndOpenPanel(page, testEnv, uid);
-    // Proof & Claims renders on the default Moderation tab.
-    const panel = page.locator('.admin-section').filter({ hasText: 'Proof & Claims' });
+    // The knobs live in Game settings › Claims & proof (admin-console-ia).
+    await openAdminSection(page, 'Game settings');
+    const panel = page.locator('.admin-section').filter({ hasText: 'Claims & proof' });
     await expect(panel).toBeVisible();
     await page.screenshot({ path: `${SHOTS}/admin-proof-claims-panel.png`, fullPage: true });
 
@@ -215,8 +224,15 @@ test.describe('Admin — Proof & Claims panel', () => {
     await expect.poll(async () => (await eventField(testEnv, uid, 'settings'))?.reportHideThreshold).toBe(before);
     await page.screenshot({ path: `${SHOTS}/admin-proof-claims-after-edits.png`, fullPage: true });
 
-    // The "Jump to queue" link anchors to the pending-claims section id.
-    await expect(panel.getByRole('link', { name: 'Jump to queue' })).toHaveAttribute('href', '#admin-pending-claims');
+    // The Easy mix slider (admin-console-ia AC): keyboard-stepped from the
+    // seeded 50% down to 25% and released — settings.easyMixRatio lands 0.25
+    // and the squares bubble tracked the drag.
+    const slider = page.getByRole('slider', { name: 'Easy mix percentage' });
+    await slider.focus();
+    for (let i = 0; i < 5; i++) await slider.press('ArrowLeft');
+    await expect(page.getByText('25% · 6 of 24 squares')).toBeVisible();
+    await slider.blur();
+    await expect.poll(async () => (await eventField(testEnv, uid, 'settings'))?.easyMixRatio).toBe(0.25);
   });
 
   test('admin_confirmed: a text (Callout) proof lands pending and does NOT count until an Admin confirms it; reject discards it', async ({
@@ -294,14 +310,15 @@ test.describe('Admin — Proof & Claims panel', () => {
       let playerSnap = await readPlayer(env, playerUid);
       expect(playerSnap.squaresMarked ?? 0).toBe(0);
 
-      // The Admin sees it in the Pending claims queue — scoped to
-      // `#admin-pending-claims` specifically: the SAME prompt text also
-      // appears, unavoidably, in Admin's own full "Prompts (N)" list further
-      // down the page (every active seeded item renders there regardless of
-      // claim state), so an unscoped `.row` filter is ambiguous.
+      // The Admin sees it in the Review queue's Pending-claims group
+      // (admin-console-ia — the merged inbox at /more/admin/queue), scoped to
+      // that group's own `.admin-section` so a same-text row in another group
+      // can never make the filter ambiguous.
       await adminPage.getByRole('link', { name: 'More' }).click();
       await adminPage.getByRole('button', { name: /^Admin/ }).click();
-      const pendingClaimsSection = adminPage.locator('#admin-pending-claims');
+      await adminPage.getByRole('dialog', { name: 'Admin' }).getByRole('button', { name: 'Review queue' }).click();
+      await expect(adminPage.getByRole('dialog', { name: 'Review queue' })).toBeVisible();
+      const pendingClaimsSection = adminPage.locator('.admin-section').filter({ hasText: 'Pending claims' });
       const claimRow = pendingClaimsSection.locator('.row').filter({ hasText: promptText });
       await expect(claimRow).toBeVisible({ timeout: 10_000 });
       await adminPage.screenshot({ path: `${SHOTS}/admin-pending-claims-queue.png`, fullPage: true });
@@ -371,7 +388,7 @@ async function eventField(
   testEnv: RulesTestEnvironment,
   _uid: string,
   field: 'claimMode' | 'settings',
-): Promise<{ photoProofSource?: string; stripPhotoExif?: boolean; visionGate?: boolean; reportHideThreshold?: number } | string | undefined> {
+): Promise<{ photoProofSource?: string; stripPhotoExif?: boolean; visionGate?: boolean; reportHideThreshold?: number; easyMixRatio?: number } | string | undefined> {
   let value: unknown;
   await testEnv.withSecurityRulesDisabled(async (ctx) => {
     const snap = await getDoc(doc(ctx.firestore(), 'events', EVENT_ID));

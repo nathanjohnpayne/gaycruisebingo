@@ -496,6 +496,37 @@ describe('Admin Game settings (specs/d15-admin-proof-claims.md rows, re-housed a
     expect(H.setEasyMixRatio).toHaveBeenCalledTimes(2);
   });
 
+  it('ignores the echo of its own write mid-adjustment — only an external change re-syncs the thumb', () => {
+    // Commit 40%, keep adjusting to 30% (no release yet), then let the 0.4
+    // write echo back off the subscription: the thumb must stay at 30, not
+    // yank back to 40 (the rapid-keyboard race the e2e walk caught).
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.5 } } as unknown as EventDoc;
+    const { rerender } = renderAdmin('/more/admin/settings');
+    const slider = screen.getByRole('slider', { name: 'Easy mix percentage' }) as HTMLInputElement;
+    fireEvent.change(slider, { target: { value: '40' } });
+    fireEvent.keyUp(slider, { key: 'ArrowLeft' });
+    expect(H.setEasyMixRatio).toHaveBeenCalledWith(0.4);
+    fireEvent.change(slider, { target: { value: '30' } });
+
+    // The 0.4 echo arrives while the user is mid-adjustment at 30.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.4 } } as unknown as EventDoc;
+    rerender(
+      <MemoryRouter initialEntries={['/more/admin/settings']}>
+        <Admin />
+      </MemoryRouter>,
+    );
+    expect(slider.value).toBe('30');
+
+    // A genuinely EXTERNAL change (another admin) does re-sync.
+    H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.75 } } as unknown as EventDoc;
+    rerender(
+      <MemoryRouter initialEntries={['/more/admin/settings']}>
+        <Admin />
+      </MemoryRouter>,
+    );
+    expect(slider.value).toBe('75');
+  });
+
   it('normalizes a legacy off-grid ratio to the 5% grid for display without rewriting the stored value', () => {
     // 0.33 → 35 on the 5% grid; the untouched release must not write 0.35.
     H.event = { ...H.event, settings: { reportHideThreshold: 4, easyMixRatio: 0.33 } } as unknown as EventDoc;

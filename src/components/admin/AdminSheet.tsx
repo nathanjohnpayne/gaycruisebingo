@@ -97,6 +97,11 @@ export default function AdminSheet({
           // fights the content's own scroll; `touch-action: none` in its CSS is
           // what lets a vertical drag reach these handlers on touch devices.
           onPointerDown={(e) => {
+            // Never start a drag from the header's buttons: pointer CAPTURE
+            // retargets the subsequent click to the header, silently eating
+            // Done/back taps (caught by the e2e suite — the Done click landed
+            // on the header and never fired the button).
+            if ((e.target as HTMLElement).closest('button')) return;
             dragStartY.current = e.clientY;
             // Keep receiving the pointer even when the finger leaves the header.
             (e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId);

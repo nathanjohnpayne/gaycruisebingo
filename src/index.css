@@ -1747,6 +1747,15 @@ a {
 .admin-sheet-body {
   padding: 8px 16px calc(20px + env(safe-area-inset-bottom));
 }
+/* On the narrow sheet, wide controls stack UNDER their row's copy instead of
+   squeezing it into a sliver column (the wireframes' settings layout): rows
+   may wrap, and a segmented control takes the full row when it does. */
+.admin-sheet-body .row {
+  flex-wrap: wrap;
+}
+.admin-sheet-body .row .seg {
+  flex-basis: 100%;
+}
 
 /* The Easy mix slider (specs/admin-console-ia.md § "Easy mix slider"): full
    0-100% range, detent labels under the track, and a value bubble translating

@@ -3,7 +3,7 @@
 // emulators: a Player-submitted Prompt (More → Suggest a square → ItemPool)
 // lands `pending` — invisible in the general pool, visible only to its
 // submitter tagged "pending review" — until an Admin approves it (More →
-// Admin → Approvals) and it flips `active`.
+// Admin → Review queue) and it flips `active`.
 //
 // "Never dealt" while pending holds by construction here (every seeded Day's
 // Board/snapshot is already frozen before this submission exists) — the part
@@ -86,7 +86,10 @@ test('a Player-submitted prompt lands Pending, then an Admin approval makes it a
     const adminRow = page.getByRole('button', { name: /^Admin/ });
     await expect(adminRow).toBeVisible({ timeout: 10_000 });
     await adminRow.click();
-    await page.getByRole('button', { name: 'Approvals' }).click();
+    // Approvals live in the merged Review queue now (admin-console-ia):
+    // hub card → /more/admin/queue, Approvals group.
+    await page.getByRole('dialog', { name: 'Admin' }).getByRole('button', { name: 'Review queue' }).click();
+    await expect(page.getByRole('dialog', { name: 'Review queue' })).toBeVisible();
 
     const queueRow = page.locator('.row').filter({ hasText: promptText });
     await expect(queueRow).toBeVisible({ timeout: 10_000 });
@@ -94,8 +97,9 @@ test('a Player-submitted prompt lands Pending, then an Admin approval makes it a
     await page.screenshot({ path: `${SHOTS}/approvals-queue-row.png`, fullPage: true });
     await queueRow.getByRole('button', { name: 'Approve' }).click();
 
-    // The queue empties (this was the only pending item this seed created).
-    await expect(page.getByText('Nothing pending review.')).toBeVisible({ timeout: 10_000 });
+    // The whole inbox empties (this was the only pending item this seed
+    // created, and nothing is reported) — the wireframes' empty state.
+    await expect(page.getByText('All clear. Go enjoy the boat.')).toBeVisible({ timeout: 10_000 });
     await page.screenshot({ path: `${SHOTS}/approvals-queue-empty-after-approve.png`, fullPage: true });
 
     // Emulator ground truth: `active`, stamped `approvedBy`/`approvedAt`.
@@ -112,7 +116,7 @@ test('a Player-submitted prompt lands Pending, then an Admin approval makes it a
     });
 
     // It now shows in the general Prompts pool (no "pending review" pill).
-    await page.getByRole('button', { name: 'Close' }).click(); // close Admin panel
+    await page.getByRole('button', { name: 'Done' }).click(); // Done closes the admin from any depth
     await page.getByRole('button', { name: /Suggest a square/ }).click();
     const activeRow = page.locator('.row').filter({ hasText: promptText });
     await expect(activeRow).toBeVisible({ timeout: 10_000 });
