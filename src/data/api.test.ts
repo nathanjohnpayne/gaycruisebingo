@@ -10,8 +10,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 type Ref = { __kind: 'doc' | 'collection'; id?: string; path: string };
 
-const { addDocMock } = vi.hoisted(() => ({
+const { addDocMock, getDocsFromCacheMock } = vi.hoisted(() => ({
   addDocMock: vi.fn((..._args: unknown[]) => Promise.resolve({ id: 'new-item' })),
+  getDocsFromCacheMock: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'med-2026' }));
@@ -23,16 +24,26 @@ vi.mock('firebase/firestore', async (importOriginal) => {
       __kind: 'collection',
       path: segments.join('/'),
     }),
+    collectionGroup: (_db: unknown, id: string): Ref => ({ __kind: 'collection', path: id }),
     doc: (_a: unknown, ...rest: string[]): Ref => ({
       __kind: 'doc',
       id: rest[rest.length - 1],
       path: rest.join('/'),
     }),
     addDoc: (...args: unknown[]) => addDocMock(...args),
+    getDocsFromCache: (...args: unknown[]) => getDocsFromCacheMock(...args),
   };
 });
 
-import { addItem } from './api';
+import { addItem, hasCachedCard } from './api';
+
+// A cached board-doc stand-in: hasCachedCard reads `.ref.path` (event scope) and
+// `.data().uid`. EVENT_ID is mocked to 'med-2026' above.
+const boardDoc = (uid: string | undefined, path: string) => ({
+  ref: { path },
+  data: () => (uid === undefined ? {} : { uid }),
+});
+const snapshotOf = (docs: ReturnType<typeof boardDoc>[]) => ({ docs });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -63,5 +74,43 @@ describe('addItem — main-pool submissions land pending (specs/d15-approvals.md
   it('a blank/whitespace-only submission never calls addDoc', async () => {
     await addItem('u1', '   ');
     expect(addDocMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('hasCachedCard — cached-card probe for the #403 deal-failure fallback', () => {
+  it('is true when a cached board (legacy or day) for the ACTIVE event carries this uid', async () => {
+    // Mixed cache: another Player's board plus this Player's day card, both under
+    // the active events/med-2026 tree.
+    getDocsFromCacheMock.mockResolvedValueOnce(
+      snapshotOf([
+        boardDoc('other-uid', 'events/med-2026/boards/other-uid'),
+        boardDoc('me', 'events/med-2026/days/0/boards/me'),
+      ]),
+    );
+    expect(await hasCachedCard('me')).toBe(true);
+  });
+
+  it('is false when no cached board matches this uid (row-only / other players)', async () => {
+    getDocsFromCacheMock.mockResolvedValueOnce(
+      snapshotOf([
+        boardDoc('someone-else', 'events/med-2026/boards/someone-else'),
+        boardDoc(undefined, 'events/med-2026/boards/malformed'),
+      ]),
+    );
+    expect(await hasCachedCard('me')).toBe(false);
+  });
+
+  it('is false when only a PRIOR event board matches this uid — active-event scoped (Codex #408 round 2)', async () => {
+    // A cached board from a past cruise for the same uid must NOT read as a current
+    // card, or a first-deal failure for the new event would be wrongly swallowed.
+    getDocsFromCacheMock.mockResolvedValueOnce(
+      snapshotOf([boardDoc('me', 'events/old-cruise-2025/boards/me')]),
+    );
+    expect(await hasCachedCard('me')).toBe(false);
+  });
+
+  it('is false (fail-closed) when the cache read throws — no local card', async () => {
+    getDocsFromCacheMock.mockRejectedValueOnce(new Error('no cache'));
+    expect(await hasCachedCard('me')).toBe(false);
   });
 });
