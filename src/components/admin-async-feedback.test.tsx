@@ -192,6 +192,26 @@ describe('AsyncButton affordance on moderation actions (specs/admin-async-feedba
     expect(input.value).toBe('Fragile prompt'); // draft kept for a one-tap retry
   });
 
+  it('the inline save guards re-entry — a double Enter while pending issues exactly one write', async () => {
+    H.items = [item('i1', { text: 'Original wording' })];
+    let settle!: () => void;
+    H.adminUpdateItemText.mockImplementationOnce(() => new Promise<void>((resolve) => (settle = resolve)));
+    renderAdmin('/more/admin/pool');
+
+    fireEvent.click(screen.getByTitle('Edit text'));
+    const edit = screen.getByLabelText('Edit prompt text') as HTMLInputElement;
+    fireEvent.change(edit, { target: { value: 'Sharper wording' } });
+    fireEvent.keyDown(edit, { key: 'Enter' });
+    fireEvent.keyDown(edit, { key: 'Enter' }); // ignored while pending
+    expect((screen.getByRole('button', { name: 'Save' }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      settle();
+      await Promise.resolve();
+    });
+    expect(H.adminUpdateItemText).toHaveBeenCalledTimes(1);
+    expect(screen.queryByLabelText('Edit prompt text')).toBeNull(); // editor closed on success
+  });
+
   it('a rejected inline text save keeps the editor open with the draft and the save-specific alert', async () => {
     H.items = [item('i1', { text: 'Original wording' })];
     H.adminUpdateItemText.mockRejectedValueOnce(new Error('offline'));
