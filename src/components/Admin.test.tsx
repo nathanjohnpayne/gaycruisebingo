@@ -390,6 +390,60 @@ describe('Admin Schedule surface (specs/d15-admin-schedule.md, at /more/admin/sc
   });
 });
 
+describe('Admin Schedule repair line (#413, specs/admin-console-ia.md § "Schedule")', () => {
+  it('a re-snapshot-eligible Day grows a repair line with its anomaly text and the Re-snapshot button; the top line holds no buttons', () => {
+    // index ≥ 3, main pool, unlocked, already snapshot-stamped → canResnapshot.
+    const days = [dayDef({ index: 3, unlockAt: Date.now() - 3600_000, pool: 'main', snapshotItemIds: ['item-1'] })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    renderAdmin('/more/admin/schedule');
+
+    const repair = screen.getByRole('group', { name: 'Day 4 repair' });
+    expect(within(repair).getByText('Snapshot predates the easy-mix deploy')).toBeInTheDocument();
+    expect(within(repair).getByRole('button', { name: 'Re-snapshot' })).toBeInTheDocument();
+
+    // The theme dropdown is the only trailing control on the top line — the
+    // fallback never lands between the Day content and the dropdown. A <select>
+    // is not a button, so the top line has zero buttons.
+    const row = screen.getByText(/Day 4 ·/).closest('.row') as HTMLElement;
+    const topLine = row.querySelector('.schedule-row-top') as HTMLElement;
+    expect(within(topLine).queryByRole('button')).toBeNull();
+    expect(within(topLine).getByLabelText('Day 4 theme')).toBeInTheDocument();
+  });
+
+  it('a Day due for manual unlock grows a repair line reading "Missed the 8:00 unlock" with Unlock now', () => {
+    const days = [dayDef({ index: 0, unlockAt: Date.now() - 3600_000, snapshotItemIds: undefined })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    renderAdmin('/more/admin/schedule');
+
+    const repair = screen.getByRole('group', { name: 'Day 1 repair' });
+    expect(within(repair).getByText('Missed the 8:00 unlock')).toBeInTheDocument();
+    expect(within(repair).getByRole('button', { name: 'Unlock now' })).toBeInTheDocument();
+  });
+
+  it('an ineligible Day renders no repair line — the row is a single line', () => {
+    // Future unlock: neither due for manual unlock nor re-snapshot-eligible.
+    const days = [dayDef({ index: 3, unlockAt: Date.now() + 3600_000, pool: 'main' })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    renderAdmin('/more/admin/schedule');
+
+    expect(screen.queryByRole('group', { name: 'Day 4 repair' })).toBeNull();
+    expect(screen.queryByText('Snapshot predates the easy-mix deploy')).toBeNull();
+    expect(screen.queryByText('Missed the 8:00 unlock')).toBeNull();
+  });
+
+  it('the result message stays inside the row after a Re-snapshot tap', async () => {
+    H.resnapshotDayNow.mockResolvedValue('resnapshotted');
+    const days = [dayDef({ index: 3, unlockAt: Date.now() - 3600_000, pool: 'main', snapshotItemIds: ['item-1'] })];
+    H.event = { ...H.event, days } as unknown as EventDoc;
+    renderAdmin('/more/admin/schedule');
+
+    const row = screen.getByText(/Day 4 ·/).closest('.row') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: 'Re-snapshot' }));
+    expect(H.resnapshotDayNow).toHaveBeenCalledWith(3);
+    expect(await within(row).findByText('Re-snapshotted with both pools.')).toBeInTheDocument();
+  });
+});
+
 describe('Admin Game settings (specs/d15-admin-proof-claims.md rows, re-housed at /more/admin/settings)', () => {
   const row = (label: string) => screen.getByText(label).closest('.row') as HTMLElement;
 

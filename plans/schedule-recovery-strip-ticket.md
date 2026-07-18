@@ -1,8 +1,6 @@
 # Schedule: fold per-day fallbacks into a repair line inside the day's row
 
-**Track:** admin/UI · **Phase:** 0 · **Size:** S · **Epic:** Daily Cards (admin console)
-**Refs:** #221 (Schedule surface), #249 (Unlock now), easy-mix deploy-race fallback, `specs/admin-console-ia.md` § Schedule. Presentation-only — no data model, callable, or gating change. (File keeps its original `recovery-strip` slug; the design iterated to the repair line described below.)
-**Target mockup:** `plans/daily-cards-wireframes.html` § `#frame-admin-schedule` (caption "Schedule—repair line inside the day that needs it"). This is the parity reference the built UI must match.
+**Track:** admin/UI · **Phase:** 0 · **Size:** S · **Epic:** Daily Cards (admin console) **Refs:** #221 (Schedule surface), #249 (Unlock now), easy-mix deploy-race fallback, `specs/admin-console-ia.md` § Schedule. Presentation-only — no data model, callable, or gating change. (File keeps its original `recovery-strip` slug; the design iterated to the repair line described below.) **Target mockup:** `plans/daily-cards-wireframes.html` § `#frame-admin-schedule` (caption "Schedule—repair line inside the day that needs it"). This is the parity reference the built UI must match.
 
 ## Problem
 

@@ -119,11 +119,16 @@ function ResnapshotButton({ dayIndex }: { dayIndex: number }) {
  * there is no row add/remove here. The lock is CLIENT-SIDE convenience only —
  * `firestore.rules` (`daysThemeLockOk`) is what actually denies a locked
  * Day's write; a direct-SDK caller bypassing this disabled control still gets
- * rejected server-side. An `UnlockNowButton` (#249) additionally renders when
- * the Day is `dayDueForManualUnlock` — unlocked but not yet snapshot-stamped,
- * the state a lagging/failed 08:00 scheduler run leaves behind. The Unlock-now
- * and Re-snapshot fallbacks anchor to the specific Day's row they act on
- * (specs/admin-console-ia.md § "Schedule").
+ * rejected server-side. The once-a-cruise recovery fallbacks (`UnlockNowButton`
+ * #249, `ResnapshotButton` easy-mix deploy race) no longer sit inline between
+ * the Day content and the dropdown — which lopsided the one eligible row and
+ * shifted its dropdown out of line. Instead a Day that needs one grows a
+ * full-width "repair line" INSIDE its own row (#413,
+ * specs/admin-console-ia.md § "Schedule"; mockup #frame-admin-schedule): the
+ * anomaly stated in plain words, the quiet fix button at the line's trailing
+ * edge. Every row keeps one uniform shape — info + theme dropdown trailing,
+ * never shifting — and the repair line stays anchored to the specific Day it
+ * acts on.
  */
 // The "Tonight:" line's two events are stored as a `string[]`; the editor round-
 // trips them through one text field joined by the same " · " the day bar renders,
@@ -158,6 +163,15 @@ function isTwoPartyDay(day: DayDef): boolean {
   return !day.tutorial && tonight.length === 2 && tonight.every(isPartyEvent);
 }
 
+// The two anomaly labels for a Day's repair line (#413,
+// specs/admin-console-ia.md § "Schedule"; mockup #frame-admin-schedule). Each
+// states, in the admin's own words, what went wrong on THIS Day; the paired
+// fallback button at the line's trailing edge is the fix. Kept here beside the
+// eligibility checks (`canResnapshot` / `dayDueForManualUnlock`) that decide
+// which — if either — a row shows.
+const RESNAPSHOT_ANOMALY = 'Snapshot predates the easy-mix deploy';
+const UNLOCK_ANOMALY = 'Missed the 8:00 unlock';
+
 function ScheduleRow({
   day,
   now,
@@ -175,6 +189,17 @@ function ScheduleRow({
   // unlocked AND been stamped (a stamped-but-maybe-main-only snapshot); an unstamped Day
   // uses "Unlock now" above, and tutorial Days never mix. Server enforces zero-boards.
   const canResnapshot = day.index >= 3 && day.pool === 'main' && day.unlockAt <= now && day.snapshotItemIds != null;
+  // Sticky mount for the repair line: show it once a fallback has been relevant,
+  // then KEEP it for the row's lifetime. `UnlockNowButton` deliberately holds
+  // its "Unlocked." confirmation after `dueForManualUnlock` flips false, and on
+  // a tutorial/early Day `canResnapshot` never turns true to re-show a line
+  // gated on the live conditions — so a line gated purely on
+  // `canResnapshot || dueForManualUnlock` would unmount that confirmation on the
+  // very success it's confirming. Latch on first relevance, never unmount.
+  const [recoveryEverShown, setRecoveryEverShown] = useState(canResnapshot || dueForManualUnlock);
+  useEffect(() => {
+    if (canResnapshot || dueForManualUnlock) setRecoveryEverShown(true);
+  }, [canResnapshot, dueForManualUnlock]);
   // Local draft so typing doesn't fight the subscribed doc; committed on blur.
   const [tonightDraft, setTonightDraft] = useState(() => joinTonight(day.tonight));
   const [tonightError, setTonightError] = useState('');
@@ -204,42 +229,59 @@ function ScheduleRow({
     }
   };
   return (
-    <div className="row">
-      <div className="grow">
-        <div className="name">
-          Day {day.index + 1} · {day.date} · {day.portEmoji} {day.port}
-          {day.tutorial ? (
-            <span className="pill">tutorial</span>
-          ) : (
-            isTwoPartyDay(day) && <span className="pill">2 parties</span>
-          )}
+    <div className="row schedule-row">
+      {/* Top line: uniform on every row — info grows, the theme dropdown trails.
+          No fallback control ever lands here, so the dropdown never shifts. */}
+      <div className="schedule-row-top">
+        <div className="grow">
+          <div className="name">
+            Day {day.index + 1} · {day.date} · {day.portEmoji} {day.port}
+            {day.tutorial ? (
+              <span className="pill">tutorial</span>
+            ) : (
+              isTwoPartyDay(day) && <span className="pill">2 parties</span>
+            )}
+          </div>
+          <div className="sub">{locked ? 'locked — already unlocked or past' : 'editable until unlock'}</div>
+          <input
+            className="tonight-input"
+            aria-label={`Day ${day.index + 1} tonight`}
+            value={tonightDraft}
+            disabled={locked}
+            placeholder="e.g. 🪖 Dog Tag T-Dance · ✈️ Duty Free"
+            onChange={(e) => setTonightDraft(e.target.value)}
+            onBlur={() => void commitTonight()}
+          />
+          {tonightError ? <div className="error" role="alert">{tonightError}</div> : null}
         </div>
-        <div className="sub">{locked ? 'locked — already unlocked or past' : 'editable until unlock'}</div>
-        <input
-          className="tonight-input"
-          aria-label={`Day ${day.index + 1} tonight`}
-          value={tonightDraft}
+        <select
+          aria-label={`Day ${day.index + 1} theme`}
+          value={day.theme}
           disabled={locked}
-          placeholder="e.g. 🪖 Dog Tag T-Dance · ✈️ Duty Free"
-          onChange={(e) => setTonightDraft(e.target.value)}
-          onBlur={() => void commitTonight()}
-        />
-        {tonightError ? <div className="error" role="alert">{tonightError}</div> : null}
+          onChange={(e) => onChangeTheme(day.index, e.target.value as ThemeId)}
+        >
+          {THEMES.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.emoji} {t.label}
+            </option>
+          ))}
+        </select>
       </div>
-      {canResnapshot && <ResnapshotButton dayIndex={day.index} />}
-      <UnlockNowButton dayIndex={day.index} visible={dueForManualUnlock} />
-      <select
-        aria-label={`Day ${day.index + 1} theme`}
-        value={day.theme}
-        disabled={locked}
-        onChange={(e) => onChangeTheme(day.index, e.target.value as ThemeId)}
-      >
-        {THEMES.map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.emoji} {t.label}
-          </option>
-        ))}
-      </select>
+      {/* Repair line: a full-width second line inside the row for a Day that
+          needs a fallback. Anomaly in plain words first, the quiet fix button at
+          the trailing edge; the button carries its own result/denial message
+          beside the anomaly after a tap. Mounted stickily (see recoveryEverShown)
+          so the confirmation survives eligibility flipping false. */}
+      {recoveryEverShown && (
+        <div className="schedule-row-repair" role="group" aria-label={`Day ${day.index + 1} repair`}>
+          {canResnapshot && <span className="schedule-row-anomaly">{RESNAPSHOT_ANOMALY}</span>}
+          {dueForManualUnlock && <span className="schedule-row-anomaly">{UNLOCK_ANOMALY}</span>}
+          <span className="schedule-row-actions">
+            {canResnapshot && <ResnapshotButton dayIndex={day.index} />}
+            <UnlockNowButton dayIndex={day.index} visible={dueForManualUnlock} />
+          </span>
+        </div>
+      )}
     </div>
   );
 }
