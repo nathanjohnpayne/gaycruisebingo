@@ -194,6 +194,23 @@ a {
   border-top: 1px solid var(--border);
   z-index: 20;
 }
+/* Full-surface bug-report capture only (src/data/bugReports.ts): html-to-image
+   paints the whole scrollable `.app` into an SVG foreignObject sized to the full
+   box, where `position: fixed` stops tracking the visible viewport bottom — so
+   the fixed `.tabs` bar would float mid-capture over the below-the-fold content
+   and read as "the toolbar is not pinned to the bottom" (report
+   GwT3bmAqwu2eKeQF1uOf). While `.bug-report-capturing` is on the root, pin the
+   bar to the foot of the captured surface (`.app` box) instead, so the
+   screenshot matches the live, thumb-pinned bar. `.app` gains only
+   `position: relative` (its lone ICB-resolved absolute descendant, the clipped
+   `.visually-hidden`, is invisible), and the class is added purely for the
+   render and removed immediately after. */
+.app.bug-report-capturing {
+  position: relative;
+}
+.app.bug-report-capturing .tabs {
+  position: absolute;
+}
 .tab {
   flex: 1;
   max-width: 180px;

@@ -11,7 +11,7 @@ const { html2canvasSpy, toBlobSpy } = vi.hoisted(() => ({
 vi.mock('html2canvas', () => ({ default: html2canvasSpy }));
 vi.mock('html-to-image', () => ({ toBlob: toBlobSpy }));
 
-import { buildBugReportInput, captureAppSurface } from './bugReports';
+import { buildBugReportInput, captureAppSurface, CAPTURE_PIN_CLASS } from './bugReports';
 import { BUG_REPORT_SCREENSHOT_MAX_DIMENSION, planCaptureScale } from './screenshotFit';
 
 beforeEach(() => {
@@ -189,6 +189,64 @@ describe('bug-report client diagnostics', () => {
     expect(ignoreElements(root.querySelector('[data-kind="remote-image"]') as HTMLElement)).toBe(true);
     expect(ignoreElements(root.querySelector('[data-kind="video"]') as HTMLElement)).toBe(true);
     expect(ignoreElements(root.querySelector('[data-kind="report-ui"]') as HTMLElement)).toBe(true);
+  });
+
+  it('re-pins the fixed tab bar to the captured surface during the render, then restores it (report GwT3bmAqwu2eKeQF1uOf)', async () => {
+    // html-to-image paints the whole scrollable `.app` into a foreignObject
+    // sized to the full box, where `position: fixed` no longer tracks the
+    // visible viewport bottom — so the fixed `.tabs` bar would float mid-capture
+    // and read as "not pinned to the bottom". The capture must re-pin it while
+    // html-to-image reads computed styles, and leave the live bar untouched
+    // afterward.
+    const root = document.createElement('main');
+    root.className = 'app';
+    root.innerHTML = '<nav class="tabs">tabs</nav><section>content</section>';
+    document.body.append(root);
+    const blob = new Blob(['png'], { type: 'image/png' });
+    let pinnedDuringRender: boolean | null = null;
+    // The re-pin to `absolute` is owned by index.css keyed on this class; the JS
+    // contract is that the class is live exactly while html-to-image reads
+    // computed styles. (The positional effect is verified in-browser, not in
+    // jsdom, which does not load index.css.)
+    toBlobSpy.mockImplementation((node: HTMLElement) => {
+      pinnedDuringRender = node.classList.contains(CAPTURE_PIN_CLASS);
+      return Promise.resolve(blob);
+    });
+
+    await expect(captureAppSurface()).resolves.toBe(blob);
+
+    expect(pinnedDuringRender).toBe(true);
+    // Restored the moment the render returns — the live, thumb-pinned bar is
+    // never left mispinned.
+    expect(root.classList.contains(CAPTURE_PIN_CLASS)).toBe(false);
+  });
+
+  it('restores the pin class even when the render throws, and never applies it in the viewport-cropped canvas fallback', async () => {
+    const root = document.createElement('main');
+    root.className = 'app';
+    root.innerHTML = '<nav class="tabs">tabs</nav><section>content</section>';
+    Object.defineProperty(root, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ width: 800, height: 2400, top: 0, left: 0, right: 800, bottom: 2400 }),
+    });
+    document.body.append(root);
+    vi.stubGlobal('innerWidth', 800);
+    vi.stubGlobal('innerHeight', 600);
+    const fallbackBlob = new Blob(['png'], { type: 'image/png' });
+    let pinnedDuringCanvas: boolean | null = null;
+    // Both html-to-image passes fail (each must still remove the class in its
+    // finally); the viewport-cropped html2canvas fallback then runs with the
+    // fixed bar left as-is, because there the crop IS the viewport.
+    toBlobSpy.mockRejectedValue(new Error('foreignObject failed'));
+    html2canvasSpy.mockImplementation((node: HTMLElement) => {
+      pinnedDuringCanvas = node.classList.contains(CAPTURE_PIN_CLASS);
+      return Promise.resolve({ toBlob: (cb: BlobCallback) => cb(fallbackBlob) } as HTMLCanvasElement);
+    });
+
+    await expect(captureAppSurface()).resolves.toBe(fallbackBlob);
+
+    expect(pinnedDuringCanvas).toBe(false);
+    expect(root.classList.contains(CAPTURE_PIN_CLASS)).toBe(false);
   });
 
   it('crops the desktop canvas fallback to the visible scrolled viewport', async () => {
