@@ -307,8 +307,12 @@ describe('ShareCard — renderBingoShareCard', () => {
     });
 
     const node = toBlobNode();
+    // All 24 playable squares plus the free centre (25 cells) carry `.marked`;
+    // the centre additionally keeps its `.free` accent styling (CodeRabbit).
     expect(node.querySelectorAll('.share-card-cell.marked')).toHaveLength(25);
     expect(node.querySelectorAll('.share-card-cell.line')).toHaveLength(0);
+    const freeCell = node.querySelectorAll('.share-card-cell')[12];
+    expect(freeCell).toHaveClass('share-card-cell', 'marked', 'free');
   });
 
   // issue #423 — the caller-composed context + stat lines render when given

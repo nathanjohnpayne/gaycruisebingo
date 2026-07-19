@@ -2584,7 +2584,7 @@ body:has(.sheet-backdrop) .guidelines-trigger {
     radial-gradient(75% 45% at 105% 112%, color-mix(in srgb, var(--secondary) 24%, transparent), transparent 60%),
     var(--bg);
   color: var(--ink);
-  font-family: 'Oswald', 'Helvetica Neue', Arial, sans-serif;
+  font-family: Oswald, 'Helvetica Neue', Arial, sans-serif;
 }
 .share-card-event {
   /* Context line: "<event> · Day N · <port>" (issue #423). */
