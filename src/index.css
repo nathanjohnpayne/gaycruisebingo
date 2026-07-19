@@ -3223,6 +3223,124 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   }
 }
 
+/* ---------- feed hearts (specs/feed-hearts.md) ----------
+   The Instagram-style like row on Proof/Moment cards: an outline Lucide heart
+   that fills with the Theme's primary once hearted, plus the live count.
+   Motion: hearting pops the icon with the ring flash (like-only — unhearting
+   is a quiet correction); the count is keyed by value in HeartButton, so any
+   change (the viewer's own tap or another Player's heart arriving on the
+   stream) remounts the number and replays the tick. */
+.heart-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 2px;
+}
+.heartbtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Compact visual, 44px thumb target — the .reshuf overlay trick. */
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--dim);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: color 0.18s ease, transform 0.12s var(--ease-glide);
+}
+.heartbtn::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+.heartbtn:active {
+  transform: scale(0.9);
+}
+.heartbtn:hover,
+.heartbtn:focus-visible {
+  color: var(--ink);
+}
+.heart-icon {
+  width: 22px;
+  height: 22px;
+  stroke-width: 2;
+  fill: none;
+}
+.heartbtn.hearted {
+  color: var(--primary);
+}
+.heartbtn.hearted .heart-icon {
+  fill: var(--primary);
+}
+/* The like burst: the heart squeezes then slams back up (Instagram's bounce),
+   while a theme-colored ring flashes outward from behind it. */
+.heartbtn.heart-burst .heart-icon {
+  animation: heart-pop 0.45s var(--ease-pop);
+}
+@keyframes heart-pop {
+  0% {
+    transform: scale(1);
+  }
+  25% {
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.35);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.heartbtn.heart-burst::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  animation: heart-ring 0.5s ease-out;
+}
+@keyframes heart-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 55%, transparent);
+    opacity: 1;
+  }
+  100% {
+    box-shadow: 0 0 0 16px color-mix(in srgb, var(--primary) 0%, transparent);
+    opacity: 0;
+  }
+}
+.heart-count {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  /* Clip the tick's slide so the incoming number never paints outside the
+     line box. */
+  overflow: hidden;
+  display: inline-flex;
+}
+.heart-count-num {
+  display: inline-block;
+  animation: heart-tick 0.3s var(--ease-glide);
+}
+@keyframes heart-tick {
+  from {
+    opacity: 0;
+    transform: translateY(0.7em);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* ---------- reduced motion: the kill switch ----------
    One universal neutralizer instead of per-animation opt-outs, so a future
    animation can never ship un-covered (the pre-pass block only caught the

@@ -64,12 +64,13 @@ type SnapCb = (snap: unknown) => void;
 // doc, so existing call sites — `sub.fire(colSnap([...]))` — keep working.
 const emptyDocSnap = { exists: () => false, data: () => undefined, metadata: { fromCache: false } };
 function captureOnNext(): { fire: (proofs: unknown, moments?: unknown, event?: unknown) => void } {
-  const captured: { proofs: SnapCb | null; moments: SnapCb | null; events: SnapCb[]; tally: SnapCb | null; doubtsAll: SnapCb | null } = {
+  const captured: { proofs: SnapCb | null; moments: SnapCb | null; events: SnapCb[]; tally: SnapCb | null; doubtsAll: SnapCb | null; heartsAll: SnapCb | null } = {
     proofs: null,
     moments: null,
     events: [],
     tally: null,
     doubtsAll: null,
+    heartsAll: null,
   };
   H.onSnapshot.mockImplementation(((target: unknown, optionsOrNext: unknown, maybeNext?: SnapCb) => {
     // #262: useAllDoubts subscribes WITHOUT an options arg; normalize.
@@ -85,6 +86,9 @@ function captureOnNext(): { fire: (proofs: unknown, moments?: unknown, event?: u
     else if (kind === 'collectionGroup') captured.tally = onNext;
     // #262: the Feed's flat doubts subscription, routed by its path segment.
     else if (args[3] === 'doubts') captured.doubtsAll = onNext;
+    // specs/feed-hearts.md: the flat hearts stream, routed by segment so it
+    // never clobbers the moments slot; fed empty below.
+    else if (args[3] === 'hearts') captured.heartsAll = onNext;
     else captured.moments = onNext;
     return () => {};
   }) as never);
@@ -99,6 +103,7 @@ function captureOnNext(): { fire: (proofs: unknown, moments?: unknown, event?: u
         // this suite exercises the proof side (Tally Cards have their own suite).
         captured.tally?.(colSnap([]));
         captured.doubtsAll?.(colSnap([]));
+        captured.heartsAll?.(colSnap([]));
       });
     },
   };

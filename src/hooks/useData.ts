@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { collectionGroup, onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
-import { eventRef, itemsCol, boardRef, dayBoardRef, dayMetaRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol } from '../data/paths';
+import { eventRef, itemsCol, boardRef, dayBoardRef, dayMetaRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol, heartsCol } from '../data/paths';
 import { isReportHidden, isBanned, isSystemAuthor } from '../data/moderation';
 import { sortPlayers, dayDealState, type DayDealState, nextDisplayBumpTime, BUMP_DEBOUNCE_MS } from '../game/logic';
-import type { EventDoc, ItemDoc, BoardDoc, DayDef, DayMetaDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, TallyCard, MomentDoc, DoubtDoc } from '../types';
+import type { EventDoc, ItemDoc, BoardDoc, DayDef, DayMetaDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, TallyCard, MomentDoc, DoubtDoc, HeartDoc } from '../types';
 
 // Both subs subscribe with includeMetadataChanges so the cache→server
 // transition is always observable: with the ADR 0006 persistent cache, a cold
@@ -820,6 +820,19 @@ export function useReportedProofs() {
  * a banned accuser's Doubts vanish for everyone; Doubts against a banned
  * target hide except from the target themselves.
  */
+// The Feed's flat Hearts stream (specs/feed-hearts.md): one subscription
+// feeding every card's count + the viewer's own hearted state, mirroring
+// useAllDoubts. NO ban filter here — heartState (src/data/hearts.ts) applies
+// it per post, because the own-content exception needs the viewer's uid at
+// derivation time and the raw stream is shared across all cards.
+export function useAllHearts(enabled = true) {
+  const { data, loading, hasServerData } = useColSub<HeartDoc>(
+    enabled ? heartsCol() : null,
+    enabled ? 'hearts:all' : 'hearts:none',
+  );
+  return { hearts: data, loading, hasServerData };
+}
+
 export function useAllDoubts(viewerUid?: string | null) {
   const { bannedUids } = useEventModeration();
   const { data, loading, hasServerData } = useColSub<DoubtDoc>(doubtsCol(), 'doubts:all');

@@ -762,6 +762,51 @@ service cloud.firestore {
         allow delete: if isAdmin(eventId) || isOwner(resource.data.fromUid);
       }
 
+      // Hearts (specs/feed-hearts.md): one Player's like on a Feed post — a
+      // Proof or a Moment. The Doubt slot's structure without the accusation:
+      // ONE deterministic doc per (Player, post), id-bound to the payload so
+      // nobody can squat another Player's slot (the #103/#105 moments-binding
+      // shape), created to heart and deleted to unheart. NO update path at
+      // all: a Heart is immutable, and the doc-exists denial on a duplicate
+      // create is exactly the "each post only once" guarantee — counts cannot
+      // inflate, cross-client races collapse onto one slot.
+      match /hearts/{heartId} {
+        allow read: if signedIn();
+        allow create: if signedIn()
+          // Own heart only — a forged uid is denied.
+          && request.resource.data.uid == request.auth.uid
+          // Exactly the contract's fields, no extras riding along.
+          && request.resource.data.keys().hasOnly(['uid', 'targetKind', 'targetId', 'createdAt'])
+          && request.resource.data.targetKind in ['proof', 'moment']
+          && request.resource.data.targetId is string
+          && request.resource.data.targetId.size() > 0
+          // Bind the doc id to the payload — `${uid}_${targetKind}_${targetId}`
+          // (uid == auth.uid above): the deterministic once-only slot the client
+          // writes. Same rationale as the doubts binding: unconstrained ids
+          // would let any signed-in Player pre-create another's slot and deny
+          // their heart forever. `_` joins — appears in no Firebase-minted uid;
+          // the id is constructed, never parsed.
+          && heartId == request.auth.uid + '_' + request.resource.data.targetKind + '_' + request.resource.data.targetId
+          // The hearted post must EXIST as its declared kind — no minting
+          // hearts against phantom ids (garbage that would count once the id
+          // is ever reused, and a free spam surface besides). Create-only
+          // gate: a post deleted later strands its hearts as dead docs the
+          // display layer simply never asks about (no Feed card, no count).
+          && (
+            (request.resource.data.targetKind == 'proof'
+              && exists(/databases/$(database)/documents/events/$(eventId)/proofs/$(request.resource.data.targetId)))
+            || (request.resource.data.targetKind == 'moment'
+              && exists(/databases/$(database)/documents/events/$(eventId)/moments/$(request.resource.data.targetId)))
+          )
+          // Same near-now window as proofs/moments/doubts: client clocks
+          // drift, forged far-future stamps don't.
+          && request.resource.data.createdAt is number
+          && request.resource.data.createdAt <= request.time.toMillis() + 60000
+          && request.resource.data.createdAt >= request.time.toMillis() - 86400000;
+        // No update rule on purpose (immutable; toggle = create/delete).
+        allow delete: if isAdmin(eventId) || isOwner(resource.data.uid);
+      }
+
       // Moments (ADR 0002): a broadcast of a big social beat (BINGO / Blackout /
       // First to BINGO) posted to the Feed. A bare Mark broadcasts nothing here.
       // Own-beat create only (a forged uid is denied); public read; fully immutable

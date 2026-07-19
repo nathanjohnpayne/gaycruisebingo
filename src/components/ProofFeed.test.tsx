@@ -192,9 +192,10 @@ function captureOnNext(): {
   fire: (tally: unknown, proofs?: unknown, moments?: unknown, event?: unknown, player?: unknown, doubts?: unknown) => void;
   fireBoard: (dayIndex: number, board: BoardDoc | null) => void;
 } {
-  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; events: ((s: unknown) => void)[]; tally: ((s: unknown) => void) | null; doubtsAll: ((s: unknown) => void) | null; player: ((s: unknown) => void) | null; boards: Record<number, (s: unknown) => void> } = {
+  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; events: ((s: unknown) => void)[]; tally: ((s: unknown) => void) | null; doubtsAll: ((s: unknown) => void) | null; heartsAll: ((s: unknown) => void) | null; player: ((s: unknown) => void) | null; boards: Record<number, (s: unknown) => void> } = {
     proofs: null,
     moments: null,
+    heartsAll: null,
     // EVERY event-doc subscription (#262: useAllDoubts' moderation read opens
     // a second one) — fire() feeds them all so none starves.
     events: [],
@@ -221,6 +222,10 @@ function captureOnNext(): {
     // #262: the Feed also opens the flat doubts subscription; route it by its
     // own path segment so it can't clobber the moments capture.
     else if (kind === 'collection' && args[3] === 'doubts') captured.doubtsAll = onNext;
+    // specs/feed-hearts.md: the flat hearts stream — routed by segment for the
+    // same clobber-proofing; this suite never fixtures hearts, so fire() feeds
+    // it the empty snapshot.
+    else if (kind === 'collection' && args[3] === 'hearts') captured.heartsAll = onNext;
     else captured.moments = onNext;
     return () => {};
   });
@@ -233,6 +238,7 @@ function captureOnNext(): {
         captured.player?.(player);
         captured.tally?.(tally);
         captured.doubtsAll?.(doubts);
+        captured.heartsAll?.(emptyColSnap);
       });
     },
     fireBoard: (dayIndex: number, board: BoardDoc | null) => {

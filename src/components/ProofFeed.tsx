@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Play, Pause } from 'lucide-react';
-import { useFeed, useEventDoc, useMyDayBoards, useAllDoubts, useMyPlayer } from '../hooks/useData';
+import { Play, Pause, Heart } from 'lucide-react';
+import { useFeed, useEventDoc, useMyDayBoards, useAllDoubts, useAllHearts, useMyPlayer } from '../hooks/useData';
 import { requestOpenSquare } from '../hooks/useOpenSquare';
 import { useAuth } from '../auth/AuthContext';
 import { reportProof, deleteProof } from '../data/proofs';
@@ -11,6 +11,7 @@ import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
 import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
 import { isDoubtSatisfied, openDoubts, doubtStatusFor, raiseDoubt } from '../data/doubts';
+import { heartState, toggleHeart } from '../data/hearts';
 import { THEMES } from '../theme/themes';
 import type {
   BoardDoc,
@@ -163,6 +164,55 @@ function visiblePodium(podium: PodiumMomentPayload | undefined, bannedUids: read
  * js/xss-through-dom #1): mediaURL is resolved from a Firestore doc, so a forged
  * non-media scheme (javascript:, …) is dropped rather than rendered.
  */
+/** A post's heart state + toggle, threaded from the Feed's one flat stream —
+ * the shape both card kinds render through `HeartButton`. */
+export type HeartControl = { count: number; hearted: boolean; onToggle: () => void };
+
+/**
+ * The Instagram-style heart (specs/feed-hearts.md): a Lucide heart that fills
+ * with the Theme's primary when the viewer has hearted the post, plus the live
+ * count. Motion (index.css § "motion"):
+ *  - hearting POPS the icon (`heart-pop`, the like-only burst — an unheart is
+ *    a quiet correction, same asymmetry as unmarking a Square) and rings the
+ *    button (`heart-ring` on ::after);
+ *  - the count is keyed by value, so a change remounts the span and replays
+ *    the `heart-tick` slide — every increment (anyone's heart, not just the
+ *    viewer's) animates in via the listener stream.
+ * The burst keys off the TAP, not the echoed doc, so a slow write still pops
+ * instantly; `animationend` releases it, gated on the animation name like the
+ * Board's stamp. `aria-pressed` carries the toggle state; the count is its
+ * own labeled text so screen readers hear "N hearts" once, not per-digit.
+ */
+export function HeartButton({ count, hearted, onToggle }: HeartControl) {
+  const [burst, setBurst] = useState(false);
+  return (
+    <div className="heart-row">
+      <button
+        type="button"
+        className={'heartbtn' + (hearted ? ' hearted' : '') + (burst ? ' heart-burst' : '')}
+        aria-pressed={hearted}
+        aria-label={hearted ? 'Unheart this post' : 'Heart this post'}
+        onClick={() => {
+          if (!hearted) setBurst(true);
+          onToggle();
+        }}
+        onAnimationEnd={(e) => {
+          if (e.animationName === 'heart-pop') setBurst(false);
+        }}
+      >
+        <Heart aria-hidden="true" className="heart-icon" />
+      </button>
+      {count > 0 && (
+        <span className="heart-count" aria-label={`${count} heart${count === 1 ? '' : 's'}`}>
+          <span key={count} className="heart-count-num" aria-hidden="true">
+            {count}
+          </span>
+        </span>
+      )}
+    </div>
+  );
+}
+
 function ProofCard({
   proof,
   viewerUid,
@@ -171,6 +221,7 @@ function ProofCard({
   isStandingsFrozen,
   clearedDoubts = 0,
   tallyCount = 0,
+  heart,
 }: {
   proof: ProofDoc;
   viewerUid: string | undefined;
@@ -181,6 +232,9 @@ function ProofCard({
   // and the Prompt's live tally. Zero hides the pill.
   clearedDoubts?: number;
   tallyCount?: number;
+  // The heart state + toggle (specs/feed-hearts.md), derived by the Feed from
+  // its one flat hearts stream.
+  heart: HeartControl;
 }) {
   const media = safeMediaUrl(proof.mediaURL);
   return (
@@ -253,6 +307,7 @@ function ProofCard({
           <span aria-hidden="true">✍️</span> “{proof.text}”
         </blockquote>
       )}
+      <HeartButton {...heart} />
       {(clearedDoubts > 0 || tallyCount > 0 || proof.status === 'flagged') && (
         <div className="proof-foot">
           {clearedDoubts > 0 && (
@@ -323,7 +378,7 @@ function AudioProof({ src }: { src: string }) {
  * Day chip a Proof/Tally Card renders, degrading to nothing on a pre-`dayIndex`
  * blackout Moment or a legacy (non-daily) Event with no `days[]`.
  */
-function MomentCard({ moment, days, bannedUids }: { moment: MomentDoc; days: DayDef[] | undefined; bannedUids: readonly string[] }) {
+function MomentCard({ moment, days, bannedUids, heart }: { moment: MomentDoc; days: DayDef[] | undefined; bannedUids: readonly string[]; heart: HeartControl }) {
   const copy = MOMENT_COPY[moment.kind] ?? { icon: '🎉', line: 'made a Moment!' };
   // #266: the finale beats carry their real content when the scheduler built
   // it — the last-call standings line, and the podium's structured payload.
@@ -379,6 +434,8 @@ function MomentCard({ moment, days, bannedUids }: { moment: MomentDoc; days: Day
         </div>
         <span className="moment-icon" aria-hidden="true">{copy.icon}</span>
       </div>
+      {/* Moments are posts too (specs/feed-hearts.md) — cheer the beat. */}
+      <HeartButton {...heart} />
     </div>
   );
 }
@@ -821,6 +878,29 @@ export default function ProofFeed() {
   // collection is event-flat, so a single unfiltered read powers every proof
   // card's "👀 cleared N doubts" pill. Ban semantics ride useAllDoubts.
   const { doubts } = useAllDoubts(user?.uid);
+  // ONE flat Hearts subscription for the whole Feed (specs/feed-hearts.md),
+  // mirroring the doubts stream above: every Proof/Moment card's count + the
+  // viewer's own hearted state derive from this via the pure `heartState`
+  // (ban semantics applied there, own-content exception included). The
+  // toggle's latency-compensated echo flips the button instantly.
+  const { hearts } = useAllHearts();
+  const heartFor = (targetKind: 'proof' | 'moment', targetId: string): HeartControl => {
+    const { count, hearted } = heartState(
+      hearts,
+      targetKind,
+      targetId,
+      user?.uid,
+      event?.bannedUids ?? [],
+    );
+    return {
+      count,
+      hearted,
+      onToggle: () => {
+        if (!user) return;
+        void toggleHeart({ uid: user.uid, targetKind, targetId, hearted });
+      },
+    };
+  };
   // The viewer's own dealt Day Cards (#261): the per-card button gating —
   // ＋ Proof on a Prompt they marked, 🙋 Got it too on one sitting unmarked on
   // one of their unlocked cards, nothing otherwise — reads these Boards
@@ -956,6 +1036,7 @@ export default function ProofFeed() {
               moment={entry.moment}
               days={event?.days}
               bannedUids={event?.bannedUids ?? []}
+              heart={heartFor('moment', entry.moment.id)}
             />
           );
         }
@@ -988,6 +1069,7 @@ export default function ProofFeed() {
                 ? (tallyByTextDay.get(`${entry.proof.itemText}\u0000${entry.proof.dayIndex}`) ?? 0)
                 : (tallyByText.get(entry.proof.itemText) ?? 0)
             }
+            heart={heartFor('proof', entry.proof.id)}
           />
         );
       })}
