@@ -32,20 +32,6 @@ export interface SubmitBugReportResult {
 const TRANSPARENT_IMAGE_PLACEHOLDER =
   'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
 
-/**
- * Class toggled on the `.app` root only for the duration of a full-surface
- * html-to-image render, so `index.css` can re-pin the fixed `.tabs` bar to the
- * bottom of the captured box. html-to-image paints the whole scrollable `.app`
- * into an SVG `<foreignObject>` sized to the full box, where `position: fixed`
- * no longer resolves against the visible viewport — so the bar would otherwise
- * float mid-image over the below-the-fold content and read as "the toolbar is
- * not pinned to the bottom" (report GwT3bmAqwu2eKeQF1uOf). The bar is correctly
- * pinned in the live app; this only fixes what the capture paints. Scoped to the
- * full-surface path (`captureWithMode`); the viewport-cropped html2canvas
- * fallback keeps the fixed bar as-is, since there the crop IS the viewport.
- */
-export const CAPTURE_PIN_CLASS = 'bug-report-capturing';
-
 type CaptureMode = 'full' | 'compat' | 'canvas';
 
 function isSafeImageForCompatCapture(node: HTMLImageElement): boolean {
@@ -61,6 +47,17 @@ function isSafeImageForCompatCapture(node: HTMLImageElement): boolean {
 
 function excludedFromCapture(node: HTMLElement, mode: CaptureMode): boolean {
   if (node.closest('[data-bug-report-ui]')) return true;
+  // The bottom tab bar is `position: fixed`. html-to-image paints the whole
+  // scrollable `.app` into an SVG `<foreignObject>` sized to the full box, where
+  // fixed positioning no longer tracks the visible viewport — so an included bar
+  // renders floating mid-capture over the below-the-fold content and reads as
+  // "the toolbar is not pinned to the bottom" (report GwT3bmAqwu2eKeQF1uOf),
+  // even though it is correctly pinned in the live app. It is app chrome, not
+  // the report's subject, so omit it from every capture path rather than move
+  // the live bar during a render (which would displace it on-screen mid-capture,
+  // notably in pick mode where the tab bar stays usable). The live bar is
+  // untouched; the screenshot is just the page the reporter is describing.
+  if (node.closest('nav.tabs')) return true;
   if (mode === 'full') return false;
   if (node.closest('video, audio, iframe, canvas, object, embed')) return true;
   if (node instanceof HTMLImageElement && !isSafeImageForCompatCapture(node)) return true;
@@ -92,33 +89,23 @@ async function captureWithMode(root: HTMLElement, mode: CaptureMode): Promise<Bl
   // lowering the pixel ratio up front keeps the capture submittable (#361)
   // and renders text directly at the final scale instead of resampling.
   const { pixelRatio } = planCaptureScale(surface.width, surface.height, preferredRatio);
-  // Re-pin the fixed `.tabs` bar to the bottom of the captured surface while the
-  // render runs (see CAPTURE_PIN_CLASS). Removing it from flow keeps the fixed
-  // bar out of `.app`'s content height, so `captureSurfaceSize` above is
-  // unaffected. Restored in `finally` so a live pick-mode capture never leaves
-  // the bar mispinned if the render throws.
-  root.classList.add(CAPTURE_PIN_CLASS);
-  try {
-    const blob = await toBlob(root, {
-      cacheBust: true,
-      imagePlaceholder: TRANSPARENT_IMAGE_PLACEHOLDER,
-      pixelRatio,
-      skipFonts: mode === 'compat',
-      filter: (node) => !(node instanceof HTMLElement) || !excludedFromCapture(node, mode),
-      // html-to-image inlines COMPUTED styles into its clone, so `.app`'s
-      // `margin: 0 auto` arrives as a concrete pixel margin (~(viewport-640)/2 —
-      // ~487px at a 1615px desktop window) inside a canvas sized to the node's
-      // 640px box: the whole capture shifts right by the live left gutter and
-      // clips (#290). Zero it on the clone; the canvas is the node's own box,
-      // so centering is meaningless there anyway.
-      style: { margin: '0' },
-    });
-    if (!blob) throw new Error('Screenshot capture returned no image');
-    if (blob.size > BUG_REPORT_SCREENSHOT_MAX_BYTES) throw new Error('Screenshot is too large');
-    return blob;
-  } finally {
-    root.classList.remove(CAPTURE_PIN_CLASS);
-  }
+  const blob = await toBlob(root, {
+    cacheBust: true,
+    imagePlaceholder: TRANSPARENT_IMAGE_PLACEHOLDER,
+    pixelRatio,
+    skipFonts: mode === 'compat',
+    filter: (node) => !(node instanceof HTMLElement) || !excludedFromCapture(node, mode),
+    // html-to-image inlines COMPUTED styles into its clone, so `.app`'s
+    // `margin: 0 auto` arrives as a concrete pixel margin (~(viewport-640)/2 —
+    // ~487px at a 1615px desktop window) inside a canvas sized to the node's
+    // 640px box: the whole capture shifts right by the live left gutter and
+    // clips (#290). Zero it on the clone; the canvas is the node's own box,
+    // so centering is meaningless there anyway.
+    style: { margin: '0' },
+  });
+  if (!blob) throw new Error('Screenshot capture returned no image');
+  if (blob.size > BUG_REPORT_SCREENSHOT_MAX_BYTES) throw new Error('Screenshot is too large');
+  return blob;
 }
 
 async function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob> {
