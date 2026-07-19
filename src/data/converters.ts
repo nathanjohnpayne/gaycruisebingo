@@ -15,6 +15,7 @@ import type {
   TallyEntry,
   MomentDoc,
   DoubtDoc,
+  HeartDoc,
   DayMetaDoc,
 } from '../types';
 
@@ -205,6 +206,16 @@ export const tallyMarkerConverter: FirestoreDataConverter<TallyEntry> = {
 // events/{EVENT_ID}/doubts/{doubtId}. Like proofs/claims/moments it carries its
 // own doc id (the read hook + derivation key on it), so pin `id` to `snap.id`.
 // The write side (src/data/doubts.ts) uses a raw ref and never stores `id`.
+// A Heart on a Feed post (specs/feed-hearts.md) — same id-from-path shape as
+// the doubt/moment converters.
+export const heartConverter: FirestoreDataConverter<HeartDoc> = {
+  toFirestore: (data) => data as DocumentData,
+  fromFirestore: (snap: QueryDocumentSnapshot) => ({
+    ...(snap.data() as Omit<HeartDoc, 'id'>),
+    id: snap.id,
+  }),
+};
+
 export const doubtConverter: FirestoreDataConverter<DoubtDoc> = {
   toFirestore: (data) => data as DocumentData,
   fromFirestore: (snap: QueryDocumentSnapshot) => ({

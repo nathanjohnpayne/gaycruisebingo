@@ -331,6 +331,30 @@ export interface TallyDoc {
 // didn't happen") — social pressure, never a gate (ADR 0001). It never blocks,
 // unmarks, or discounts the Mark. Attaching a Proof satisfies it, so `satisfied*`
 // tracks open vs answered without gating play.
+// A Heart (specs/feed-hearts.md): one Player's like on a Feed post — a Proof
+// or a Moment (Tally Cards are derived aggregates, not posts, and take no
+// hearts). ONE slot per (Player, post): the doc id IS
+// `${uid}_${targetKind}_${targetId}` — the same deterministic-slot shape as a
+// Doubt — so a Player can heart many posts but each post only once; toggling
+// off is a delete, never an update (a Heart is immutable). Carries no
+// displayName (nothing to misattribute, so no identityKnown gate): counts are
+// derived client-side from this collection's live size, per ADR 0001.
+export type HeartTargetKind = 'proof' | 'moment';
+
+export interface HeartDoc {
+  id: string;
+  uid: string; // the Player who hearted
+  targetKind: HeartTargetKind;
+  targetId: string; // the hearted Proof/Moment doc id
+  // The hearted post's OWN createdAt — the incarnation stamp (Codex P2 on
+  // #425): Moment ids are deterministic and a deleted Moment can be
+  // recreated at the same id, so a Heart binds to the specific document it
+  // was given to (rules verify this against the live target), and the
+  // display filters by it. A recreated post starts at zero hearts.
+  targetCreatedAt: number;
+  createdAt: number; // ms epoch
+}
+
 export interface DoubtDoc {
   id: string;
   itemId: string; // the doubted Prompt

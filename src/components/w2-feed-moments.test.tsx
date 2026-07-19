@@ -71,6 +71,9 @@ vi.mock('../hooks/useData', () => ({
   useFeed: () => ({ entries: H.feedEntries, tallyCards: H.feedTallyCards, loading: false }),
   useMyDayBoards: () => new Map(),
   useAllDoubts: () => ({ doubts: [], loading: false, hasServerData: true }),
+  // specs/feed-hearts.md: the Feed's flat hearts stream — empty here; the
+  // hearts surface has its own suite (feed-hearts.test.tsx).
+  useAllHearts: () => ({ hearts: [], loading: false, hasServerData: true }),
   // Board subscribes the per-Square Doubt count + the Feed's Proofs for the #33
   // satisfied derivation. These Moment-edge fixtures never open the Tally sheet or
   // assert a Doubt count, so empty streams keep them focused on the edge machinery.
@@ -1049,7 +1052,11 @@ describe('ProofFeed — the merged Feed (specs/w2-feed-moments.md)', () => {
     expect(moment).toBeInTheDocument();
     // No attached evidence (ADR 0002) and nothing to dispute.
     expect(moment.querySelector('img.proof-media, audio.proof-media, .proof-quote')).toBeNull();
-    expect(moment.querySelector('button')).toBeNull();
+    // The ONLY affordance is the heart (specs/feed-hearts.md) — a Moment is a
+    // post you can cheer, still never one you can report or delete from here.
+    const buttons = [...moment.querySelectorAll('button')];
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0].className).toContain('heartbtn');
     expect(moment).toHaveTextContent(/blacked out the whole card/i);
   });
 

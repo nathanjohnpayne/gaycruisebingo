@@ -34,6 +34,12 @@ vi.mock('../data/proofs', () => ({
   deleteProof: H.deleteProof,
 }));
 vi.mock('../analytics', () => ({ track: H.track }));
+
+// Defensive stand-in for the transitive `../firebase` module-scope import
+// (mirrors w2-feed-moments.test.tsx): ProofFeed's graph now pulls
+// src/data/hearts.ts → ./paths → ../firebase, whose module-scope getAuth
+// throws on the test env's blank config. Nothing here calls Firestore.
+vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event', analytics: null }));
 // ProofFeed navigates to the Card tab from Tally Card actions (#261); mock
 // the router hook so these router-free renders keep working.
 vi.mock('react-router-dom', () => ({ useNavigate: () => vi.fn() }));
@@ -55,6 +61,9 @@ vi.mock('../hooks/useData', () => ({
   useEventDoc: () => ({ data: null, loading: false }),
   useMyDayBoards: () => new Map(),
   useAllDoubts: () => ({ doubts: [], loading: false, hasServerData: true }),
+  // specs/feed-hearts.md: the Feed's flat hearts stream — empty here; the
+  // hearts surface has its own suite (feed-hearts.test.tsx).
+  useAllHearts: () => ({ hearts: [], loading: false, hasServerData: true }),
   // #392: the Feed resolves the viewer's own player row for its ask-for-proof
   // affordance; this XSS suite exercises only media sinks, so a loaded-absent row
   // (identity known, no saved name) suffices.

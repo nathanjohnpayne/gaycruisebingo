@@ -78,4 +78,6 @@ A phone-first, live, social bingo game for one cruise at a time. The card's prom
 
 **Doubt**: One Player publicly asking another to back up a specific marked Prompt — "pics or it didn't happen." The count of doubts shows on the marked square and the Tally entry; attaching a Proof satisfies them. Social pressure, never a gate — it's how the group applies the "the group is the verification" principle in-app. _Avoid_: Callout, demand, challenge
 
+**Heart**: One Player's like on a Feed post — a Proof or a Moment. Many posts per Player, each post only once; tapping again takes it back. Warmth, never score — hearts touch no stats, no Leaderboard, no win logic, and a Tally Card (an aggregate, not a post) takes none. _Avoid_: Like, favorite, reaction
+
 **Claim**: In Admin-confirmed mode, the pending record raised when a Player marks a Square, for an Admin to confirm or reject.

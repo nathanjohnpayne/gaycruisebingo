@@ -38,6 +38,11 @@ export const GA4_EVENTS = [
   // for a fresh deal. Params: `dayIndex`, `reshufflesUsed` (the resulting spend,
   // 1..3). Call site: components/ReshuffleSheet.tsx.
   'reshuffle_card',
+  // Hearts (specs/feed-hearts.md) — a Player toggled a like on a Feed post.
+  // Params: `targetKind` ('proof' | 'moment'), `on` (true = hearted, false =
+  // unhearted). Fired only once the write persists (the demand_proof posture).
+  // Call site: src/data/hearts.ts.
+  'heart_post',
 ] as const;
 
 export type GA4EventName = (typeof GA4_EVENTS)[number];
