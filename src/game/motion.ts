@@ -35,14 +35,27 @@ export function dealDelayMs(index: number): number {
 
 /**
  * Shimmer order for the winning line(s): cell index → position in the wave,
- * ascending by index so the glow sweeps the line in reading order. The CSS
+ * ascending by index so the glow sweeps each line in reading order. The CSS
  * (`.cell.win`) multiplies this by its own per-step delay.
+ *
+ * Takes the COMPLETED LINES (game/logic's `completedLines`), never their
+ * union: each line sweeps independently from its own start (positions 0..4),
+ * and a cell on several lines takes its earliest position. Numbering the
+ * union instead queued one global 0..N ramp — on a blackout the last Square
+ * waited 24 steps (2.64s at the CSS's 110ms multiplier), far past the spec's
+ * stagger bound (Codex P2 on #421). Per-line positions cap every delay at 4
+ * steps regardless of how many lines stand.
  */
-export function winOrder(wins: Iterable<number>): Map<number, number> {
+export function winOrder(lines: Iterable<readonly number[]>): Map<number, number> {
   const order = new Map<number, number>();
-  [...wins]
-    .sort((a, b) => a - b)
-    .forEach((index, position) => order.set(index, position));
+  for (const line of lines) {
+    [...line]
+      .sort((a, b) => a - b)
+      .forEach((index, position) => {
+        const existing = order.get(index);
+        if (existing === undefined || position < existing) order.set(index, position);
+      });
+  }
   return order;
 }
 

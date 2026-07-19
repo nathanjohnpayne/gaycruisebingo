@@ -31,6 +31,16 @@ import type { AttachProofResult } from '../data/proofs';
 import { hasBingo, isBlackout, winningCells, completedLines, countMarked, isPristine, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
 import { fitTextSize } from '../game/fitText';
 import { dealDelayMs, winOrder } from '../game/motion';
+
+// Board identities whose deal-in cascade has already played this session
+// (specs/motion-polish.md; Codex P2 on #421): MODULE state, not component
+// state, because the router unmounts Board on every tab switch — a set living
+// in the component would forget the card and replay the deal on every return
+// to the Card tab, defeating the "only a genuinely new card deals" gate.
+// Session-scoped on purpose: a fresh page load deals visually again (the
+// welcome-back beat), while a mere tab round-trip mounts the card landed.
+// Never pruned — one short string per dealt card per session.
+const dealCascadePlayed = new Set<string>();
 import { useTextSize } from '../hooks/useTextSize';
 import { useOnline } from '../hooks/useOnline';
 import { track } from '../analytics';
@@ -1315,6 +1325,24 @@ export default function Board() {
       return next;
     });
 
+  // The deal cascade's replay decision (Codex P2 on #421), STICKY per mounted
+  // board identity: computed once when this mount first sees a given dealKey
+  // (adjust-during-render ref, the edgeStateUid idiom) and held for that
+  // key's lifetime — recomputing per render would flip the grid to its
+  // "already dealt" state on the first re-render after the effect below
+  // records the key (a tally echo lands within the cascade's ~800ms),
+  // cancelling the animation mid-flight. The effect records the identity
+  // AFTER commit, so a discarded render never marks a cascade as played.
+  const dealKeyLive = board != null ? `${edgeStateKey}:${board.seed}` : null;
+  const replayDealRef = useRef<{ key: string; replay: boolean } | null>(null);
+  if (dealKeyLive != null && replayDealRef.current?.key !== dealKeyLive) {
+    replayDealRef.current = { key: dealKeyLive, replay: !dealCascadePlayed.has(dealKeyLive) };
+  }
+  const replayDeal = replayDealRef.current?.replay ?? false;
+  useEffect(() => {
+    if (dealKeyLive != null) dealCascadePlayed.add(dealKeyLive);
+  }, [dealKeyLive]);
+
   // Feed → Board square-opening intent (#261): a Tally Card's ＋ Proof /
   // 🙋 Got it too recorded {dayIndex, itemId} and navigated here. Switch the
   // viewed Day first; once the DAY-SCOPED board is rendered and attributable,
@@ -1578,15 +1606,19 @@ export default function Board() {
 
   const wins = winningCells(cells);
   // The payline sweep's per-cell order (specs/motion-polish.md): position of
-  // each winning Square along the line(s), ascending by index, consumed by
-  // `.cell.win`'s staggered `--win-order` delay.
-  const winOrderByIndex = winOrder(wins);
+  // each winning Square along ITS OWN line — `completedLines`, never the
+  // `wins` union, so every line sweeps 0..4 independently and a multi-line
+  // win (blackout included) never queues one board-wide ramp (Codex P2 on
+  // #421). Consumed by `.cell.win`'s staggered `--win-order` delay.
+  const winOrderByIndex = winOrder(completedLines(cells));
   // Remounting the grid per board identity replays the deal-in cascade for
   // every genuinely new card — first deal, Day switch, reshuffle (fresh seed),
   // account switch — while ordinary re-renders (marks, tally updates) keep
   // the DOM and play no entrance. Same identity notion as `edgeStateKey`,
-  // plus the seed so a reshuffled card (same uid+Day) still re-deals.
-  const dealKey = `${edgeStateKey}:${board.seed}`;
+  // plus the seed so a reshuffled card (same uid+Day) still re-deals. The
+  // route-remount half of the gate is `replayDeal` above: this mount plays
+  // the cascade only if the identity has not already dealt this session.
+  const dealKey = dealKeyLive ?? `${edgeStateKey}:${board.seed}`;
 
   const doMark = async (c: Cell, nextMarked: boolean) => {
     // Attribution guard (Codex P2, PR #110 finding 2 — the SAME cellsAttributable
@@ -1963,7 +1995,15 @@ export default function Board() {
           the Celebration baseline above would swallow as an initial state, not
           an animated edge) cannot flake the BINGO! assertion (Codex P2 on
           PR #114 round 3). */}
-        <div className="grid" key={dealKey} data-server-confirmed={boardConfirmed ? 'true' : 'false'}>
+        {/* `grid-dealt` (Codex P2 on #421): a card whose cascade already
+            played this session mounts landed — the class zeroes the entrance
+            animation (index.css) instead of replaying it on a tab
+            round-trip. */}
+        <div
+          className={'grid' + (replayDeal ? '' : ' grid-dealt')}
+          key={dealKey}
+          data-server-confirmed={boardConfirmed ? 'true' : 'false'}
+        >
         {cells.map((c) => (
           <div
             key={c.index}
@@ -2084,6 +2124,12 @@ export default function Board() {
           undefined`). */}
       {celebrate && (
         <Celebration
+          // Keyed by win kind (Codex P3 on #421): a BINGO celebration still
+          // open when a blackout lands must REMOUNT, not re-render — the
+          // confetti burst is a mount-time lazy initializer, so an in-place
+          // kind change would keep the smaller BINGO rain under the new
+          // BLACKOUT hero.
+          key={celebrate}
           kind={celebrate}
           cells={cells}
           playerName={identityKnown ? displayName : null}

@@ -102,17 +102,40 @@ describe('dealDelayMs — the reel cascade (specs/motion-polish.md)', () => {
 });
 
 describe('winOrder — the payline sweep order', () => {
-  it('maps each winning cell to its ascending position along the line', () => {
-    const order = winOrder(new Set([14, 2, 8, 20]));
-    expect(order.get(2)).toBe(0);
-    expect(order.get(8)).toBe(1);
-    expect(order.get(14)).toBe(2);
-    expect(order.get(20)).toBe(3);
+  it('maps each winning cell to its ascending position along its own line', () => {
+    const order = winOrder([[10, 11, 12, 13, 14]]);
+    expect(order.get(10)).toBe(0);
+    expect(order.get(12)).toBe(2);
+    expect(order.get(14)).toBe(4);
     expect(order.has(3)).toBe(false);
   });
 
+  it('sweeps intersecting lines independently — shared cells take the earliest position', () => {
+    // The middle row and middle column both stand; they share the free
+    // center (12), which is position 2 on both lines.
+    const order = winOrder([
+      [10, 11, 12, 13, 14],
+      [2, 7, 12, 17, 22],
+    ]);
+    expect(order.get(10)).toBe(0);
+    expect(order.get(2)).toBe(0); // the second line starts its own sweep at 0
+    expect(order.get(12)).toBe(2);
+    expect(order.get(22)).toBe(4);
+  });
+
+  it('caps every position at 4 no matter how many lines stand (Codex P2 #421: blackout)', () => {
+    // All 12 lines of a blacked-out card.
+    const lines: number[][] = [];
+    for (let r = 0; r < 5; r++) lines.push([0, 1, 2, 3, 4].map((c) => r * 5 + c));
+    for (let c = 0; c < 5; c++) lines.push([0, 1, 2, 3, 4].map((r) => r * 5 + c));
+    lines.push([0, 6, 12, 18, 24], [4, 8, 12, 16, 20]);
+    const order = winOrder(lines);
+    expect(order.size).toBe(25);
+    for (const position of order.values()) expect(position).toBeLessThanOrEqual(4);
+  });
+
   it('is empty for no win', () => {
-    expect(winOrder(new Set()).size).toBe(0);
+    expect(winOrder([]).size).toBe(0);
   });
 });
 
@@ -264,6 +287,18 @@ describe('index.css — motion section structure (specs/motion-polish.md)', () =
     // weighs (0,3,0) and permanently out-cascades the `.cell.win` payline
     // and `.cell.just-marked` stamp animations.
     expect(indexCss).toMatch(/:where\(\.grid:not\(\.locked-grid\)\)\s*>\s*\.cell/);
+  });
+
+  it('mounts an already-dealt card landed — .grid-dealt zeroes the entrance before win/stamp rules', () => {
+    // Codex P2 #421: the router remounts Board per tab switch, so the
+    // session gate needs a CSS off-switch, and it must sit BEFORE the
+    // same-specificity .cell.win / .cell.just-marked rules so those still
+    // take the animation channel on an already-dealt card.
+    const dealtAt = indexCss.search(/\.grid-dealt\s*>\s*\.cell\s*\{[^}]*animation:\s*none/);
+    const stampRuleAt = indexCss.search(/\.cell\.just-marked\s*\{/);
+    expect(dealtAt).toBeGreaterThan(-1);
+    expect(stampRuleAt).toBeGreaterThan(-1);
+    expect(dealtAt).toBeLessThan(stampRuleAt);
   });
 
   it('never animates the off-screen share-card DOM', () => {

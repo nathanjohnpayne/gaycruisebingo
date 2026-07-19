@@ -2880,6 +2880,15 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   animation: deal-drop 0.42s var(--ease-pop) backwards;
   animation-delay: var(--deal-delay, 0ms);
 }
+/* A card whose cascade already played this session mounts LANDED (Codex P2
+   on #421): the router remounts Board on every tab switch, so Board's
+   module-scope dealCascadePlayed gate adds this class on a repeat mount and
+   the entrance zeroes out instead of replaying. Declared here — before the
+   same-specificity `.cell.win` / `.cell.just-marked` rules below — so those
+   still take the animation channel when live. */
+.grid-dealt > .cell {
+  animation: none;
+}
 @keyframes deal-drop {
   from {
     opacity: 0;
