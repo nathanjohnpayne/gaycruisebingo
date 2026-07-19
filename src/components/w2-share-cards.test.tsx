@@ -75,6 +75,7 @@ vi.mock('../hooks/useData', () => ({
 
 import Celebration from './Celebration';
 import Leaderboard from './Leaderboard';
+import { leaderboardShareCopy } from './Leaderboard';
 import {
   renderBingoShareCard,
   renderLeaderboardShareCard,
@@ -113,6 +114,10 @@ function mkPlayer(over: Partial<PlayerDoc> & Pick<PlayerDoc, 'uid' | 'displayNam
 
 function toBlobNode(): HTMLElement {
   return toBlobMock.mock.calls[0][0] as HTMLElement;
+}
+
+function latestToBlobNode(): HTMLElement {
+  return toBlobMock.mock.calls[toBlobMock.mock.calls.length - 1][0] as HTMLElement;
 }
 
 beforeEach(() => {
@@ -374,6 +379,35 @@ describe('ShareCard CSS — .share-card-title contrast', () => {
     expect(rule, '.share-card-title rule not found in src/index.css').not.toBeNull();
     expect(rule![1]).toMatch(/color:\s*var\(--ink\)/);
     expect(rule![1]).not.toMatch(/color:\s*#fff/);
+  });
+});
+
+describe('ShareCard CSS — fixed-frame safety', () => {
+  it('bounds long winner and leaderboard names inside the fixed card', () => {
+    for (const selector of ['.share-card-player', '.share-card-col .share-card-name', '.share-card-row .share-card-name']) {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rule = indexCss.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      expect(rule, `${selector} rule not found in src/index.css`).not.toBeNull();
+      expect(rule![1]).toMatch(/overflow-wrap:\s*anywhere/);
+      expect(rule![1]).toMatch(/-webkit-line-clamp:\s*2/);
+    }
+  });
+
+  it('keeps pending share-card cells visibly dashed even when also marked', () => {
+    const rule = indexCss.match(/\.share-card-cell\.pending\s*\{([^}]*)\}/);
+    expect(rule, '.share-card-cell.pending rule not found in src/index.css').not.toBeNull();
+    expect(rule![1]).toMatch(/border-style:\s*dashed/);
+    expect(rule![1]).toMatch(/border-color:\s*var\(--ink\)/);
+  });
+
+  it('uses ink, not dim, for share-card copy over the composited tint wash', () => {
+    for (const selector of ['.share-card-event', '.share-card-stat', '.share-card-footer']) {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rule = indexCss.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      expect(rule, `${selector} rule not found in src/index.css`).not.toBeNull();
+      expect(rule![1]).toMatch(/color:\s*var\(--ink\)/);
+      expect(rule![1]).not.toMatch(/color:\s*var\(--dim\)/);
+    }
   });
 });
 
@@ -1014,6 +1048,84 @@ describe('Leaderboard — share affordance', () => {
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     expect(toBlobMock).toHaveBeenCalledTimes(1); // the tap reused the warmed render
     expect(shareMock.mock.calls[0][0].files).toHaveLength(1);
+  });
+
+  it('invalidates a warmed bare app-name card once the schedule copy loads', async () => {
+    H.event = null;
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
+    const user = userEvent.setup();
+
+    const { rerender } = render(<Leaderboard />, { wrapper: MemoryRouter });
+    await user.hover(screen.getByRole('button', { name: 'Share leaderboard' }));
+    expect(toBlobMock).toHaveBeenCalledTimes(1);
+    expect(toBlobNode().querySelector('.share-card-event')?.textContent).toBe(SHARE_CARD_APP_NAME);
+
+    H.event = {
+      name: SHARE_CARD_APP_NAME,
+      days: [
+        {
+          index: 0,
+          date: '2026-07-15',
+          port: 'Palermo',
+          portEmoji: '🇮🇹',
+          theme: 'glamiators',
+          tonight: [],
+          pool: 'main',
+          tutorial: false,
+          unlockAt: Date.now() - 1000,
+        },
+      ],
+    } as unknown as EventDoc;
+    rerender(<Leaderboard />);
+
+    await user.click(screen.getByRole('button', { name: 'Share leaderboard' }));
+
+    await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
+    expect(toBlobMock).toHaveBeenCalledTimes(2);
+    expect(latestToBlobNode().querySelector('.share-card-event')?.textContent).toBe(
+      `${SHARE_CARD_APP_NAME} · Day 1 · Palermo`,
+    );
+  });
+
+  it('keys leaderboard Share Card copy on the derived event schedule lines', () => {
+    const first = leaderboardShareCopy({
+      name: SHARE_CARD_APP_NAME,
+      days: [
+        {
+          index: 0,
+          date: '2026-07-15',
+          port: 'Palermo',
+          portEmoji: '🇮🇹',
+          theme: 'glamiators',
+          tonight: [],
+          pool: 'main',
+          tutorial: false,
+          unlockAt: 1000,
+        },
+      ],
+    }, 2000);
+    const changed = leaderboardShareCopy({
+      name: SHARE_CARD_APP_NAME,
+      days: [
+        {
+          index: 0,
+          date: '2026-07-15',
+          port: 'Valletta',
+          portEmoji: '🇲🇹',
+          theme: 'glamiators',
+          tonight: [],
+          pool: 'main',
+          tutorial: false,
+          unlockAt: 1000,
+        },
+      ],
+    }, 2000);
+
+    expect(first.contextLine).toBe(`${SHARE_CARD_APP_NAME} · Day 1 · Palermo`);
+    expect(changed.contextLine).toBe(`${SHARE_CARD_APP_NAME} · Day 1 · Valletta`);
+    expect(changed.cacheKey).not.toBe(first.cacheKey);
   });
 
   it('includes the First to BINGO Player on the card even when their rank falls outside the top 5', async () => {

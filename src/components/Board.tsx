@@ -485,6 +485,17 @@ export function knownFirstBingoAt(
   return player?.firstBingoAt ?? null;
 }
 
+export function shareCardBingoNumber(params: {
+  cells: Cell[];
+  rootBingoCount: number;
+  dayBingoCount: number | undefined;
+  hasDays: boolean;
+}): number {
+  const currentBoardLines = completedLines(params.cells).length;
+  if (!params.hasDays) return Math.max(params.rootBingoCount, currentBoardLines);
+  return Math.max(params.dayBingoCount ?? 0, currentBoardLines);
+}
+
 /** Title-cases a hyphenated ThemeId ('welcome-aboard' -> 'Welcome Aboard') —
  * the fallback label/description source for a Day whose Theme has no
  * `ThemeMeta` entry yet (the two Phase 1.5 tutorial themes land theirs in
@@ -2147,7 +2158,12 @@ export default function Board() {
           const statLine = winDay
             ? celebrate === 'blackout'
               ? `All 24 squares${nightSuffix}`
-              : `Bingo #${player?.bingoCount ?? 0} · ${countMarked(cells)} squares${nightSuffix}`
+              : `Bingo #${shareCardBingoNumber({
+                  cells,
+                  rootBingoCount: player?.bingoCount ?? 0,
+                  dayBingoCount: board?.dayIndex == null ? undefined : player?.dayStats?.[board.dayIndex]?.bingoCount,
+                  hasDays,
+                })} · ${countMarked(cells)} squares${nightSuffix}`
             : undefined;
           return (
             <Celebration

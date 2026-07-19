@@ -118,7 +118,7 @@ vi.mock('firebase/firestore', () => ({
 // mounting Board here never touches the real Firebase app init.
 vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
 
-import Board from './Board';
+import Board, { shareCardBingoNumber } from './Board';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -132,6 +132,38 @@ function dealt(pool = 'i'): Cell[] {
     markedAt: null,
   }));
 }
+
+function withMarked(indices: number[]): Cell[] {
+  const cells = dealt();
+  for (const i of indices) {
+    cells[i] = { ...cells[i], marked: true, markedAt: i + 1, status: 'confirmed' };
+  }
+  return cells;
+}
+
+describe('Share Card BINGO number', () => {
+  it('uses the current daily board line count when frozen root standings lag the win', () => {
+    expect(
+      shareCardBingoNumber({
+        cells: withMarked([0, 1, 2, 3, 4]),
+        rootBingoCount: 0,
+        dayBingoCount: 0,
+        hasDays: true,
+      }),
+    ).toBe(1);
+  });
+
+  it('keeps legacy cards compatible by falling back to the root aggregate', () => {
+    expect(
+      shareCardBingoNumber({
+        cells: withMarked([0, 1, 2, 3, 4]),
+        rootBingoCount: 2,
+        dayBingoCount: undefined,
+        hasDays: false,
+      }),
+    ).toBe(2);
+  });
+});
 
 function day(overrides: Partial<DayDef> & Pick<DayDef, 'index' | 'unlockAt' | 'theme'>): DayDef {
   return {

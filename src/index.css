@@ -2569,8 +2569,7 @@ body:has(.sheet-backdrop) .guidelines-trigger {
      picture; the board is textless shape. Centered composition, a 2px
      theme-primary border so the card pops against light AND dark chat
      backgrounds. The --primary tint stays at 30% / --secondary 24% — the
-     weights theme-on-color-contrast.test.tsx pins --ink legibility against;
-     this redesign only enlarges/repositions the radials, never deepens them. */
+     weights theme-on-color-contrast.test.tsx pins --ink legibility against. */
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2591,7 +2590,7 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   font-size: 17px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--dim);
+  color: var(--ink);
 }
 .share-card-title {
   /* color follows the theme ink, never a hardcoded #fff (Codex P2, PR #111
@@ -2620,6 +2619,13 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   letter-spacing: 0.03em;
   color: var(--accent);
   margin-top: 2px;
+  max-width: 100%;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 .share-card-grid {
   /* Textless 5×5, a centered fixed-width block (NOT full-bleed) — the frame's
@@ -2664,12 +2670,13 @@ body:has(.sheet-backdrop) .guidelines-trigger {
      alongside .marked, never instead of it — see ShareCard.tsx. */
   opacity: 0.55;
   border-style: dashed;
+  border-color: var(--ink);
 }
 .share-card-stat {
   /* Single stat/brag line (issue #423): "Bingo #2 · 16 squares · <night>" /
      "All 24 squares · <night>" / "Through Day N of 10". */
   font-size: 20px;
-  color: var(--dim);
+  color: var(--ink);
   margin-top: 6px;
 }
 /* ---- Leaderboard: podium (top 3) + compact rows (issue #423) ---- */
@@ -2693,6 +2700,14 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   font-size: 30px;
   line-height: 1;
   color: var(--ink);
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 .share-card-bc {
   font-size: 18px;
@@ -2743,13 +2758,21 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 }
 .share-card-row .share-card-name {
   color: var(--dim);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 .share-card-row.pinned .share-card-name {
   color: var(--accent);
 }
 .share-card-sub {
   margin-left: auto;
-  color: var(--dim);
+  color: var(--ink);
   font-size: 18px;
 }
 .share-card-row .share-card-pin {
@@ -2760,7 +2783,7 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 .share-card-footer {
   margin-top: auto;
   padding-top: 14px;
-  color: var(--dim);
+  color: var(--ink);
   font-size: 17px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
