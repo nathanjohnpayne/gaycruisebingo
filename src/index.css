@@ -186,7 +186,17 @@ a {
 /* Bottom tab bar — the frozen stable-mount-point navigation (see
    src/components/tabs.ts). Fixed to the viewport bottom for one-handed,
    thumb-reachable navigation and padded for env(safe-area-inset-bottom) so
-   it clears the iOS home indicator on notched devices. */
+   it clears the iOS home indicator on notched devices.
+
+   NO `backdrop-filter` here (report GwT3bmAqwu2eKeQF1uOf + a real-device
+   capture): on iOS WebKit a `position: fixed` element that also carries
+   `backdrop-filter` is promoted to a compositing layer WebKit fails to keep
+   pinned to the visual viewport while the page scrolls, so the bar detaches
+   and freezes mid-screen — most visibly in a standalone home-screen PWA on a
+   scrolling route (Feed). Desktop/Android render it fine, which is why it read
+   as intermittent. The frosted-glass blur is not worth a nav bar that drifts
+   off the bottom edge, so the background is a near-opaque themed fill instead
+   (still legible over feed imagery without relying on a live blur). */
 .tabs {
   position: fixed;
   bottom: 0;
@@ -196,8 +206,7 @@ a {
   gap: 6px;
   justify-content: center;
   padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: blur(8px);
+  background: color-mix(in srgb, var(--bg) 96%, transparent);
   border-top: 1px solid var(--border);
   z-index: 20;
 }
