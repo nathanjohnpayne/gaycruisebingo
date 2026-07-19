@@ -30,6 +30,8 @@ export default function Celebration({
   kind,
   cells,
   playerName,
+  contextLine,
+  statLine,
   onClose,
 }: {
   kind: 'bingo' | 'blackout';
@@ -63,6 +65,13 @@ export default function Celebration({
   // renders no avatar (BingoShareCardData has no photo field), so only the
   // name is threaded.
   playerName: string | null;
+  // Optional card copy (issue #423), composed by Board.tsx from the day it
+  // holds (day + port) and the Player's stats — the top context line and the
+  // single stat/brag line. Both fall through to the renderer's own defaults
+  // (bare event name / nothing) when absent, so this component and the
+  // direct-render unit tests can omit them.
+  contextLine?: string;
+  statLine?: string;
   onClose: () => void;
 }) {
   // Event name still resolves via the same hook Board.tsx itself reads: it
@@ -120,14 +129,19 @@ export default function Celebration({
       return;
     }
     setCardReady(false);
-    const promise = renderBingoShareCard({ kind, playerName, eventName, cells }).catch(
-      () => null,
-    );
+    const promise = renderBingoShareCard({
+      kind,
+      playerName,
+      eventName,
+      cells,
+      contextLine,
+      statLine,
+    }).catch(() => null);
     cardBlob.current = promise;
     void promise.then(() => {
       if (cardBlob.current === promise) setCardReady(true);
     });
-  }, [kind, playerName, eventName, cells]);
+  }, [kind, playerName, eventName, cells, contextLine, statLine]);
 
   const share = async () => {
     const pending = cardBlob.current;

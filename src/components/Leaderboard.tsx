@@ -6,7 +6,7 @@ import { THEMES } from '../theme/themes';
 import { track } from '../analytics';
 import { renderLeaderboardShareCard, shareCardBlob, SHARE_CARD_APP_NAME, type LeaderboardShareRow } from './ShareCard';
 import Avatar from './Avatar';
-import type { PlayerDoc, ProofDoc } from '../types';
+import type { EventDoc, PlayerDoc, ProofDoc } from '../types';
 import LoadingState from './LoadingState';
 
 function when(ts: number | null): string {
@@ -57,9 +57,34 @@ function proofChips(proof: ProofDoc | undefined): string[] {
   return chips;
 }
 
-// Share Card row cap (issue #36): a fixed-size card can't fit the whole
-// roster, so the card shows the top MAX_SHARE_ROWS by rank.
-const MAX_SHARE_ROWS = 8;
+// Share Card row cap (issue #36; lowered 8→5 for the text-message-first
+// redesign, issue #423): the card shows the top MAX_SHARE_ROWS by rank —
+// the renderer lays the first three out as a podium and the remainder as
+// compact rows, so five (podium + two) is the frame's shape.
+const MAX_SHARE_ROWS = 5;
+
+export function leaderboardShareCopy(
+  event: Pick<EventDoc, 'name' | 'days'> | null | undefined,
+  now = Date.now(),
+): { eventName: string; contextLine: string | undefined; statLine: string | undefined; cacheKey: string } {
+  const eventName = event?.name ?? SHARE_CARD_APP_NAME;
+  const days = [...(event?.days ?? [])].sort((a, b) => a.index - b.index);
+  const unlocked = days.filter((d) => d.unlockAt <= now);
+  const currentDay = unlocked.length ? unlocked[unlocked.length - 1] : days[0];
+  const contextLine =
+    currentDay && event?.name
+      ? `${event.name} · Day ${currentDay.index + 1} · ${currentDay.port}`
+      : undefined;
+  const statLine = days.length
+    ? `Through Day ${(currentDay?.index ?? days.length - 1) + 1} of ${days.length}`
+    : undefined;
+  return {
+    eventName,
+    contextLine,
+    statLine,
+    cacheKey: JSON.stringify({ eventName, contextLine, statLine }),
+  };
+}
 
 function toShareRow(p: PlayerDoc, rank: number, firstBingoUid: string | undefined): LeaderboardShareRow {
   return {
@@ -106,12 +131,12 @@ export default function Leaderboard() {
   const navigate = useNavigate();
   const [filter, setFilter] = useState<LeaderboardFilter>('all');
   // The most recent warmed-up card render, keyed by the inputs it was built
-  // from (the roster array's identity + the resolved event name) so a tap
-  // reuses it only while it still depicts the CURRENT standings — see
-  // warmShareCard below (Codex P2, PR #111 round 2 finding 2).
+  // from (the roster array's identity + the resolved schedule copy) so a tap
+  // reuses it only while it still depicts the CURRENT standings and Day context
+  // — see warmShareCard below (Codex P2, PR #111 round 2 finding 2).
   const warmedCard = useRef<{
     players: PlayerDoc[];
-    eventName: string;
+    shareCopyKey: string;
     bannedKey: string;
     promise: Promise<Blob | null>;
   } | null>(null);
@@ -207,10 +232,10 @@ export default function Leaderboard() {
   // card that is rarely shared; Celebration's inputs are fixed for the
   // lifetime of a short-lived win modal, so mount-eager is cheap there. The
   // warmed promise is reused ONLY while its inputs (the roster array's
-  // identity + event name) still match — a roster that moved between
-  // warm-up and tap re-renders fresh at tap time so the card never shows
-  // stale standings, accepting the (rare, slow-device) residual activation
-  // risk on that path. `.catch(() => null)` lives inside the cached
+  // identity + rendered event/schedule copy) still match — a roster or schedule
+  // that moved between warm-up and tap re-renders fresh at tap time so the card
+  // never shows stale standings, accepting the (rare, slow-device) residual
+  // activation risk on that path. `.catch(() => null)` lives inside the cached
   // promise: a render failure resolves null (shareCardBlob degrades to the
   // text/URL leg) and can never surface as an unhandled rejection from a
   // hover that was never followed by a tap.
@@ -225,7 +250,7 @@ export default function Leaderboard() {
   // an unsettled-at-tap await rare (hover/focus/press starts the render
   // before the click can land).
   const warmShareCard = (): Promise<Blob | null> => {
-    const eventName = event?.name ?? SHARE_CARD_APP_NAME;
+    const shareCopy = leaderboardShareCopy(event);
     // The ban roster is part of the card's inputs (#108): the warmed render is
     // reused only while the SAME banned set still applies, so a ban/unban that
     // lands between warm-up and tap re-renders fresh rather than sharing a card
@@ -235,16 +260,18 @@ export default function Leaderboard() {
     if (
       cached &&
       cached.players === players &&
-      cached.eventName === eventName &&
+      cached.shareCopyKey === shareCopy.cacheKey &&
       cached.bannedKey === bannedKey
     ) {
       return cached.promise;
     }
     const promise = renderLeaderboardShareCard({
-      eventName,
+      eventName: shareCopy.eventName,
       rows: buildShareStandings(roster, firstBingoUid, MAX_SHARE_ROWS),
+      contextLine: shareCopy.contextLine,
+      statLine: shareCopy.statLine,
     }).catch(() => null);
-    warmedCard.current = { players, eventName, bannedKey, promise };
+    warmedCard.current = { players, shareCopyKey: shareCopy.cacheKey, bannedKey, promise };
     return promise;
   };
 

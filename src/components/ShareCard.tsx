@@ -1,4 +1,5 @@
 import { toBlob } from 'html-to-image';
+import { completedLines } from '../game/logic';
 import type { Cell } from '../types';
 
 /**
@@ -69,34 +70,78 @@ export interface BingoShareCardData {
   eventName: string;
   /** The Player's own 25-cell board (index order, free center included). */
   cells: Cell[];
+  /**
+   * Optional top line (day + port), composed by the caller — e.g. "Gay Cruise
+   * Bingo · Day 4 · Valletta". Renders in place of the bare `eventName` when
+   * present; absent, the card falls back to `eventName` (which itself falls
+   * back to the app name). The renderer stays dumb — it never derives the day.
+   */
+  contextLine?: string;
+  /**
+   * Optional single stat/brag line, composed by the caller — e.g. "Bingo #2 ·
+   * 16 squares · 💦 Splash T-Dance night" or "All 24 squares · <night>".
+   * Absent → nothing renders.
+   */
+  statLine?: string;
+}
+
+/**
+ * The cells of the NEWEST completed BINGO line — the one lit brighter than any
+ * other marked square (issue #423, resolved: newest line only, not every
+ * completed line). Derived purely from the board's own `markedAt` timestamps,
+ * so no pre-mark board or extra caller data is needed: a line's "completion
+ * time" is the latest `markedAt` among its five cells, and the newest line(s)
+ * are those tied for the greatest such time — so a double-BINGO landed by a
+ * single mark lights both, while an older line dims once a newer one lands.
+ * `completedLines` already excludes `status: 'pending'` cells (game/logic.ts's
+ * markedMask), so an unconfirmed square can never pull a line into the glow.
+ */
+function newestLineCells(cells: Cell[]): Set<number> {
+  const completed = completedLines(cells);
+  if (completed.length === 0) return new Set();
+  const lineTime = (line: number[]): number =>
+    Math.max(...line.map((i) => cells[i]?.markedAt ?? 0));
+  const newest = Math.max(...completed.map(lineTime));
+  const lit = new Set<number>();
+  for (const line of completed) {
+    if (lineTime(line) === newest) for (const i of line) lit.add(i);
+  }
+  return lit;
 }
 
 function buildBingoCardNode(data: BingoShareCardData): HTMLDivElement {
   const card = el('div', 'share-card share-card-bingo');
   card.style.width = `${CARD_WIDTH}px`;
   card.style.height = `${CARD_HEIGHT}px`;
-  card.append(el('div', 'share-card-event', data.eventName));
+  card.append(el('div', 'share-card-event', data.contextLine ?? data.eventName));
   card.append(el('div', 'share-card-title', data.kind === 'blackout' ? 'BLACKOUT' : 'BINGO!'));
   card.append(el('div', 'share-card-player', data.playerName));
-  const bhead = el('div', 'share-card-bhead');
-  for (const letter of ['B', 'I', 'N', 'G', 'O']) bhead.append(el('span', undefined, letter));
-  card.append(bhead);
   const grid = el('div', 'share-card-grid');
+  // The winning-line glow marks only the NEWEST completed line (see
+  // newestLineCells). Blackout lights the whole grid, so a single-line
+  // emphasis would be noise there — skip it and let the wall of gradient be
+  // the flex.
+  const lineCells = data.kind === 'blackout' ? new Set<number>() : newestLineCells(data.cells);
   for (const c of data.cells) {
-    // A `marked` cell awaiting admin confirmation (admin_confirmed claim
-    // mode) does NOT count toward a win — game/logic.ts's markedMask
-    // excludes `status: 'pending'` from "on" — so the card must not depict
-    // it as an indistinguishable solid win square either (Codex P2, PR #111
-    // finding 2). `.pending` layers on top of `.marked` (both classes apply
-    // together), mirroring Board.tsx's own on-page cell className.
+    // Textless by design (issue #423): at iMessage-bubble size prompt text is
+    // gray noise — the board reads as SHAPE, not data. Marked squares fill
+    // with the theme gradient (`.marked`), the newest winning line adds a
+    // glow (`.line`), the free centre stays accent (`.free`), and a
+    // marked-but-unconfirmed square (admin_confirmed mode) reads faded/dashed
+    // (`.pending`) rather than a solid win — game/logic.ts's markedMask
+    // withholds credit from pending marks, so the card must not overstate
+    // them either (Codex P2, PR #111 finding 2). `.pending` layers on top of
+    // `.marked`, mirroring Board.tsx's own on-page cell className.
     const cls =
       'share-card-cell' +
       (c.free ? ' free' : '') +
       (c.marked ? ' marked' : '') +
+      (lineCells.has(c.index) ? ' line' : '') +
       (c.status === 'pending' ? ' pending' : '');
-    grid.append(el('div', cls, c.text));
+    grid.append(el('div', cls));
   }
   card.append(grid);
+  if (data.statLine) card.append(el('div', 'share-card-stat', data.statLine));
   card.append(el('div', 'share-card-footer', `${SHARE_CARD_APP_NAME} 🚢`));
   return card;
 }
@@ -135,27 +180,70 @@ export interface LeaderboardShareCardData {
   eventName: string;
   /** Already the exact rows to render, in display order — shaping (top-N, pin inclusion) is the caller's job (Leaderboard.tsx), not this renderer's. */
   rows: LeaderboardShareRow[];
+  /** Optional top line (day + port) — same contract as the BINGO card's `contextLine`. Absent → falls back to `eventName`. */
+  contextLine?: string;
+  /** Optional snapshot-dating stat line — e.g. "Through Day 5 of 10". Absent → nothing renders. */
+  statLine?: string;
+}
+
+const PIN_LABEL = '★ First BINGO';
+
+/** A compact rank-4+ row: rank, name, and the bingo/square stat pushed right. */
+function buildLeaderboardRow(r: LeaderboardShareRow): HTMLDivElement {
+  const row = el('div', 'share-card-row' + (r.firstToBingo ? ' pinned' : ''));
+  row.append(el('span', 'share-card-rank', String(r.rank)));
+  row.append(el('span', 'share-card-name', r.displayName));
+  const subText =
+    `${r.bingoCount} bingo${r.bingoCount === 1 ? '' : 's'} · ${r.squaresMarked} sq` +
+    (r.blackout ? ' · BLACKOUT' : '');
+  row.append(el('span', 'share-card-sub', subText));
+  // The pin can still land on a compact row when its holder falls outside the
+  // top three (buildShareStandings appends them), so it must render here too.
+  if (r.firstToBingo) row.append(el('span', 'share-card-pin', PIN_LABEL));
+  return row;
+}
+
+/** A podium column (rank 1–3): the ★ pin above its holder, name, bingo count, and a rank-baked bar. */
+function buildPodiumColumn(r: LeaderboardShareRow): HTMLDivElement {
+  const col = el('div', `share-card-col rank-${r.rank}` + (r.firstToBingo ? ' pinned' : ''));
+  if (r.firstToBingo) col.append(el('span', 'share-card-pin', PIN_LABEL));
+  col.append(el('span', 'share-card-name', r.displayName));
+  col.append(el('span', 'share-card-bc', `${r.bingoCount} bingo${r.bingoCount === 1 ? '' : 's'}`));
+  col.append(el('div', 'share-card-bar', String(r.rank)));
+  return col;
 }
 
 function buildLeaderboardCardNode(data: LeaderboardShareCardData): HTMLDivElement {
   const card = el('div', 'share-card share-card-leaderboard');
   card.style.width = `${CARD_WIDTH}px`;
   card.style.height = `${CARD_HEIGHT}px`;
-  card.append(el('div', 'share-card-event', data.eventName));
+  card.append(el('div', 'share-card-event', data.contextLine ?? data.eventName));
   card.append(el('div', 'share-card-title', 'LEADERBOARD'));
-  const rows = el('div', 'share-card-rows');
-  for (const r of data.rows) {
-    const row = el('div', 'share-card-row' + (r.firstToBingo ? ' pinned' : ''));
-    row.append(el('span', 'share-card-rank', String(r.rank)));
-    row.append(el('span', 'share-card-name', r.displayName));
-    const subText =
-      `${r.bingoCount} bingo${r.bingoCount === 1 ? '' : 's'} · ${r.squaresMarked} sq` +
-      (r.blackout ? ' · BLACKOUT' : '');
-    row.append(el('span', 'share-card-sub', subText));
-    if (r.firstToBingo) row.append(el('span', 'share-card-pin', '★ 1st BINGO'));
-    rows.append(row);
+
+  // Renderer renders exactly the rows it is given (issue #36): the caller
+  // shapes to the cap (five) and appends the pin if needed. The renderer only
+  // decides layout — first three as a podium, the rest as compact rows.
+  const podiumRows = data.rows.slice(0, 3);
+  const restRows = data.rows.slice(3);
+
+  if (podiumRows.length > 0) {
+    const podium = el('div', 'share-card-podium');
+    // Centre the leader visually (2nd · 1st · 3rd) when a full podium is
+    // present; render in given order otherwise. Rank text is never
+    // renumbered — the bar shows `row.rank`.
+    const order =
+      podiumRows.length === 3 ? [1, 0, 2] : podiumRows.length === 2 ? [0, 1] : [0];
+    for (const idx of order) podium.append(buildPodiumColumn(podiumRows[idx]));
+    card.append(podium);
   }
-  card.append(rows);
+
+  if (restRows.length > 0) {
+    const rows = el('div', 'share-card-rows');
+    for (const r of restRows) rows.append(buildLeaderboardRow(r));
+    card.append(rows);
+  }
+
+  if (data.statLine) card.append(el('div', 'share-card-stat', data.statLine));
   card.append(el('div', 'share-card-footer', `${SHARE_CARD_APP_NAME} 🚢`));
   return card;
 }

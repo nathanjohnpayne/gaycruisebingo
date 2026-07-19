@@ -75,6 +75,7 @@ vi.mock('../hooks/useData', () => ({
 
 import Celebration from './Celebration';
 import Leaderboard from './Leaderboard';
+import { leaderboardShareCopy } from './Leaderboard';
 import {
   renderBingoShareCard,
   renderLeaderboardShareCard,
@@ -113,6 +114,10 @@ function mkPlayer(over: Partial<PlayerDoc> & Pick<PlayerDoc, 'uid' | 'displayNam
 
 function toBlobNode(): HTMLElement {
   return toBlobMock.mock.calls[0][0] as HTMLElement;
+}
+
+function latestToBlobNode(): HTMLElement {
+  return toBlobMock.mock.calls[toBlobMock.mock.calls.length - 1][0] as HTMLElement;
 }
 
 beforeEach(() => {
@@ -244,6 +249,108 @@ describe('ShareCard — renderBingoShareCard', () => {
     expect(confirmedCell).not.toHaveClass('pending');
     expect(pendingCell).toHaveClass('share-card-cell', 'marked', 'pending');
   });
+
+  // issue #423 — the board is textless: at iMessage-bubble size prompt text is
+  // gray noise, so the redesign renders shape, not data. The old "cell text
+  // renders" assertion flips to asserting its ABSENCE, even for a long token.
+  it('renders textless board squares — no prompt text on any cell', async () => {
+    const longToken = `${'w'.repeat(60)}.example/very-long-unbroken-url-ish-prompt`;
+    const cells = makeCells([0]);
+    cells[0] = { ...cells[0], text: longToken };
+    await renderBingoShareCard({ kind: 'bingo', playerName: 'A', eventName: 'E', cells });
+
+    const cellNodes = toBlobNode().querySelectorAll('.share-card-cell');
+    expect(cellNodes).toHaveLength(25);
+    for (const cell of cellNodes) expect(cell.textContent).toBe('');
+  });
+
+  // issue #423 (resolved decision: newest line only) — only the most-recently
+  // completed line is lit brighter (`.line`), derived from the cells' own
+  // `markedAt`. Fixture: row 0 completed earlier (markedAt 100), row 1
+  // completed later (its last mark at 300), so ONLY row 1 carries `.line`.
+  it('lights only the newest completed line (by markedAt), not every completed line', async () => {
+    const cells = Array.from({ length: 25 }, (_, index) => ({
+      index,
+      itemId: index === 12 ? null : `item-${index}`,
+      text: index === 12 ? 'FREE' : `Prompt ${index}`,
+      free: index === 12,
+      marked: false,
+      markedAt: null as number | null,
+    }));
+    for (const i of [0, 1, 2, 3, 4]) {
+      cells[i].marked = true;
+      cells[i].markedAt = 100; // row 0 — the older line
+    }
+    for (const i of [5, 6, 7, 8, 9]) {
+      cells[i].marked = true;
+      cells[i].markedAt = 200; // row 1 — the newer line
+    }
+    cells[9].markedAt = 300; // the mark that completed row 1 (the win)
+    cells[12].marked = true;
+    cells[12].markedAt = 1; // free centre
+
+    await renderBingoShareCard({ kind: 'bingo', playerName: 'A', eventName: 'E', cells });
+
+    const cellNodes = toBlobNode().querySelectorAll('.share-card-cell');
+    expect(toBlobNode().querySelectorAll('.share-card-cell.line')).toHaveLength(5);
+    for (const i of [5, 6, 7, 8, 9]) expect(cellNodes[i]).toHaveClass('line');
+    for (const i of [0, 1, 2, 3, 4]) expect(cellNodes[i]).not.toHaveClass('line');
+    // The free centre keeps its accent class regardless of the line glow.
+    expect(cellNodes[12]).toHaveClass('free');
+  });
+
+  // issue #423 — a blackout lights every square; the single-line glow would be
+  // noise on a full grid, so `.line` is skipped and the wall of gradient is the
+  // flex. All 25 cells (24 + free) carry `.marked`, none carry `.line`.
+  it('lights all 24 squares (plus free) for a blackout and applies no line glow', async () => {
+    const allButFree = Array.from({ length: 25 }, (_, i) => i).filter((i) => i !== 12);
+    await renderBingoShareCard({
+      kind: 'blackout',
+      playerName: 'A',
+      eventName: 'E',
+      cells: makeCells(allButFree),
+    });
+
+    const node = toBlobNode();
+    // All 24 playable squares plus the free centre (25 cells) carry `.marked`;
+    // the centre additionally keeps its `.free` accent styling (CodeRabbit).
+    expect(node.querySelectorAll('.share-card-cell.marked')).toHaveLength(25);
+    expect(node.querySelectorAll('.share-card-cell.line')).toHaveLength(0);
+    const freeCell = node.querySelectorAll('.share-card-cell')[12];
+    expect(freeCell).toHaveClass('share-card-cell', 'marked', 'free');
+  });
+
+  // issue #423 — the caller-composed context + stat lines render when given
+  // (the context line takes the top slot in place of the bare event name), and
+  // the stat line is simply absent when omitted.
+  it('renders contextLine and statLine when provided, and neither when absent', async () => {
+    await renderBingoShareCard({
+      kind: 'bingo',
+      playerName: 'A',
+      eventName: 'Gay Cruise Bingo',
+      cells: makeCells([0]),
+      contextLine: 'Gay Cruise Bingo · Day 4 · Valletta',
+      statLine: 'Bingo #2 · 16 squares · 💦 Splash T-Dance night',
+    });
+    let node = toBlobNode();
+    expect(node.querySelector('.share-card-event')?.textContent).toBe(
+      'Gay Cruise Bingo · Day 4 · Valletta',
+    );
+    expect(node.querySelector('.share-card-stat')?.textContent).toBe(
+      'Bingo #2 · 16 squares · 💦 Splash T-Dance night',
+    );
+
+    toBlobMock.mockClear();
+    await renderBingoShareCard({
+      kind: 'bingo',
+      playerName: 'A',
+      eventName: 'Just The Event',
+      cells: makeCells([0]),
+    });
+    node = toBlobNode();
+    expect(node.querySelector('.share-card-event')?.textContent).toBe('Just The Event');
+    expect(node.querySelector('.share-card-stat')).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -273,34 +380,50 @@ describe('ShareCard CSS — .share-card-title contrast', () => {
     expect(rule![1]).toMatch(/color:\s*var\(--ink\)/);
     expect(rule![1]).not.toMatch(/color:\s*#fff/);
   });
+});
 
-  // Codex P3, PR #111 round 3 finding 2: `.share-card-cell` hid overflow
-  // WITHOUT the word-break/hyphenation the on-screen `.cell` uses, so a
-  // long unbroken token (an 80-char URL-ish prompt) lost most of its text
-  // on the shared image. jsdom computes no layout, so the wrap behavior is
-  // pinned at the CSS source (same technique as the title test above) and
-  // the DOM half proves the renderer hands the full token through untrimmed.
-  it('carries .cell’s wrapping rules on .share-card-cell so a long unbroken prompt breaks instead of clipping', async () => {
-    const rule = indexCss.match(/\.share-card-cell\s*\{([^}]*)\}/);
-    expect(rule, '.share-card-cell rule not found in src/index.css').not.toBeNull();
-    expect(rule![1]).toMatch(/word-break:\s*break-word/);
-    expect(rule![1]).toMatch(/hyphens:\s*auto/);
-    // Same pair the on-screen .cell rule carries — the card must not drift
-    // from the Board's own wrapping semantics.
-    const cellRule = indexCss.match(/^\.cell\s*\{([^}]*)\}/m);
-    expect(cellRule, '.cell rule not found in src/index.css').not.toBeNull();
-    expect(cellRule![1]).toMatch(/word-break:\s*break-word/);
-    expect(cellRule![1]).toMatch(/hyphens:\s*auto/);
+describe('ShareCard CSS — fixed-frame safety', () => {
+  it('bounds long winner and leaderboard names inside the fixed card', () => {
+    for (const selector of ['.share-card-player', '.share-card-col .share-card-name', '.share-card-row .share-card-name']) {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rule = indexCss.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      expect(rule, `${selector} rule not found in src/index.css`).not.toBeNull();
+      expect(rule![1]).toMatch(/overflow-wrap:\s*anywhere/);
+      expect(rule![1]).toMatch(/-webkit-line-clamp:\s*2/);
+    }
+  });
 
-    // DOM half: the full unbroken token reaches the cell node untrimmed —
-    // no renderer-side truncation is layered on top of the CSS wrapping.
-    const longToken = `${'w'.repeat(60)}.example/very-long-unbroken-url-ish-prompt`;
-    const cells = makeCells();
-    cells[0] = { ...cells[0], text: longToken };
-    await renderBingoShareCard({ kind: 'bingo', playerName: 'A', eventName: 'E', cells });
-    const cellNode = toBlobNode().querySelectorAll('.share-card-cell')[0];
-    expect(cellNode).toHaveClass('share-card-cell');
-    expect(cellNode.textContent).toBe(longToken);
+  it('reserves fixed-frame space for two winner-name lines', () => {
+    const playerRule = indexCss.match(/\.share-card-player\s*\{([^}]*)\}/);
+    expect(playerRule, '.share-card-player rule not found in src/index.css').not.toBeNull();
+    expect(playerRule![1]).toMatch(/min-height:\s*104px/);
+
+    const titleRule = indexCss.match(/\.share-card-bingo \.share-card-title\s*\{([^}]*)\}/);
+    expect(titleRule, '.share-card-bingo .share-card-title rule not found in src/index.css').not.toBeNull();
+    expect(titleRule![1]).toMatch(/font-size:\s*100px/);
+
+    const gridRule = indexCss.match(/\.share-card-grid\s*\{([^}]*)\}/);
+    expect(gridRule, '.share-card-grid rule not found in src/index.css').not.toBeNull();
+    expect(gridRule![1]).toMatch(/width:\s*330px/);
+    expect(gridRule![1]).toMatch(/gap:\s*10px/);
+    expect(gridRule![1]).toMatch(/margin:\s*18px 0 8px/);
+  });
+
+  it('keeps pending share-card cells visibly dashed even when also marked', () => {
+    const rule = indexCss.match(/\.share-card-cell\.pending\s*\{([^}]*)\}/);
+    expect(rule, '.share-card-cell.pending rule not found in src/index.css').not.toBeNull();
+    expect(rule![1]).toMatch(/border-style:\s*dashed/);
+    expect(rule![1]).toMatch(/border-color:\s*var\(--ink\)/);
+  });
+
+  it('uses ink, not dim, for share-card copy over the composited tint wash', () => {
+    for (const selector of ['.share-card-event', '.share-card-stat', '.share-card-footer']) {
+      const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rule = indexCss.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
+      expect(rule, `${selector} rule not found in src/index.css`).not.toBeNull();
+      expect(rule![1]).toMatch(/color:\s*var\(--ink\)/);
+      expect(rule![1]).not.toMatch(/color:\s*var\(--dim\)/);
+    }
   });
 });
 
@@ -309,59 +432,97 @@ describe('ShareCard CSS — .share-card-title contrast', () => {
 // ---------------------------------------------------------------------------
 
 describe('ShareCard — renderLeaderboardShareCard', () => {
+  // Five rows in rank order (issue #423): the renderer lays the first three out
+  // as a podium and the rest as compact rows. Jess (rank 2) holds the pin; Big
+  // Denver Chris (rank 5) carries a blackout, so the row's stat suffix is
+  // exercised.
   const rows: LeaderboardShareRow[] = [
-    {
-      uid: 'top-dog',
-      rank: 1,
-      displayName: 'Top Dog',
-      bingoCount: 3,
-      squaresMarked: 20,
-      blackout: true,
-      firstToBingo: false,
-    },
-    {
-      uid: 'early-bird',
-      rank: 2,
-      displayName: 'Early Bird',
-      bingoCount: 2,
-      squaresMarked: 15,
-      blackout: false,
-      firstToBingo: true,
-    },
+    { uid: 'r1', rank: 1, displayName: 'Marco', bingoCount: 6, squaresMarked: 90, blackout: false, firstToBingo: false },
+    { uid: 'r2', rank: 2, displayName: 'Jess', bingoCount: 7, squaresMarked: 88, blackout: false, firstToBingo: true },
+    { uid: 'r3', rank: 3, displayName: 'Dan', bingoCount: 6, squaresMarked: 80, blackout: false, firstToBingo: false },
+    { uid: 'r4', rank: 4, displayName: 'Theo', bingoCount: 5, squaresMarked: 80, blackout: false, firstToBingo: false },
+    { uid: 'r5', rank: 5, displayName: 'Big Denver Chris', bingoCount: 4, squaresMarked: 62, blackout: true, firstToBingo: false },
   ];
 
-  it('produces a non-empty blob whose node lists the event name and one row per given Player', async () => {
-    const blob = await renderLeaderboardShareCard({ eventName: 'Allure of the Seas', rows });
+  it('splits the given rows into a top-3 podium and compact rows for the rest, with context + stat lines', async () => {
+    const blob = await renderLeaderboardShareCard({
+      eventName: 'Allure of the Seas',
+      rows,
+      contextLine: 'Gay Cruise Bingo · Day 5 · Palermo',
+      statLine: 'Through Day 5 of 10',
+    });
 
     expect(blob.size).toBeGreaterThan(0);
     const node = toBlobNode();
-    expect(node.textContent).toContain('Allure of the Seas');
     expect(node.textContent).toContain('LEADERBOARD');
-    expect(node.querySelectorAll('.share-card-row')).toHaveLength(2);
-    expect(node.textContent).toContain('Top Dog');
-    expect(node.textContent).toContain('BLACKOUT');
+    expect(node.querySelectorAll('.share-card-col')).toHaveLength(3); // podium: ranks 1–3
+    expect(node.querySelectorAll('.share-card-row')).toHaveLength(2); // rows: ranks 4–5
+    expect(node.querySelector('.share-card-event')?.textContent).toBe('Gay Cruise Bingo · Day 5 · Palermo');
+    expect(node.querySelector('.share-card-stat')?.textContent).toBe('Through Day 5 of 10');
   });
 
-  it('pins the "★ 1st BINGO" badge on exactly the row flagged firstToBingo', async () => {
+  it('preserves each row.rank as its label — podium bars 1–3, rows 4–5 — never renumbering', async () => {
     await renderLeaderboardShareCard({ eventName: 'E', rows });
 
     const node = toBlobNode();
-    const pinned = node.querySelectorAll('.share-card-row.pinned');
-    expect(pinned).toHaveLength(1);
-    expect(pinned[0].textContent).toContain('Early Bird');
-    expect(pinned[0].textContent).toContain('1st BINGO');
-
-    const topDogRow = Array.from(node.querySelectorAll('.share-card-row')).find((r) =>
-      r.textContent?.includes('Top Dog'),
+    // Podium is laid out 2nd·1st·3rd, so sort before comparing the set.
+    const bars = Array.from(node.querySelectorAll('.share-card-bar')).map((b) => b.textContent);
+    expect(bars.slice().sort()).toEqual(['1', '2', '3']);
+    const rowRanks = Array.from(node.querySelectorAll('.share-card-row .share-card-rank')).map(
+      (r) => r.textContent,
     );
-    expect(topDogRow).not.toHaveClass('pinned');
+    expect(rowRanks).toEqual(['4', '5']);
   });
 
-  it('renders zero rows without crashing when given an empty row list', async () => {
+  it('pins the ★ badge on exactly the podium column flagged firstToBingo', async () => {
+    await renderLeaderboardShareCard({ eventName: 'E', rows });
+
+    const node = toBlobNode();
+    const pinnedCols = node.querySelectorAll('.share-card-col.pinned');
+    expect(pinnedCols).toHaveLength(1);
+    expect(pinnedCols[0].textContent).toContain('Jess');
+    expect(pinnedCols[0].textContent).toContain('First BINGO');
+    // No compact row is pinned here — the pin holder is a top-three Player.
+    expect(node.querySelectorAll('.share-card-row.pinned')).toHaveLength(0);
+  });
+
+  it('renders the blackout suffix and squares stat on a compact row', async () => {
+    await renderLeaderboardShareCard({ eventName: 'E', rows });
+
+    const chrisRow = Array.from(toBlobNode().querySelectorAll('.share-card-row')).find((r) =>
+      r.textContent?.includes('Big Denver Chris'),
+    );
+    expect(chrisRow?.textContent).toContain('BLACKOUT');
+    expect(chrisRow?.textContent).toContain('62 sq');
+  });
+
+  it('pins a compact row when the firstToBingo holder falls outside the podium', async () => {
+    const pinOutside = rows.map((r, i) => ({ ...r, firstToBingo: i === 4 }));
+    await renderLeaderboardShareCard({ eventName: 'E', rows: pinOutside });
+
+    const node = toBlobNode();
+    const pinnedRows = node.querySelectorAll('.share-card-row.pinned');
+    expect(pinnedRows).toHaveLength(1);
+    expect(pinnedRows[0].textContent).toContain('Big Denver Chris');
+    expect(pinnedRows[0].textContent).toContain('First BINGO');
+    expect(node.querySelectorAll('.share-card-col.pinned')).toHaveLength(0);
+  });
+
+  it('falls back to the event name (no contextLine) and omits the stat line', async () => {
+    await renderLeaderboardShareCard({ eventName: 'Just The Event', rows });
+
+    const node = toBlobNode();
+    expect(node.querySelector('.share-card-event')?.textContent).toBe('Just The Event');
+    expect(node.querySelector('.share-card-stat')).toBeNull();
+  });
+
+  it('renders zero podium columns and zero rows without crashing for an empty row list', async () => {
     const blob = await renderLeaderboardShareCard({ eventName: 'E', rows: [] });
 
     expect(blob.size).toBeGreaterThan(0);
-    expect(toBlobNode().querySelectorAll('.share-card-row')).toHaveLength(0);
+    const node = toBlobNode();
+    expect(node.querySelectorAll('.share-card-col')).toHaveLength(0);
+    expect(node.querySelectorAll('.share-card-row')).toHaveLength(0);
   });
 });
 
@@ -868,9 +1029,10 @@ describe('Leaderboard — share affordance', () => {
     expect(node.textContent).toContain('Allure of the Seas');
     expect(node.textContent).toContain('Top Dog');
     expect(node.textContent).toContain('Early Bird');
-    // Early Bird has the earliest firstBingoAt (1000 < 9000) — the same
-    // Player the on-screen "1st BINGO" badge pins.
-    const pinned = node.querySelectorAll('.share-card-row.pinned');
+    // Two Players → both land in the podium (issue #423). Early Bird has the
+    // earliest firstBingoAt (1000 < 9000) — the same Player the on-screen "1st
+    // BINGO" badge pins — so the pinned podium column is Early Bird's.
+    const pinned = node.querySelectorAll('.share-card-col.pinned');
     expect(pinned).toHaveLength(1);
     expect(pinned[0].textContent).toContain('Early Bird');
 
@@ -904,11 +1066,89 @@ describe('Leaderboard — share affordance', () => {
     expect(shareMock.mock.calls[0][0].files).toHaveLength(1);
   });
 
-  it('includes the First to BINGO Player on the card even when their rank falls outside the top 8', async () => {
+  it('invalidates a warmed bare app-name card once the schedule copy loads', async () => {
+    H.event = null;
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
+    const user = userEvent.setup();
+
+    const { rerender } = render(<Leaderboard />, { wrapper: MemoryRouter });
+    await user.hover(screen.getByRole('button', { name: 'Share leaderboard' }));
+    expect(toBlobMock).toHaveBeenCalledTimes(1);
+    expect(toBlobNode().querySelector('.share-card-event')?.textContent).toBe(SHARE_CARD_APP_NAME);
+
+    H.event = {
+      name: SHARE_CARD_APP_NAME,
+      days: [
+        {
+          index: 0,
+          date: '2026-07-15',
+          port: 'Palermo',
+          portEmoji: '🇮🇹',
+          theme: 'glamiators',
+          tonight: [],
+          pool: 'main',
+          tutorial: false,
+          unlockAt: Date.now() - 1000,
+        },
+      ],
+    } as unknown as EventDoc;
+    rerender(<Leaderboard />);
+
+    await user.click(screen.getByRole('button', { name: 'Share leaderboard' }));
+
+    await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
+    expect(toBlobMock).toHaveBeenCalledTimes(2);
+    expect(latestToBlobNode().querySelector('.share-card-event')?.textContent).toBe(
+      `${SHARE_CARD_APP_NAME} · Day 1 · Palermo`,
+    );
+  });
+
+  it('keys leaderboard Share Card copy on the derived event schedule lines', () => {
+    const first = leaderboardShareCopy({
+      name: SHARE_CARD_APP_NAME,
+      days: [
+        {
+          index: 0,
+          date: '2026-07-15',
+          port: 'Palermo',
+          portEmoji: '🇮🇹',
+          theme: 'glamiators',
+          tonight: [],
+          pool: 'main',
+          tutorial: false,
+          unlockAt: 1000,
+        },
+      ],
+    }, 2000);
+    const changed = leaderboardShareCopy({
+      name: SHARE_CARD_APP_NAME,
+      days: [
+        {
+          index: 0,
+          date: '2026-07-15',
+          port: 'Valletta',
+          portEmoji: '🇲🇹',
+          theme: 'glamiators',
+          tonight: [],
+          pool: 'main',
+          tutorial: false,
+          unlockAt: 1000,
+        },
+      ],
+    }, 2000);
+
+    expect(first.contextLine).toBe(`${SHARE_CARD_APP_NAME} · Day 1 · Palermo`);
+    expect(changed.contextLine).toBe(`${SHARE_CARD_APP_NAME} · Day 1 · Valletta`);
+    expect(changed.cacheKey).not.toBe(first.cacheKey);
+  });
+
+  it('includes the First to BINGO Player on the card even when their rank falls outside the top 5', async () => {
     // 9 Players, already in rank order (bingos desc): topDog, 7 "Mid"
     // Players tied at 4 bingos, then Late Bloomer — who has the fewest
-    // bingos (rank #9, outside the card's top-8 slice) but the EARLIEST
-    // firstBingoAt of anyone, so they still hold the pin.
+    // bingos (rank #9, outside the card's top-5 slice, MAX_SHARE_ROWS = 5)
+    // but the EARLIEST firstBingoAt of anyone, so they still hold the pin.
     const mids = Array.from({ length: 7 }, (_, i) =>
       mkPlayer({ uid: `mid-${i}`, displayName: `Mid ${i}`, bingoCount: 4, squaresMarked: 10, firstBingoAt: 5000 + i }),
     );
@@ -930,8 +1170,11 @@ describe('Leaderboard — share affordance', () => {
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     const node = toBlobNode();
-    // Top 8 by rank + Late Bloomer appended as the 9th, pinned row.
-    expect(node.querySelectorAll('.share-card-row')).toHaveLength(9);
+    // Top 5 by rank + Late Bloomer appended (rank 9, outside the top 5) →
+    // the renderer lays the first three as a podium and the remaining three
+    // (ranks 4, 5, and the appended pin) as compact rows.
+    expect(node.querySelectorAll('.share-card-col')).toHaveLength(3);
+    expect(node.querySelectorAll('.share-card-row')).toHaveLength(3);
     const pinned = node.querySelectorAll('.share-card-row.pinned');
     expect(pinned).toHaveLength(1);
     expect(pinned[0].textContent).toContain('Late Bloomer');
@@ -951,8 +1194,9 @@ describe('Leaderboard — share affordance', () => {
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     // Both Players appear on the shared card even though the ON-SCREEN
-    // filter is currently showing neither.
-    expect(toBlobNode().querySelectorAll('.share-card-row')).toHaveLength(2);
+    // filter is currently showing neither — two Players → the podium (issue
+    // #423).
+    expect(toBlobNode().querySelectorAll('.share-card-col')).toHaveLength(2);
   });
 
   it('falls back to a text/URL share when file sharing is unsupported, and still fires share_click', async () => {

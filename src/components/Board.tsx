@@ -485,6 +485,19 @@ export function knownFirstBingoAt(
   return player?.firstBingoAt ?? null;
 }
 
+export function shareCardBingoNumber(params: {
+  cells: Cell[];
+  rootBingoCount: number;
+  dayBingoCount: number | undefined;
+  hasDays: boolean;
+  statsFrozen: boolean;
+}): number {
+  const currentBoardLines = completedLines(params.cells).length;
+  if (!params.hasDays) return Math.max(params.rootBingoCount, currentBoardLines);
+  if (params.statsFrozen) return currentBoardLines;
+  return Math.max(params.dayBingoCount ?? 0, currentBoardLines);
+}
+
 /** Title-cases a hyphenated ThemeId ('welcome-aboard' -> 'Welcome Aboard') —
  * the fallback label/description source for a Day whose Theme has no
  * `ThemeMeta` entry yet (the two Phase 1.5 tutorial themes land theirs in
@@ -2126,20 +2139,52 @@ export default function Board() {
           disables Share instead of ever stamping the stale auth fallback
           onto a card (mirrors doMark's `identityKnown ? displayName :
           undefined`). */}
-      {celebrate && (
-        <Celebration
-          // Keyed by win kind (Codex P3 on #421): a BINGO celebration still
-          // open when a blackout lands must REMOUNT, not re-render — the
-          // confetti burst is a mount-time lazy initializer, so an in-place
-          // kind change would keep the smaller BINGO rain under the new
-          // BLACKOUT hero.
-          key={celebrate}
-          kind={celebrate}
-          cells={cells}
-          playerName={identityKnown ? displayName : null}
-          onClose={() => setCelebrate(null)}
-        />
-      )}
+      {celebrate &&
+        (() => {
+          // Share Card copy (issue #423): the context + stat lines the card
+          // renderer displays, composed HERE where the win's Day (port, night)
+          // and the Player's stats live — the renderer stays dumb. Built only
+          // when the win's Day is known (a daily event); a legacy non-daily
+          // event leaves both undefined, and the card falls back to the bare
+          // event name with no stat line.
+          const winDay =
+            hasDays && board?.dayIndex != null
+              ? (days.find((d) => d.index === board.dayIndex) ?? days[board.dayIndex])
+              : undefined;
+          const night = winDay?.tonight?.find(Boolean);
+          const nightSuffix = night ? ` · ${night} night` : '';
+          const contextLine =
+            winDay && event?.name
+              ? `${event.name} · Day ${winDay.index + 1} · ${winDay.port}`
+              : undefined;
+          const statLine = winDay
+            ? celebrate === 'blackout'
+              ? `All 24 squares${nightSuffix}`
+              : `Bingo #${shareCardBingoNumber({
+                  cells,
+                  rootBingoCount: player?.bingoCount ?? 0,
+                  dayBingoCount: board?.dayIndex == null ? undefined : player?.dayStats?.[board.dayIndex]?.bingoCount,
+                  hasDays,
+                  statsFrozen,
+                })} · ${countMarked(cells)} squares${nightSuffix}`
+            : undefined;
+          return (
+            <Celebration
+              // Keyed by win kind (Codex P3 on #421): a BINGO celebration still
+              // open when a blackout lands must REMOUNT, not re-render — the
+              // confetti burst is a mount-time lazy initializer, so an in-place
+              // kind change would keep the smaller BINGO rain under the new
+              // BLACKOUT hero.
+              key={celebrate}
+              kind={celebrate}
+              cells={cells}
+              playerName={identityKnown ? displayName : null}
+              contextLine={contextLine}
+              statLine={statLine}
+              onClose={() => setCelebrate(null)}
+            />
+          );
+        })()}
       {proofTarget && user && (
         <ProofSheet
           uid={uid}
