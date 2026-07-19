@@ -39,6 +39,13 @@ body,
      the last word, so a bigger ceiling only enlarges prompts with room —
      long prompts keep shrinking to fit, never truncating. */
   --square-scale: 1;
+  /* ---------- motion tokens (specs/motion-polish.md) ----------
+     The two easings every animation in the app draws from: `--ease-pop` is
+     the springy overshoot (marks landing, jackpot letters, toasts) and
+     `--ease-glide` the fast-out settle (sheets, page changes, list rows).
+     One vocabulary keeps the whole app feeling like one machine. */
+  --ease-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-glide: cubic-bezier(0.22, 1, 0.36, 1);
 }
 :root[data-text-size='small'] {
   --text-scale: 0.9;
@@ -213,11 +220,38 @@ a {
   letter-spacing: 0.04em;
   font-size: 13px;
   touch-action: manipulation;
+  /* Motion pass: tabs light up/dim smoothly and squeeze under the thumb. */
+  transition:
+    color 0.18s ease,
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    transform 0.15s var(--ease-pop);
+}
+.tab:active {
+  transform: scale(0.93);
 }
 .tab.active {
   color: var(--ink);
   border-color: var(--border);
   background: color-mix(in srgb, var(--primary) 16%, transparent);
+}
+/* The landing tab's glyph does a little jump — the "you are here" wink. Runs
+   when `.active` flips on (and once on first paint of the active tab). */
+.tab.active .tab-icon,
+.tab.active .tab-ellipsis,
+.tab.active .tab-avatar {
+  animation: tab-hop 0.4s var(--ease-pop);
+}
+@keyframes tab-hop {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  45% {
+    transform: translateY(-3px) scale(1.12);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+  }
 }
 /* Card/Feed/Ranks Lucide glyphs + the signed-out More fallback (daily-cards-
    spec § "Iconography — Lucide"): sit above the label, sized to stay inside
@@ -369,8 +403,27 @@ a {
   opacity: 0.7;
   border-style: dashed;
 }
+/* The winning line's payline sweep (specs/motion-polish.md): each Square in
+   the line shimmers in turn — `--win-order` (Board.tsx, game/motion.ts) is the
+   cell's position along the line, so the glow travels it like a slot payline
+   lighting up. Infinite on purpose (a standing win keeps glowing, the pre-pass
+   behavior); the reduced-motion block at the end of this file swaps it for a
+   static accent ring. z-index lifts the mid-scale Square over its neighbors. */
 .cell.win {
-  animation: pulse 1s ease-in-out infinite;
+  animation: win-glow 1.3s ease-in-out infinite;
+  animation-delay: calc(var(--win-order, 0) * 110ms);
+  z-index: 1;
+}
+@keyframes win-glow {
+  0%,
+  100% {
+    filter: brightness(1);
+    transform: scale(1);
+  }
+  50% {
+    filter: brightness(1.55) saturate(1.15);
+    transform: scale(1.045);
+  }
 }
 @keyframes pulse {
   0%,
@@ -379,13 +432,6 @@ a {
   }
   50% {
     filter: brightness(1.5);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .loading-spinner i,
-  .cell.free.free-pulse-a,
-  .cell.free.free-pulse-b {
-    animation: none;
   }
 }
 /* ---------- Day switcher + locked-Day preview (daily-cards-spec §§ "Day
@@ -423,6 +469,16 @@ a {
   font-size: 11px;
   line-height: 1.2;
   cursor: pointer;
+  /* Motion pass: chip selection/lock states cross-fade; taps squeeze. */
+  transition:
+    color 0.18s ease,
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.15s var(--ease-pop);
+}
+.day-chip:active {
+  transform: scale(0.94);
 }
 .day-chip.selected {
   border-color: var(--ink);
@@ -541,6 +597,11 @@ a {
   background: var(--panel);
   white-space: nowrap;
   cursor: pointer;
+  /* Motion pass: the trade-in chip squeezes and its dice-throw glyph twists. */
+  transition: transform 0.15s var(--ease-pop), border-color 0.18s ease, color 0.18s ease;
+}
+.reshuf:active {
+  transform: scale(0.94) rotate(-3deg);
 }
 .reshuf-icon {
   width: 12px;
@@ -892,6 +953,12 @@ a {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   font-size: 13px;
+  /* Tactile press (specs/motion-polish.md): every pill compresses under the
+     thumb like a physical button — the same 0.95-ish squeeze `.cell` has. */
+  transition: transform 0.12s var(--ease-glide), filter 0.15s ease, box-shadow 0.2s ease;
+}
+.btn:not(:disabled):active {
+  transform: scale(0.96);
 }
 .btn.primary {
   border-color: var(--primary);
@@ -2699,6 +2766,11 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   text-align: left;
   cursor: pointer;
   touch-action: manipulation;
+  /* Motion pass: menu rows highlight smoothly and give under the thumb. */
+  transition: border-color 0.18s ease, transform 0.12s var(--ease-glide);
+}
+.more-row:not(:disabled):active {
+  transform: scale(0.985);
 }
 .more-row:disabled {
   opacity: 0.5;
@@ -2782,4 +2854,390 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 }
 .more-howtoplay li {
   line-height: 1.4;
+}
+
+/* ---------- motion (specs/motion-polish.md) ----------
+   The slot-machine polish pass: one section so the whole vocabulary reads in
+   one place. Rules of the system:
+     - entrances are 200-550ms, staggers cap under ~700ms total;
+     - every color comes from theme tokens, so all eight Themes retint free;
+     - nothing here animates the off-screen `.share-card-*` DOM (html-to-image
+       would rasterize a mid-animation frame) or the locked preview's grid
+       (a locked Day should feel parked, not live);
+     - the kill switch at the end of this section neutralizes ALL of it (plus
+       the app's earlier animations) under prefers-reduced-motion. */
+
+/* The deal: Squares tumble in column by column, top to bottom — the reels
+   settling. `--deal-delay` is set per Square (Board.tsx via game/motion.ts);
+   the grid remounts per board identity (Day switch, reshuffle, account), so
+   every fresh card replays the deal. The locked preview's `.locked-grid` is
+   excluded on purpose. `both` holds a Square invisible through its delay.
+   `:where()` keeps this rule at bare-`.cell` specificity (0,1,0) — a plain
+   `:not(.locked-grid)` would weigh (0,3,0) and permanently out-cascade the
+   `.cell.win` payline and `.cell.just-marked` stamp rules below, which must
+   take over a Square's `animation` when their states apply. */
+:where(.grid:not(.locked-grid)) > .cell {
+  animation: deal-drop 0.42s var(--ease-pop) backwards;
+  animation-delay: var(--deal-delay, 0ms);
+}
+/* A card whose cascade already played this session mounts LANDED (Codex P2
+   on #421): the router remounts Board on every tab switch, so Board's
+   module-scope dealCascadePlayed gate adds this class on a repeat mount and
+   the entrance zeroes out instead of replaying. `:where()` keeps this at the
+   SAME bare-cell (0,1,0) weight as the deal rule above — later in source, so
+   it beats exactly that rule and nothing else. Every stateful animation
+   (`.cell.win`, `.cell.just-marked`, the free pulses) carries (0,2,0)+ and
+   out-specifies this reset regardless of source position — a bare
+   `.grid-dealt > .cell` at (0,2,0) sat later in the file than `.cell.win`
+   and silenced a standing win's payline shimmer after any tab round-trip
+   (Codex P2 on #421, round 2). */
+:where(.grid-dealt) > .cell {
+  animation: none;
+}
+@keyframes deal-drop {
+  from {
+    opacity: 0;
+    transform: translateY(-14px) scale(0.85);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+/* The B-I-N-G-O header letters ride the same cascade, one per column. */
+.bingo-head span {
+  animation: deal-drop 0.36s var(--ease-glide) backwards;
+}
+.bingo-head span:nth-child(2) {
+  animation-delay: 60ms;
+}
+.bingo-head span:nth-child(3) {
+  animation-delay: 120ms;
+}
+.bingo-head span:nth-child(4) {
+  animation-delay: 180ms;
+}
+.bingo-head span:nth-child(5) {
+  animation-delay: 240ms;
+}
+/* The header letters follow the SAME once-per-board contract as the Squares
+   (Codex P3 on #421, round 3): Board keys its `.bingo-head` by deal identity
+   (so a genuinely new card — Day switch, reshuffle — replays the letters)
+   and adds `-dealt` on a repeat mount (tab round-trip), zeroing the
+   entrance. Same (0,1,1) weight as `.bingo-head span` above — later in
+   source, so it wins the tie; the higher-weight nth-child rules above only
+   set the delay longhand, which is moot once animation-name is none. (No
+   `:where()` here, unlike `.grid-dealt`: nothing else ever needs to
+   out-cascade a header letter.) */
+.bingo-head-dealt span {
+  animation: none;
+}
+
+/* The stamp: a freshly-marked Square punches in with an overshoot, and its ✓
+   pops right behind it. `.just-marked` is edge-detected in Board.tsx (only a
+   Mark that RISES between snapshots — a returning Player's standing marks
+   never re-stamp) and cleared on animationend. Declared after the deal rule
+   so a mid-deal Mark prefers the stamp. */
+.cell.just-marked {
+  animation: cell-stamp 0.45s var(--ease-pop);
+}
+@keyframes cell-stamp {
+  0% {
+    transform: scale(0.8);
+  }
+  45% {
+    transform: scale(1.12);
+    filter: brightness(1.4) saturate(1.2);
+    box-shadow: 0 0 26px var(--shadow);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+.cell.marked.just-marked::after {
+  animation: check-pop 0.32s var(--ease-pop) 0.08s backwards;
+}
+@keyframes check-pop {
+  from {
+    opacity: 0;
+    transform: scale(0) rotate(-30deg);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+/* The scoreboard line's numbers pop when they change (Board keys the <b>s by
+   value, so a change remounts the span and replays this). */
+.stat-pop {
+  display: inline-block;
+  animation: stat-pop 0.4s var(--ease-pop);
+}
+@keyframes stat-pop {
+  0% {
+    transform: scale(0.6);
+  }
+  55% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* The jackpot: the celebration backdrop washes in, the hero word slams down
+   letter by letter (`--letter-i` set per span in Celebration.tsx), and the
+   supporting copy + actions rise once the word has landed. The `.big` pulse
+   (its pre-pass glow throb) stays — letters animate transform, the parent
+   animates filter, and the two compose. */
+.celebrate {
+  animation: celebrate-in 0.35s ease-out both;
+}
+@keyframes celebrate-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.big-letter {
+  display: inline-block;
+  animation: letter-slam 0.5s var(--ease-pop) backwards;
+  animation-delay: calc(var(--letter-i, 0) * 65ms);
+}
+.big-letter:nth-child(even) {
+  --letter-tilt: 7deg;
+}
+@keyframes letter-slam {
+  from {
+    opacity: 0;
+    transform: translateY(-1.1em) scale(1.7) rotate(var(--letter-tilt, -6deg));
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(0.04em) scale(0.96) rotate(0deg);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1) rotate(0deg);
+  }
+}
+.celebrate .muted,
+.celebrate .btn {
+  animation: rise-in 0.45s var(--ease-glide) 0.5s backwards;
+}
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* Confetti: absolutely-positioned particles raining over the celebration.
+   Geometry/timing land inline per piece (game/motion.ts via Celebration.tsx);
+   colors are theme tokens. pointer-events pass through so tap-to-dismiss and
+   the action buttons keep working; Celebration skips rendering the layer
+   entirely under prefers-reduced-motion (belt to the kill switch's braces). */
+.confetti {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.confetti i {
+  position: absolute;
+  top: -5vh;
+  border-radius: 2px;
+  opacity: 0;
+  background: var(--confetti-c, var(--accent));
+  animation: confetti-fall linear both;
+}
+@keyframes confetti-fall {
+  0% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) rotate(0deg);
+  }
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--drift, 0px), 108vh, 0) rotate(var(--spin, 540deg));
+  }
+}
+
+/* Sheets: every bottom sheet glides up while its scrim fades — the app's
+   drawers finally move like drawers. Entrance only (no exit choreography:
+   sheets unmount on state, and a delay there would hold stale content); no
+   fill, so a finished animation never overrides later inline styles. */
+.sheet-backdrop {
+  animation: backdrop-in 0.22s ease-out;
+}
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.sheet {
+  animation: sheet-up 0.34s var(--ease-glide);
+}
+@keyframes sheet-up {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Toasts (install/update) bounce up from the tab bar. */
+.install-prompt,
+.update-prompt {
+  animation: toast-in 0.45s var(--ease-pop);
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Lists (Ranks rows, Feed cards, who-lists, admin rows): rows deal in with a
+   short cascade — same trick as the board, CSS-only via nth-child. Children
+   past the eighth share the last slot so a long Feed never staggers forever.
+   Scoped to the three card shapes so overlays mounted inside a list (the
+   Feed's who-list sheet) never inherit a row delay. */
+.list > .row,
+.list > .proof,
+.list > .moment {
+  animation: row-in 0.38s var(--ease-glide) backwards;
+}
+@keyframes row-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.list > :is(.row, .proof, .moment):nth-child(2) {
+  animation-delay: 45ms;
+}
+.list > :is(.row, .proof, .moment):nth-child(3) {
+  animation-delay: 90ms;
+}
+.list > :is(.row, .proof, .moment):nth-child(4) {
+  animation-delay: 135ms;
+}
+.list > :is(.row, .proof, .moment):nth-child(5) {
+  animation-delay: 180ms;
+}
+.list > :is(.row, .proof, .moment):nth-child(6) {
+  animation-delay: 225ms;
+}
+.list > :is(.row, .proof, .moment):nth-child(7) {
+  animation-delay: 270ms;
+}
+.list > :is(.row, .proof, .moment):nth-child(n + 8) {
+  animation-delay: 315ms;
+}
+
+/* Tab switches: the incoming page fades in. App.tsx keys this wrapper on the
+   top-level route segment, so sub-navigation inside a tab (More → admin)
+   never replays it. OPACITY ONLY — deliberately no transform: an animating
+   transform makes this wrapper the containing block for every
+   position:fixed descendant, and overlays that mount WITH the page (the
+   coach overlay on a first Card entry, the admin sheet on a direct
+   /more/admin load) would lay their inset backdrops and bottom sheets out
+   against the route content instead of the viewport, then jump into place
+   when the entrance ends (Codex P2 on #421, round 3). */
+.route-view {
+  animation: page-in 0.26s var(--ease-glide);
+}
+@keyframes page-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Flourishes: the locked Day's padlock bobs on the tide; the farewell
+   podium's medal takes its bow once. */
+.day-lock-icon-circle {
+  animation: lock-bob 3.2s ease-in-out infinite;
+}
+@keyframes lock-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+.farewell-podium-medal {
+  animation: medal-pop 0.6s var(--ease-pop) backwards;
+}
+@keyframes medal-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(-14deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.15) rotate(4deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+/* ---------- reduced motion: the kill switch ----------
+   One universal neutralizer instead of per-animation opt-outs, so a future
+   animation can never ship un-covered (the pre-pass block only caught the
+   loading spinner and free pulse; `.cell.win`'s throb slipped it entirely).
+   Durations clamp to a frame (not `animation: none`) so fill-mode
+   entrances still resolve to their landed state and delayed Squares never
+   stay invisible; delays zero out for the same reason. The two spots where
+   stillness needs a substitute get one: the winning line keeps a static
+   accent ring, and the confetti layer (pure decoration) is dropped. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .cell.win {
+    box-shadow:
+      0 0 0 2px var(--accent),
+      0 0 14px var(--shadow);
+  }
+  .confetti {
+    display: none;
+  }
 }

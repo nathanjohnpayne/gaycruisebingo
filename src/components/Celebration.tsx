@@ -1,11 +1,29 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { track } from '../analytics';
 import { useEventDoc } from '../hooks/useData';
+import {
+  confettiPieces,
+  CONFETTI_COUNT_BINGO,
+  CONFETTI_COUNT_BLACKOUT,
+  type ConfettiPiece,
+} from '../game/motion';
 import { renderBingoShareCard, shareCardBlob, SHARE_CARD_APP_NAME } from './ShareCard';
 import type { Cell } from '../types';
 
 function celebrationCopy(kind: 'bingo' | 'blackout'): string {
   return kind === 'blackout' ? 'BLACKOUT. I win the boat. 🚢' : 'I got BINGO on the high seas 🚢';
+}
+
+/** The confetti gate (specs/motion-polish.md): decoration only, so a reduced-
+ * motion preference (or an environment with no matchMedia at all failing
+ * open to "render") skips the LAYER, not just its animation — the CSS kill
+ * switch also hides `.confetti`, belt and braces. */
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
 }
 
 export default function Celebration({
@@ -84,6 +102,15 @@ export default function Celebration({
   // render is in flight) from opening the gate for the newer render.
   const cardBlob = useRef<Promise<Blob | null> | null>(null);
   const [cardReady, setCardReady] = useState(false);
+
+  // One confetti burst per celebration mount (lazy initializer — regenerating
+  // on a re-render would restart the rain mid-fall); null under reduced
+  // motion, which skips rendering the layer at all.
+  const [confetti] = useState<ConfettiPiece[] | null>(() =>
+    prefersReducedMotion()
+      ? null
+      : confettiPieces(kind === 'blackout' ? CONFETTI_COUNT_BLACKOUT : CONFETTI_COUNT_BINGO),
+  );
   useEffect(() => {
     if (playerName == null) {
       // Identity not yet known (round 2 finding 1): nothing to pre-render —
@@ -135,10 +162,50 @@ export default function Celebration({
     }
   };
 
+  const hero = kind === 'blackout' ? 'BLACKOUT' : 'BINGO!';
+
   return (
     <div className="celebrate" onClick={onClose}>
+      {/* The jackpot rain (specs/motion-polish.md): generated once per mount,
+          sized to the win (blackout gets the bigger burst), colored purely by
+          theme tokens. Skipped entirely under reduced motion. */}
+      {confetti && (
+        <div className="confetti" aria-hidden="true">
+          {confetti.map((p, i) => (
+            <i
+              key={i}
+              style={
+                {
+                  left: `${p.leftPct}%`,
+                  width: `${p.sizePx}px`,
+                  height: `${Math.round(p.sizePx * 1.6)}px`,
+                  '--confetti-c': p.color,
+                  animationDelay: `${p.delayMs}ms`,
+                  animationDuration: `${p.durationMs}ms`,
+                  '--drift': `${p.driftPx}px`,
+                  '--spin': `${p.spinDeg}deg`,
+                } as CSSProperties
+              }
+            />
+          ))}
+        </div>
+      )}
       <div className="celebrate-card" onClick={(e) => e.stopPropagation()}>
-        <div className="big">{kind === 'blackout' ? 'BLACKOUT' : 'BINGO!'}</div>
+        {/* The hero word slams in letter by letter (`.big-letter`, index.css).
+            Screen readers get the intact word once; the animated letters are
+            hidden from the a11y tree so nothing spells B-I-N-G-O aloud. The
+            element's text content still CONTAINS the word, so the e2e
+            `.big { hasText }` locators keep matching. */}
+        <div className="big">
+          <span className="visually-hidden">{hero}</span>
+          <span aria-hidden="true">
+            {hero.split('').map((letter, i) => (
+              <span key={i} className="big-letter" style={{ '--letter-i': i } as CSSProperties}>
+                {letter}
+              </span>
+            ))}
+          </span>
+        </div>
         <p className="muted" style={{ letterSpacing: '0.14em', textTransform: 'uppercase' }}>
           You've seen some things.
         </p>
