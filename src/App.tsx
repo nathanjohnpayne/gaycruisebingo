@@ -1,5 +1,5 @@
 import { type ReactElement } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import SignIn, { DealError } from './components/SignIn';
 import Nav from './components/Nav';
@@ -13,6 +13,12 @@ import LoadingState from './components/LoadingState';
 
 export default function App() {
   const { user, loading, dealError, dealing, retryDeal } = useAuth();
+  // The tab-switch transition's key (specs/motion-polish.md): the TOP-LEVEL
+  // route segment only, so `.route-view` replays its entrance when the tab
+  // changes but sub-navigation inside a tab (More → admin → section) never
+  // re-animates the page it is already on.
+  const location = useLocation();
+  const section = location.pathname.split('/')[1] || 'card';
 
   if (loading) return <LoadingState label="Checking your cruise pass…" />;
   if (!user) return <SignIn />;
@@ -54,6 +60,10 @@ export default function App() {
           the surface stays under captureAppSurface()'s own exclusion marker. */}
       <BugReportProvider>
         <Nav />
+        {/* Keyed per top-level section so switching tabs replays the page-in
+            rise (index.css `.route-view`); the wrapper is a plain block, so
+            layout inside is unchanged. */}
+        <div className="route-view" key={section}>
         <Routes>
           {/* The More tab alone mounts with a splat (specs/admin-console-ia.md):
               the admin console lives at REAL sub-routes (/more/admin[/section])
@@ -66,6 +76,7 @@ export default function App() {
           ))}
           <Route path="*" element={<Navigate to={FALLBACK_PATH} replace />} />
         </Routes>
+        </div>
       </BugReportProvider>
     </div>
   );

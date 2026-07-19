@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties } from 'react';
 import { Lock, Shuffle } from 'lucide-react';
 import { getDoc } from 'firebase/firestore';
 import { useAuth } from '../auth/AuthContext';
@@ -30,6 +30,7 @@ import {
 import type { AttachProofResult } from '../data/proofs';
 import { hasBingo, isBlackout, winningCells, completedLines, countMarked, isPristine, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
 import { fitTextSize } from '../game/fitText';
+import { dealDelayMs, winOrder } from '../game/motion';
 import { useTextSize } from '../hooks/useTextSize';
 import { useOnline } from '../hooks/useOnline';
 import { track } from '../analytics';
@@ -792,6 +793,11 @@ export default function Board() {
 
   const [celebrate, setCelebrate] = useState<null | 'bingo' | 'blackout'>(null);
   const [freePulse, setFreePulse] = useState(0);
+  // Squares wearing the one-shot mark-stamp animation (specs/motion-polish.md).
+  // Populated by the rising-mark edge detector further down (it needs
+  // `cellsAttributable`, derived below); cleared per cell on animationend and
+  // wholesale on a board-identity change (the edgeStateKey adjust block).
+  const [stamped, setStamped] = useState<ReadonlySet<number>>(() => new Set());
   const [proofTarget, setProofTarget] = useState<Cell | null>(null);
   const [tallyTarget, setTallyTarget] = useState<Cell | null>(null);
   // The Reshuffle confirm sheet (#378). Parent-owned open flag, like the sheets
@@ -929,6 +935,11 @@ export default function Board() {
     initialized.current = false;
     wasBingoLines.current = 0;
     wasBlackout.current = false;
+    // The stamp set is board-scoped too (specs/motion-polish.md): a stamp
+    // whose animationend never fired (Day switched mid-punch) must not
+    // replay on another board's same-index Square. Same adjust-during-render
+    // idiom as the sheet closes below; guarded, so it can't loop.
+    if (stamped.size > 0) setStamped(new Set());
   }
 
   const cells: Cell[] = board?.cells ?? [];
@@ -1276,6 +1287,34 @@ export default function Board() {
     drainMoments(); // duty 2
   }, [cells, cellsAttributable, boardConfirmed, uid, drainMoments]);
 
+  // The mark-stamp animation's edge detector (specs/motion-polish.md): a
+  // Square whose marked flag RISES between attributable snapshots wears
+  // `.just-marked` (the `stamped` state above) until its stamp animation
+  // ends. Same edge discipline as the celebration refs above — the first
+  // attributable snapshot per board identity (`edgeStateKey`: account AND
+  // viewed Day) is a BASELINE, so a returning Player's standing marks, a Day
+  // switch, or an account switch never replays the stamp; only a fresh Mark
+  // does. The set is cleared per cell on animationend (reduced-motion leaves
+  // the class inert — the kill switch in index.css collapses the animation
+  // anyway).
+  const prevMarkedRef = useRef<{ key: string; marked: Set<number> } | null>(null);
+  useEffect(() => {
+    if (!cellsAttributable || cells.length === 0) return;
+    const markedNow = new Set(cells.filter((c) => c.marked && !c.free).map((c) => c.index));
+    const prev = prevMarkedRef.current;
+    prevMarkedRef.current = { key: edgeStateKey, marked: markedNow };
+    if (prev == null || prev.key !== edgeStateKey) return; // baseline: never animate
+    const fresh = [...markedNow].filter((i) => !prev.marked.has(i));
+    if (fresh.length > 0) setStamped((s) => new Set([...s, ...fresh]));
+  }, [cells, cellsAttributable, edgeStateKey]);
+  const clearStamp = (index: number) =>
+    setStamped((s) => {
+      if (!s.has(index)) return s;
+      const next = new Set(s);
+      next.delete(index);
+      return next;
+    });
+
   // Feed → Board square-opening intent (#261): a Tally Card's ＋ Proof /
   // 🙋 Got it too recorded {dayIndex, itemId} and navigated here. Switch the
   // viewed Day first; once the DAY-SCOPED board is rendered and attributable,
@@ -1538,6 +1577,16 @@ export default function Board() {
   }
 
   const wins = winningCells(cells);
+  // The payline sweep's per-cell order (specs/motion-polish.md): position of
+  // each winning Square along the line(s), ascending by index, consumed by
+  // `.cell.win`'s staggered `--win-order` delay.
+  const winOrderByIndex = winOrder(wins);
+  // Remounting the grid per board identity replays the deal-in cascade for
+  // every genuinely new card — first deal, Day switch, reshuffle (fresh seed),
+  // account switch — while ordinary re-renders (marks, tally updates) keep
+  // the DOM and play no entrance. Same identity notion as `edgeStateKey`,
+  // plus the seed so a reshuffled card (same uid+Day) still re-deals.
+  const dealKey = `${edgeStateKey}:${board.seed}`;
 
   const doMark = async (c: Cell, nextMarked: boolean) => {
     // Attribution guard (Codex P2, PR #110 finding 2 — the SAME cellsAttributable
@@ -1914,7 +1963,7 @@ export default function Board() {
           the Celebration baseline above would swallow as an initial state, not
           an animated edge) cannot flake the BINGO! assertion (Codex P2 on
           PR #114 round 3). */}
-        <div className="grid" data-server-confirmed={boardConfirmed ? 'true' : 'false'}>
+        <div className="grid" key={dealKey} data-server-confirmed={boardConfirmed ? 'true' : 'false'}>
         {cells.map((c) => (
           <div
             key={c.index}
@@ -1924,7 +1973,19 @@ export default function Board() {
               (c.marked ? ' marked' : '') +
               (c.status === 'pending' ? ' pending' : '') +
               (wins.has(c.index) ? ' win' : '') +
+              (stamped.has(c.index) ? ' just-marked' : '') +
               (c.free && freePulse > 0 ? (freePulse % 2 ? ' free-pulse-a' : ' free-pulse-b') : '')
+            }
+            // The motion pass's per-Square inputs (specs/motion-polish.md):
+            // the deal cascade's column/row delay, and — on a winning line —
+            // the payline sweep's position stagger.
+            style={
+              {
+                '--deal-delay': `${dealDelayMs(c.index)}ms`,
+                ...(winOrderByIndex.has(c.index)
+                  ? { '--win-order': winOrderByIndex.get(c.index) }
+                  : null),
+              } as CSSProperties
             }
             role={c.free ? 'button' : undefined}
             tabIndex={c.free ? 0 : undefined}
@@ -1937,8 +1998,12 @@ export default function Board() {
                 toggle(c);
               }
             }}
-            onAnimationEnd={() => {
+            onAnimationEnd={(event) => {
               if (c.free) setFreePulse(0);
+              // The stamp is one-shot: release the class the moment its own
+              // animation ends (other animations on the cell — deal, win —
+              // report different names and must not clear it early).
+              if (event.animationName === 'cell-stamp') clearStamp(c.index);
             }}
           >
             {c.free ? (
@@ -1999,7 +2064,10 @@ export default function Board() {
         </div>
       </div>
       <div className="count">
-        Marked <b>{countMarked(cells)}</b> · Bingos <b>{player?.bingoCount ?? 0}</b>
+        {/* Keyed by value (specs/motion-polish.md): a change remounts the
+            span and replays the .stat-pop tick — the odometer beat. */}
+        Marked <b key={`m${countMarked(cells)}`} className="stat-pop">{countMarked(cells)}</b> · Bingos{' '}
+        <b key={`b${player?.bingoCount ?? 0}`} className="stat-pop">{player?.bingoCount ?? 0}</b>
       </div>
       {/* `cells` fixes the empty-card share race (Codex P2, PR #111 finding
           1): Celebration used to open its own useBoard(uid) listener and
