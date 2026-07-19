@@ -1,9 +1,6 @@
 # Share Cards: text-message-first redesign (BINGO, Blackout, Leaderboard)
 
-**Track:** social/share · **Phase:** 0 · **Size:** M · **Epic:** Social core
-**Refs:** ADR 0005 (on-device share images), `specs/w2-share-cards.md` (the shipped v1 this supersedes visually), `specs/theme-on-color-contrast.md`. Presentation-only — the render pipeline, share sheet fallback chain, eager pre-render, analytics, and validity gates are all untouched.
-**Target mockups (the parity reference):** `plans/daily-cards-wireframes.html` § "Share Cards—text-message-first redesign" — frames `#frame-share-bingo`, `#frame-share-blackout`, `#frame-share-leaderboard`, drawn at half scale (300×375 = the rendered 600×750) in three day themes. The built cards must match these compositions.
-**Suggested runner:** Claude Sonnet 5, medium reasoning effort (well-scoped presentational change with a pinned mockup and an existing 39-test harness; see Validation).
+**Track:** social/share · **Phase:** 0 · **Size:** M · **Epic:** Social core **Refs:** ADR 0005 (on-device share images), `specs/w2-share-cards.md` (the shipped v1 this supersedes visually), `specs/theme-on-color-contrast.md`. Presentation-only — the render pipeline, share sheet fallback chain, eager pre-render, analytics, and validity gates are all untouched. **Target mockups (the parity reference):** `plans/daily-cards-wireframes.html` § "Share Cards—text-message-first redesign" — frames `#frame-share-bingo`, `#frame-share-blackout`, `#frame-share-leaderboard`, drawn at half scale (300×375 = the rendered 600×750) in three day themes. The built cards must match these compositions. **Suggested runner:** Claude Sonnet 5, medium reasoning effort (well-scoped presentational change with a pinned mockup and an existing 39-test harness; see Validation).
 
 ## Problem
 
