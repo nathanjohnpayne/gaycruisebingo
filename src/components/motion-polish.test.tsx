@@ -289,16 +289,21 @@ describe('index.css — motion section structure (specs/motion-polish.md)', () =
     expect(indexCss).toMatch(/:where\(\.grid:not\(\.locked-grid\)\)\s*>\s*\.cell/);
   });
 
-  it('mounts an already-dealt card landed — .grid-dealt zeroes the entrance before win/stamp rules', () => {
-    // Codex P2 #421: the router remounts Board per tab switch, so the
-    // session gate needs a CSS off-switch, and it must sit BEFORE the
-    // same-specificity .cell.win / .cell.just-marked rules so those still
-    // take the animation channel on an already-dealt card.
-    const dealtAt = indexCss.search(/\.grid-dealt\s*>\s*\.cell\s*\{[^}]*animation:\s*none/);
-    const stampRuleAt = indexCss.search(/\.cell\.just-marked\s*\{/);
+  it('mounts an already-dealt card landed — .grid-dealt zeroes the entrance at bare-cell weight', () => {
+    // Codex P2 #421 (rounds 1-2): the router remounts Board per tab switch,
+    // so the session gate needs a CSS off-switch — and that off-switch must
+    // lose to EVERY stateful animation. `:where()` is load-bearing: it pins
+    // the reset at (0,1,0), under `.cell.win` / `.cell.just-marked` / the
+    // free pulses (all (0,2,0)+) wherever they sit in the file, while source
+    // order alone lets it beat the equally-weighted deal rule above it. A
+    // bare `.grid-dealt > .cell` silenced a standing win's shimmer after a
+    // tab round-trip because it out-ordered the early `.cell.win` rule.
+    const dealtAt = indexCss.search(/:where\(\.grid-dealt\)\s*>\s*\.cell\s*\{[^}]*animation:\s*none/);
+    const dealRuleAt = indexCss.search(/:where\(\.grid:not\(\.locked-grid\)\)\s*>\s*\.cell/);
     expect(dealtAt).toBeGreaterThan(-1);
-    expect(stampRuleAt).toBeGreaterThan(-1);
-    expect(dealtAt).toBeLessThan(stampRuleAt);
+    expect(dealRuleAt).toBeGreaterThan(-1);
+    // Same specificity as the deal rule — source order is what beats it.
+    expect(dealtAt).toBeGreaterThan(dealRuleAt);
   });
 
   it('never animates the off-screen share-card DOM', () => {

@@ -2883,10 +2883,15 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 /* A card whose cascade already played this session mounts LANDED (Codex P2
    on #421): the router remounts Board on every tab switch, so Board's
    module-scope dealCascadePlayed gate adds this class on a repeat mount and
-   the entrance zeroes out instead of replaying. Declared here — before the
-   same-specificity `.cell.win` / `.cell.just-marked` rules below — so those
-   still take the animation channel when live. */
-.grid-dealt > .cell {
+   the entrance zeroes out instead of replaying. `:where()` keeps this at the
+   SAME bare-cell (0,1,0) weight as the deal rule above — later in source, so
+   it beats exactly that rule and nothing else. Every stateful animation
+   (`.cell.win`, `.cell.just-marked`, the free pulses) carries (0,2,0)+ and
+   out-specifies this reset regardless of source position — a bare
+   `.grid-dealt > .cell` at (0,2,0) sat later in the file than `.cell.win`
+   and silenced a standing win's payline shimmer after any tab round-trip
+   (Codex P2 on #421, round 2). */
+:where(.grid-dealt) > .cell {
   animation: none;
 }
 @keyframes deal-drop {
