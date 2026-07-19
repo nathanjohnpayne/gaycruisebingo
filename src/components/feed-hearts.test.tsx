@@ -20,10 +20,18 @@ import type { HeartDoc } from '../types';
 
 const indexCss = readFileSync('src/index.css', 'utf8');
 
-const h = (uid: string, targetKind: 'proof' | 'moment', targetId: string): Pick<
-  HeartDoc,
-  'uid' | 'targetKind' | 'targetId'
-> => ({ uid, targetKind, targetId });
+const AT = 1000; // the canonical incarnation stamp for fixtures
+const h = (
+  uid: string,
+  targetKind: 'proof' | 'moment',
+  targetId: string,
+  targetCreatedAt = AT,
+): Pick<HeartDoc, 'uid' | 'targetKind' | 'targetId' | 'targetCreatedAt'> => ({
+  uid,
+  targetKind,
+  targetId,
+  targetCreatedAt,
+});
 
 /** jsdom has no AnimationEvent constructor, so fireEvent's init drops
  * `animationName` — build a plain event and pin the property, the shape
@@ -51,26 +59,35 @@ describe('heartState — count + viewer state + ban semantics', () => {
   ];
 
   it('counts only the target post and reports whether the viewer hearted it', () => {
-    expect(heartState(hearts, 'proof', 'p1', 'alice')).toEqual({ count: 3, hearted: true });
-    expect(heartState(hearts, 'proof', 'p1', 'dave')).toEqual({ count: 3, hearted: false });
-    expect(heartState(hearts, 'moment', 'm1', 'bob')).toEqual({ count: 1, hearted: false });
-    expect(heartState(hearts, 'proof', 'nope', 'alice')).toEqual({ count: 0, hearted: false });
+    expect(heartState(hearts, 'proof', 'p1', AT, 'alice')).toEqual({ count: 3, hearted: true });
+    expect(heartState(hearts, 'proof', 'p1', AT, 'dave')).toEqual({ count: 3, hearted: false });
+    expect(heartState(hearts, 'moment', 'm1', AT, 'bob')).toEqual({ count: 1, hearted: false });
+    expect(heartState(hearts, 'proof', 'nope', AT, 'alice')).toEqual({ count: 0, hearted: false });
   });
 
   it('kind is part of the key — a proof and a moment sharing an id never pool', () => {
     const shared = [h('alice', 'proof', 'x'), h('bob', 'moment', 'x')];
-    expect(heartState(shared, 'proof', 'x', undefined).count).toBe(1);
-    expect(heartState(shared, 'moment', 'x', undefined).count).toBe(1);
+    expect(heartState(shared, 'proof', 'x', AT, undefined).count).toBe(1);
+    expect(heartState(shared, 'moment', 'x', AT, undefined).count).toBe(1);
   });
 
   it('a banned Player’s hearts vanish from other viewers’ counts…', () => {
-    expect(heartState(hearts, 'proof', 'p1', 'dave', ['bob'])).toEqual({ count: 2, hearted: false });
+    expect(heartState(hearts, 'proof', 'p1', AT, 'dave', ['bob'])).toEqual({ count: 2, hearted: false });
   });
 
   it('…but stay visible to THEMSELVES (own-content exception): the button must keep reading hearted', () => {
-    // Without the exception a banned viewer would see unhearted, retap, and
-    // land on the doc-exists update denial forever.
-    expect(heartState(hearts, 'proof', 'p1', 'bob', ['bob'])).toEqual({ count: 3, hearted: true });
+    // Without the exception a banned viewer would see unhearted and their
+    // retap would just re-assert the same slot forever.
+    expect(heartState(hearts, 'proof', 'p1', AT, 'bob', ['bob'])).toEqual({ count: 3, hearted: true });
+  });
+
+  it('scopes to the post INCARNATION: a recreated post never inherits the old one’s hearts (Codex P2 on #425)', () => {
+    // Two hearts bound to the ORIGINAL incarnation (stamp AT), one to the
+    // recreated post (stamp AT+5). Each incarnation counts only its own;
+    // the viewer whose heart is stale reads unhearted on the new post.
+    const mixed = [h('alice', 'moment', 'm1', AT), h('bob', 'moment', 'm1', AT), h('carol', 'moment', 'm1', AT + 5)];
+    expect(heartState(mixed, 'moment', 'm1', AT + 5, 'alice')).toEqual({ count: 1, hearted: false });
+    expect(heartState(mixed, 'moment', 'm1', AT, 'alice')).toEqual({ count: 2, hearted: true });
   });
 });
 
@@ -94,12 +111,12 @@ describe('HeartButton — the Instagram-style like control', () => {
     expect(count!.textContent).toBe('125');
   });
 
-  it('a like tap fires the toggle AND arms the burst; the burst releases on its own animationend', () => {
+  it('a like tap fires the toggle with the INTENDED state AND arms the burst; the burst releases on its own animationend', () => {
     const onToggle = vi.fn();
     render(<HeartButton count={0} hearted={false} onToggle={onToggle} />);
     const btn = screen.getByRole('button');
     fireEvent.click(btn);
-    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onToggle).toHaveBeenCalledWith(true);
     expect(btn.className).toContain('heart-burst');
     // A different animation ending (the ring) must NOT release the burst…
     fireAnimationEnd(btn, 'heart-ring');
@@ -114,8 +131,34 @@ describe('HeartButton — the Instagram-style like control', () => {
     render(<HeartButton count={4} hearted={true} onToggle={onToggle} />);
     const btn = screen.getByRole('button');
     fireEvent.click(btn);
-    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onToggle).toHaveBeenCalledWith(false);
     expect(btn.className).not.toContain('heart-burst');
+  });
+
+  it('a quick double tap toggles BACK before any echo (Codex P2 on #425): intents alternate off the shown state', () => {
+    const onToggle = vi.fn();
+    // `hearted` stays false the whole time — no echo arrives between taps.
+    render(<HeartButton count={0} hearted={false} onToggle={onToggle} />);
+    const btn = screen.getByRole('button');
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    // First tap asks for ON, second (reading the optimistic shown state,
+    // not the stale prop) asks for OFF — create-then-delete, matching the
+    // user's final intent instead of double-creating.
+    expect(onToggle.mock.calls).toEqual([[true], [false]]);
+    // The button honestly shows the last intent while the writes settle.
+    expect(btn).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  it('the optimistic override yields to the prop once it next moves (echo or rollback)', () => {
+    const { rerender } = render(<HeartButton count={0} hearted={false} onToggle={vi.fn()} />);
+    const btn = screen.getByRole('button');
+    fireEvent.click(btn); // optimistic ON
+    expect(btn).toHaveAttribute('aria-pressed', 'true');
+    rerender(<HeartButton count={1} hearted={true} onToggle={vi.fn()} />); // the echo confirms
+    expect(btn).toHaveAttribute('aria-pressed', 'true');
+    rerender(<HeartButton count={0} hearted={false} onToggle={vi.fn()} />); // a rollback reverts
+    expect(btn).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('the count span is keyed by value, so a change remounts it (the tick replays)', () => {

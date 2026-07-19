@@ -11,7 +11,7 @@ import Avatar from './Avatar';
 import { safeMediaUrl } from './safeMediaUrl';
 import { tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
 import { isDoubtSatisfied, openDoubts, doubtStatusFor, raiseDoubt } from '../data/doubts';
-import { heartState, toggleHeart } from '../data/hearts';
+import { heartState, setHeart } from '../data/hearts';
 import { THEMES } from '../theme/themes';
 import type {
   BoardDoc,
@@ -165,8 +165,9 @@ function visiblePodium(podium: PodiumMomentPayload | undefined, bannedUids: read
  * non-media scheme (javascript:, …) is dropped rather than rendered.
  */
 /** A post's heart state + toggle, threaded from the Feed's one flat stream —
- * the shape both card kinds render through `HeartButton`. */
-export type HeartControl = { count: number; hearted: boolean; onToggle: () => void };
+ * the shape both card kinds render through `HeartButton`. `onToggle` takes
+ * the INTENDED next state (see the pending note below), never re-derives it. */
+export type HeartControl = { count: number; hearted: boolean; onToggle: (next: boolean) => void };
 
 /**
  * The Instagram-style heart (specs/feed-hearts.md): a Lucide heart that fills
@@ -180,21 +181,42 @@ export type HeartControl = { count: number; hearted: boolean; onToggle: () => vo
  *    viewer's) animates in via the listener stream.
  * The burst keys off the TAP, not the echoed doc, so a slow write still pops
  * instantly; `animationend` releases it, gated on the animation name like the
- * Board's stamp. `aria-pressed` carries the toggle state; the count is its
- * own labeled text so screen readers hear "N hearts" once, not per-digit.
+ * Board's stamp.
+ *
+ * `pending` is the tap's own optimistic intent (Codex P2 on #425): two quick
+ * taps before the first latency-compensated echo would otherwise both read
+ * the SAME stale `hearted` prop and issue the same write — a fast
+ * heart-then-unheart would stick hearted. Each tap instead toggles off the
+ * SHOWN state (pending when set, the prop otherwise) and hands that intent
+ * to `onToggle`, so create-then-delete queue in order and the final doc
+ * matches the last tap. The override clears whenever the prop next moves —
+ * the echo confirming it, or a rules rollback reverting it (the button then
+ * honestly snaps back).
+ *
+ * `aria-pressed` carries the shown toggle state; the count is its own
+ * labeled text so screen readers hear "N hearts" once, not per-digit.
  */
 export function HeartButton({ count, hearted, onToggle }: HeartControl) {
   const [burst, setBurst] = useState(false);
+  const [pending, setPending] = useState<boolean | null>(null);
+  useEffect(() => {
+    // Any movement of the underlying prop resolves the truth — clear the
+    // optimistic override (React bails out when it is already null).
+    setPending(null);
+  }, [hearted]);
+  const shown = pending ?? hearted;
   return (
     <div className="heart-row">
       <button
         type="button"
-        className={'heartbtn' + (hearted ? ' hearted' : '') + (burst ? ' heart-burst' : '')}
-        aria-pressed={hearted}
-        aria-label={hearted ? 'Unheart this post' : 'Heart this post'}
+        className={'heartbtn' + (shown ? ' hearted' : '') + (burst ? ' heart-burst' : '')}
+        aria-pressed={shown}
+        aria-label={shown ? 'Unheart this post' : 'Heart this post'}
         onClick={() => {
-          if (!hearted) setBurst(true);
-          onToggle();
+          const next = !shown;
+          setPending(next);
+          if (next) setBurst(true);
+          onToggle(next);
         }}
         onAnimationEnd={(e) => {
           if (e.animationName === 'heart-pop') setBurst(false);
@@ -884,20 +906,27 @@ export default function ProofFeed() {
   // (ban semantics applied there, own-content exception included). The
   // toggle's latency-compensated echo flips the button instantly.
   const { hearts } = useAllHearts();
-  const heartFor = (targetKind: 'proof' | 'moment', targetId: string): HeartControl => {
+  // `targetCreatedAt` is the post's own createdAt — the incarnation stamp
+  // that both scopes the derivation and rides the write (Codex P2 on #425).
+  const heartFor = (
+    targetKind: 'proof' | 'moment',
+    targetId: string,
+    targetCreatedAt: number,
+  ): HeartControl => {
     const { count, hearted } = heartState(
       hearts,
       targetKind,
       targetId,
+      targetCreatedAt,
       user?.uid,
       event?.bannedUids ?? [],
     );
     return {
       count,
       hearted,
-      onToggle: () => {
+      onToggle: (next: boolean) => {
         if (!user) return;
-        void toggleHeart({ uid: user.uid, targetKind, targetId, hearted });
+        void setHeart({ uid: user.uid, targetKind, targetId, targetCreatedAt, on: next });
       },
     };
   };
@@ -1036,7 +1065,7 @@ export default function ProofFeed() {
               moment={entry.moment}
               days={event?.days}
               bannedUids={event?.bannedUids ?? []}
-              heart={heartFor('moment', entry.moment.id)}
+              heart={heartFor('moment', entry.moment.id, entry.moment.createdAt)}
             />
           );
         }
@@ -1069,7 +1098,7 @@ export default function ProofFeed() {
                 ? (tallyByTextDay.get(`${entry.proof.itemText}\u0000${entry.proof.dayIndex}`) ?? 0)
                 : (tallyByText.get(entry.proof.itemText) ?? 0)
             }
-            heart={heartFor('proof', entry.proof.id)}
+            heart={heartFor('proof', entry.proof.id, entry.proof.createdAt)}
           />
         );
       })}

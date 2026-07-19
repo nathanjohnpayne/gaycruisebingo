@@ -766,17 +766,23 @@ service cloud.firestore {
       // Proof or a Moment. The Doubt slot's structure without the accusation:
       // ONE deterministic doc per (Player, post), id-bound to the payload so
       // nobody can squat another Player's slot (the #103/#105 moments-binding
-      // shape), created to heart and deleted to unheart. NO update path at
-      // all: a Heart is immutable, and the doc-exists denial on a duplicate
-      // create is exactly the "each post only once" guarantee — counts cannot
-      // inflate, cross-client races collapse onto one slot.
+      // shape). The SLOT ID is the once-only guarantee — one doc per
+      // (Player, post) means counts cannot inflate no matter how the writes
+      // race — so the owner may create AND overwrite their own slot under
+      // the same full validation (`allow create, update` below): that
+      // overwrite is how a heart re-binds to a RECREATED post (Codex P2 on
+      // #425 — Moment ids are deterministic and a deleted Moment can come
+      // back at the same id). Toggle-off is the owner's delete.
       match /hearts/{heartId} {
         allow read: if signedIn();
-        allow create: if signedIn()
-          // Own heart only — a forged uid is denied.
+        allow create, update: if signedIn()
+          // Own heart only — a forged uid is denied, and the id binding below
+          // makes a cross-Player update structurally impossible too (the slot
+          // id embeds the OWNER's uid; the writer's payload uid must equal
+          // their own auth uid, so the two can never meet on a foreign doc).
           && request.resource.data.uid == request.auth.uid
           // Exactly the contract's fields, no extras riding along.
-          && request.resource.data.keys().hasOnly(['uid', 'targetKind', 'targetId', 'createdAt'])
+          && request.resource.data.keys().hasOnly(['uid', 'targetKind', 'targetId', 'targetCreatedAt', 'createdAt'])
           && request.resource.data.targetKind in ['proof', 'moment']
           && request.resource.data.targetId is string
           && request.resource.data.targetId.size() > 0
@@ -787,23 +793,26 @@ service cloud.firestore {
           // their heart forever. `_` joins — appears in no Firebase-minted uid;
           // the id is constructed, never parsed.
           && heartId == request.auth.uid + '_' + request.resource.data.targetKind + '_' + request.resource.data.targetId
-          // The hearted post must EXIST as its declared kind — no minting
-          // hearts against phantom ids (garbage that would count once the id
-          // is ever reused, and a free spam surface besides). Create-only
-          // gate: a post deleted later strands its hearts as dead docs the
-          // display layer simply never asks about (no Feed card, no count).
+          // The hearted post must EXIST as its declared kind AND the Heart
+          // must carry that document's own createdAt — the INCARNATION stamp
+          // (Codex P2 on #425). A phantom id fails the get() outright; a
+          // stale or forged stamp fails the equality. The display layer
+          // filters hearts by this stamp, so a deleted-then-recreated post
+          // (deterministic Moment ids) starts at ZERO hearts instead of
+          // inheriting the old incarnation's, and a stranded heart can never
+          // resurface on a lookalike.
+          && request.resource.data.targetCreatedAt is number
           && (
             (request.resource.data.targetKind == 'proof'
-              && exists(/databases/$(database)/documents/events/$(eventId)/proofs/$(request.resource.data.targetId)))
+              && get(/databases/$(database)/documents/events/$(eventId)/proofs/$(request.resource.data.targetId)).data.createdAt == request.resource.data.targetCreatedAt)
             || (request.resource.data.targetKind == 'moment'
-              && exists(/databases/$(database)/documents/events/$(eventId)/moments/$(request.resource.data.targetId)))
+              && get(/databases/$(database)/documents/events/$(eventId)/moments/$(request.resource.data.targetId)).data.createdAt == request.resource.data.targetCreatedAt)
           )
           // Same near-now window as proofs/moments/doubts: client clocks
           // drift, forged far-future stamps don't.
           && request.resource.data.createdAt is number
           && request.resource.data.createdAt <= request.time.toMillis() + 60000
           && request.resource.data.createdAt >= request.time.toMillis() - 86400000;
-        // No update rule on purpose (immutable; toggle = create/delete).
         allow delete: if isAdmin(eventId) || isOwner(resource.data.uid);
       }
 

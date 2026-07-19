@@ -12,13 +12,16 @@ import { deleteDoc, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 // specs/feed-hearts.md — the Hearts rules contract. A Heart is one Player's
 // like on a Feed post (a Proof or a Moment): the Doubt slot's structure
 // without the accusation. Pinned invariants:
-//   - create: OWN uid only, exactly the contract's four fields, a real
-//     targetKind, the doc id BOUND to `${uid}_${targetKind}_${targetId}` (no
-//     squatting another Player's slot), the hearted post must EXIST as its
-//     declared kind, and createdAt sits in the shared +60s/-24h window.
-//   - once-only: a second create on an existing slot is a doc-exists UPDATE —
-//     denied (there is NO update rule at all; a Heart is immutable), so "a
-//     user may heart many posts, but may heart them only once" is structural.
+//   - create/update: OWN uid only, exactly the contract's five fields, a
+//     real targetKind, the doc id BOUND to `${uid}_${targetKind}_${targetId}`
+//     (no squatting another Player's slot), the hearted post must EXIST as
+//     its declared kind WITH a matching `targetCreatedAt` incarnation stamp
+//     (Codex P2 on #425 — a recreated post must never inherit old hearts),
+//     and createdAt sits in the shared +60s/-24h window.
+//   - once-only: the SLOT ID is the guarantee — one doc per (Player, post),
+//     so counts cannot inflate; the owner overwriting their own slot (the
+//     recreated-post re-bind) is allowed under the same full validation and
+//     still yields exactly one doc.
 //   - toggle: the owner (or an admin) deletes; unheart-then-reheart is
 //     delete + fresh create.
 //   - read: public (the group sees the love).
@@ -29,18 +32,23 @@ const [ADMIN, ALICE, BOB] = ['admin-uid', 'alice', 'bob'];
 const PROOF = 'proof1';
 const MOMENT = 'moment1';
 const NOW = () => Date.now();
+// The seeded targets' own createdAt stamps — the incarnation the heart
+// fixtures must carry (rules compare via get() against the live doc).
+const PROOF_AT = Date.now() - 60000;
+const MOMENT_AT = Date.now() - 120000;
 
 let testEnv: RulesTestEnvironment;
 const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
 const at = (p: string) => `events/${EVENT}/${p}`;
-// The deterministic once-only slot toggleHeart writes (src/data/hearts.ts
-// heartDocId) — the create rule binds the doc id to exactly this triple.
+// The deterministic once-only slot setHeart writes (src/data/hearts.ts
+// heartDocId) — the write rule binds the doc id to exactly this triple.
 const slot = (uid: string, kind: string, targetId: string) =>
   at(`hearts/${uid}_${kind}_${targetId}`);
 const heart = (uid: string, kind: string, targetId: string, over: Record<string, unknown> = {}) => ({
   uid,
   targetKind: kind,
   targetId,
+  targetCreatedAt: kind === 'moment' ? MOMENT_AT : PROOF_AT,
   createdAt: NOW(),
   ...over,
 });
@@ -72,10 +80,10 @@ beforeEach(async () => {
     });
     await setDoc(doc(s, at(`proofs/${PROOF}`)), {
       uid: BOB, displayName: BOB, photoURL: null, itemText: 'Saw a drag show',
-      type: 'text', text: 'It happened.', status: 'active', reportCount: 0, createdAt: NOW(),
+      type: 'text', text: 'It happened.', status: 'active', reportCount: 0, createdAt: PROOF_AT,
     });
     await setDoc(doc(s, at(`moments/${MOMENT}`)), {
-      kind: 'bingo', uid: BOB, displayName: BOB, photoURL: null, createdAt: NOW(),
+      kind: 'bingo', uid: BOB, displayName: BOB, photoURL: null, createdAt: MOMENT_AT,
     });
     await setDoc(doc(s, slot(BOB, 'proof', PROOF)), heart(BOB, 'proof', PROOF));
   });
@@ -124,13 +132,28 @@ describe('firestore.rules — Hearts (specs/feed-hearts.md)', () => {
     );
   });
 
-  it('once-only: a second create on the standing slot is a doc-exists update — denied', async () => {
-    await assertFails(setDoc(doc(db(BOB), slot(BOB, 'proof', PROOF)), heart(BOB, 'proof', PROOF)));
+  it('once-only lives in the slot id: the owner overwriting their own slot succeeds and still means ONE doc', async () => {
+    // The recreated-post re-bind (Codex P2 on #425): a duplicate setDoc from
+    // the owner is an allowed full-validation overwrite — never a second doc,
+    // so the count cannot inflate.
+    await assertSucceeds(setDoc(doc(db(BOB), slot(BOB, 'proof', PROOF)), heart(BOB, 'proof', PROOF)));
+    await assertSucceeds(getDoc(doc(db(BOB), slot(BOB, 'proof', PROOF))));
   });
 
-  it('no update path at all — not even the owner mutates a Heart in place', async () => {
-    await assertFails(updateDoc(doc(db(BOB), slot(BOB, 'proof', PROOF)), { createdAt: NOW() }));
+  it('denies a stale or forged incarnation stamp — targetCreatedAt must match the live target doc', async () => {
+    await assertFails(
+      setDoc(doc(db(ALICE), slot(ALICE, 'proof', PROOF)), heart(ALICE, 'proof', PROOF, { targetCreatedAt: PROOF_AT - 999 })),
+    );
+    await assertFails(
+      setDoc(doc(db(ALICE), slot(ALICE, 'moment', MOMENT)), heart(ALICE, 'moment', MOMENT, { targetCreatedAt: 'soon' })),
+    );
+  });
+
+  it('no cross-Player mutation: an admin (or anyone) cannot update someone else’s Heart in place', async () => {
+    // The merged doc's uid stays BOB — never the caller's — so the own-uid
+    // bind denies every foreign update; the admin lever is delete, not edit.
     await assertFails(updateDoc(doc(db(ADMIN), slot(BOB, 'proof', PROOF)), { createdAt: NOW() }));
+    await assertFails(updateDoc(doc(db(ALICE), slot(BOB, 'proof', PROOF)), { createdAt: NOW() }));
   });
 
   it('the owner unhearts (deletes) their own Heart; others cannot', async () => {

@@ -346,6 +346,12 @@ export interface HeartDoc {
   uid: string; // the Player who hearted
   targetKind: HeartTargetKind;
   targetId: string; // the hearted Proof/Moment doc id
+  // The hearted post's OWN createdAt — the incarnation stamp (Codex P2 on
+  // #425): Moment ids are deterministic and a deleted Moment can be
+  // recreated at the same id, so a Heart binds to the specific document it
+  // was given to (rules verify this against the live target), and the
+  // display filters by it. A recreated post starts at zero hearts.
+  targetCreatedAt: number;
   createdAt: number; // ms epoch
 }
 
