@@ -2923,6 +2923,18 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 .bingo-head span:nth-child(5) {
   animation-delay: 240ms;
 }
+/* The header letters follow the SAME once-per-board contract as the Squares
+   (Codex P3 on #421, round 3): Board keys its `.bingo-head` by deal identity
+   (so a genuinely new card — Day switch, reshuffle — replays the letters)
+   and adds `-dealt` on a repeat mount (tab round-trip), zeroing the
+   entrance. Same (0,1,1) weight as `.bingo-head span` above — later in
+   source, so it wins the tie; the higher-weight nth-child rules above only
+   set the delay longhand, which is moot once animation-name is none. (No
+   `:where()` here, unlike `.grid-dealt`: nothing else ever needs to
+   out-cascade a header letter.) */
+.bingo-head-dealt span {
+  animation: none;
+}
 
 /* The stamp: a freshly-marked Square punches in with an overshoot, and its ✓
    pops right behind it. `.just-marked` is edge-detected in Board.tsx (only a
@@ -3149,22 +3161,24 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   animation-delay: 315ms;
 }
 
-/* Tab switches: the incoming page rises in. App.tsx keys this wrapper on the
+/* Tab switches: the incoming page fades in. App.tsx keys this wrapper on the
    top-level route segment, so sub-navigation inside a tab (More → admin)
-   never replays it. No fill — the transform must fully release after entry
-   so position:fixed descendants (sheets, celebration) anchor to the viewport
-   again. */
+   never replays it. OPACITY ONLY — deliberately no transform: an animating
+   transform makes this wrapper the containing block for every
+   position:fixed descendant, and overlays that mount WITH the page (the
+   coach overlay on a first Card entry, the admin sheet on a direct
+   /more/admin load) would lay their inset backdrops and bottom sheets out
+   against the route content instead of the viewport, then jump into place
+   when the entrance ends (Codex P2 on #421, round 3). */
 .route-view {
   animation: page-in 0.26s var(--ease-glide);
 }
 @keyframes page-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
   }
 }
 

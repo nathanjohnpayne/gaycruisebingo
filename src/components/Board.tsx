@@ -1982,7 +1982,11 @@ export default function Board() {
           />
         )}
         {viewedDay && <TutorialBanner day={viewedDay} />}
-        <div className="bingo-head">
+        {/* Keyed + gated like the grid below (Codex P3 on #421 round 3): the
+            header letters cascade once per board identity — replaying for a
+            genuinely new card (Day switch, reshuffle) and mounting landed on
+            a tab round-trip — instead of riding every route remount. */}
+        <div className={'bingo-head' + (replayDeal ? '' : ' bingo-head-dealt')} key={`head:${dealKey}`}>
           {['B', 'I', 'N', 'G', 'O'].map((l) => (
             <span key={l}>{l}</span>
           ))}

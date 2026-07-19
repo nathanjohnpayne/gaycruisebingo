@@ -282,6 +282,25 @@ describe('index.css — motion section structure (specs/motion-polish.md)', () =
     expect(indexCss).toMatch(/--ease-glide:\s*cubic-bezier/);
   });
 
+  it('keeps the page transition transform-free (fixed-overlay anchoring)', () => {
+    // Codex P2 #421 round 3: a transform on .route-view makes it the
+    // containing block for position:fixed overlays that mount WITH the page
+    // (coach overlay, admin sheet), mis-anchoring them for the entrance.
+    const pageIn = indexCss.match(/@keyframes page-in\s*\{[\s\S]*?\n\}/);
+    expect(pageIn).not.toBeNull();
+    expect(pageIn![0]).not.toMatch(/transform/);
+  });
+
+  it('gates the header cascade on the same once-per-board contract as the grid', () => {
+    // Codex P3 #421 round 3: Board keys/gates .bingo-head like the grid; the
+    // -dealt reset must exist and sit after the header cascade rules it ties.
+    const headerResetAt = indexCss.search(/\.bingo-head-dealt\s+span\s*\{[^}]*animation:\s*none/);
+    const headerCascadeAt = indexCss.search(/\.bingo-head\s+span\s*\{[^}]*deal-drop/);
+    expect(headerResetAt).toBeGreaterThan(-1);
+    expect(headerCascadeAt).toBeGreaterThan(-1);
+    expect(headerResetAt).toBeGreaterThan(headerCascadeAt);
+  });
+
   it('excludes the locked preview grid from the deal cascade, at bare-cell specificity', () => {
     // `:where()` is load-bearing (not just style): without it this rule
     // weighs (0,3,0) and permanently out-cascades the `.cell.win` payline
