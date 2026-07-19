@@ -471,9 +471,13 @@ const isClaimCell = (x: Cell, c: ClaimDoc): boolean =>
   c.proofId != null ? x.proofId === c.proofId : x.index === c.cellIndex;
 
 export function confirmClaim(c: ClaimDoc, adminUid: string): Promise<void> {
+  const creditedAt = Date.now();
   return resolve(
     c,
-    (cells) => cells.map((x) => (isClaimCell(x, c) ? { ...x, status: 'confirmed' as const } : x)),
+    (cells) =>
+      cells.map((x) =>
+        isClaimCell(x, c) ? { ...x, status: 'confirmed' as const, markedAt: creditedAt } : x,
+      ),
     adminUid,
     'confirmed',
   );

@@ -202,11 +202,25 @@ describe('confirmClaim — the pending win materializes: credit + publish the Pr
     // The board cell is now confirmed (credited by the mask) and the stat rises.
     const board = setPayload('/boards/') as { cells: Cell[] };
     expect(board.cells[4].status).toBe('confirmed');
+    expect(board.cells[4].markedAt).toBe(1000);
     expect(setPayload('/players/')).toMatchObject({ squaresMarked: 1 });
     // The pending (admin-only) Proof becomes publicly visible on confirm.
     expect(setPayload('/proofs/')).toMatchObject({ status: 'active' });
     // The claim is stamped resolved.
     expect(setPayload('/claims/')).toMatchObject({ status: 'confirmed', resolvedBy: 'admin-1' });
+  });
+
+  it('stamps the cell with the admin confirmation time that makes the square count', async () => {
+    const cells = boardWith([]);
+    cells[4] = { ...cells[4], marked: true, markedAt: 9, proofId: 'P', status: 'pending' };
+    boardState = { cells };
+
+    vi.mocked(Date.now).mockReturnValue(12_000);
+
+    await confirmClaim(pendingClaim(), 'admin-1');
+
+    const board = setPayload('/boards/') as { cells: Cell[] };
+    expect(board.cells[4]).toMatchObject({ status: 'confirmed', markedAt: 12_000 });
   });
 
   it('a confirm that COMPLETES a line credits the bingo and stamps firstBingoAt', async () => {

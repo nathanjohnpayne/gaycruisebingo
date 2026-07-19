@@ -149,8 +149,33 @@ describe('Share Card BINGO number', () => {
         rootBingoCount: 0,
         dayBingoCount: 0,
         hasDays: true,
+        statsFrozen: true,
       }),
     ).toBe(1);
+  });
+
+  it('does not overstate frozen daily cards from stale day standings', () => {
+    expect(
+      shareCardBingoNumber({
+        cells: withMarked([0, 1, 2, 3, 4]),
+        rootBingoCount: 3,
+        dayBingoCount: 2,
+        hasDays: true,
+        statsFrozen: true,
+      }),
+    ).toBe(1);
+  });
+
+  it('keeps unfrozen daily cards compatible by falling back to day standings', () => {
+    expect(
+      shareCardBingoNumber({
+        cells: withMarked([0, 1, 2, 3, 4]),
+        rootBingoCount: 3,
+        dayBingoCount: 2,
+        hasDays: true,
+        statsFrozen: false,
+      }),
+    ).toBe(2);
   });
 
   it('keeps legacy cards compatible by falling back to the root aggregate', () => {
@@ -160,6 +185,7 @@ describe('Share Card BINGO number', () => {
         rootBingoCount: 2,
         dayBingoCount: undefined,
         hasDays: false,
+        statsFrozen: true,
       }),
     ).toBe(2);
   });

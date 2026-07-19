@@ -490,9 +490,11 @@ export function shareCardBingoNumber(params: {
   rootBingoCount: number;
   dayBingoCount: number | undefined;
   hasDays: boolean;
+  statsFrozen: boolean;
 }): number {
   const currentBoardLines = completedLines(params.cells).length;
   if (!params.hasDays) return Math.max(params.rootBingoCount, currentBoardLines);
+  if (params.statsFrozen) return currentBoardLines;
   return Math.max(params.dayBingoCount ?? 0, currentBoardLines);
 }
 
@@ -2163,6 +2165,7 @@ export default function Board() {
                   rootBingoCount: player?.bingoCount ?? 0,
                   dayBingoCount: board?.dayIndex == null ? undefined : player?.dayStats?.[board.dayIndex]?.bingoCount,
                   hasDays,
+                  statsFrozen,
                 })} · ${countMarked(cells)} squares${nightSuffix}`
             : undefined;
           return (

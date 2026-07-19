@@ -2607,6 +2607,10 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   text-shadow: 0 0 14px #fff, 0 0 44px var(--primary), 0 0 80px var(--secondary);
   margin: 6px 0 0;
 }
+.share-card-bingo .share-card-title {
+  /* Keep the fixed 3:4 image frame inside 750px even when the winner wraps. */
+  font-size: 100px;
+}
 .share-card-leaderboard .share-card-title {
   /* LEADERBOARD is a longer word — the "mid" size from the frame. */
   font-size: 84px;
@@ -2619,6 +2623,7 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   letter-spacing: 0.03em;
   color: var(--accent);
   margin-top: 2px;
+  min-height: 104px;
   max-width: 100%;
   overflow: hidden;
   overflow-wrap: anywhere;
@@ -2632,9 +2637,9 @@ body:has(.sheet-backdrop) .guidelines-trigger {
      board sits narrower than the card so the title/name dominate. */
   display: grid;
   grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
-  width: 360px;
-  margin: 26px 0 10px;
+  gap: 10px;
+  width: 330px;
+  margin: 18px 0 8px;
 }
 .share-card-cell {
   aspect-ratio: 1 / 1;

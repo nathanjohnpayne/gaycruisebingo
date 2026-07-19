@@ -393,6 +393,22 @@ describe('ShareCard CSS — fixed-frame safety', () => {
     }
   });
 
+  it('reserves fixed-frame space for two winner-name lines', () => {
+    const playerRule = indexCss.match(/\.share-card-player\s*\{([^}]*)\}/);
+    expect(playerRule, '.share-card-player rule not found in src/index.css').not.toBeNull();
+    expect(playerRule![1]).toMatch(/min-height:\s*104px/);
+
+    const titleRule = indexCss.match(/\.share-card-bingo \.share-card-title\s*\{([^}]*)\}/);
+    expect(titleRule, '.share-card-bingo .share-card-title rule not found in src/index.css').not.toBeNull();
+    expect(titleRule![1]).toMatch(/font-size:\s*100px/);
+
+    const gridRule = indexCss.match(/\.share-card-grid\s*\{([^}]*)\}/);
+    expect(gridRule, '.share-card-grid rule not found in src/index.css').not.toBeNull();
+    expect(gridRule![1]).toMatch(/width:\s*330px/);
+    expect(gridRule![1]).toMatch(/gap:\s*10px/);
+    expect(gridRule![1]).toMatch(/margin:\s*18px 0 8px/);
+  });
+
   it('keeps pending share-card cells visibly dashed even when also marked', () => {
     const rule = indexCss.match(/\.share-card-cell\.pending\s*\{([^}]*)\}/);
     expect(rule, '.share-card-cell.pending rule not found in src/index.css').not.toBeNull();
