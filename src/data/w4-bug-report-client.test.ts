@@ -191,6 +191,57 @@ describe('bug-report client diagnostics', () => {
     expect(ignoreElements(root.querySelector('[data-kind="report-ui"]') as HTMLElement)).toBe(true);
   });
 
+  it('excludes the fixed bottom tab bar from every capture path so it never floats mid-screenshot (report GwT3bmAqwu2eKeQF1uOf)', async () => {
+    // html-to-image paints the whole scrollable `.app` into a foreignObject
+    // sized to the full box, where `position: fixed` no longer tracks the
+    // visible viewport — so an included `.tabs` bar renders floating mid-capture
+    // and reads as "not pinned to the bottom". The bar is app chrome, not the
+    // report's subject, so it is dropped from the capture (full, compat, and the
+    // html2canvas fallback) rather than the live bar being moved during a render.
+    const root = document.createElement('main');
+    root.className = 'app';
+    root.innerHTML = `
+      <section><p data-kind="content">Feed content</p></section>
+      <nav class="tabs">
+        <a data-kind="tab" href="/">Card</a>
+        <a data-kind="tab-more" href="/more">More</a>
+      </nav>
+    `;
+    Object.defineProperty(root, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({ width: 800, height: 2400, top: 0, left: 0, right: 800, bottom: 2400 }),
+    });
+    document.body.append(root);
+    vi.stubGlobal('innerWidth', 800);
+    vi.stubGlobal('innerHeight', 600);
+    const fallbackBlob = new Blob(['png'], { type: 'image/png' });
+    // Force all three paths to run so we can assert every filter drops the bar.
+    toBlobSpy.mockRejectedValue(new Error('foreignObject failed'));
+    html2canvasSpy.mockResolvedValue({
+      toBlob: (cb: BlobCallback) => cb(fallbackBlob),
+    } as HTMLCanvasElement);
+
+    await expect(captureAppSurface()).resolves.toBe(fallbackBlob);
+
+    const nav = root.querySelector('nav.tabs') as HTMLElement;
+    const tabLink = root.querySelector('[data-kind="tab"]') as HTMLElement;
+    const content = root.querySelector('[data-kind="content"]') as HTMLElement;
+
+    // Full pass (call 0) and compat pass (call 1): the html-to-image `filter`
+    // returns false for the bar and its descendants, true for page content.
+    for (const call of toBlobSpy.mock.calls) {
+      const filter = call[1].filter as (node: HTMLElement) => boolean;
+      expect(filter(nav)).toBe(false);
+      expect(filter(tabLink)).toBe(false);
+      expect(filter(content)).toBe(true);
+    }
+    // Canvas fallback: `ignoreElements` returns true for the bar, false for content.
+    const ignoreElements = html2canvasSpy.mock.calls[0][1].ignoreElements as (element: Element) => boolean;
+    expect(ignoreElements(nav)).toBe(true);
+    expect(ignoreElements(tabLink)).toBe(true);
+    expect(ignoreElements(content)).toBe(false);
+  });
+
   it('crops the desktop canvas fallback to the visible scrolled viewport', async () => {
     const root = document.createElement('main');
     root.className = 'app';

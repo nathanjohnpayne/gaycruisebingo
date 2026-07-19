@@ -47,6 +47,17 @@ function isSafeImageForCompatCapture(node: HTMLImageElement): boolean {
 
 function excludedFromCapture(node: HTMLElement, mode: CaptureMode): boolean {
   if (node.closest('[data-bug-report-ui]')) return true;
+  // The bottom tab bar is `position: fixed`. html-to-image paints the whole
+  // scrollable `.app` into an SVG `<foreignObject>` sized to the full box, where
+  // fixed positioning no longer tracks the visible viewport — so an included bar
+  // renders floating mid-capture over the below-the-fold content and reads as
+  // "the toolbar is not pinned to the bottom" (report GwT3bmAqwu2eKeQF1uOf),
+  // even though it is correctly pinned in the live app. It is app chrome, not
+  // the report's subject, so omit it from every capture path rather than move
+  // the live bar during a render (which would displace it on-screen mid-capture,
+  // notably in pick mode where the tab bar stays usable). The live bar is
+  // untouched; the screenshot is just the page the reporter is describing.
+  if (node.closest('nav.tabs')) return true;
   if (mode === 'full') return false;
   if (node.closest('video, audio, iframe, canvas, object, embed')) return true;
   if (node instanceof HTMLImageElement && !isSafeImageForCompatCapture(node)) return true;
