@@ -330,11 +330,12 @@ describe('html/body/#root span the viewport (specs/theme-on-color-contrast.md, #
 });
 
 // ---------------------------------------------------------------------------
-// Bonus fix (same defect class, same file): .share-card-bhead span mirrors
-// .bingo-head span inside the off-screen Share Card renderer
-// (src/components/ShareCard.tsx) — its own background layers a 30%
-// --primary / 24% --secondary radial-gradient tint over --bg, the same
-// self-referential trap as body's.
+// The Share Card's own background layers a 30% --primary / 24% --secondary
+// radial-gradient tint over --bg (src/components/ShareCard.tsx), the same
+// self-referential trap as body's. The text-message-first redesign (issue
+// #423) dropped the old B-I-N-G-O header (.share-card-bhead span) but the
+// --ink text over that tint is now carried by the context line, the title,
+// and the player name — so this legibility bound still guards a real surface.
 // ---------------------------------------------------------------------------
 
 describe('share-card gradient tints: --ink vs the composited backdrop (specs/theme-on-color-contrast.md)', () => {
@@ -345,7 +346,7 @@ describe('share-card gradient tints: --ink vs the composited backdrop (specs/the
 
   for (const t of THEMES) {
     const vars = themeBlocks[t.id] ?? {};
-    it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the ${primaryWeight * 100}% --primary tint over --bg (.share-card-bhead span)`, () => {
+    it(`${t.id}: --ink meets ${TEXT_MIN}:1 against the ${primaryWeight * 100}% --primary tint over --bg (share-card context/title text)`, () => {
       const composite = mixSrgb(hexToRgb(vars.primary), hexToRgb(vars.bg), primaryWeight);
       expect(contrastRatio(hexToRgb(vars.ink), composite)).toBeGreaterThanOrEqual(TEXT_MIN);
     });

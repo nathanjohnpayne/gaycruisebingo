@@ -57,9 +57,11 @@ function proofChips(proof: ProofDoc | undefined): string[] {
   return chips;
 }
 
-// Share Card row cap (issue #36): a fixed-size card can't fit the whole
-// roster, so the card shows the top MAX_SHARE_ROWS by rank.
-const MAX_SHARE_ROWS = 8;
+// Share Card row cap (issue #36; lowered 8→5 for the text-message-first
+// redesign, issue #423): the card shows the top MAX_SHARE_ROWS by rank —
+// the renderer lays the first three out as a podium and the remainder as
+// compact rows, so five (podium + two) is the frame's shape.
+const MAX_SHARE_ROWS = 5;
 
 function toShareRow(p: PlayerDoc, rank: number, firstBingoUid: string | undefined): LeaderboardShareRow {
   return {
@@ -240,9 +242,27 @@ export default function Leaderboard() {
     ) {
       return cached.promise;
     }
+    // Context + snapshot-dating copy (issue #423), composed here where the
+    // event schedule lives. The current Day is the latest one already unlocked
+    // (all past → the finale day); a legacy non-daily event leaves both
+    // undefined, and the card falls back to the bare event name. Kept OUT of
+    // the cache key above — a warmed card whose day line is a rollover stale
+    // is an acceptable trade for not re-rasterizing on the clock.
+    const days = [...(event?.days ?? [])].sort((a, b) => a.index - b.index);
+    const unlocked = days.filter((d) => d.unlockAt <= Date.now());
+    const currentDay = unlocked.length ? unlocked[unlocked.length - 1] : days[0];
+    const contextLine =
+      currentDay && event?.name
+        ? `${event.name} · Day ${currentDay.index + 1} · ${currentDay.port}`
+        : undefined;
+    const statLine = days.length
+      ? `Through Day ${(currentDay?.index ?? days.length - 1) + 1} of ${days.length}`
+      : undefined;
     const promise = renderLeaderboardShareCard({
       eventName,
       rows: buildShareStandings(roster, firstBingoUid, MAX_SHARE_ROWS),
+      contextLine,
+      statLine,
     }).catch(() => null);
     warmedCard.current = { players, eventName, bannedKey, promise };
     return promise;
