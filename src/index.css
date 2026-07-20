@@ -1140,6 +1140,26 @@ a {
   padding: 12px;
   font-size: 15px;
 }
+/* Multi-line `.input` fields (the Callout on the claim sheet, the "What
+   happened?" box on Report a bug) need typography the single-line inputs
+   don't. A bare `<textarea>` renders in the UA default monospace at
+   `line-height: normal`, which is both the wrong (non-app) font and the
+   classic cause of the caret sitting out of line with the typed text on
+   mobile. Inherit the app font and pin an explicit line-height so the caret
+   tracks the glyphs. */
+textarea.input {
+  font-family: inherit;
+  line-height: 1.4;
+}
+/* The Callout textarea has no width of its own, so inside `.proof-body`
+   (a centered flex column) it collapses to the intrinsic textarea width and
+   floats narrow in the middle of the sheet. Stretch it to fill the sheet like
+   the Report-a-bug field already does, and cap resizing to vertical so a drag
+   can't push it past the sheet edge. */
+.proof-body textarea.input {
+  width: 100%;
+  resize: vertical;
+}
 .iconbtn {
   background: none;
   border: none;
