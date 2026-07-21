@@ -75,10 +75,10 @@ describe('DAYS — the ten-Day itinerary mapping', () => {
       ['2026-07-16', 'Split', '🇭🇷', 'uniforms-without-borders', 'main', false],
       ['2026-07-17', 'Sea Day', '🌊', 'neon-pink-playground', 'main', false],
       ['2026-07-18', 'Valletta', '🇲🇹', 'sporty-splash', 'main', false],
-      ['2026-07-19', 'Palermo', '🇮🇹', 'under-the-stars', 'main', false],
-      ['2026-07-20', 'Naples', '🇮🇹', 'glamiators', 'main', false],
+      ['2026-07-19', 'Palermo (Sicily)', '🇮🇹', 'under-the-stars', 'main', false],
+      ['2026-07-20', 'Naples (Pompeii)', '🇮🇹', 'glamiators', 'main', false],
       ['2026-07-21', 'Rome (Civitavecchia)', '🇮🇹', 'atlantis-classics', 'main', false],
-      ['2026-07-22', 'Villefranche', '🇫🇷', 'summer-white', 'main', false],
+      ['2026-07-22', 'Villefranche (Nice)', '🇫🇷', 'summer-white', 'main', false],
       ['2026-07-23', 'Marseille', '🇫🇷', 'revival-disco', 'main', false],
       ['2026-07-24', 'Barcelona', '🇪🇸', 'so-long-farewell', 'farewell', true],
     ] as const;
