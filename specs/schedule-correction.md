@@ -19,10 +19,10 @@ Each `DayDef` keeps ONE `theme: ThemeId` (drives chrome, palette, chips, honors 
 | 2 | 2026-07-16 | 🇭🇷 Split | 🌍 Uniforms Without Borders (`uniforms-without-borders`) | 🪖 Dog Tag T-Dance · ✈️ Duty Free |
 | 3 | 2026-07-17 | 🌊 Sea Day | 💖 Neon Pink Playground (`neon-pink-playground`) | 💖 Seriously Pink T-Dance · 🌈 Neon Playground |
 | 4 | 2026-07-18 | 🇲🇹 Valletta | 💦 Sporty Splash (`sporty-splash`) | 💦 Splash T-Dance · 🏋️ Get Sporty |
-| 5 | 2026-07-19 | 🇮🇹 Palermo | 🌌 Under the Stars (`under-the-stars`) | 🎭 AirOtic · 🌌 Under the Stars |
-| 6 | 2026-07-20 | 🇮🇹 Naples | 🏛️ Glamiators (`glamiators`) | 🎤 Solea Pfeiffer · 🏛️ Glamiators |
+| 5 | 2026-07-19 | 🇮🇹 Palermo (Sicily) | 🌌 Under the Stars (`under-the-stars`) | 🎭 AirOtic · 🌌 Under the Stars |
+| 6 | 2026-07-20 | 🇮🇹 Naples (Pompeii) | 🏛️ Glamiators (`glamiators`) | 🎤 Solea Pfeiffer · 🏛️ Glamiators |
 | 7 | 2026-07-21 | 🇮🇹 Rome (Civitavecchia) | 🏺 Dance Classics (`atlantis-classics`) | 🎭 Persephone · 🏺 Dance Classics |
-| 8 | 2026-07-22 | 🇫🇷 Villefranche | 🤍 Summer White (`summer-white`) | 🎤 HAYLA · 🤍 Summer White Party |
+| 8 | 2026-07-22 | 🇫🇷 Villefranche (Nice) | 🤍 Summer White (`summer-white`) | 🎤 HAYLA · 🤍 Summer White Party |
 | 9 | 2026-07-23 | 🇫🇷 Marseille | 🪩 Revival! Classic Disco (`revival-disco`) | 🪩 Revival! Classic Disco T-Dance · 🎉 Last Dance |
 | 10 | 2026-07-24 | 🇪🇸 Barcelona | 👋 So Long, Farewell (`so-long-farewell`) | 🧳 Disembark in Barcelona · 👋 Until next year |
 

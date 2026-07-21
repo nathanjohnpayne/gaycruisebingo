@@ -21,10 +21,10 @@ const EXPECTED = [
   { theme: 'uniforms-without-borders', port: 'Split', portEmoji: '🇭🇷', tonight: ['🪖 Dog Tag T-Dance', '✈️ Duty Free'] },
   { theme: 'neon-pink-playground', port: 'Sea Day', portEmoji: '🌊', tonight: ['💖 Seriously Pink T-Dance', '🌈 Neon Playground'] },
   { theme: 'sporty-splash', port: 'Valletta', portEmoji: '🇲🇹', tonight: ['💦 Splash T-Dance', '🏋️ Get Sporty'] },
-  { theme: 'under-the-stars', port: 'Palermo', portEmoji: '🇮🇹', tonight: ['🎭 AirOtic', '🌌 Under the Stars'] },
-  { theme: 'glamiators', port: 'Naples', portEmoji: '🇮🇹', tonight: ['🎤 Solea Pfeiffer', '🏛️ Glamiators'] },
+  { theme: 'under-the-stars', port: 'Palermo (Sicily)', portEmoji: '🇮🇹', tonight: ['🎭 AirOtic', '🌌 Under the Stars'] },
+  { theme: 'glamiators', port: 'Naples (Pompeii)', portEmoji: '🇮🇹', tonight: ['🎤 Solea Pfeiffer', '🏛️ Glamiators'] },
   { theme: 'atlantis-classics', port: 'Rome (Civitavecchia)', portEmoji: '🇮🇹', tonight: ['🎭 Persephone', '🏺 Dance Classics'] },
-  { theme: 'summer-white', port: 'Villefranche', portEmoji: '🇫🇷', tonight: ['🎤 HAYLA', '🤍 Summer White Party'] },
+  { theme: 'summer-white', port: 'Villefranche (Nice)', portEmoji: '🇫🇷', tonight: ['🎤 HAYLA', '🤍 Summer White Party'] },
   { theme: 'revival-disco', port: 'Marseille', portEmoji: '🇫🇷', tonight: ['🪩 Revival! Classic Disco T-Dance', '🎉 Last Dance'] },
   { theme: 'so-long-farewell', port: 'Barcelona', portEmoji: '🇪🇸', tonight: ['🧳 Disembark in Barcelona', '👋 Until next year'] },
 ] as const;

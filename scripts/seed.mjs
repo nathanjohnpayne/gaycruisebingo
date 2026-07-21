@@ -118,7 +118,7 @@ export const EVENT_SEED = {
     {
       index: 4,
       date: '2026-07-19',
-      port: 'Palermo',
+      port: 'Palermo (Sicily)',
       portEmoji: '🇮🇹',
       theme: 'under-the-stars',
       tonight: ['🎭 AirOtic', '🌌 Under the Stars'],
@@ -129,7 +129,7 @@ export const EVENT_SEED = {
     {
       index: 5,
       date: '2026-07-20',
-      port: 'Naples',
+      port: 'Naples (Pompeii)',
       portEmoji: '🇮🇹',
       theme: 'glamiators',
       tonight: ['🎤 Solea Pfeiffer', '🏛️ Glamiators'],
@@ -152,7 +152,7 @@ export const EVENT_SEED = {
     {
       index: 7,
       date: '2026-07-22',
-      port: 'Villefranche',
+      port: 'Villefranche (Nice)',
       portEmoji: '🇫🇷',
       theme: 'summer-white',
       tonight: ['🎤 HAYLA', '🤍 Summer White Party'],
