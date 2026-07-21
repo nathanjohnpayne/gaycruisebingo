@@ -79,6 +79,11 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
   // mount and must read the CURRENT gesture without re-subscribing.
   const start = useRef<{ x: number; y: number } | null>(null);
   const engaged = useRef(false);
+  // The live pull distance, mirrored from state (Codex P2 on #432 round 2):
+  // finishTouch decides the threshold from THIS, never from inside a setPull
+  // functional updater — updaters must stay pure (StrictMode replays them),
+  // and a timer scheduled inside one could fire a refresh per replay.
+  const pullRef = useRef(0);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
@@ -118,7 +123,9 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       // Engaged: the pull owns this touch — stop the page from scrolling
       // (and the browser's native pull gesture) underneath the drag.
       e.preventDefault();
-      setPull(pullProgress(dy));
+      const p = pullProgress(dy);
+      pullRef.current = p;
+      setPull(p);
     };
 
     // Shared teardown for both release paths. `commit` distinguishes a real
@@ -129,29 +136,36 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       engaged.current = false;
       detachMove();
       if (!wasEngaged || phaseRef.current === 'refreshing') return;
-      if (!commit) {
-        // The system stole the touch (browser chrome, notification shade,
-        // an alert): abort — snap back, write nothing, reload nothing.
-        setPhase('idle');
-        setPull(0);
+      // The threshold decision reads pullRef, and the timer is scheduled
+      // HERE in the event handler — never inside a state updater (round 2:
+      // updaters must be pure; a replay would double-schedule the reload).
+      if (commit && pullRef.current >= PTR_THRESHOLD_PX) {
+        pullRef.current = PTR_THRESHOLD_PX;
+        setPhase('refreshing');
+        setPull(PTR_THRESHOLD_PX);
+        // Hold at the threshold while the ring spins; give the spin two
+        // beats to be SEEN before the reload tears the page down.
+        window.setTimeout(() => (onRefresh ?? (() => void refreshApp()))(), 450);
         return;
       }
-      setPull((finalPull) => {
-        if (finalPull >= PTR_THRESHOLD_PX) {
-          setPhase('refreshing');
-          // Hold at the threshold while the ring spins; give the spin two
-          // beats to be SEEN before the reload tears the page down.
-          window.setTimeout(() => (onRefresh ?? (() => void refreshApp()))(), 450);
-          return PTR_THRESHOLD_PX;
-        }
-        setPhase('idle');
-        return 0;
-      });
+      // Below threshold, or the system stole the touch (browser chrome,
+      // notification shade, an alert): snap back, write nothing.
+      pullRef.current = 0;
+      setPhase('idle');
+      setPull(0);
     };
 
     const onTouchStart = (e: TouchEvent) => {
       if (phaseRef.current === 'refreshing') return;
-      if (e.touches.length !== 1 || !atTop()) return;
+      if (e.touches.length !== 1) {
+        // A second finger joining an armed pull CANCELS it (Codex P2 on
+        // #432 round 2): multi-touch is pinch/zoom territory, and without
+        // the abort, lifting EITHER finger later would emit a touchend that
+        // committed the still-armed pull while the other finger is down.
+        if (start.current) finishTouch(false);
+        return;
+      }
+      if (!atTop()) return;
       const target = e.target as Element | null;
       // Overlays own their gestures — a pull inside a sheet must never
       // reload the app out from under it.

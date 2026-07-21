@@ -7,6 +7,7 @@
 // Plus the index.css structural pins. Real scroll physics are not
 // assertable in jsdom; the e2e layer and live use cover feel.
 import { readFileSync } from 'node:fs';
+import { StrictMode } from 'react';
 import { act, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -162,6 +163,48 @@ describe('PullToRefresh — gesture contract', () => {
     fireTouch('touchmove', 100, 10 + 200); // past threshold, still held
     expect(document.querySelector('.ptr')!.className).toContain('ptr-ready');
     fireTouch('touchend', 100, 210);
+  });
+
+  it('fires onRefresh exactly ONCE under StrictMode — the timer lives in the handler, never a state updater (Codex P2 on #432 round 2)', () => {
+    const onRefresh = vi.fn();
+    render(
+      <StrictMode>
+        <PullToRefresh onRefresh={onRefresh} />
+      </StrictMode>,
+    );
+    pullGesture(10, 10 + 200);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a second finger joining an armed pull CANCELS it — no touchend commit while the other finger is down (Codex P2 on #432 round 2)', () => {
+    const onRefresh = vi.fn();
+    render(<PullToRefresh onRefresh={onRefresh} />);
+    fireTouch('touchstart', 100, 10);
+    fireTouch('touchmove', 100, 10 + PTR_SLOP_PX + 4);
+    fireTouch('touchmove', 100, 10 + 220); // engaged, past threshold
+    // The second finger lands: a two-touch touchstart on the armed gesture.
+    const twoFingers = new Event('touchstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(twoFingers, 'touches', {
+      value: [
+        { clientX: 100, clientY: 230 },
+        { clientX: 240, clientY: 300 },
+      ],
+    });
+    act(() => {
+      window.dispatchEvent(twoFingers);
+    });
+    const ptr = document.querySelector('.ptr')!;
+    expect(ptr.className).not.toContain('ptr-refreshing');
+    expect(ptr.getAttribute('style')).toContain('--ptr-pull: 0px');
+    // Either finger lifting now must not commit the cancelled pull.
+    fireTouch('touchend', 100, 230);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(onRefresh).not.toHaveBeenCalled();
   });
 
   it('touchcancel ABORTS — a stolen touch never refreshes, however far the pull got (Codex P2 on #432)', () => {
