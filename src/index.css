@@ -960,6 +960,36 @@ a {
   color: var(--ink);
 }
 
+/* The durable-cache Card fallback (#434): a non-blocking notice above a
+   READ-ONLY saved card (CachedCardFallback), carrying the same Retry action the
+   full reload screen offers so a Player who was already dealt in still sees
+   their squares while the deal recovers in the background. */
+.cached-card-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+.cached-card-banner-text {
+  color: var(--dim);
+  font-size: 13px;
+}
+.cached-card-banner .btn {
+  flex: none;
+  width: auto;
+  padding: 8px 16px;
+}
+/* Read-only: the snapshot Squares carry no tap handler, so nothing should read
+   as pressable (the live Board sets `cursor: pointer` on a markable cell). */
+.cached-card .cell {
+  cursor: default;
+}
+
 /* ---------- buttons ---------- */
 .btn {
   border: 1.5px solid var(--secondary);

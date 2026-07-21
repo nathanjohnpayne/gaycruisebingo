@@ -4,6 +4,7 @@ import { getDoc } from 'firebase/firestore';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useDayBoard, useDayMeta, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, useDayMetasStatus, isBanned } from '../hooks/useData';
 import { setMark, dealDayCard, resolveDisplayName, RESHUFFLE_ALLOWANCE } from '../data/api';
+import { saveCardSnapshot } from '../data/cardCache';
 import { dayBoardRef } from '../data/paths';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
@@ -1009,6 +1010,38 @@ export default function Board() {
     return cell != null && !cell.free && cell.itemId === target.itemId && cell.marked === target.marked;
   };
   if (proofTarget && !proofSourceLive(proofTarget)) setProofTarget(null);
+
+  // Durable card snapshot (#434): persist the card the Player is looking at to
+  // localStorage so a later transient deal failure (offline / flaky ship wifi)
+  // renders THIS saved card instead of the full-screen reload screen — App reads
+  // it back via `loadCardSnapshot` and swaps in `CachedCardFallback`. Only an
+  // ATTRIBUTABLE, dealt board is snapshotted (`cellsAttributable` folds the
+  // account-identity guard, so a mid-account-switch board never overwrites the
+  // new account's snapshot), and the effect is keyed on the `board` doc so it
+  // fires once per real card update rather than on every unrelated re-render.
+  // The Day header is a tiny presentational subset — deriving it inline (not
+  // from the later `viewedDay`) keeps this effect ahead of the render's early
+  // returns. Fire-and-forget; `saveCardSnapshot` swallows any store failure.
+  useEffect(() => {
+    if (!uid || !cellsAttributable || !board || cells.length === 0) return;
+    const vd = hasDays ? (days[viewedIndex] ?? days[0]) : undefined;
+    saveCardSnapshot({
+      uid,
+      dayIndex: hasDays ? (board.dayIndex ?? null) : null,
+      cells,
+      bingoCount: player?.bingoCount ?? 0,
+      day: vd
+        ? {
+            number: vd.index + 1,
+            port: vd.port,
+            portEmoji: vd.portEmoji,
+            theme: vd.theme,
+            label: themeLabel(vd.theme),
+          }
+        : null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `days`/`vd` derive from event?.days (a fresh [] each render); the deps track the fields actually snapshotted.
+  }, [uid, cellsAttributable, board, cells, hasDays, viewedIndex, player?.bingoCount]);
 
   // The latest identity + roster + gate signals + CURRENT attributable cells for
   // Moment broadcasts, stored in a ref so `drainMoments` (a stable callback)
