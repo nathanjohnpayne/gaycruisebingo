@@ -358,7 +358,12 @@ export default function Leaderboard() {
                     aria-label={`${p.displayName}'s latest proof — view in Feed`}
                     onClick={() => navigate('/feed')}
                   >
-                    {chips.join('')}
+                    {/* One <span> per chip so `.lb-proof-chips`'s flex gap spaces
+                        them evenly — a bare `join('')` renders the emoji flush
+                        against each other (📷🖼️), which reads as cramped (#433). */}
+                    {chips.map((chip, ci) => (
+                      <span key={ci}>{chip}</span>
+                    ))}
                   </button>
                 )}
                 {isFirst && <div className="badge">⭐ First BINGO</div>}
