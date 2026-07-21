@@ -107,3 +107,25 @@ export function confettiPieces(count: number, random: () => number = Math.random
     color: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
   }));
 }
+
+// ---- Pull-to-refresh (specs/pull-to-refresh.md) ----
+
+/** Releasing at or past this indicator travel refreshes. */
+export const PTR_THRESHOLD_PX = 70;
+/** The indicator never travels further than this, however far the finger goes. */
+export const PTR_MAX_PULL_PX = 110;
+/** Finger travel below this never engages the gesture (tap/scroll slop). */
+export const PTR_SLOP_PX = 8;
+
+/**
+ * Map raw downward finger travel (px) to the indicator's travel: a linear
+ * resistance (the finger moves ~2.2x the indicator) capped at
+ * PTR_MAX_PULL_PX, so the ring drags like it weighs something and never
+ * disappears off down the page. Monotonic, 0 at 0, negative-clamped —
+ * reaching PTR_THRESHOLD_PX takes ~156px of real finger travel, a
+ * deliberate commit gesture rather than a graze.
+ */
+export function pullProgress(rawDy: number): number {
+  if (!Number.isFinite(rawDy) || rawDy <= 0) return 0;
+  return Math.min(PTR_MAX_PULL_PX, rawDy * 0.45);
+}

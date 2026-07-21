@@ -8,6 +8,7 @@ import Leaderboard from './components/Leaderboard';
 import ProofFeed from './components/ProofFeed';
 import More from './components/More';
 import { BugReportProvider } from './components/BugReport';
+import PullToRefresh from './components/PullToRefresh';
 import { TABS, FALLBACK_PATH, type TabId } from './components/tabs';
 import LoadingState from './components/LoadingState';
 
@@ -59,6 +60,10 @@ export default function App() {
           the launcher (#324, specs/w4-bug-report-inbox.md). Inside `.app` so
           the surface stays under captureAppSurface()'s own exclusion marker. */}
       <BugReportProvider>
+        {/* Shell chrome (specs/pull-to-refresh.md): one gesture surface for
+            every tab — pull from the very top of any page to reload
+            (reconnects wedged listeners, picks up a fresh deploy). */}
+        <PullToRefresh />
         <Nav />
         {/* Keyed per top-level section so switching tabs replays the page-in
             rise (index.css `.route-view`); the wrapper is a plain block, so
