@@ -1123,9 +1123,15 @@ a {
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
-/* Leaderboard row's latest-proof media chip(s) (#218) — tap target to the Feed. */
+/* Leaderboard row's latest-proof media chip(s) (#218) — tap target to the Feed.
+   Each chip is its own <span> (Leaderboard.tsx), laid out inline-flex with a
+   gap so a multi-chip proof (e.g. 📷 + 🖼️) reads with air between the emoji
+   instead of flush together (#433). */
 .lb-proof-chips {
   flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: none;
   font-size: 16px;
@@ -1164,9 +1170,16 @@ textarea.input {
    (a centered flex column) it collapses to the intrinsic textarea width and
    floats narrow in the middle of the sheet. Stretch it to fill the sheet like
    the Report-a-bug field already does, and cap resizing to vertical so a drag
-   can't push it past the sheet edge. */
+   can't push it past the sheet edge.
+   `align-self: stretch` also opts this field OUT of the parent's
+   `align-items: center` cross-axis alignment. #431 fixed the font/line-height
+   (the monospace-default caret drift) but the caret still sat a line below the
+   glyphs on iOS Safari — a known bug where a form control centered as a flex
+   item mis-positions its caret. Un-centering the item leaves it flush to the
+   text line. No visual change elsewhere (the field already spans full width). */
 .proof-body textarea.input {
   width: 100%;
+  align-self: stretch;
   resize: vertical;
 }
 .iconbtn {
