@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import { act, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import PullToRefresh from './PullToRefresh';
+import PullToRefresh, { refreshApp } from './PullToRefresh';
 import {
   pullProgress,
   PTR_MAX_PULL_PX,
@@ -162,6 +162,106 @@ describe('PullToRefresh — gesture contract', () => {
     fireTouch('touchmove', 100, 10 + 200); // past threshold, still held
     expect(document.querySelector('.ptr')!.className).toContain('ptr-ready');
     fireTouch('touchend', 100, 210);
+  });
+
+  it('touchcancel ABORTS — a stolen touch never refreshes, however far the pull got (Codex P2 on #432)', () => {
+    const onRefresh = vi.fn();
+    render(<PullToRefresh onRefresh={onRefresh} />);
+    fireTouch('touchstart', 100, 10);
+    fireTouch('touchmove', 100, 10 + PTR_SLOP_PX + 4);
+    fireTouch('touchmove', 100, 10 + 220); // well past threshold
+    fireTouch('touchcancel', 100, 230);
+    const ptr = document.querySelector('.ptr')!;
+    expect(ptr.className).not.toContain('ptr-refreshing');
+    expect(ptr.getAttribute('style')).toContain('--ptr-pull: 0px');
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(onRefresh).not.toHaveBeenCalled();
+  });
+
+  it('the non-passive touchmove listener exists ONLY while a touch is armed (Codex P2 on #432)', () => {
+    const added: Array<{ type: string; passive: unknown }> = [];
+    const original = window.addEventListener.bind(window);
+    const addSpy = vi.spyOn(window, 'addEventListener').mockImplementation(
+      ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+        added.push({ type, passive: typeof options === 'object' ? options?.passive : undefined });
+        return original(type, listener, options);
+      }) as typeof window.addEventListener,
+    );
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+    render(<PullToRefresh onRefresh={vi.fn()} />);
+    // Idle: touchstart/end/cancel registered, but NO touchmove — scrolling
+    // keeps its passive fast path for the component's whole idle life.
+    expect(added.filter((a) => a.type === 'touchmove')).toHaveLength(0);
+    fireTouch('touchstart', 100, 10);
+    expect(added.filter((a) => a.type === 'touchmove')).toEqual([{ type: 'touchmove', passive: false }]);
+    // A horizontal disarm drops it immediately — not just at touchend.
+    fireTouch('touchmove', 100 + 80, 10 + 40);
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(1);
+    fireTouch('touchend', 180, 50);
+    addSpy.mockRestore();
+    removeSpy.mockRestore();
+  });
+});
+
+describe('refreshApp — the waiting-worker-aware reload (Codex P2 on #432)', () => {
+  afterEach(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test env teardown
+    delete (navigator as any).serviceWorker;
+  });
+
+  function stubSW(waiting: { postMessage: (m: unknown) => void } | null) {
+    const listeners: Record<string, Array<() => void>> = {};
+    const sw = {
+      getRegistration: () => Promise.resolve(waiting ? { waiting } : {}),
+      addEventListener: (type: string, fn: () => void) => {
+        (listeners[type] ??= []).push(fn);
+      },
+      fireControllerChange: () => (listeners['controllerchange'] ?? []).forEach((fn) => fn()),
+    };
+    Object.defineProperty(navigator, 'serviceWorker', { value: sw, configurable: true });
+    return sw;
+  }
+
+  it('with no waiting worker it just reloads', async () => {
+    stubSW(null);
+    const reload = vi.fn();
+    await refreshApp(reload);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('with no serviceWorker API at all it still reloads', async () => {
+    const reload = vi.fn();
+    await refreshApp(reload);
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('a waiting worker gets SKIP_WAITING and the reload rides controllerchange — once', async () => {
+    const postMessage = vi.fn();
+    const sw = stubSW({ postMessage });
+    const reload = vi.fn();
+    await refreshApp(reload);
+    expect(postMessage).toHaveBeenCalledWith({ type: 'SKIP_WAITING' });
+    expect(reload).not.toHaveBeenCalled(); // waits for the new worker to take over
+    sw.fireControllerChange();
+    expect(reload).toHaveBeenCalledTimes(1);
+    // The bounded fallback must not double-fire after the real event.
+    act(() => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('a worker that never activates falls back to the bounded-timeout reload', async () => {
+    stubSW({ postMessage: vi.fn() });
+    const reload = vi.fn();
+    await refreshApp(reload);
+    expect(reload).not.toHaveBeenCalled();
+    act(() => {
+      vi.advanceTimersByTime(1600);
+    });
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });
 
