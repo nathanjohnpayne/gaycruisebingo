@@ -6,15 +6,19 @@ import type { DayDef, NoticeDoc } from '../types';
 // focused mocks — the three notice writers, the two data hooks, the identity/day
 // helpers — so the compose + history behavior tests without Firestore.
 
-const H = vi.hoisted(() => ({ notices: [] as NoticeDoc[] }));
+const H = vi.hoisted(() => ({
+  notices: [] as NoticeDoc[],
+  player: { displayName: 'Nathan' } as { displayName?: string } | null,
+}));
 const writers = vi.hoisted(() => ({
   postNotice: vi.fn((..._a: unknown[]) => Promise.resolve('new-id')),
   setNoticePinned: vi.fn((..._a: unknown[]) => Promise.resolve()),
   deleteNotice: vi.fn((..._a: unknown[]) => Promise.resolve()),
 }));
 
+vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'admin-uid', displayName: 'Nathan (auth)' } }) }));
 vi.mock('../hooks/useData', () => ({
-  useMyPlayer: () => ({ data: { displayName: 'Nathan' } }),
+  useMyPlayer: () => ({ data: H.player }),
   useNotices: () => ({ notices: H.notices }),
 }));
 vi.mock('../data/api', () => ({
@@ -46,6 +50,7 @@ const notice = (id: string, pinned: boolean): NoticeDoc => ({
 describe('MessagesPanel (specs/admin-messages.md)', () => {
   beforeEach(() => {
     H.notices = [];
+    H.player = { displayName: 'Nathan' };
     writers.postNotice.mockClear();
     writers.setNoticePinned.mockClear();
     writers.deleteNotice.mockClear();
@@ -70,6 +75,19 @@ describe('MessagesPanel (specs/admin-messages.md)', () => {
     // The draft clears on a settled success.
     await waitFor(() => expect(screen.getByLabelText('Notice title')).toHaveValue(''));
     expect(screen.getByLabelText('Notice body')).toHaveValue('');
+  });
+
+  it('attributes to the auth name (not Anonymous) when the player row is still loading (CodeRabbit #440)', async () => {
+    H.player = null; // useMyPlayer still loading — no saved player-row name yet
+    render(<MessagesPanel adminUid="admin-uid" days={days} />);
+    fireEvent.change(screen.getByLabelText('Notice title'), { target: { value: 'T' } });
+    fireEvent.change(screen.getByLabelText('Notice body'), { target: { value: 'B' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Post to everyone' }));
+    await waitFor(() =>
+      expect(writers.postNotice).toHaveBeenCalledWith(
+        expect.objectContaining({ displayName: 'Nathan (auth)' }),
+      ),
+    );
   });
 
   it('the Post button is disabled until both title and body are non-empty', () => {

@@ -14,8 +14,11 @@ import type { NoticeDoc } from '../types';
 
 const dismissKey = (noticeId: string): string => `gcb.notice.${noticeId}.dismissedAt`;
 
-// try/catch — storage-unavailable falls open (isDismissed → false, mark → no-op),
-// the same fallback CoachOverlay.tsx and InstallPrompt.tsx use for their keys.
+/**
+ * Whether this device has dismissed the banner for `noticeId`. try/catch —
+ * storage-unavailable falls open (returns false), the same fallback CoachOverlay.tsx
+ * and InstallPrompt.tsx use for their keys.
+ */
 export function isNoticeBannerDismissed(noticeId: string): boolean {
   try {
     return localStorage.getItem(dismissKey(noticeId)) !== null;
@@ -23,6 +26,7 @@ export function isNoticeBannerDismissed(noticeId: string): boolean {
     return false;
   }
 }
+/** Persist this device's dismissal of the banner for `noticeId` (no-op on error). */
 function markNoticeDismissed(noticeId: string): void {
   try {
     localStorage.setItem(dismissKey(noticeId), String(Date.now()));

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useAuth } from '../../auth/AuthContext';
 import { useMyPlayer, useNotices } from '../../hooks/useData';
 import { resolveDisplayName } from '../../data/api';
 import { defaultViewedIndex } from '../DaySwitcher';
@@ -21,9 +22,11 @@ import type { DayDef, NoticeDoc } from '../../types';
  * picker, no threading, no read receipts.
  */
 
-// The compose form: mirrors PromptPool's AdminAddItemForm — a local draft, a busy
-// guard, and an inline failure (role=alert) that KEEPS the draft so a retry is one
-// tap (#411, specs/admin-async-feedback.md). Clears only on a settled success.
+/**
+ * The compose form: mirrors PromptPool's AdminAddItemForm — a local draft, a busy
+ * guard, and an inline failure (role=alert) that KEEPS the draft so a retry is one
+ * tap (#411, specs/admin-async-feedback.md). Clears only on a settled success.
+ */
 function ComposeNotice({ adminUid, adminName, dayIndex }: { adminUid: string; adminName: string; dayIndex?: number }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -94,9 +97,11 @@ function ComposeNotice({ adminUid, adminName, dayIndex }: { adminUid: string; ad
   );
 }
 
-// One sent-history row: title + a "Day N · Name · 📌 pinned" attribution line, with
-// the quiet Unpin (when pinned) / Delete controls trailing (AsyncButton — disables
-// in flight, surfaces a failure pill instead of a silent rejection).
+/**
+ * One sent-history row: title + a "Day N · Name · 📌 pinned" attribution line, with
+ * the quiet Unpin (when pinned) / Delete controls trailing (AsyncButton — disables
+ * in flight, surfaces a failure pill instead of a silent rejection).
+ */
 function SentNoticeRow({ notice, days }: { notice: NoticeDoc; days: DayDef[] }) {
   const hasDay = typeof notice.dayIndex === 'number' && days[notice.dayIndex] != null;
   const meta = [
@@ -129,11 +134,16 @@ function SentNoticeRow({ notice, days }: { notice: NoticeDoc; days: DayDef[] }) 
 }
 
 export default function MessagesPanel({ adminUid, days }: { adminUid: string; days: DayDef[] }) {
+  const { user } = useAuth();
   const { data: player } = useMyPlayer(adminUid);
   const { notices } = useNotices();
   // The posting admin's public identity, resolved the SAME validated way the Feed
-  // Moment/Tally writers do (saved player-row name, else auth, else 'Anonymous').
-  const adminName = resolveDisplayName(player, undefined);
+  // Moment/Tally writers do (Board.tsx): saved player-row name, else the auth
+  // displayName, else 'Anonymous'. Passing the auth fallback (not undefined) means
+  // a post fired while the player row is still loading attributes to the admin's
+  // real Google name rather than persisting 'Anonymous' onto the Notice
+  // (CodeRabbit, PR #440).
+  const adminName = resolveDisplayName(player, user?.displayName);
   // The event's current Day, stamped onto the Notice at post time (Moment-style) so
   // the Feed reads "📌 Nathan · Day 8". Undefined for a schedule-less Event.
   const dayIndex = days.length ? defaultViewedIndex(days, Date.now()) : undefined;
