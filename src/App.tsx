@@ -62,26 +62,26 @@ export default function App() {
   const cachedCard =
     dealError && dealErrorReason === 'connection' && canRenderEventContent ? loadCardSnapshot(user.uid) : null;
   const pages: Record<TabId, ReactElement> = {
-    // A pinned admin Notice shows once as a dismissible banner above the card
-    // (specs/admin-messages.md); it self-gates to nothing when none is pinned or
-    // this device already dismissed it, so the card is otherwise unchanged. It
-    // rides BOTH the live Board AND the durable cached-card fallback (Codex P2, PR
-    // #440): a Notice already in Firestore's offline cache must still reach the
-    // poor-connectivity path this fallback exists for. Only the full-screen
-    // DealError (no card, nothing cached) omits it.
-    card: dealError ? (
-      cachedCard ? (
-        <>
-          <NoticeBanner />
-          <CachedCardFallback snapshot={cachedCard} onRetry={retryDeal} retrying={dealing} />
-        </>
-      ) : (
-        <DealError message={dealError} onRetry={retryDeal} retrying={dealing} />
-      )
-    ) : (
+    // A pinned admin Notice shows once as a dismissible banner above WHATEVER the
+    // Card tab renders (specs/admin-messages.md): the live Board, the durable
+    // cached-card fallback, OR the DealError retry surface (Codex P2, PR #440) — a
+    // pinned Notice already in Firestore's offline cache must reach every signed-in
+    // Player, including the ones hitting a startup problem, which is exactly who an
+    // urgent admin message is for. The banner self-gates to nothing when none is
+    // pinned or this device already dismissed it, so each card state is otherwise
+    // unchanged. Mounted once, outside the deal-state conditional.
+    card: (
       <>
         <NoticeBanner />
-        <Board />
+        {dealError ? (
+          cachedCard ? (
+            <CachedCardFallback snapshot={cachedCard} onRetry={retryDeal} retrying={dealing} />
+          ) : (
+            <DealError message={dealError} onRetry={retryDeal} retrying={dealing} />
+          )
+        ) : (
+          <Board />
+        )}
       </>
     ),
     feed: <ProofFeed />,

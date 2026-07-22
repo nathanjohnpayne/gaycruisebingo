@@ -29,7 +29,8 @@ The doc carries its own id on read (`noticeConverter` pins `id` to `snap.id`); t
 Inside `match /events/{eventId}`, a sibling of `moments`:
 
 - `read`: any signed-in user (the delivery surface everyone watches).
-- `create, update`: `isAdmin(eventId)` AND `title is string && title.size() <= 60` AND `body is string && body.size() <= 400` AND `pinned is bool`. Both create and update revalidate, because the pin toggle is an admin `update` and an `updateDoc({pinned})` merges the existing (already-valid) title/body into `request.resource.data`.
+- `create`: `isAdmin(eventId)` AND `title is string && title.size() <= 60` AND `body is string && body.size() <= 400` AND `pinned is bool`.
+- `update`: `isAdmin(eventId)` AND the diff touches ONLY `pinned` (`diff(resource.data).affectedKeys().hasOnly(['pinned'])`) AND `pinned is bool`. The pin toggle is the sole mutable operation — a Notice's content, attribution, and `createdAt` are immutable once posted, so a stale or hand-built admin client cannot rewrite an already-delivered Notice (the rules are the enforcement boundary, not just the client writer).
 - `delete`: `isAdmin(eventId)`.
 
 No owner-write path (a Notice belongs to the admin role, not one uid) and no report counter (admin-authored content is not player-reportable).

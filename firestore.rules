@@ -895,11 +895,20 @@ service cloud.firestore {
       // owner-write path (a Notice belongs to the admin role, not one uid).
       match /notices/{noticeId} {
         allow read: if signedIn();
-        allow create, update: if isAdmin(eventId)
+        allow create: if isAdmin(eventId)
           && request.resource.data.title is string
           && request.resource.data.title.size() <= 60
           && request.resource.data.body is string
           && request.resource.data.body.size() <= 400
+          && request.resource.data.pinned is bool;
+        // The ONLY mutable operation is the pin toggle (Unpin/Pin). A Notice's
+        // content, attribution, and createdAt are immutable once posted (Codex P2,
+        // PR #440): require the update diff to touch NOTHING but `pinned`, so a
+        // stale or hand-built admin client cannot rewrite an already-delivered
+        // Notice's title/body/attribution/feed-ordering. The rules are the
+        // enforcement boundary here, not just the client writer.
+        allow update: if isAdmin(eventId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned'])
           && request.resource.data.pinned is bool;
         allow delete: if isAdmin(eventId);
       }

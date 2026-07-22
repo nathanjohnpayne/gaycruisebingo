@@ -87,6 +87,19 @@ describe('firestore.rules — Notices (specs/admin-messages.md)', () => {
     await assertSucceeds(deleteDoc(doc(db(ADMIN), noticePath('seed'))));
   });
 
+  it('the ONLY mutable field is `pinned` — content/attribution edits are denied (Codex #440)', async () => {
+    // The pin toggle is the sole update; a stale/hand-built admin client cannot
+    // rewrite an already-delivered Notice's content, attribution, or ordering.
+    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { title: 'Rewritten' }));
+    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { body: 'Rewritten' }));
+    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { displayName: 'Someone else' }));
+    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { createdAt: 1 }));
+    // A pin toggle alongside a content change is still denied (the diff isn't pin-only).
+    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { pinned: false, title: 'x' }));
+    // A non-boolean pinned is denied even alone.
+    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { pinned: 'no' }));
+  });
+
   it('enforces the title ≤60, body ≤400, and boolean-pinned caps on create', async () => {
     const p = (id: string) => doc(db(ADMIN), noticePath(id));
     await assertFails(setDoc(p('long-title'), notice(ADMIN, { title: 'x'.repeat(61) })));
