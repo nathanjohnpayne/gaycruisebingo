@@ -5,7 +5,7 @@ import { matchPath } from 'react-router-dom';
  * Firestore-free and component-free so More can resolve "is the admin open?"
  * without importing the console itself (whose module tests routinely mock).
  */
-export const ADMIN_SECTIONS = ['queue', 'settings', 'schedule', 'pool', 'players'] as const;
+export const ADMIN_SECTIONS = ['queue', 'settings', 'schedule', 'pool', 'players', 'messages'] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 /**

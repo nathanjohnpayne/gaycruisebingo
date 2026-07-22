@@ -440,6 +440,27 @@ export interface PodiumMomentPayload {
   dailyHonors: { dayIndex: number; uid: string; displayName: string; at: number }[];
 }
 
+// A Notice (specs/admin-messages.md): an admin-authored broadcast — title + body,
+// optionally pinned — posted to the shared Feed for everyone (ADR 0002). Unlike a
+// Moment, which marks *that* a game beat happened and carries no authored copy, a
+// Notice carries the admin's own words; unlike a Proof it has no evidence, no
+// report counter, and no threading. A pinned Notice sorts to the very top of the
+// Feed and shows once as a dismissible Card-tab banner; unpinning demotes it into
+// the stream at its `createdAt`. It carries its own doc id (the Feed keys on it),
+// read from events/{eventId}/notices/{noticeId}.
+export interface NoticeDoc {
+  id: string;
+  title: string; // ≤ 60 chars (firestore.rules cap)
+  body: string; // ≤ 400 chars (firestore.rules cap)
+  uid: string;
+  displayName: string;
+  createdAt: number; // ms epoch
+  // Which Day this Notice was posted on, stamped from the event's current Day at
+  // post time (Moment-style). Optional so a legacy/minimal doc still renders.
+  dayIndex?: number;
+  pinned: boolean;
+}
+
 // Per-Day honor doc at events/{eventId}/days/{dayIndex}/meta/{dayIndex} — a
 // `meta` subcollection holding one document whose id IS the encoded dayIndex,
 // so the shape carries no id field (the path above is a valid document path:

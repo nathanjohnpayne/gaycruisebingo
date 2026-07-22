@@ -10,6 +10,7 @@ import {
   claimConverter,
   tallyMarkerConverter,
   momentConverter,
+  noticeConverter,
   doubtConverter,
   heartConverter,
   dayMetaConverter,
@@ -63,6 +64,14 @@ export const momentsCol = () =>
   collection(db, 'events', EVENT_ID, 'moments').withConverter(momentConverter);
 export const momentRef = (id: string) =>
   doc(db, 'events', EVENT_ID, 'moments', id).withConverter(momentConverter);
+// Notices: events/{EVENT_ID}/notices (specs/admin-messages.md) — admin-authored
+// broadcasts that merge into the one Feed (pinned first, then newest-first with
+// Proofs/Moments). Mirrors the proofs/moments helpers; the write path
+// (src/data/notices.ts) uses raw refs.
+export const noticesCol = () =>
+  collection(db, 'events', EVENT_ID, 'notices').withConverter(noticeConverter);
+export const noticeRef = (id: string) =>
+  doc(db, 'events', EVENT_ID, 'notices', id).withConverter(noticeConverter);
 // Doubts: events/{EVENT_ID}/doubts (ADR 0001) — a Player publicly asking another
 // to back up a marked Prompt ("pics or it didn't happen"). Mirrors the proofs/
 // moments helpers; the read hook (useDoubts) filters by itemId, and the write

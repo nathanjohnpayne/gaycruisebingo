@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { collectionGroup, onSnapshot, query, where, type DocumentReference, type Query } from 'firebase/firestore';
 import { db, EVENT_ID } from '../firebase';
-import { eventRef, itemsCol, boardRef, dayBoardRef, dayMetaRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, doubtsCol, heartsCol } from '../data/paths';
+import { eventRef, itemsCol, boardRef, dayBoardRef, dayMetaRef, playerRef, playersCol, proofsCol, claimsCol, userRef, tallyMarkersCol, momentsCol, noticesCol, doubtsCol, heartsCol } from '../data/paths';
 import { isReportHidden, isBanned, isSystemAuthor } from '../data/moderation';
 import { sortPlayers, dayDealState, type DayDealState, nextDisplayBumpTime, BUMP_DEBOUNCE_MS } from '../game/logic';
-import type { EventDoc, ItemDoc, BoardDoc, DayDef, DayMetaDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, TallyCard, MomentDoc, DoubtDoc, HeartDoc } from '../types';
+import type { EventDoc, ItemDoc, BoardDoc, DayDef, DayMetaDoc, PlayerDoc, ProofDoc, ClaimDoc, UserDoc, TallyEntry, TallyCard, MomentDoc, NoticeDoc, DoubtDoc, HeartDoc } from '../types';
 
 // Both subs subscribe with includeMetadataChanges so the cache→server
 // transition is always observable: with the ADR 0006 persistent cache, a cold
@@ -464,6 +464,20 @@ export function useMoments(max = 60) {
 }
 
 /**
+ * The Event's Notices (specs/admin-messages.md): admin-authored broadcasts, live
+ * (includeMetadataChanges via `useColSub`), newest-first. UNCAPPED — the admin
+ * sent-history and the Card-tab banner both need the full set; the Feed applies its
+ * own cap in `mergeFeed`. No status/ban filter — a Notice is admin-authored, has no
+ * lifecycle, and no report counter. Powers the merged Feed (`useFeed` → `mergeFeed`,
+ * pinned-first), the Card-tab `NoticeBanner`, and the admin `MessagesPanel` history.
+ */
+export function useNotices() {
+  const { data, loading } = useColSub<NoticeDoc>(noticesCol(), 'notices');
+  const notices = [...data].sort((a, b) => b.createdAt - a.createdAt);
+  return { notices, loading };
+}
+
+/**
  * The rules intentionally allow caller-chosen Moment document ids, so the read
  * side enforces the deterministic ids the writer relies on before anything can
  * render in the public Feed.
@@ -497,41 +511,58 @@ export function hasCanonicalMomentId(moment: MomentDoc): boolean {
 }
 
 /**
- * One Feed entry — a Proof, a Moment, or a Tally Card (#216) — tagged so the
- * renderer (ProofFeed) can branch, with `createdAt` hoisted so the merge sorts one
- * flat stream. A Proof keeps its report/delete affordances; a Moment renders as a
- * celebratory line; a Tally Card renders as a lighter-weight one-line aggregation
- * of bare Marks (ADR 0002 / daily-cards-spec § "Tally Cards").
+ * One Feed entry — a Proof, a Moment, a Tally Card (#216), or a Notice
+ * (specs/admin-messages.md) — tagged so the renderer (ProofFeed) can branch, with
+ * `createdAt` hoisted so the merge sorts one flat stream. A Proof keeps its
+ * report/delete affordances; a Moment renders as a celebratory line; a Tally Card
+ * renders as a lighter-weight one-line aggregation of bare Marks; a Notice renders
+ * as an accent-bordered admin broadcast, pinned ones first (ADR 0002).
  */
 export type FeedEntry =
   | { feedKind: 'proof'; createdAt: number; proof: ProofDoc }
   | { feedKind: 'moment'; createdAt: number; moment: MomentDoc }
-  | { feedKind: 'tallyCard'; createdAt: number; card: TallyCard };
+  | { feedKind: 'tallyCard'; createdAt: number; card: TallyCard }
+  | { feedKind: 'notice'; createdAt: number; notice: NoticeDoc };
 
 /**
- * Merge Proofs, Moments, and Tally Cards into ONE newest-first stream (ADR 0002 /
- * #216), capped to `max` — the honest Feed. Pure (no Firestore, no clock) so the
- * interleave/cap is unit-testable and shared as the single source of Feed order. A
- * Proof/Moment sorts by its `createdAt`; a Tally Card sorts by its DEBOUNCED
- * `displayBump` (not raw `lastMarkedAt`), so a hot square can't churn the stream and
- * bury photo proofs. A zero-count Tally Card is excluded — an emptied Tally drops
- * out of the Feed entirely (belt-and-braces with `deriveTallyCards`, which never
- * emits one).
+ * Merge Proofs, Moments, Tally Cards, and Notices into ONE Feed stream (ADR 0002 /
+ * #216 / specs/admin-messages.md), capped to `max` — the honest Feed. Pure (no
+ * Firestore, no clock) so the interleave/cap is unit-testable and shared as the
+ * single source of Feed order. PINNED Notices sort to the very top, newest pinned
+ * first, above every Proof/Moment/Tally Card regardless of time; everything else —
+ * including UNPINNED Notices — interleaves newest-first below them. A Proof/Moment
+ * sorts by its `createdAt`; a Tally Card sorts by its DEBOUNCED `displayBump` (not
+ * raw `lastMarkedAt`), so a hot square can't churn the stream and bury photo
+ * proofs. A zero-count Tally Card is excluded — an emptied Tally drops out of the
+ * Feed entirely. With no Notices the output is byte-identical to the pre-Notice
+ * merge (the `notices` default is `[]`, contributing no entries).
  */
 export function mergeFeed(
   proofs: ProofDoc[],
   moments: MomentDoc[],
   tallyCards: TallyCard[] = [],
+  notices: NoticeDoc[] = [],
   max = 60,
 ): FeedEntry[] {
-  const entries: FeedEntry[] = [
+  const noticeEntries = notices.map((notice) => ({
+    feedKind: 'notice' as const,
+    createdAt: notice.createdAt,
+    notice,
+  }));
+  // Pinned Notices are the Feed's masthead: always on top, newest pinned first,
+  // independent of the stream's newest-first ordering below.
+  const pinned = noticeEntries
+    .filter((e) => e.notice.pinned)
+    .sort((a, b) => b.createdAt - a.createdAt);
+  const stream: FeedEntry[] = [
     ...proofs.map((proof) => ({ feedKind: 'proof' as const, createdAt: proof.createdAt, proof })),
     ...moments.map((moment) => ({ feedKind: 'moment' as const, createdAt: moment.createdAt, moment })),
     ...tallyCards
       .filter((card) => card.count > 0)
       .map((card) => ({ feedKind: 'tallyCard' as const, createdAt: card.displayBump, card })),
-  ];
-  return entries.sort((a, b) => b.createdAt - a.createdAt).slice(0, max);
+    ...noticeEntries.filter((e) => !e.notice.pinned),
+  ].sort((a, b) => b.createdAt - a.createdAt);
+  return [...pinned, ...stream].slice(0, max);
 }
 
 /** One Tally marker row for the Feed derivation: the marker doc plus the `itemId`
@@ -653,15 +684,17 @@ export function useFeed(max = 60) {
   const { proofs, loading: proofsLoading } = useProofFeed(max);
   const { moments, loading: momentsLoading } = useMoments(max);
   const { cards, loading: tallyLoading } = useTallyCards();
+  const { notices, loading: noticesLoading } = useNotices();
   return {
-    entries: mergeFeed(proofs, moments, cards, max),
+    entries: mergeFeed(proofs, moments, cards, notices, max),
     // The UNCAPPED tally stream (Codex P2 on #286): the proof-card pills
     // (itemId → text for the doubts derivation, itemText → live count) must be
     // derived from EVERY Tally Card, not just the ones that survived the
     // `max`-entry merge cap — a busy Feed would otherwise zero the pills on
     // any Proof whose Prompt's card fell outside the cap.
     tallyCards: cards,
-    loading: proofsLoading || momentsLoading || tallyLoading,
+    notices,
+    loading: proofsLoading || momentsLoading || tallyLoading || noticesLoading,
   };
 }
 

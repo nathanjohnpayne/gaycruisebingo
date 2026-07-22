@@ -884,6 +884,25 @@ service cloud.firestore {
         // schema evolution.
         allow delete: if isAdmin(eventId) || isOwner(resource.data.uid);
       }
+
+      // Notices (specs/admin-messages.md): admin-authored broadcasts — title +
+      // body, optionally pinned — that render at the top of the shared Feed. Any
+      // signed-in Player READS them (the delivery surface everyone watches); only
+      // an admin creates, updates (pin/unpin), or deletes them. Unlike a Moment, a
+      // Notice IS mutable — the pin toggle is an admin update — so create AND update
+      // both revalidate the title/body caps and the boolean `pinned`. There is no
+      // report counter (Notices are admin-authored, not player-reportable) and no
+      // owner-write path (a Notice belongs to the admin role, not one uid).
+      match /notices/{noticeId} {
+        allow read: if signedIn();
+        allow create, update: if isAdmin(eventId)
+          && request.resource.data.title is string
+          && request.resource.data.title.size() <= 60
+          && request.resource.data.body is string
+          && request.resource.data.body.size() <= 400
+          && request.resource.data.pinned is bool;
+        allow delete: if isAdmin(eventId);
+      }
     }
 
     // Collection-group READ for the Feed's Tally Cards (#216/#294): the client

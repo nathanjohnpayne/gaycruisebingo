@@ -20,6 +20,7 @@ import type {
   LastCallMomentPayload,
   MomentDoc,
   MomentKind,
+  NoticeDoc,
   PodiumMomentPayload,
   ProofDoc,
   TallyCard as TallyCardData,
@@ -400,6 +401,29 @@ function AudioProof({ src }: { src: string }) {
  * Day chip a Proof/Tally Card renders, degrading to nothing on a pre-`dayIndex`
  * blackout Moment or a legacy (non-daily) Event with no `days[]`.
  */
+// A Notice (specs/admin-messages.md): an admin-authored broadcast rendered as an
+// accent-bordered card. A PINNED Notice sorts to the very top of the Feed (mergeFeed
+// puts it above every Proof/Moment) and wears the 📌; an UNPINNED one interleaves by
+// its `createdAt` with no pin marker. Attribution + day chip follow the Moment
+// convention — "📌 Nathan · Day 8" (#frame-feed-notice). Unlike the Card-tab banner
+// this Feed copy is NOT dismissible: it is the durable record latecomers scroll to.
+function NoticeCard({ notice, days }: { notice: NoticeDoc; days: DayDef[] | undefined }) {
+  const hasDay = typeof notice.dayIndex === 'number' && days?.[notice.dayIndex] != null;
+  const meta = [
+    notice.pinned ? `📌 ${notice.displayName}` : notice.displayName,
+    hasDay ? `Day ${(notice.dayIndex as number) + 1}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <div className={`notice-card${notice.pinned ? ' notice-card-pinned' : ''}`}>
+      <div className="notice-card-title">{notice.title}</div>
+      <div className="notice-card-body">{notice.body}</div>
+      <div className="notice-card-who">{meta}</div>
+    </div>
+  );
+}
+
 function MomentCard({ moment, days, bannedUids, heart }: { moment: MomentDoc; days: DayDef[] | undefined; bannedUids: readonly string[]; heart: HeartControl }) {
   const copy = MOMENT_COPY[moment.kind] ?? { icon: '🎉', line: 'made a Moment!' };
   // #266: the finale beats carry their real content when the scheduler built
@@ -1058,6 +1082,9 @@ export default function ProofFeed() {
   return (
     <div className="list">
       {entries.map((entry) => {
+        if (entry.feedKind === 'notice') {
+          return <NoticeCard key={`notice-${entry.notice.id}`} notice={entry.notice} days={event?.days} />;
+        }
         if (entry.feedKind === 'moment') {
           return (
             <MomentCard

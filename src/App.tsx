@@ -6,6 +6,7 @@ import CachedCardFallback from './components/CachedCardFallback';
 import { loadCardSnapshot } from './data/cardCache';
 import Nav from './components/Nav';
 import Board from './components/Board';
+import NoticeBanner from './components/NoticeBanner';
 import Leaderboard from './components/Leaderboard';
 import ProofFeed from './components/ProofFeed';
 import More from './components/More';
@@ -68,7 +69,13 @@ export default function App() {
         <DealError message={dealError} onRetry={retryDeal} retrying={dealing} />
       )
     ) : (
-      <Board />
+      // A pinned admin Notice shows once as a dismissible banner above the Board
+      // (specs/admin-messages.md); it self-gates to nothing when none is pinned or
+      // this device already dismissed it, so the real card is otherwise unchanged.
+      <>
+        <NoticeBanner />
+        <Board />
+      </>
     ),
     feed: <ProofFeed />,
     ranks: <Leaderboard />,

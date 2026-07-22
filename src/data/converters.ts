@@ -14,6 +14,7 @@ import type {
   ClaimDoc,
   TallyEntry,
   MomentDoc,
+  NoticeDoc,
   DoubtDoc,
   HeartDoc,
   DayMetaDoc,
@@ -184,6 +185,18 @@ export const momentConverter: FirestoreDataConverter<MomentDoc> = {
   toFirestore: (data) => data as DocumentData,
   fromFirestore: (snap: QueryDocumentSnapshot) => ({
     ...(snap.data() as Omit<MomentDoc, 'id'>),
+    id: snap.id,
+  }),
+};
+
+// A Notice (specs/admin-messages.md): an admin-authored broadcast, read from
+// events/{EVENT_ID}/notices/{noticeId}. Like proofs/moments it carries its own
+// doc id (the Feed keys on it), so pin `id` to `snap.id`. The write side
+// (src/data/notices.ts) uses a raw ref and never stores `id`.
+export const noticeConverter: FirestoreDataConverter<NoticeDoc> = {
+  toFirestore: (data) => data as DocumentData,
+  fromFirestore: (snap: QueryDocumentSnapshot) => ({
+    ...(snap.data() as Omit<NoticeDoc, 'id'>),
     id: snap.id,
   }),
 };
