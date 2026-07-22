@@ -62,16 +62,23 @@ export default function App() {
   const cachedCard =
     dealError && dealErrorReason === 'connection' && canRenderEventContent ? loadCardSnapshot(user.uid) : null;
   const pages: Record<TabId, ReactElement> = {
+    // A pinned admin Notice shows once as a dismissible banner above the card
+    // (specs/admin-messages.md); it self-gates to nothing when none is pinned or
+    // this device already dismissed it, so the card is otherwise unchanged. It
+    // rides BOTH the live Board AND the durable cached-card fallback (Codex P2, PR
+    // #440): a Notice already in Firestore's offline cache must still reach the
+    // poor-connectivity path this fallback exists for. Only the full-screen
+    // DealError (no card, nothing cached) omits it.
     card: dealError ? (
       cachedCard ? (
-        <CachedCardFallback snapshot={cachedCard} onRetry={retryDeal} retrying={dealing} />
+        <>
+          <NoticeBanner />
+          <CachedCardFallback snapshot={cachedCard} onRetry={retryDeal} retrying={dealing} />
+        </>
       ) : (
         <DealError message={dealError} onRetry={retryDeal} retrying={dealing} />
       )
     ) : (
-      // A pinned admin Notice shows once as a dismissible banner above the Board
-      // (specs/admin-messages.md); it self-gates to nothing when none is pinned or
-      // this device already dismissed it, so the real card is otherwise unchanged.
       <>
         <NoticeBanner />
         <Board />

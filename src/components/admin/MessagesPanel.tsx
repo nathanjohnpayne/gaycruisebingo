@@ -27,7 +27,7 @@ import type { DayDef, NoticeDoc } from '../../types';
  * guard, and an inline failure (role=alert) that KEEPS the draft so a retry is one
  * tap (#411, specs/admin-async-feedback.md). Clears only on a settled success.
  */
-function ComposeNotice({ adminUid, adminName, dayIndex }: { adminUid: string; adminName: string; dayIndex?: number }) {
+function ComposeNotice({ adminUid, adminName, days }: { adminUid: string; adminName: string; days: DayDef[] }) {
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [pinned, setPinned] = useState(true);
@@ -40,6 +40,10 @@ function ComposeNotice({ adminUid, adminName, dayIndex }: { adminUid: string; ad
     setBusy(true);
     setFailed(false);
     try {
+      // Stamp the current Day at SUBMIT time, not render time (Codex P2, PR #440):
+      // a panel left mounted across a scheduled Day unlock would otherwise post
+      // under the previous Day. Undefined for a schedule-less Event.
+      const dayIndex = days.length ? defaultViewedIndex(days, Date.now()) : undefined;
       await postNotice({ uid: adminUid, displayName: adminName, title, body, pinned, dayIndex });
       setTitle('');
       setBody('');
@@ -54,12 +58,15 @@ function ComposeNotice({ adminUid, adminName, dayIndex }: { adminUid: string; ad
   return (
     <div className="admin-section">
       <h3>New message</h3>
+      {/* Fields disable while a post is in flight (Codex P2, PR #440) so a newer
+          draft composed mid-write can't be erased by the success-clear below. */}
       <input
         className="notice-input"
         value={title}
         maxLength={NOTICE_TITLE_MAX}
         placeholder="Title"
         aria-label="Notice title"
+        disabled={busy}
         onChange={(e) => setTitle(e.target.value)}
       />
       <textarea
@@ -69,6 +76,7 @@ function ComposeNotice({ adminUid, adminName, dayIndex }: { adminUid: string; ad
         placeholder="What does everyone need to know?"
         aria-label="Notice body"
         rows={4}
+        disabled={busy}
         onChange={(e) => setBody(e.target.value)}
       />
       <label className="notice-pin-row">
@@ -80,6 +88,7 @@ function ComposeNotice({ adminUid, adminName, dayIndex }: { adminUid: string; ad
           type="checkbox"
           checked={pinned}
           aria-label="Pin to Feed and show Card banner"
+          disabled={busy}
           onChange={(e) => setPinned(e.target.checked)}
         />
       </label>
@@ -144,13 +153,12 @@ export default function MessagesPanel({ adminUid, days }: { adminUid: string; da
   // real Google name rather than persisting 'Anonymous' onto the Notice
   // (CodeRabbit, PR #440).
   const adminName = resolveDisplayName(player, user?.displayName);
-  // The event's current Day, stamped onto the Notice at post time (Moment-style) so
-  // the Feed reads "📌 Nathan · Day 8". Undefined for a schedule-less Event.
-  const dayIndex = days.length ? defaultViewedIndex(days, Date.now()) : undefined;
 
   return (
     <div>
-      <ComposeNotice adminUid={adminUid} adminName={adminName} dayIndex={dayIndex} />
+      {/* `days` is threaded (not a precomputed dayIndex) so the compose form
+          stamps the CURRENT Day at submit time, not this render (Codex P2, #440). */}
+      <ComposeNotice adminUid={adminUid} adminName={adminName} days={days} />
       <div className="admin-section">
         <h3>
           Sent
