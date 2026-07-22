@@ -896,11 +896,23 @@ service cloud.firestore {
       match /notices/{noticeId} {
         allow read: if signedIn();
         allow create: if isAdmin(eventId)
+          // Bind attribution to the authenticated admin (Codex P2, PR #440) so a
+          // Notice's public "📌 Nathan" byline cannot be forged as another admin —
+          // the same isOwner-of-uid discipline markers/moments/proofs use.
+          && request.resource.data.uid == request.auth.uid
           && request.resource.data.title is string
           && request.resource.data.title.size() <= 60
           && request.resource.data.body is string
           && request.resource.data.body.size() <= 400
-          && request.resource.data.pinned is bool;
+          && request.resource.data.pinned is bool
+          // createdAt is client-set and the Feed sorts by it; require a numeric,
+          // near-now value (within +60s / -24h of request.time, the moments/proofs
+          // bound) so a forged far-future stamp can't pin a Notice above all Feed
+          // activity (Codex P2, PR #440). The client writes Date.now() — in bounds
+          // by construction.
+          && request.resource.data.createdAt is number
+          && request.resource.data.createdAt <= request.time.toMillis() + 60000
+          && request.resource.data.createdAt >= request.time.toMillis() - 86400000;
         // The ONLY mutable operation is the pin toggle (Unpin/Pin). A Notice's
         // content, attribution, and createdAt are immutable once posted (Codex P2,
         // PR #440): require the update diff to touch NOTHING but `pinned`, so a

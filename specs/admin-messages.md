@@ -29,7 +29,7 @@ The doc carries its own id on read (`noticeConverter` pins `id` to `snap.id`); t
 Inside `match /events/{eventId}`, a sibling of `moments`:
 
 - `read`: any signed-in user (the delivery surface everyone watches).
-- `create`: `isAdmin(eventId)` AND `title is string && title.size() <= 60` AND `body is string && body.size() <= 400` AND `pinned is bool`.
+- `create`: `isAdmin(eventId)` AND `uid == request.auth.uid` (attribution bound to the posting admin, the markers/moments isOwner discipline — a "📌 Nathan" byline can't be forged) AND `title is string && title.size() <= 60` AND `body is string && body.size() <= 400` AND `pinned is bool` AND `createdAt is number` within `+60s / -24h` of `request.time` (so a forged far-future stamp can't pin a Notice above all Feed activity, the moments/proofs bound).
 - `update`: `isAdmin(eventId)` AND the diff touches ONLY `pinned` (`diff(resource.data).affectedKeys().hasOnly(['pinned'])`) AND `pinned is bool`. The pin toggle is the sole mutable operation — a Notice's content, attribution, and `createdAt` are immutable once posted, so a stale or hand-built admin client cannot rewrite an already-delivered Notice (the rules are the enforcement boundary, not just the client writer).
 - `delete`: `isAdmin(eventId)`.
 

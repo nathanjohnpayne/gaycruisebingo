@@ -111,4 +111,18 @@ describe('firestore.rules — Notices (specs/admin-messages.md)', () => {
       setDoc(p('at-caps'), notice(ADMIN, { title: 'x'.repeat(60), body: 'y'.repeat(400) })),
     );
   });
+
+  it('binds attribution to the authenticated admin — a forged uid is denied (Codex #440)', async () => {
+    // An admin cannot mint a Notice attributed to a different uid (isOwner-of-uid).
+    await assertFails(setDoc(doc(db(ADMIN), noticePath('forged')), notice(ALICE)));
+    await assertSucceeds(setDoc(doc(db(ADMIN), noticePath('own')), notice(ADMIN)));
+  });
+
+  it('bounds createdAt near request.time so a forged stamp cannot pin forever (Codex #440)', async () => {
+    const p = (id: string) => doc(db(ADMIN), noticePath(id));
+    await assertFails(setDoc(p('future'), notice(ADMIN, { createdAt: NOW() + 3_600_000 })));
+    await assertFails(setDoc(p('ancient'), notice(ADMIN, { createdAt: NOW() - 2 * 86_400_000 })));
+    await assertFails(setDoc(p('nonnum'), notice(ADMIN, { createdAt: 'now' })));
+    await assertSucceeds(setDoc(p('nowish'), notice(ADMIN, { createdAt: NOW() })));
+  });
 });
