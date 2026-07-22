@@ -30,7 +30,7 @@ class MemoryStorage implements Storage {
 // VITE_EVENT_ID is unset (the value under test).
 const EVENT_ID = 'med-2026';
 const UID = 'user-1';
-const keyFor = (uid: string) => `gcb:card-snapshot:${EVENT_ID}:${uid}`;
+const latestKeyFor = (uid: string) => `gcb:card-snapshot:${EVENT_ID}:${uid}:latest`;
 
 function cell(index: number, over: Partial<Cell> = {}): Cell {
   return {
@@ -69,6 +69,7 @@ describe('cardCache', () => {
     expect(snap!.cells).toHaveLength(25);
     expect(snap!.day).toEqual(SAVE.day);
     expect(hasCardSnapshot(UID)).toBe(true);
+    expect(loadCardSnapshot(UID, 2)?.dayIndex).toBe(2);
   });
 
   it('reports no snapshot for a user who has none', () => {
@@ -89,14 +90,46 @@ describe('cardCache', () => {
   });
 
   it('reads a corrupt/unparseable blob as a miss, never a throw', () => {
-    localStorage.setItem(keyFor(UID), '{not valid json');
+    localStorage.setItem(latestKeyFor(UID), '{not valid json');
     expect(loadCardSnapshot(UID)).toBeNull();
     expect(hasCardSnapshot(UID)).toBe(false);
   });
 
   it('rejects a stale schema version (read as a miss)', () => {
     const stale: CardSnapshot = { ...(SAVE as object as CardSnapshot), v: 0, eventId: EVENT_ID, savedAt: 1 };
-    localStorage.setItem(keyFor(UID), JSON.stringify(stale));
+    localStorage.setItem(latestKeyFor(UID), JSON.stringify(stale));
+    expect(loadCardSnapshot(UID)).toBeNull();
+  });
+
+  it('rejects malformed cell arrays as a miss', () => {
+    const malformed = {
+      v: 1,
+      uid: UID,
+      eventId: EVENT_ID,
+      dayIndex: 2,
+      savedAt: 1,
+      bingoCount: 0,
+      cells: [{}],
+      day: DAY,
+    };
+    localStorage.setItem(latestKeyFor(UID), JSON.stringify(malformed));
+    expect(loadCardSnapshot(UID)).toBeNull();
+  });
+
+  it('rejects duplicate or missing cell indexes as a miss', () => {
+    const cellsWithDuplicate = CELLS.map((c) => ({ ...c }));
+    cellsWithDuplicate[24] = { ...cellsWithDuplicate[24], index: 23 };
+    const malformed: CardSnapshot = {
+      v: 1,
+      uid: UID,
+      eventId: EVENT_ID,
+      dayIndex: 2,
+      savedAt: 1,
+      bingoCount: 0,
+      cells: cellsWithDuplicate,
+      day: DAY,
+    };
+    localStorage.setItem(latestKeyFor(UID), JSON.stringify(malformed));
     expect(loadCardSnapshot(UID)).toBeNull();
   });
 
@@ -111,8 +144,15 @@ describe('cardCache', () => {
       cells: CELLS,
       day: null,
     };
-    localStorage.setItem(keyFor(UID), JSON.stringify(otherEvent));
+    localStorage.setItem(latestKeyFor(UID), JSON.stringify(otherEvent));
     expect(loadCardSnapshot(UID)).toBeNull();
+  });
+
+  it('does not return a different Day snapshot for a day-specific load', () => {
+    saveCardSnapshot(SAVE);
+    expect(loadCardSnapshot(UID, 1)).toBeNull();
+    expect(hasCardSnapshot(UID, 1)).toBe(false);
+    expect(loadCardSnapshot(UID, 2)?.dayIndex).toBe(2);
   });
 
   it('never returns account A snapshot for account B (uid-scoped keys)', () => {

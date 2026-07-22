@@ -14,6 +14,7 @@ vi.mock('./auth/AuthContext', () => ({
     loading: false,
     dealError: null,
     dealErrorReason: null,
+    canRenderEventContent: true,
     dealing: false,
     retryDeal: () => {},
     ...authState.value,
@@ -105,6 +106,19 @@ describe('App — Card route deal-error routing (#434)', () => {
 
   it('falls back to the full reload screen when a connection failure has nothing cached', () => {
     authState.value = { dealError: DEAL_ERROR, dealErrorReason: 'connection', dealing: false };
+    renderApp();
+    expect(screen.getByText(DEAL_ERROR)).toBeInTheDocument();
+    expect(screen.queryByText(/Showing your saved card/)).not.toBeInTheDocument();
+  });
+
+  it('keeps the reload screen when attestation proof is not established', () => {
+    saveCardSnapshot({ uid: 'sailor-1', dayIndex: 0, cells: cells(), bingoCount: 1, day: null });
+    authState.value = {
+      dealError: DEAL_ERROR,
+      dealErrorReason: 'connection',
+      canRenderEventContent: false,
+      dealing: false,
+    };
     renderApp();
     expect(screen.getByText(DEAL_ERROR)).toBeInTheDocument();
     expect(screen.queryByText(/Showing your saved card/)).not.toBeInTheDocument();

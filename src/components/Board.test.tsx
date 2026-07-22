@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import type { BoardDoc, Cell, DayDef, EventDoc, PlayerDoc } from '../types';
 import { ThemeProvider } from '../theme/ThemeContext';
+import { saveCardSnapshot } from '../data/cardCache';
 
 // specs/d15-day-switcher.md: Board mounting the Day switcher (daily-cards-
 // spec § "Day switcher") and the locked-Day preview (§ "Locked Day
@@ -30,6 +31,7 @@ const H = vi.hoisted(() => ({
   takeHeldHonorPins: vi.fn(() => [] as Array<{ uid: string; dayIndex: number; at: number }>),
   dropHeldHonorPins: vi.fn(),
   getDoc: vi.fn(),
+  retryDeal: vi.fn(),
 }));
 
 vi.mock('../hooks/useData', () => ({
@@ -103,7 +105,14 @@ vi.mock('../data/dayMeta', () => ({
 }));
 vi.mock('../analytics', () => ({ track: H.track }));
 vi.mock('../auth/AuthContext', () => ({
-  useAuth: () => ({ user: H.user, loading: false, signIn: vi.fn(), signOutUser: vi.fn() }),
+  useAuth: () => ({
+    user: H.user,
+    loading: false,
+    signIn: vi.fn(),
+    signOutUser: vi.fn(),
+    retryDeal: H.retryDeal,
+    dealing: false,
+  }),
 }));
 vi.mock('firebase/firestore', () => ({
   getDoc: H.getDoc,
@@ -131,6 +140,28 @@ function dealt(pool = 'i'): Cell[] {
     marked: index === 12,
     markedAt: null,
   }));
+}
+
+class MemoryStorage implements Storage {
+  private m = new Map<string, string>();
+  get length() {
+    return this.m.size;
+  }
+  clear() {
+    this.m.clear();
+  }
+  getItem(k: string) {
+    return this.m.has(k) ? this.m.get(k)! : null;
+  }
+  key(i: number) {
+    return [...this.m.keys()][i] ?? null;
+  }
+  removeItem(k: string) {
+    this.m.delete(k);
+  }
+  setItem(k: string, v: string) {
+    this.m.set(k, String(v));
+  }
 }
 
 function withMarked(indices: number[]): Cell[] {
@@ -216,12 +247,98 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   // ThemeProvider (mounted only by the retint test below) writes
   // `<html data-theme>` on mount — this repo's jsdom project leaves
   // `window.localStorage` unset (see src/theme/w1-themes.test.tsx), so
   // ThemeContext's own defensive try/catch handles persistence here; this
   // just resets the DOM side effect between tests.
   delete document.documentElement.dataset.theme;
+});
+
+describe('Durable cached-card fallback', () => {
+  it('renders a matching Day snapshot when the live board is unavailable', () => {
+    vi.stubGlobal('localStorage', new MemoryStorage());
+    const now = Date.now();
+    const cells = dealt('saved');
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({
+          index: 0,
+          theme: 'welcome-aboard',
+          unlockAt: now - DAY_MS,
+          tutorial: true,
+          pool: 'embark',
+          snapshotItemIds: cells.filter((c) => !c.free).map((c) => c.itemId!),
+        }),
+      ],
+    } as unknown as EventDoc;
+    saveCardSnapshot({ uid: 'u1', dayIndex: 0, cells, bingoCount: 1, day: null });
+
+    render(<Board />);
+
+    expect(screen.getByText(/Showing your saved card/)).toBeInTheDocument();
+    expect(screen.getByText('Prompt saved0')).toBeInTheDocument();
+    expect(screen.queryByText(/Dealing your card/)).not.toBeInTheDocument();
+  });
+
+  it('does not render a snapshot saved for a different viewed Day', () => {
+    vi.stubGlobal('localStorage', new MemoryStorage());
+    const now = Date.now();
+    const cells = dealt('wrong');
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({
+          index: 0,
+          theme: 'welcome-aboard',
+          unlockAt: now - DAY_MS,
+          tutorial: true,
+          pool: 'embark',
+          snapshotItemIds: cells.filter((c) => !c.free).map((c) => c.itemId!),
+        }),
+      ],
+    } as unknown as EventDoc;
+    saveCardSnapshot({ uid: 'u1', dayIndex: 1, cells, bingoCount: 1, day: null });
+
+    render(<Board />);
+
+    expect(screen.queryByText(/Showing your saved card/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Prompt wrong0')).not.toBeInTheDocument();
+    expect(screen.getByText(/Dealing your card/)).toBeInTheDocument();
+  });
+
+  it('treats a retained foreign board as unavailable and renders only this user snapshot', () => {
+    vi.stubGlobal('localStorage', new MemoryStorage());
+    const now = Date.now();
+    const saved = dealt('mine');
+    const foreign = dealt('foreign');
+    H.event = {
+      claimMode: 'honor',
+      timezone: 'UTC',
+      days: [
+        day({
+          index: 0,
+          theme: 'welcome-aboard',
+          unlockAt: now - DAY_MS,
+          tutorial: true,
+          pool: 'embark',
+          snapshotItemIds: saved.filter((c) => !c.free).map((c) => c.itemId!),
+        }),
+      ],
+    } as unknown as EventDoc;
+    H.board = { uid: 'someone-else', dayIndex: 0, seed: 1, createdAt: 0, cells: foreign };
+    saveCardSnapshot({ uid: 'u1', dayIndex: 0, cells: saved, bingoCount: 1, day: null });
+
+    render(<Board />);
+
+    expect(screen.getByText(/Showing your saved card/)).toBeInTheDocument();
+    expect(screen.getByText('Prompt mine0')).toBeInTheDocument();
+    expect(screen.queryByText('Prompt foreign0')).not.toBeInTheDocument();
+  });
 });
 
 describe('Day switcher retint', () => {

@@ -166,6 +166,11 @@ interface AuthContextValue {
   // Never true mid-bootstrap: it is gated on profileReady, so an attestation that
   // is still UNKNOWN during load can't flash the prompt.
   needsAttestation: boolean;
+  // True only after this session has proof that Event content may render:
+  // a cached offline stamp, a server-confirmed stamp, or a same-session attest.
+  // Consumers that bypass Board's normal render path (the durable card fallback)
+  // must check this instead of inferring permission from a saved snapshot.
+  canRenderEventContent: boolean;
   // Player-worded, retryable failure on the path to a dealt Board — a failed
   // join/deal, or a failed attestation bootstrap (#112 round 2) — null once dealt.
   dealError: string | null;
@@ -194,6 +199,7 @@ const AuthContext = createContext<AuthContextValue>({
   loading: true,
   profileReady: false,
   needsAttestation: false,
+  canRenderEventContent: false,
   dealError: null,
   dealErrorReason: null,
   dealing: false,
@@ -1027,6 +1033,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // bootstrap (attestation UNKNOWN) never flashes the prompt. `SignIn` reads
   // `user` from context to render its re-prompt mode.
   const needsAttestation = user != null && profileReady && attested === false;
+  const canRenderEventContent = user != null && attested === true;
 
   return (
     <AuthContext.Provider
@@ -1035,6 +1042,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         profileReady,
         needsAttestation,
+        canRenderEventContent,
         dealError,
         dealErrorReason,
         dealing,

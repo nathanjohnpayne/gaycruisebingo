@@ -15,12 +15,17 @@ const EVENT_ID = import.meta.env.VITE_EVENT_ID || 'med-2026';
 // (null), never as a mis-shaped card.
 const SNAPSHOT_VERSION = 1;
 
-// One key per (event, user): the LATEST card this device painted for the
-// current cruise. Event-scoped exactly like `hasCachedCard` (src/data/api.ts)
-// so a PRIOR cruise's snapshot can never render for a new Event, and uid-scoped
-// so account B never sees account A's saved card.
-function keyFor(uid: string): string {
-  return `gcb:card-snapshot:${EVENT_ID}:${uid}`;
+// One key per (event, user, day): the card this device painted for that Day.
+// Event-scoped exactly like `hasCachedCard` (src/data/api.ts) so a PRIOR cruise's
+// snapshot can never render for a new Event, uid-scoped so account B never sees
+// account A's saved card, and day-scoped so switching Days offline cannot show
+// the last card painted for a different Day.
+function keyFor(uid: string, dayIndex: number | null): string {
+  return `gcb:card-snapshot:${EVENT_ID}:${uid}:${dayIndex === null ? 'legacy' : `day-${dayIndex}`}`;
+}
+
+function latestKeyFor(uid: string): string {
+  return `gcb:card-snapshot:${EVENT_ID}:${uid}:latest`;
 }
 
 // localStorage access throws in some privacy modes (and is absent under SSR),
@@ -33,6 +38,90 @@ function store(): Storage | null {
   } catch {
     return null;
   }
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
+}
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+function isNullableString(v: unknown): v is string | null {
+  return typeof v === 'string' || v === null;
+}
+
+function isSnapshotDay(v: unknown): v is CardSnapshotDay | null {
+  if (v === null) return true;
+  return (
+    isRecord(v) &&
+    isFiniteNumber(v.number) &&
+    typeof v.port === 'string' &&
+    typeof v.portEmoji === 'string' &&
+    typeof v.theme === 'string' &&
+    typeof v.label === 'string'
+  );
+}
+
+function isSnapshotCell(v: unknown): v is Cell {
+  if (!isRecord(v)) return false;
+  const status = v.status;
+  const proofId = v.proofId;
+  return (
+    Number.isInteger(v.index) &&
+    typeof v.itemId !== 'undefined' &&
+    isNullableString(v.itemId) &&
+    typeof v.text === 'string' &&
+    typeof v.free === 'boolean' &&
+    typeof v.marked === 'boolean' &&
+    typeof v.markedAt !== 'undefined' &&
+    (isFiniteNumber(v.markedAt) || v.markedAt === null) &&
+    (typeof proofId === 'undefined' || isNullableString(proofId)) &&
+    (typeof status === 'undefined' || status === 'confirmed' || status === 'pending')
+  );
+}
+
+function isSnapshotCells(v: unknown): v is Cell[] {
+  if (!Array.isArray(v) || v.length !== 25) return false;
+  const seen = new Set<number>();
+  for (const cell of v) {
+    if (!isSnapshotCell(cell) || cell.index < 0 || cell.index > 24 || seen.has(cell.index)) return false;
+    seen.add(cell.index);
+  }
+  return seen.size === 25;
+}
+
+function isDayIndex(v: unknown): v is number | null {
+  return v === null || (typeof v === 'number' && Number.isInteger(v) && v >= 0);
+}
+
+function parseSnapshot(raw: string, uid: string, requiredDayIndex: number | null | undefined): CardSnapshot | null {
+  const parsed: unknown = JSON.parse(raw);
+  if (!isRecord(parsed)) return null;
+  if (
+    parsed.v !== SNAPSHOT_VERSION ||
+    parsed.uid !== uid ||
+    parsed.eventId !== EVENT_ID ||
+    !isDayIndex(parsed.dayIndex) ||
+    (requiredDayIndex !== undefined && parsed.dayIndex !== requiredDayIndex) ||
+    !isFiniteNumber(parsed.savedAt) ||
+    !isFiniteNumber(parsed.bingoCount) ||
+    !isSnapshotCells(parsed.cells) ||
+    !isSnapshotDay(parsed.day)
+  ) {
+    return null;
+  }
+  return {
+    v: SNAPSHOT_VERSION,
+    uid,
+    eventId: EVENT_ID,
+    dayIndex: parsed.dayIndex,
+    savedAt: parsed.savedAt,
+    bingoCount: parsed.bingoCount,
+    cells: parsed.cells,
+    day: parsed.day,
+  };
 }
 
 /**
@@ -61,7 +150,9 @@ export function saveCardSnapshot(input: {
     day: input.day,
   };
   try {
-    ls.setItem(keyFor(input.uid), JSON.stringify(snapshot));
+    const serialized = JSON.stringify(snapshot);
+    ls.setItem(keyFor(input.uid, input.dayIndex), serialized);
+    ls.setItem(latestKeyFor(input.uid), serialized);
   } catch {
     /* quota exceeded / serialization failure — skip; the live Board still renders */
   }
@@ -73,30 +164,19 @@ export function saveCardSnapshot(input: {
  * another account's or another cruise's card is never rendered). Reads the
  * local store only — no network, never throws.
  */
-export function loadCardSnapshot(uid: string): CardSnapshot | null {
+export function loadCardSnapshot(uid: string, dayIndex?: number | null): CardSnapshot | null {
   const ls = store();
   if (!ls || !uid) return null;
   try {
-    const raw = ls.getItem(keyFor(uid));
+    const raw = ls.getItem(dayIndex === undefined ? latestKeyFor(uid) : keyFor(uid, dayIndex));
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<CardSnapshot> | null;
-    if (
-      !parsed ||
-      parsed.v !== SNAPSHOT_VERSION ||
-      parsed.uid !== uid ||
-      parsed.eventId !== EVENT_ID ||
-      !Array.isArray(parsed.cells) ||
-      parsed.cells.length === 0
-    ) {
-      return null;
-    }
-    return parsed as CardSnapshot;
+    return parseSnapshot(raw, uid, dayIndex);
   } catch {
     return null;
   }
 }
 
 /** True when a renderable card snapshot exists for this (event, user). */
-export function hasCardSnapshot(uid: string): boolean {
-  return loadCardSnapshot(uid) !== null;
+export function hasCardSnapshot(uid: string, dayIndex?: number | null): boolean {
+  return loadCardSnapshot(uid, dayIndex) !== null;
 }

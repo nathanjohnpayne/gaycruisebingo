@@ -1498,7 +1498,7 @@ export default function Board() {
     );
   }
 
-  if (!board) {
+  if (!board || !cellsAttributable) {
     // A lazy per-Day deal that FAILED for the viewed Day (thin/malformed snapshot
     // or a repeatedly-denied write) surfaces a retry instead of an indefinite
     // "Dealing…" spinner (Codex #247 P2). Retry clears the in-flight guard + error
@@ -1574,16 +1574,13 @@ export default function Board() {
         </>
       );
     }
-    // #434 (Codex #438): OFFLINE with no live board to render. This is the core
-    // deal-eviction scenario — a returning Player whose Firestore board cache was
-    // evicted, or a cold-boot where bootstrapUser CLEARED dealError while releasing
-    // the gate offline, so App mounts Board (not the DealError path) and it would
-    // otherwise sit on an indefinite "Dealing…". Render this device's durable
-    // snapshot read-only with a Retry instead. Gated on OFFLINE only: while ONLINE
-    // we let the real deal complete (a fresh card, never a stale snapshot), and on
-    // reconnect the normal deal flow resumes and swaps the live Board back in.
-    if (uid && !online) {
-      const snapshot = loadCardSnapshot(uid);
+    // #434 (Codex #438): no live, attributable board to render. This covers a
+    // Firestore-cache eviction, a retained foreign board during an account switch,
+    // and captive/ship Wi-Fi where navigator.onLine can be true while Firestore is
+    // unreachable. Render only a durable snapshot that matches THIS viewed Day, so
+    // an offline Day switch can never show the last card painted for another Day.
+    if (uid) {
+      const snapshot = loadCardSnapshot(uid, hasDays ? viewedIndex : null);
       if (snapshot) {
         return (
           <>
@@ -1592,9 +1589,9 @@ export default function Board() {
               snapshot={snapshot}
               onRetry={() => {
                 // Nudge both deal paths: the day-scoped lazy deal (dealNonce) and
-                // the AuthContext join/legacy deal (retryDeal). Offline both are
-                // effectively inert, but on reconnect the effects re-fire anyway;
-                // this just gives the Player agency without waiting for the flip.
+                // the AuthContext join/legacy deal (retryDeal). If Firestore is
+                // merely unreachable, this gives the Player agency without waiting
+                // for a connectivity event the browser may never emit.
                 setDealNonce((n) => n + 1);
                 retryDeal();
               }}
