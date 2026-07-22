@@ -23,7 +23,7 @@ Implements `plans/admin-redesign-ticket.md` (issue #404), matching `plans/daily-
 
 ### Hub (`/more/admin`)
 
-`src/components/admin/AdminHub.tsx` — section cards (reusing the More menu's exported `MoreRow` chrome), each with a live subtitle and badge:
+`src/components/admin/AdminHub.tsx` — section cards (reusing the More menu's exported `MoreRow` chrome), each with a live subtitle and, where a queue waits behind it, a badge:
 
 - **Review queue** — badge = reports + approvals + claims total, where claims count ONLY in `admin_confirmed` claim mode; subtitle enumerates the parts ("Reports N · Approvals N · Claims N — one inbox, oldest first"), or "All clear".
 - **Game settings** — static subtitle enumerating the dials.
