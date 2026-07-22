@@ -166,6 +166,11 @@ interface AuthContextValue {
   // Never true mid-bootstrap: it is gated on profileReady, so an attestation that
   // is still UNKNOWN during load can't flash the prompt.
   needsAttestation: boolean;
+  // True only after this session has proof that Event content may render:
+  // a cached offline stamp, a server-confirmed stamp, or a same-session attest.
+  // Consumers that bypass Board's normal render path (the durable card fallback)
+  // must check this instead of inferring permission from a saved snapshot.
+  canRenderEventContent: boolean;
   // Player-worded, retryable failure on the path to a dealt Board — a failed
   // join/deal, or a failed attestation bootstrap (#112 round 2) — null once dealt.
   dealError: string | null;
@@ -194,6 +199,7 @@ const AuthContext = createContext<AuthContextValue>({
   loading: true,
   profileReady: false,
   needsAttestation: false,
+  canRenderEventContent: false,
   dealError: null,
   dealErrorReason: null,
   dealing: false,
@@ -251,10 +257,13 @@ function dealErrorMessage(err: unknown): string {
 // Why the current `dealError` happened — the TYPED marker the pool-recovery auto-retry
 // (#70) arms on, so the watcher never keys off the Player-worded string. 'pool-shortfall'
 // is the ADR 0003/0004 below-floor guard (fixable by adding Prompts → worth watching the
-// pool); 'connection' is any other deal/bootstrap failure (a connectivity/permission blip
-// the pool can never fix). Non-null exactly when `dealError` is non-null (set/cleared in
+// pool); 'connection' is a TRANSIENT connectivity/timeout blip (the class the #434
+// cached-card fallback renders a saved card for, and the class #403's swallow retries
+// behind a Firestore-cached board); 'permanent' is a rules/schema/permission or
+// unknown-coded failure that reconnecting cannot fix — it always surfaces the error,
+// never a cached card. Non-null exactly when `dealError` is non-null (set/cleared in
 // lockstep — see `failDeal`/`clearDealError`).
-export type DealErrorReason = 'pool-shortfall' | 'connection';
+export type DealErrorReason = 'pool-shortfall' | 'connection' | 'permanent';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -400,16 +409,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Set / clear `dealError` and its typed reason in LOCKSTEP (#70). Every deal or
   // bootstrap failure routes through `failDeal` (which classifies pool-shortfall vs
-  // connection via the single `isPoolShortfall`) and every clear through
-  // `clearDealError`, so the reason can never drift from the message — the
-  // pool-recovery watcher arms on the reason, so a stale/desynced reason would arm
-  // (or silently fail to arm) it wrongly. Stable identities (`[]` deps: they touch
-  // only stable state setters + module-scope classifiers), so wiring them into the
-  // deal/bootstrap callbacks' deps below does not change those callbacks' identity —
-  // no #117 effect re-runs.
+  // connection vs permanent via the single `isPoolShortfall`/`isTransientDealError`
+  // pair) and every clear through `clearDealError`, so the reason can never drift
+  // from the message — the pool-recovery watcher arms on the reason, so a
+  // stale/desynced reason would arm (or silently fail to arm) it wrongly. Stable
+  // identities (`[]` deps: they touch only stable state setters + module-scope
+  // classifiers), so wiring them into the deal/bootstrap callbacks' deps below does
+  // not change those callbacks' identity — no #117 effect re-runs.
   const failDeal = useCallback((err: unknown) => {
     setDealError(dealErrorMessage(err));
-    setDealErrorReason(isPoolShortfall(err) ? 'pool-shortfall' : 'connection');
+    // Three-way (#434, Codex #438): a PERMANENT rules/schema/permission or
+    // unknown-coded failure is NOT 'connection' — reconnecting cannot fix it, so
+    // it must always surface the error rather than let App swap in a cached card.
+    // Mirrors the #403 swallow, which likewise refuses to hide a permanent failure
+    // behind a Firestore-cached board.
+    setDealErrorReason(
+      isPoolShortfall(err) ? 'pool-shortfall' : isTransientDealError(err) ? 'connection' : 'permanent',
+    );
   }, []);
   const clearDealError = useCallback(() => {
     setDealError(null);
@@ -1017,6 +1033,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // bootstrap (attestation UNKNOWN) never flashes the prompt. `SignIn` reads
   // `user` from context to render its re-prompt mode.
   const needsAttestation = user != null && profileReady && attested === false;
+  const canRenderEventContent = user != null && attested === true;
 
   return (
     <AuthContext.Provider
@@ -1025,6 +1042,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         profileReady,
         needsAttestation,
+        canRenderEventContent,
         dealError,
         dealErrorReason,
         dealing,

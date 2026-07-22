@@ -2,6 +2,8 @@ import { type ReactElement } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import SignIn, { DealError } from './components/SignIn';
+import CachedCardFallback from './components/CachedCardFallback';
+import { loadCardSnapshot } from './data/cardCache';
 import Nav from './components/Nav';
 import Board from './components/Board';
 import Leaderboard from './components/Leaderboard';
@@ -13,7 +15,7 @@ import { TABS, FALLBACK_PATH, type TabId } from './components/tabs';
 import LoadingState from './components/LoadingState';
 
 export default function App() {
-  const { user, loading, dealError, dealing, retryDeal } = useAuth();
+  const { user, loading, dealError, dealErrorReason, dealing, retryDeal, canRenderEventContent } = useAuth();
   // The tab-switch transition's key (specs/motion-polish.md): the TOP-LEVEL
   // route segment only, so `.route-view` replays its entrance when the tab
   // changes but sub-navigation inside a tab (More → admin → section) never
@@ -37,12 +39,34 @@ export default function App() {
   // route stay mounted while the error is up (Codex P2). `AuthContext` owns the
   // deal + error state.
   //
+  // #434: on a CONNECTION-class deal failure, PREFER this device's latest durable
+  // card snapshot over the full-screen reload screen. A Player who was already
+  // dealt in still sees their card (read-only, refreshing in the background via
+  // Retry) instead of a dead-end — the exact "it should be cached and load in the
+  // background" ask. `loadCardSnapshot` is a synchronous localStorage read (no
+  // network), scoped to this event + uid; Board writes the snapshot whenever it
+  // paints a real card.
+  //
+  // Gated on `dealErrorReason === 'connection'` and AuthContext's explicit render
+  // authorization so the fallback NEVER hides an actionable error and never uses a
+  // saved card as proof-of-18+. A pool-shortfall keeps its own DealError ("ask an
+  // admin to add prompts", which PoolRecoveryWatcher also auto-recovers on the
+  // reason). This mirrors the #403 swallow, which excludes pool-shortfall for the
+  // same reason. The full DealError also stays for a genuine first-timer with
+  // nothing cached.
+  //
   // Phase 1.5 (#203): Prompts (ItemPool) and Admin are no longer routed,
   // tab-driven pages — they mount inside the More tab's menu (#208), not the
   // route table. The set is Card · Feed · Ranks · More.
+  const cachedCard =
+    dealError && dealErrorReason === 'connection' && canRenderEventContent ? loadCardSnapshot(user.uid) : null;
   const pages: Record<TabId, ReactElement> = {
     card: dealError ? (
-      <DealError message={dealError} onRetry={retryDeal} retrying={dealing} />
+      cachedCard ? (
+        <CachedCardFallback snapshot={cachedCard} onRetry={retryDeal} retrying={dealing} />
+      ) : (
+        <DealError message={dealError} onRetry={retryDeal} retrying={dealing} />
+      )
     ) : (
       <Board />
     ),

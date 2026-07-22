@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useReducer, useRef, useState, type CSSProperties } from 'react';
 import { Lock, Shuffle } from 'lucide-react';
 import { getDoc } from 'firebase/firestore';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useDayBoard, useDayMeta, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, useDayMetasStatus, isBanned } from '../hooks/useData';
 import { setMark, dealDayCard, resolveDisplayName, RESHUFFLE_ALLOWANCE } from '../data/api';
+import { saveCardSnapshot, loadCardSnapshot } from '../data/cardCache';
 import { dayBoardRef } from '../data/paths';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
@@ -29,7 +30,6 @@ import {
 // finding 1), same shape as setMark's return.
 import type { AttachProofResult } from '../data/proofs';
 import { hasBingo, isBlackout, winningCells, completedLines, countMarked, isPristine, MIN_POOL, bingoLineEdge, dayDealState, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen } from '../game/logic';
-import { fitTextSize } from '../game/fitText';
 import { dealDelayMs, winOrder } from '../game/motion';
 
 // Board identities whose deal-in cascade has already played this session
@@ -41,12 +41,12 @@ import { dealDelayMs, winOrder } from '../game/motion';
 // welcome-back beat), while a mere tab round-trip mounts the card landed.
 // Never pruned — one short string per dealt card per session.
 const dealCascadePlayed = new Set<string>();
-import { useTextSize } from '../hooks/useTextSize';
 import { useOnline } from '../hooks/useOnline';
 import { track } from '../analytics';
 import { setClaimSheetOpen } from '../hooks/useToastStack';
 import { useOpenSquareIntent, clearOpenSquare } from '../hooks/useOpenSquare';
 import Celebration from './Celebration';
+import CachedCardFallback from './CachedCardFallback';
 import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 import LoadingState from './LoadingState';
@@ -60,88 +60,10 @@ import LaunchIntro from './LaunchIntro';
 import ReshuffleSheet from './ReshuffleSheet';
 import { THEMES } from '../theme/themes';
 import { FREE_TEXT } from '../data/seed';
-
-/**
- * A non-free Square's prompt text (#215, specs/d15-text-size.md): the S/M/L
- * auto-fit guard that always wins over the chosen base size. `.cell`'s own
- * `font-size` (index.css, `clamp(...) * var(--text-scale)`) is the CEILING
- * this reads via `getComputedStyle` — the Player's S/M/L pick, already
- * viewport-clamped by CSS — never the floor: this span's own inline
- * `font-size` is what a Square actually renders text at, and it only ever
- * shrinks that ceiling down, never grows past it ("Large is a ceiling,
- * never an overflow"). Re-measures whenever the prompt text or the live
- * `textSize` pick changes (a pick applies `data-text-size` to `<html>`
- * SYNCHRONOUSLY inside `useTextSize`'s `setState`, ahead of the React
- * notify, so the CSS custom property has already updated by the time this
- * effect re-runs and re-reads the computed ceiling). A cell not yet laid
- * out (`getBoundingClientRect` reporting 0x0 pre-first-paint) is left at
- * the unshrunk ceiling — `fitTextSize` itself treats a zero-area box as
- * "nothing to measure against yet" — so a Square never flashes at a
- * shrunk size before its real box is known.
- */
-function SquareText({ text }: { text: string }) {
-  // Not read directly below — its only job is to make this effect re-run
-  // when the Player's S/M/L pick changes, since the ceiling itself is read
-  // from the DOM (getComputedStyle), not from this hook's return value.
-  const [textSize] = useTextSize();
-  const ref = useRef<HTMLSpanElement>(null);
-  const [fontSize, setFontSize] = useState<number | null>(null);
-
-  useLayoutEffect(() => {
-    const el = ref.current;
-    const cell = el?.parentElement;
-    if (!el || !cell) return;
-
-    // Applies the fitted size directly to the DOM every time this runs,
-    // independent of React state — `setFontSize` alone isn't enough: two
-    // different prompts can both bottom out at the same fitted number (PR
-    // #237 Codex finding), and React bails out of re-rendering (and thus
-    // re-applying the `style` prop) when a state update doesn't change the
-    // value. Writing `el.style.fontSize` imperatively here guarantees the
-    // shrink is always (re)applied, whether or not the number moved.
-    const measure = () => {
-      // Reset to the CSS-computed ceiling before measuring — a shrink
-      // applied for a PREVIOUS (longer) prompt or a PREVIOUS (larger) cell
-      // size must never cap this one's ceiling.
-      el.style.fontSize = '';
-      const baseSize = parseFloat(window.getComputedStyle(el).fontSize);
-      if (!Number.isFinite(baseSize) || baseSize <= 0) return;
-      const cellRect = cell.getBoundingClientRect();
-      // .cell's own 4px padding on every side (index.css) — the usable box
-      // the text actually has to fit inside is the cell minus that padding.
-      const CELL_PADDING = 8;
-      const box = {
-        width: Math.max(0, cellRect.width - CELL_PADDING),
-        height: Math.max(0, cellRect.height - CELL_PADDING),
-      };
-      const fitted = fitTextSize(text, box, { baseSize });
-      if (fitted != null) el.style.fontSize = `${fitted}px`;
-      setFontSize(fitted);
-    };
-
-    measure();
-
-    // Recompute on any cell-size change (phone rotation, split-screen,
-    // desktop resize, sidebar toggling the grid's column count, etc.) — PR
-    // #237 Codex finding: without this, an already-mounted Square keeps the
-    // font size fitted to its OLD box until `text` or the S/M/L pick next
-    // changes, so a prompt that fit at the old width can overflow or clip
-    // at a narrower one. ResizeObserver is unavailable in some older/jsdom
-    // test environments, so this is a best-effort enhancement, not a hard
-    // dependency of the guard (the effect above still fits on mount/change).
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => measure());
-    observer.observe(cell);
-    return () => observer.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- textSize only retriggers the DOM re-read above; see the doc comment.
-  }, [text, textSize]);
-
-  return (
-    <span ref={ref} className="cell-text" style={fontSize != null ? { fontSize: `${fontSize}px` } : undefined}>
-      {text}
-    </span>
-  );
-}
+// The non-free Square prompt text with the S/M/L auto-fit guard (#215) — moved
+// to its own module (#434) so the read-only CachedCardFallback can reuse the
+// SAME fitting guard instead of clipping long prompts. Firebase-free deps only.
+import SquareText from './SquareText';
 
 /**
  * The per-Prompt Tally count badge on a marked Square (ADR 0002). Subscribes to
@@ -721,7 +643,7 @@ function LockedDayPreview({
 }
 
 export default function Board() {
-  const { user } = useAuth();
+  const { user, retryDeal, dealing } = useAuth();
   const uid = user?.uid;
   // The single legacy Board (pre-1.5 events with no `days[]` schedule). In daily-
   // cards mode the rendered Board is the DAY-SCOPED one below; this stays the
@@ -1009,6 +931,49 @@ export default function Board() {
     return cell != null && !cell.free && cell.itemId === target.itemId && cell.marked === target.marked;
   };
   if (proofTarget && !proofSourceLive(proofTarget)) setProofTarget(null);
+
+  // Durable card snapshot (#434): persist the card the Player is looking at to
+  // localStorage so a later transient deal failure (offline / flaky ship wifi)
+  // renders THIS saved card instead of the full-screen reload screen — App reads
+  // it back via `loadCardSnapshot` and swaps in `CachedCardFallback`. Only an
+  // ATTRIBUTABLE, dealt board is snapshotted (`cellsAttributable` folds the
+  // account-identity guard, so a mid-account-switch board never overwrites the
+  // new account's snapshot), and the effect is keyed on the `board` doc so it
+  // fires once per real card update rather than on every unrelated re-render.
+  // The Day header is a tiny presentational subset — deriving it inline (not
+  // from the later `viewedDay`) keeps this effect ahead of the render's early
+  // returns. Fire-and-forget; `saveCardSnapshot` swallows any store failure.
+  useEffect(() => {
+    if (!uid || !cellsAttributable || !board || cells.length === 0) return;
+    const vd = hasDays ? (days[viewedIndex] ?? days[0]) : undefined;
+    saveCardSnapshot({
+      uid,
+      dayIndex: hasDays ? (board.dayIndex ?? null) : null,
+      cells,
+      bingoCount: player?.bingoCount ?? 0,
+      day: vd
+        ? {
+            number: vd.index + 1,
+            port: vd.port,
+            portEmoji: vd.portEmoji,
+            theme: vd.theme,
+            label: themeLabel(vd.theme),
+          }
+        : null,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `days`/`vd` derive from event?.days (a fresh [] each render); the deps track the PRIMITIVE fields actually snapshotted, incl. the viewed Day's presentational meta so a live schedule correction (port/emoji/theme) re-writes the snapshot even when the board + stats are unchanged (Codex P3, #438).
+  }, [
+    uid,
+    cellsAttributable,
+    board,
+    cells,
+    hasDays,
+    viewedIndex,
+    player?.bingoCount,
+    days[viewedIndex]?.port,
+    days[viewedIndex]?.portEmoji,
+    days[viewedIndex]?.theme,
+  ]);
 
   // The latest identity + roster + gate signals + CURRENT attributable cells for
   // Moment broadcasts, stored in a ref so `drainMoments` (a stable callback)
@@ -1533,7 +1498,7 @@ export default function Board() {
     );
   }
 
-  if (!board) {
+  if (!board || !cellsAttributable) {
     // A lazy per-Day deal that FAILED for the viewed Day (thin/malformed snapshot
     // or a repeatedly-denied write) surfaces a retry instead of an indefinite
     // "Dealing…" spinner (Codex #247 P2). Retry clears the in-flight guard + error
@@ -1608,6 +1573,33 @@ export default function Board() {
           </div>
         </>
       );
+    }
+    // #434 (Codex #438): no live, attributable board to render. This covers a
+    // Firestore-cache eviction, a retained foreign board during an account switch,
+    // and captive/ship Wi-Fi where navigator.onLine can be true while Firestore is
+    // unreachable. Render only a durable snapshot that matches THIS viewed Day, so
+    // an offline Day switch can never show the last card painted for another Day.
+    if (uid) {
+      const snapshot = loadCardSnapshot(uid, hasDays ? viewedIndex : null);
+      if (snapshot) {
+        return (
+          <>
+            {daySwitcher}
+            <CachedCardFallback
+              snapshot={snapshot}
+              onRetry={() => {
+                // Nudge both deal paths: the day-scoped lazy deal (dealNonce) and
+                // the AuthContext join/legacy deal (retryDeal). If Firestore is
+                // merely unreachable, this gives the Player agency without waiting
+                // for a connectivity event the browser may never emit.
+                setDealNonce((n) => n + 1);
+                retryDeal();
+              }}
+              retrying={dealing}
+            />
+          </>
+        );
+      }
     }
     return (
       <>

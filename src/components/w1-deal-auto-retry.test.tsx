@@ -310,6 +310,23 @@ describe('pool-recovery auto-retry (#70)', () => {
     expect(mocks.joinAndDeal).toHaveBeenCalledTimes(1);
   });
 
+  it('a PERMANENT (permission-denied) failure classifies as reason "permanent", never "connection", and never arms the watcher (#434)', async () => {
+    // #434 (Codex #438): a rules/permission failure is NOT a transient connection
+    // blip, so App must never swap in a cached card for it. AuthContext now marks it
+    // reason "permanent" (the generic message copy is unchanged) — distinct from the
+    // "connection" class the cached-card fallback renders for.
+    mocks.joinAndDeal.mockRejectedValue(
+      Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' }),
+    );
+    mount();
+    await signInUser();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/connection/i); // generic message, unchanged
+    expect(screen.getByTestId('reason')).toHaveTextContent('permanent');
+    // Not pool-shortfall, so the pool-recovery watcher never arms.
+    expect(mocks.useItemsEnabled).not.toContain(true);
+  });
+
   it('fire-once + no-loop: a failed auto-retry does not spin, but a second genuine below→above recovery fires again (once each)', async () => {
     mocks.joinAndDeal.mockRejectedValue(new Error(POOL_ERR)); // every deal fails on the thin pool
     mount();

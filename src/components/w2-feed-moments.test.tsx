@@ -65,7 +65,7 @@ vi.mock('../hooks/useData', () => ({
   useDayBoard: () => ({ data: H.board, loading: false, hasServerData: H.boardConfirmed }),
   useMyPlayer: () => ({ data: H.player, loading: H.playerLoading, hasServerData: H.playerConfirmed }),
   useEventDoc: () => ({ data: { claimMode: H.claimMode, bannedUids: H.bannedUids, days: H.days }, loading: false }),
-  useItems: () => ({ items: [], loading: false, hasServerData: true }),
+  useItems: (enabled = true) => ({ items: [], loading: false, hasServerData: enabled }),
   useTally: () => ({ markers: [], count: 0, loading: false, hasServerData: true }),
   useLeaderboard: () => ({ players: H.players, loading: false, hasServerData: H.rosterConfirmed }),
   useFeed: () => ({ entries: H.feedEntries, tallyCards: H.feedTallyCards, loading: false }),
@@ -668,10 +668,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.player = { displayName: 'Second Sailor', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
     rerender(<Board />);
 
-    await act(async () => {
-      fireEvent.click(screen.getByText('p4'));
-    });
-    await flushAsync();
+    expect(screen.queryByText('p4')).toBeNull();
     expect(H.setMark).not.toHaveBeenCalled(); // the write itself would be wrong — never issued
     expect(peekPendingMoments('u1')).toEqual({ bingo: false, blackout: false, firstBingo: false });
     expect(peekPendingMoments('u2')).toEqual({ bingo: false, blackout: false, firstBingo: false });
@@ -941,10 +938,7 @@ describe('Board — broadcasts Moments on the ACTION path (specs/w2-feed-moments
     H.player = { displayName: 'Second Sailor', photoURL: null, firstBingoAt: null } as unknown as PlayerDoc;
     rerender(<Board />);
 
-    await act(async () => {
-      fireEvent.click(screen.getAllByTitle('Add proof')[0]); // p0's ＋ (first marked cell)
-    });
-    await flushAsync();
+    expect(screen.queryAllByTitle('Add proof')).toHaveLength(0);
     // No sheet opened → the mocked sheet's submit trigger is absent, and nothing
     // could attach or broadcast under u2 off u1's card.
     expect(screen.queryByText('submit-proof')).toBeNull();
