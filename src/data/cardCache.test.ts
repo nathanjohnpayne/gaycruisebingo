@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { saveCardSnapshot, loadCardSnapshot, hasCardSnapshot, type CardSnapshot } from './cardCache';
-import type { Cell } from '../types';
+import type { Cell, CardSnapshotDay } from '../types';
 
 // jsdom here leaves `window.localStorage` unset (see src/hooks/useTextSize.test.ts),
 // so provide a real in-memory Storage the module under test can read/write.
@@ -45,12 +45,13 @@ function cell(index: number, over: Partial<Cell> = {}): Cell {
 }
 const CELLS: Cell[] = Array.from({ length: 25 }, (_, i) => cell(i));
 
+const DAY: CardSnapshotDay = { number: 3, port: 'Split', portEmoji: '🇭🇷', theme: 'get-sporty', label: 'Get Sporty' };
 const SAVE = {
   uid: UID,
   dayIndex: 2,
   cells: CELLS,
   bingoCount: 3,
-  day: { number: 3, port: 'Split', portEmoji: '🇭🇷', theme: 'get-sporty', label: 'Get Sporty' },
+  day: DAY,
 };
 
 describe('cardCache', () => {

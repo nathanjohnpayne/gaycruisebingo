@@ -13,6 +13,7 @@ vi.mock('./auth/AuthContext', () => ({
     user: { uid: 'sailor-1' },
     loading: false,
     dealError: null,
+    dealErrorReason: null,
     dealing: false,
     retryDeal: () => {},
     ...authState.value,
@@ -56,6 +57,7 @@ function renderApp() {
 }
 
 const DEAL_ERROR = 'We could not deal your bingo card.';
+const POOL_ERROR = 'The prompt pool is below 24. Ask an admin to add prompts.';
 
 // jsdom here leaves `window.localStorage` unset (see src/hooks/useTextSize.test.ts).
 class MemoryStorage implements Storage {
@@ -92,25 +94,36 @@ describe('App — Card route deal-error routing (#434)', () => {
     expect(screen.getByTestId('board')).toBeInTheDocument();
   });
 
-  it('shows the durable cached card (not the reload screen) when a deal fails and a snapshot exists', () => {
+  it('shows the durable cached card (not the reload screen) on a CONNECTION-class failure with a snapshot', () => {
     saveCardSnapshot({ uid: 'sailor-1', dayIndex: 0, cells: cells(), bingoCount: 1, day: null });
-    authState.value = { dealError: DEAL_ERROR, dealing: false };
+    authState.value = { dealError: DEAL_ERROR, dealErrorReason: 'connection', dealing: false };
     renderApp();
     expect(screen.getByText(/Showing your saved card/)).toBeInTheDocument();
     expect(screen.queryByText(DEAL_ERROR)).not.toBeInTheDocument();
     expect(screen.queryByTestId('board')).not.toBeInTheDocument();
   });
 
-  it('falls back to the full reload screen when a deal fails and nothing is cached', () => {
-    authState.value = { dealError: DEAL_ERROR, dealing: false };
+  it('falls back to the full reload screen when a connection failure has nothing cached', () => {
+    authState.value = { dealError: DEAL_ERROR, dealErrorReason: 'connection', dealing: false };
     renderApp();
     expect(screen.getByText(DEAL_ERROR)).toBeInTheDocument();
     expect(screen.queryByText(/Showing your saved card/)).not.toBeInTheDocument();
   });
 
+  it('keeps the actionable pool-shortfall error visible even when a snapshot exists', () => {
+    // A pool-shortfall is NOT a connection failure: reconnecting cannot fix it,
+    // and its DealError carries the "ask an admin" guidance. The cached card must
+    // not mask it (Codex P2, #438).
+    saveCardSnapshot({ uid: 'sailor-1', dayIndex: 0, cells: cells(), bingoCount: 1, day: null });
+    authState.value = { dealError: POOL_ERROR, dealErrorReason: 'pool-shortfall', dealing: false };
+    renderApp();
+    expect(screen.getByText(POOL_ERROR)).toBeInTheDocument();
+    expect(screen.queryByText(/Showing your saved card/)).not.toBeInTheDocument();
+  });
+
   it('does not surface another account cached card on a deal failure', () => {
     saveCardSnapshot({ uid: 'someone-else', dayIndex: 0, cells: cells(), bingoCount: 1, day: null });
-    authState.value = { dealError: DEAL_ERROR, dealing: false };
+    authState.value = { dealError: DEAL_ERROR, dealErrorReason: 'connection', dealing: false };
     renderApp();
     // sailor-1 has nothing cached -> the reload screen, never someone-else's card.
     expect(screen.getByText(DEAL_ERROR)).toBeInTheDocument();

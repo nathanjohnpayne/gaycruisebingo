@@ -79,6 +79,18 @@ describe('CachedCardFallback', () => {
     expect(btn).toBeDisabled();
   });
 
+  it('marks an admin_confirmed pending square with the pending class (not confirmed-looking)', () => {
+    const cells = Array.from({ length: 25 }, (_, i) =>
+      cell(i, i === 3 ? { marked: true, markedAt: 1, status: 'pending' } : {}),
+    );
+    const { container } = render(
+      <CachedCardFallback snapshot={snapshot({ cells })} onRetry={() => {}} retrying={false} />,
+    );
+    const pending = container.querySelectorAll('.cell.marked.pending');
+    expect(pending).toHaveLength(1);
+    expect(pending[0].textContent).toContain('Prompt 3');
+  });
+
   it('renders a legacy single board (no Day header) when day is null', () => {
     const { container } = render(
       <CachedCardFallback snapshot={snapshot({ day: null })} onRetry={() => {}} retrying={false} />,

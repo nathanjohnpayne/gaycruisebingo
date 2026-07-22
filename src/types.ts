@@ -180,6 +180,30 @@ export interface BoardDoc {
   cells: Cell[]; // length 25
 }
 
+// The durable localStorage card snapshot (#434) — this device's LATEST painted
+// card, kept so a transient deal failure renders the saved card instead of the
+// reload screen (src/data/cardCache.ts). It is a persisted serialization
+// contract shared by the data helper, Board (writer), CachedCardFallback
+// (reader), and their tests, so it lives here with the other domain types
+// rather than drifting in a component file. The Day subset is DERIVED from
+// `DayDef` (never re-declared) and keeps `ThemeId`, so the stored and live Day
+// contracts cannot diverge without a type error.
+export interface CardSnapshotDay extends Pick<DayDef, 'port' | 'portEmoji' | 'theme'> {
+  number: number; // day.index + 1 (1..10) — the 1-based label the header shows
+  label: string; // resolved ThemeMeta label for the header line (themeLabel(theme))
+}
+
+export interface CardSnapshot {
+  v: number; // schema version — an older blob reads as a miss, never mis-shaped
+  uid: string;
+  eventId: string;
+  dayIndex: number | null; // null for a legacy single board
+  savedAt: number;
+  bingoCount: number;
+  cells: Cell[];
+  day: CardSnapshotDay | null; // null for a legacy single-board (no day schedule) Event
+}
+
 export interface PlayerDoc {
   uid: string;
   displayName: string;

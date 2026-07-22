@@ -1,5 +1,6 @@
 import type { CardSnapshot } from '../data/cardCache';
 import { countMarked } from '../game/logic';
+import SquareText from './SquareText';
 
 /**
  * The durable-cache fallback for the Card tab (#434). When the client-driven
@@ -58,7 +59,16 @@ export default function CachedCardFallback({
         {cells.map((c) => (
           <div
             key={c.index}
-            className={'cell' + (c.free ? ' free' : '') + (c.marked ? ' marked' : '')}
+            className={
+              'cell' +
+              (c.free ? ' free' : '') +
+              (c.marked ? ' marked' : '') +
+              // Mirror the live Board: an admin_confirmed claim that is still
+              // marked-but-`pending` must read as unconfirmed (faded/dashed)
+              // here too, so the cached card never overstates confirmed
+              // progress (Codex P2, #438).
+              (c.status === 'pending' ? ' pending' : '')
+            }
             aria-label={c.free ? c.text : undefined}
           >
             {c.free ? (
@@ -69,7 +79,11 @@ export default function CachedCardFallback({
                 <span className="free-prompt">{c.text}</span>
               </>
             ) : (
-              <span className="cell-text">{c.text}</span>
+              // Reuse Board's auto-fit guard so a long prompt SHRINKS to fit
+              // rather than clipping under `.cell { overflow: hidden }` at the
+              // Large text setting (Codex P2, #438) — the text-size contract
+              // holds on this last-resort view too.
+              <SquareText text={c.text} />
             )}
           </div>
         ))}

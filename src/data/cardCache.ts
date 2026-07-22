@@ -1,4 +1,9 @@
-import type { Cell } from '../types';
+import type { Cell, CardSnapshot, CardSnapshotDay } from '../types';
+
+// Re-exported for convenience so existing importers (Board, CachedCardFallback,
+// App, tests) can keep pulling the snapshot shape from this module; the single
+// definition of record lives in src/types.ts with the other domain contracts.
+export type { CardSnapshot, CardSnapshotDay };
 
 // The active Event id, derived the SAME way src/firebase.ts does. Read inline
 // (not imported from ../firebase) so this pure localStorage helper never pulls
@@ -16,28 +21,6 @@ const SNAPSHOT_VERSION = 1;
 // so account B never sees account A's saved card.
 function keyFor(uid: string): string {
   return `gcb:card-snapshot:${EVENT_ID}:${uid}`;
-}
-
-// The presentational Day header the fallback paints — a tiny subset of DayDef
-// (no snapshotItemIds or scoring inputs) so the stored blob stays small. Null
-// for a legacy single-board Event with no day schedule.
-export interface CardSnapshotDay {
-  number: number; // day.index + 1 (1..10)
-  port: string;
-  portEmoji: string;
-  theme: string; // ThemeId string — drives the `data-theme` gradient theming
-  label: string; // resolved theme label for the header line
-}
-
-export interface CardSnapshot {
-  v: number;
-  uid: string;
-  eventId: string;
-  dayIndex: number | null; // null for a legacy single board
-  savedAt: number;
-  bingoCount: number;
-  cells: Cell[];
-  day: CardSnapshotDay | null;
 }
 
 // localStorage access throws in some privacy modes (and is absent under SSR),
