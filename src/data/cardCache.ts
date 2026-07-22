@@ -87,6 +87,11 @@ function isSnapshotCells(v: unknown): v is Cell[] {
   const seen = new Set<number>();
   for (const cell of v) {
     if (!isSnapshotCell(cell) || cell.index < 0 || cell.index > 24 || seen.has(cell.index)) return false;
+    if (cell.index === 12) {
+      if (!cell.free || cell.itemId !== null || !cell.marked) return false;
+    } else if (cell.free || cell.itemId === null) {
+      return false;
+    }
     seen.add(cell.index);
   }
   return seen.size === 25;

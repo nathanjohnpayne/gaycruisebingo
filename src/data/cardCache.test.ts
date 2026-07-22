@@ -133,6 +133,39 @@ describe('cardCache', () => {
     expect(loadCardSnapshot(UID)).toBeNull();
   });
 
+  it('rejects semantically invalid free-cell layouts as a miss', () => {
+    const invalidFreeCells = CELLS.map((c) => ({ ...c, free: true }));
+    const malformed: CardSnapshot = {
+      v: 1,
+      uid: UID,
+      eventId: EVENT_ID,
+      dayIndex: 2,
+      savedAt: 1,
+      bingoCount: 0,
+      cells: invalidFreeCells,
+      day: DAY,
+    };
+    localStorage.setItem(latestKeyFor(UID), JSON.stringify(malformed));
+    expect(loadCardSnapshot(UID)).toBeNull();
+  });
+
+  it('rejects non-free cells without item ids as a miss', () => {
+    const cellsWithMissingItem = CELLS.map((c) => ({ ...c }));
+    cellsWithMissingItem[3] = { ...cellsWithMissingItem[3], itemId: null };
+    const malformed: CardSnapshot = {
+      v: 1,
+      uid: UID,
+      eventId: EVENT_ID,
+      dayIndex: 2,
+      savedAt: 1,
+      bingoCount: 0,
+      cells: cellsWithMissingItem,
+      day: DAY,
+    };
+    localStorage.setItem(latestKeyFor(UID), JSON.stringify(malformed));
+    expect(loadCardSnapshot(UID)).toBeNull();
+  });
+
   it('rejects a snapshot whose event id does not match the active event', () => {
     const otherEvent: CardSnapshot = {
       v: 1,
