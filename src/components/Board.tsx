@@ -4,7 +4,7 @@ import { getDoc } from 'firebase/firestore';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useDayBoard, useDayMeta, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, useDayMetasStatus, isBanned } from '../hooks/useData';
 import { setMark, dealDayCard, resolveDisplayName, RESHUFFLE_ALLOWANCE } from '../data/api';
-import { saveCardSnapshot } from '../data/cardCache';
+import { saveCardSnapshot, loadCardSnapshot } from '../data/cardCache';
 import { dayBoardRef } from '../data/paths';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
 import {
@@ -46,6 +46,7 @@ import { track } from '../analytics';
 import { setClaimSheetOpen } from '../hooks/useToastStack';
 import { useOpenSquareIntent, clearOpenSquare } from '../hooks/useOpenSquare';
 import Celebration from './Celebration';
+import CachedCardFallback from './CachedCardFallback';
 import ProofSheet from './ProofSheet';
 import type { Cell, ClaimMode, DayDef, PlayerDoc, ProofDoc, TallyEntry } from '../types';
 import LoadingState from './LoadingState';
@@ -642,7 +643,7 @@ function LockedDayPreview({
 }
 
 export default function Board() {
-  const { user } = useAuth();
+  const { user, retryDeal, dealing } = useAuth();
   const uid = user?.uid;
   // The single legacy Board (pre-1.5 events with no `days[]` schedule). In daily-
   // cards mode the rendered Board is the DAY-SCOPED one below; this stays the
@@ -960,8 +961,19 @@ export default function Board() {
           }
         : null,
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `days`/`vd` derive from event?.days (a fresh [] each render); the deps track the fields actually snapshotted.
-  }, [uid, cellsAttributable, board, cells, hasDays, viewedIndex, player?.bingoCount]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `days`/`vd` derive from event?.days (a fresh [] each render); the deps track the PRIMITIVE fields actually snapshotted, incl. the viewed Day's presentational meta so a live schedule correction (port/emoji/theme) re-writes the snapshot even when the board + stats are unchanged (Codex P3, #438).
+  }, [
+    uid,
+    cellsAttributable,
+    board,
+    cells,
+    hasDays,
+    viewedIndex,
+    player?.bingoCount,
+    days[viewedIndex]?.port,
+    days[viewedIndex]?.portEmoji,
+    days[viewedIndex]?.theme,
+  ]);
 
   // The latest identity + roster + gate signals + CURRENT attributable cells for
   // Moment broadcasts, stored in a ref so `drainMoments` (a stable callback)
@@ -1561,6 +1573,36 @@ export default function Board() {
           </div>
         </>
       );
+    }
+    // #434 (Codex #438): OFFLINE with no live board to render. This is the core
+    // deal-eviction scenario — a returning Player whose Firestore board cache was
+    // evicted, or a cold-boot where bootstrapUser CLEARED dealError while releasing
+    // the gate offline, so App mounts Board (not the DealError path) and it would
+    // otherwise sit on an indefinite "Dealing…". Render this device's durable
+    // snapshot read-only with a Retry instead. Gated on OFFLINE only: while ONLINE
+    // we let the real deal complete (a fresh card, never a stale snapshot), and on
+    // reconnect the normal deal flow resumes and swaps the live Board back in.
+    if (uid && !online) {
+      const snapshot = loadCardSnapshot(uid);
+      if (snapshot) {
+        return (
+          <>
+            {daySwitcher}
+            <CachedCardFallback
+              snapshot={snapshot}
+              onRetry={() => {
+                // Nudge both deal paths: the day-scoped lazy deal (dealNonce) and
+                // the AuthContext join/legacy deal (retryDeal). Offline both are
+                // effectively inert, but on reconnect the effects re-fire anyway;
+                // this just gives the Player agency without waiting for the flip.
+                setDealNonce((n) => n + 1);
+                retryDeal();
+              }}
+              retrying={dealing}
+            />
+          </>
+        );
+      }
     }
     return (
       <>

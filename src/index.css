@@ -985,9 +985,14 @@ a {
   padding: 8px 16px;
 }
 /* Read-only: the snapshot Squares carry no tap handler, so nothing should read
-   as pressable (the live Board sets `cursor: pointer` on a markable cell). */
+   as pressable (the live Board sets `cursor: pointer` on a markable cell) and a
+   press must not fire the live board's `.cell:active` compress animation (Codex
+   P3, #438) — otherwise a cached square visibly reacts like an actionable one. */
 .cached-card .cell {
   cursor: default;
+}
+.cached-card .cell:active {
+  transform: none;
 }
 
 /* ---------- buttons ---------- */

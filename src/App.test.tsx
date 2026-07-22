@@ -110,6 +110,17 @@ describe('App — Card route deal-error routing (#434)', () => {
     expect(screen.queryByText(/Showing your saved card/)).not.toBeInTheDocument();
   });
 
+  it('keeps a PERMANENT failure on the error surface even when a snapshot exists', () => {
+    // permission-denied / schema / unknown-coded failures cannot be fixed by
+    // reconnecting, so they must never be masked behind a cached card + Retry
+    // (Codex #438). AuthContext classifies them as dealErrorReason 'permanent'.
+    saveCardSnapshot({ uid: 'sailor-1', dayIndex: 0, cells: cells(), bingoCount: 1, day: null });
+    authState.value = { dealError: DEAL_ERROR, dealErrorReason: 'permanent', dealing: false };
+    renderApp();
+    expect(screen.getByText(DEAL_ERROR)).toBeInTheDocument();
+    expect(screen.queryByText(/Showing your saved card/)).not.toBeInTheDocument();
+  });
+
   it('keeps the actionable pool-shortfall error visible even when a snapshot exists', () => {
     // A pool-shortfall is NOT a connection failure: reconnecting cannot fix it,
     // and its DealError carries the "ask an admin" guidance. The cached card must
