@@ -135,13 +135,25 @@ function buildBingoCardNode(data: BingoShareCardData): HTMLDivElement {
     // withholds credit from pending marks, so the card must not overstate
     // them either (Codex P2, PR #111 finding 2). `.pending` layers on top of
     // `.marked`, mirroring Board.tsx's own on-page cell className.
+    const showText = c.free || c.marked;
+    // Length-tiered type (Codex P2, PR #445): the pool's prompt ceiling is 80
+    // chars (firestore.rules' text.size() <= 80), and at the base 9px a
+    // ~58px tile fits only ~50 — wrapping alone just grows more lines than
+    // the tile can show, and overflow: hidden would clip the receipt out of
+    // the rasterized image where pinch-to-zoom can't recover it. Two smaller
+    // steps keep the full ceiling renderable, sized against the tightest
+    // tile (a `.line` cell's 3px border): >40 chars drops to 7px, >70 to
+    // 6px. Thresholds are chars, not pixels — the card is a fixed frame, so
+    // a deterministic class beats a measure-and-fit pass here.
+    const fit = !showText ? '' : c.text.length > 70 ? ' xlong' : c.text.length > 40 ? ' long' : '';
     const cls =
       'share-card-cell' +
       (c.free ? ' free' : '') +
       (c.marked ? ' marked' : '') +
       (lineCells.has(c.index) ? ' line' : '') +
-      (c.status === 'pending' ? ' pending' : '');
-    grid.append(el('div', cls, c.free || c.marked ? c.text : undefined));
+      (c.status === 'pending' ? ' pending' : '') +
+      fit;
+    grid.append(el('div', cls, showText ? c.text : undefined));
   }
   card.append(grid);
   if (data.statLine) card.append(el('div', 'share-card-stat', data.statLine));

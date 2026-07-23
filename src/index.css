@@ -2886,13 +2886,34 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   background: color-mix(in srgb, var(--accent) 32%, var(--cell));
   border-color: var(--accent);
 }
+.share-card-cell.long {
+  /* Length-tiered fit (Codex P2, PR #445): >40-char prompts drop to 7px so
+     the pool's 80-char ceiling (firestore.rules) renders in full instead of
+     clipping out of the rasterized image; >70 drops again for the tightest
+     (.line-bordered) tile. See ShareCard.tsx's fit classes. */
+  font-size: 7px;
+}
+.share-card-cell.xlong {
+  font-size: 6px;
+}
 .share-card-cell.pending {
-  /* Mirrors .cell.pending (Board.tsx's own on-page pending styling) — a
-     marked-but-unconfirmed square (admin_confirmed claim mode) reads as
+  /* A marked-but-unconfirmed square (admin_confirmed claim mode) reads as
      faded/dashed rather than a solid win, matching the semantics
      game/logic.ts already encodes (Codex P2, PR #111 finding 2). Applies
-     alongside .marked, never instead of it — see ShareCard.tsx. */
-  opacity: 0.55;
+     alongside .marked, never instead of it — see ShareCard.tsx. Faded by
+     mixing the gradient endpoints toward --bg rather than the on-page
+     .cell.pending's tile-level fade — now that the tile carries prompt
+     text (issue #444), a whole-tile fade would composite the text toward
+     the card background too and wash it out, summer-white's light theme
+     worst (Codex P2, PR #445) — so the FILL fades while the text stays
+     opaque, switched to --ink, the token tuned to read against
+     --bg-adjacent washes (same reasoning as .share-card-cell.free above). */
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--primary) 45%, var(--bg)),
+    color-mix(in srgb, var(--secondary) 45%, var(--bg))
+  );
+  color: var(--ink);
   border-style: dashed;
   border-color: var(--ink);
 }

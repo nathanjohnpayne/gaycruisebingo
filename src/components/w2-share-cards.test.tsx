@@ -271,6 +271,31 @@ describe('ShareCard — renderBingoShareCard', () => {
     }
   });
 
+  // Codex P2, PR #445 — the fixed tile must FIT the pool's 80-char prompt
+  // ceiling (firestore.rules), not clip it out of the rasterized image:
+  // turned-over cells carry deterministic length-tiered fit classes (>40
+  // chars → .long, >70 → .xlong) that step the font down in CSS. jsdom
+  // cannot measure rendered overflow, so the mechanism is pinned instead:
+  // the class thresholds here, the font sizes in the CSS describe below.
+  it('applies length-tiered fit classes to turned-over cells only', async () => {
+    const cells = makeCells([0, 1, 2]);
+    cells[0] = { ...cells[0], text: 'Poppers spill' }; // 13 chars → base size
+    cells[1] = { ...cells[1], text: 'Feathers, mesh, or sequins before noon KAPOW' }; // 44 chars → .long
+    cells[2] = { ...cells[2], text: 'x'.repeat(80) }; // the rules ceiling → .xlong
+    cells[3] = { ...cells[3], text: 'y'.repeat(80) }; // UNMARKED long text → no fit class
+    await renderBingoShareCard({ kind: 'bingo', playerName: 'A', eventName: 'E', cells });
+
+    const cellNodes = toBlobNode().querySelectorAll('.share-card-cell');
+    expect(cellNodes[0]).not.toHaveClass('long');
+    expect(cellNodes[0]).not.toHaveClass('xlong');
+    expect(cellNodes[1]).toHaveClass('long');
+    expect(cellNodes[1]).not.toHaveClass('xlong');
+    expect(cellNodes[2]).toHaveClass('xlong');
+    expect(cellNodes[2]).not.toHaveClass('long');
+    expect(cellNodes[3]).not.toHaveClass('long');
+    expect(cellNodes[3]).not.toHaveClass('xlong');
+  });
+
   // issue #423 (resolved decision: newest line only) — only the most-recently
   // completed line is lit brighter (`.line`), derived from the cells' own
   // `markedAt`. Fixture: row 0 completed earlier (markedAt 100), row 1
@@ -452,6 +477,26 @@ describe('ShareCard CSS — fixed-frame safety', () => {
     expect(rule, '.share-card-cell.pending rule not found in src/index.css').not.toBeNull();
     expect(rule![1]).toMatch(/border-style:\s*dashed/);
     expect(rule![1]).toMatch(/border-color:\s*var\(--ink\)/);
+    // Codex P2, PR #445: the fade lives in the FILL (gradient endpoints
+    // mixed toward --bg), never a tile-level opacity that would composite
+    // the now-present prompt text toward the card background; the text
+    // stays opaque on --ink.
+    expect(rule![1]).not.toMatch(/opacity\s*:/);
+    expect(rule![1]).toMatch(/color:\s*var\(--ink\)/);
+    expect(rule![1]).toMatch(/color-mix\(in srgb, var\(--primary\) 45%, var\(--bg\)\)/);
+  });
+
+  it('steps the cell font down for the length-tiered fit classes', () => {
+    // Codex P2, PR #445: the class thresholds live in ShareCard.tsx; the
+    // sizes here are what make an 80-char prompt (the firestore.rules
+    // ceiling) fit the tile instead of clipping out of the raster.
+    const longRule = indexCss.match(/\.share-card-cell\.long\s*\{([^}]*)\}/);
+    expect(longRule, '.share-card-cell.long rule not found in src/index.css').not.toBeNull();
+    expect(longRule![1]).toMatch(/font-size:\s*7px/);
+
+    const xlongRule = indexCss.match(/\.share-card-cell\.xlong\s*\{([^}]*)\}/);
+    expect(xlongRule, '.share-card-cell.xlong rule not found in src/index.css').not.toBeNull();
+    expect(xlongRule![1]).toMatch(/font-size:\s*6px/);
   });
 
   it('uses ink, not dim, for share-card copy over the composited tint wash', () => {
