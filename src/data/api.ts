@@ -702,7 +702,15 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
           isCeremonialDay: (i) => ceremonialSet.has(i),
           priorBlackout: playerData?.blackout === true,
         });
-        tx.set(playerRef, write, { merge: true });
+        if (frozen) {
+          // A post-freeze CEREMONIAL deal records its bucket ONLY (Codex P2
+          // on #447 round 2): the mark/reconcile paths never move root fields
+          // after the freeze — root blackout included — so neither may a
+          // farewell card that arrives echo-marked.
+          tx.set(playerRef, { dayStats: { [dayIndex]: write.dayStats[dayIndex] } }, { merge: true });
+        } else {
+          tx.set(playerRef, write, { merge: true });
+        }
       }
     } else {
       // Seed this Day's per-Day stat bucket (players/{uid}.dayStats[dayIndex]) so the
@@ -1059,7 +1067,14 @@ export async function reshuffleBoard(params: {
     // assert `after == before + 1` against `before`, and the transaction's re-read
     // is what keeps that value fresh under contention.
     tx.set(boardRef, { uid, dayIndex, seed, createdAt: now, cells: echoRes.cells, easyMixRatio: boardEasyMixRatio });
-    tx.set(playerRef, { reshufflesUsed: nextUsed, ...(statWrite ?? {}) }, { merge: true });
+    // Post-freeze, even a ceremonial Day's re-derive narrows to its bucket
+    // (Codex P2 on #447 round 2) — no root field moves once the standings
+    // are settled, mirroring the mark/reconcile paths.
+    const frozenNarrowed =
+      statWrite && standingsFrozen({ frozenAt: eventData?.frozenAt, days })
+        ? { dayStats: { [dayIndex]: statWrite.dayStats[dayIndex] } }
+        : statWrite;
+    tx.set(playerRef, { reshufflesUsed: nextUsed, ...(frozenNarrowed ?? {}) }, { merge: true });
     return nextUsed;
   });
   if (reshuffleEcho) {
@@ -1784,12 +1799,37 @@ async function runReconcileEchoes(
   const achieved = achievedItemIds(allBoards);
   const now = Date.now();
   const res = applyEchoes(boardCells, achieved, now);
-  if (!res.changed) return none;
 
   const cachedPlayerData =
     playerSnap.status === 'fulfilled' && playerSnap.value.exists()
       ? (playerSnap.value.data() as Partial<PlayerDoc>)
       : undefined;
+
+  // Marker self-heal (Codex P2 on #447 round 2): an unmark on a device that
+  // could not see a sibling carrier deletes the Prompt's single Tally marker
+  // out from under a still-standing echo — and that echo needs its marker back
+  // for the mark⇒tally invariant and the Doubt gate. The proof of that wrong
+  // delete is a CACHED TOMBSTONE: the deleting device holds the marker as
+  // known-absent in its own cache, so when it later opens the sibling (caching
+  // the standing confirmed cell), this repair re-creates the marker. Strictly
+  // tombstone-gated — a REJECTED marker read (simply not cached, the common
+  // case) proves nothing and never writes, so an existing marker's Day can
+  // never be moved by a repair.
+  const confirmedCells = res.cells.filter(
+    (c) => !c.free && c.marked && c.status !== 'pending' && c.itemId,
+  );
+  const markerReads = await Promise.allSettled(
+    confirmedCells.map((c) =>
+      getDocFromCache(doc(database, 'events', EVENT_ID, 'tally', c.itemId as string, 'markers', uid)),
+    ),
+  );
+  const markerRepairs = confirmedCells.filter((c, i) => {
+    const read = markerReads[i];
+    return read.status === 'fulfilled' && !read.value.exists();
+  });
+
+  if (!res.changed && markerRepairs.length === 0) return none;
+
   const priorDayStats = cachedPlayerData?.dayStats as DayStats | undefined;
   const write = foldEchoStats({
     priorDayStats,
@@ -1812,22 +1852,33 @@ async function runReconcileEchoes(
   });
 
   const batch = writeBatch(database);
-  batch.set(
-    boardRef,
-    {
-      cells: res.cells,
-      ...(typeof board.seed === 'number' ? { markSeed: board.seed } : {}),
-    },
-    { merge: true },
-  );
-  if (params.statsFrozen) {
-    // The same post-freeze narrowing as the Mark path: only a ceremonial
-    // (farewell) Day's bucket still records; the cells always land.
-    if (params.ceremonialDayIndexes?.includes(dayIndex)) {
-      batch.set(playerRef, { dayStats: write.dayStats }, { merge: true });
+  if (res.changed) {
+    batch.set(
+      boardRef,
+      {
+        cells: res.cells,
+        ...(typeof board.seed === 'number' ? { markSeed: board.seed } : {}),
+      },
+      { merge: true },
+    );
+    if (params.statsFrozen) {
+      // The same post-freeze narrowing as the Mark path: only a ceremonial
+      // (farewell) Day's bucket still records; the cells always land.
+      if (params.ceremonialDayIndexes?.includes(dayIndex)) {
+        batch.set(playerRef, { dayStats: write.dayStats }, { merge: true });
+      }
+    } else {
+      batch.set(playerRef, write, { merge: true });
     }
-  } else {
-    batch.set(playerRef, write, { merge: true });
+  }
+  for (const cell of markerRepairs) {
+    batch.set(doc(database, 'events', EVENT_ID, 'tally', cell.itemId as string, 'markers', uid), {
+      uid,
+      displayName: markerDisplayName(undefined, cachedPlayerData?.displayName),
+      markedAt: cell.markedAt ?? now,
+      itemText: cell.text,
+      dayIndex,
+    });
   }
   void batch.commit().catch((err: unknown) => {
     // Same posture as setMark: offline PENDS durably (never lands here); a
@@ -1860,7 +1911,7 @@ async function runReconcileEchoes(
     }
   }
   return {
-    changed: true,
+    changed: res.changed,
     bingoTransition: res.bingoTransition,
     blackoutTransition: res.blackoutTransition,
     complete,

@@ -24,6 +24,14 @@ const H = vi.hoisted(() => ({
   // Returns a real promise: pinDayFirstBingo chains `.catch` onto it, and a
   // bare vi.fn() (undefined return) would throw an unhandled rejection.
   setDoc: vi.fn(async (..._args: unknown[]) => {}),
+  // Tally marker CACHE state per itemId: absent → the read REJECTS (not
+  // cached, the production common case); `false` → a cached TOMBSTONE (this
+  // device deleted it); `true` → a cached live marker.
+  markerCache: new Map<string, boolean>(),
+  // The default getDocFromCache implementation, exposed so a test that
+  // overrides it can restore EXACTLY this (a lookalike without the tally
+  // branch would silently change marker-cache semantics for later tests).
+  defaultGetDocFromCache: undefined as unknown as (ref: { args?: unknown[] }) => Promise<unknown>,
 }));
 
 vi.mock('../firebase', () => ({
@@ -51,7 +59,7 @@ vi.mock('firebase/firestore', () => {
     query: (...args: unknown[]) => ({ query: args }),
     where: (...args: unknown[]) => ({ where: args }),
     getDoc: vi.fn(async (ref: { args?: unknown[] }) => route(ref)),
-    getDocFromCache: vi.fn(async (ref: { args?: unknown[] }) => route(ref)),
+    getDocFromCache: vi.fn((ref: { args?: unknown[] }) => H.defaultGetDocFromCache(ref)),
     getDocFromServer: vi.fn(),
     getDocs: vi.fn(),
     getDocsFromCache: vi.fn(),
@@ -86,6 +94,15 @@ const snap = (exists: boolean, id = '', data: unknown = undefined) => ({
   id,
   data: () => data,
 });
+
+H.defaultGetDocFromCache = async (ref: { args?: unknown[] }) => {
+  const a = (ref.args ?? []).filter((x): x is string => typeof x === 'string');
+  if (a[2] === 'tally') {
+    if (!H.markerCache.has(a[3])) throw new Error('marker not in cache');
+    return snap(H.markerCache.get(a[3])!, a[5], { uid: a[5] });
+  }
+  return route(ref);
+};
 
 function route(ref: { args?: unknown[] }) {
   const a = (ref.args ?? []).filter((x): x is string => typeof x === 'string');
@@ -155,6 +172,7 @@ beforeEach(() => {
   H.event = { days: [day(0), day(1), day(2), day(3)], settings: { spicyRatio: 0.4 } };
   H.itemsById.clear();
   H.dayBoards = new Map();
+  H.markerCache.clear();
   H.player = null;
 });
 
@@ -386,6 +404,23 @@ describe('dealDayCard — deal-time echo (spec § Deal-time)', () => {
     const cells = (H.txSet.mock.calls.find((c) => isDayBoardWrite(c, 0))![1] as { cells: Cell[] }).cells;
     expect(cells.some((c) => c.echo)).toBe(false);
   });
+
+  it('a POST-FREEZE ceremonial deal records its echoed bucket ONLY — no root fields (Codex P2 #447 round 2)', async () => {
+    seedDeal({ 0: { marked: true, markedAt: 1, status: 'confirmed' } });
+    // Freeze the standings and make the dealt Day ceremonial (farewell pool).
+    H.event = {
+      ...(H.event as Record<string, unknown>),
+      frozenAt: PAST,
+      days: [
+        day(0, { snapshotItemIds: SNAP, pool: 'farewell', tutorial: true }),
+        day(1, { snapshotItemIds: SNAP }),
+      ],
+    };
+    await expect(dealDayCard(u, 0)).resolves.toBe(true);
+    const playerWrite = H.txSet.mock.calls.find(isPlayerWrite)![1] as Record<string, unknown>;
+    expect(Object.keys(playerWrite)).toEqual(['dayStats']); // bucket only — no roots move post-freeze
+    expect((playerWrite.dayStats as Record<number, { squaresMarked: number }>)[0].squaresMarked).toBe(1);
+  });
 });
 
 describe('reshuffleBoard — the post-Reshuffle re-deal echo (spec § Reshuffle pristine-ness)', () => {
@@ -522,7 +557,7 @@ describe('reconcileEchoes — open-time backfill (spec § Open-time)', () => {
       expect(res.changed).toBe(false);
       expect(res.complete).toBe(false);
     } finally {
-      mocked.mockImplementation(async (ref) => route(ref as { args?: unknown[] }) as never);
+      mocked.mockImplementation(((ref: { args?: unknown[] }) => H.defaultGetDocFromCache(ref)) as never);
     }
   });
 
@@ -532,6 +567,35 @@ describe('reconcileEchoes — open-time backfill (spec § Open-time)', () => {
     await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
     const playerWrite = H.batchSet.mock.calls.find(isPlayerWrite)![1] as { blackout: boolean };
     expect(playerWrite.blackout).toBe(true);
+  });
+
+  it('re-creates a cache-tombstoned marker for a standing confirmed cell (Codex P2 #447 round 2)', async () => {
+    // The opened board still holds `shared` confirmed (an echo), but this
+    // device's cache carries a TOMBSTONE for its marker — the trace of the
+    // unmark that deleted it while this sibling was unknowable.
+    seedReconcile();
+    H.dayBoards.set(2, {
+      uid: 'u1',
+      seed: 222,
+      dayIndex: 2,
+      cells: card((i) => (i === 9 ? 'shared' : `d${i}`), {
+        9: { marked: true, markedAt: 7, status: 'confirmed', echo: true },
+      }),
+    });
+    H.markerCache.set('shared', false); // cached tombstone
+    const res = await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
+    expect(res.changed).toBe(false); // no echo to write — the repair rides alone
+    const markerWrite = H.batchSet.mock.calls.find(isMarkerWrite);
+    expect(markerWrite).toBeDefined();
+    expect(segs(markerWrite! as unknown[])).toEqual(['events', EVENT_ID, 'tally', 'shared', 'markers', 'u1']);
+    expect(markerWrite![1]).toMatchObject({ uid: 'u1', markedAt: 7, dayIndex: 2 });
+    expect(H.batchCommit).toHaveBeenCalledTimes(1);
+    // And a NOT-CACHED marker (the common case) proves nothing — no write.
+    vi.clearAllMocks();
+    H.markerCache.clear();
+    await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
+    expect(H.batchSet.mock.calls.some((c) => isMarkerWrite(c))).toBe(false);
+    expect(H.batchCommit).not.toHaveBeenCalled();
   });
 });
 
