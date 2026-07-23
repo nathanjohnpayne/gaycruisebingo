@@ -3015,7 +3015,11 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 .share-card-row .share-card-name {
   color: var(--dim);
   flex: 1 1 auto;
-  min-width: 0;
+  /* A 96px floor, not 0 (Codex P2, PR #445 round 3): the nowrap stat and
+     nowrap ★ pin on an appended First-BINGO row could otherwise shrink the
+     one flexible child — the honored Player's NAME — to nothing. The name
+     keeps its floor; the stat gives way instead (ellipsis below). */
+  min-width: 96px;
   overflow: hidden;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -3035,6 +3039,12 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   color: var(--ink);
   font-size: 16px;
   white-space: nowrap;
+  /* Shrinkable with a truncation tail (Codex P2, PR #445 round 3): on a
+     squeezed pinned row the stat loses its tail before the name loses its
+     96px floor — the row exists to honor a Player by NAME. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .share-card-row .share-card-pin {
   margin-left: 10px;

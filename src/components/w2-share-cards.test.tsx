@@ -517,6 +517,21 @@ describe('ShareCard CSS — fixed-frame safety', () => {
     }
   });
 
+  it('keeps the honored name legible on a squeezed pinned row', () => {
+    // Codex P2, PR #445 round 3: the nowrap stat + nowrap ★ pin on an
+    // appended First-BINGO row must never shrink the name to nothing — the
+    // name keeps a 96px floor and the stat truncates with an ellipsis
+    // instead.
+    const nameRule = indexCss.match(/\.share-card-row \.share-card-name\s*\{([^}]*)\}/);
+    expect(nameRule, '.share-card-row .share-card-name rule not found').not.toBeNull();
+    expect(nameRule![1]).toMatch(/min-width:\s*96px/);
+
+    const subRule = indexCss.match(/\.share-card-sub\s*\{([^}]*)\}/);
+    expect(subRule, '.share-card-sub rule not found').not.toBeNull();
+    expect(subRule![1]).toMatch(/min-width:\s*0/);
+    expect(subRule![1]).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
   it('steps the cell font down for the length-tiered fit classes', () => {
     // Codex P2, PR #445: the class thresholds live in ShareCard.tsx; the
     // sizes here are what make an 80-char prompt (the firestore.rules

@@ -49,9 +49,32 @@ function mountOffscreen(node: HTMLElement): () => void {
   return () => host.remove();
 }
 
+/**
+ * Post-mount shrink-to-fit for cell prompt text (Codex P2, PR #445 round 3).
+ * The length-tiered classes (see buildBingoCardNode) are the deterministic
+ * base, but character counts are glyph-blind — a permitted 80-char prompt of
+ * unusually wide glyphs can still overflow the tile, and overflow: hidden
+ * would clip it out of the raster. The card is mounted with REAL layout
+ * before html-to-image walks it (mountOffscreen's whole point), so measure
+ * the truth instead of guessing: any overflowing cell steps its font down
+ * until the text fits, floored at 4px. No-ops in jsdom (scroll metrics are
+ * 0 there) and on the Leaderboard card (no .share-card-cell nodes).
+ */
+function fitCellText(card: HTMLElement): void {
+  for (const cell of card.querySelectorAll<HTMLElement>('.share-card-cell')) {
+    if (!cell.textContent) continue;
+    let size = parseFloat(getComputedStyle(cell).fontSize);
+    while (cell.scrollHeight > cell.clientHeight && size > 4) {
+      size -= 0.5;
+      cell.style.fontSize = `${size}px`;
+    }
+  }
+}
+
 async function rasterize(node: HTMLElement): Promise<Blob> {
   const unmount = mountOffscreen(node);
   try {
+    fitCellText(node);
     const blob = await toBlob(node, { pixelRatio: PIXEL_RATIO });
     if (!blob) throw new Error('Share Card render produced no image data.');
     return blob;
