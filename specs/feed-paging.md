@@ -13,13 +13,15 @@ The Feed reveals its entries a page at a time and grows as the reader scrolls, i
 
 ## The window is presentational, not a fetch boundary
 
-All three underlying streams (`useProofFeed`, `useMoments`, `useTallyCards`) subscribe to their whole collections and slice client-side, so the older entries were *already in memory*: the client was paying to hold them and refusing to show them. Growing the window therefore costs render work and never another Firestore read, and there is no network round trip to wait on — a new page is on screen in the same commit. That is why this is paging, not fetching: no "loading more" spinner, no cursor, no `startAfter`.
+All four underlying streams (`useProofFeed`, `useMoments`, `useTallyCards`, `useNotices`) subscribe to their whole collections and slice client-side, so the older entries were *already in memory*: the client was paying to hold them and refusing to show them. Growing the window therefore costs render work and never another Firestore read, and there is no network round trip to wait on — a new page is on screen in the same commit. That is why this is paging, not fetching: no "loading more" spinner, no cursor, no `startAfter`.
 
 ## `useFeed(max)` — window and `hasMore`
 
-`max` is a WINDOW, not a ceiling. `useFeed` merges ONE entry past it (`mergeFeed(..., max + 1)`), returns the first `max` as `entries`, and reports `hasMore` as "the probe found an extra entry".
+`max` is a WINDOW, not a ceiling. `entries` is the plain `mergeFeed(..., max)` it always was; `hasMore` runs that same merge one entry wider (`max + 1`) and asks whether it yielded more.
 
-The probe is the definition of `hasMore`, deliberately: counting the raw streams would overcount, because each sub-hook slices to its own `max` before `mergeFeed` sees it and `mergeFeed` drops zero-count Tally Cards. Slicing the probe back to `max` is exactly `mergeFeed(..., max)` — same inputs, same comparator, stable sort — so the window's contents and order are unchanged by the probe's existence. `tallyCards` stays the UNCAPPED stream (Codex P2 on #286): the proof-card pills derive from every card, not just the ones inside the window.
+Asking `mergeFeed` twice, rather than counting the raw streams, is the point. A hand-rolled count drifts from what the merge actually emits: each sub-hook slices to its own `max` before `mergeFeed` sees it, `mergeFeed` drops zero-count Tally Cards, and the pinned-Notice masthead (specs/admin-messages.md) occupies window slots by a *different* rule than the newest-first stream — it sorts above everything and carries its own limit. Deferring to the merge itself needs none of that reasoning to stay true as the merge rules evolve, and it costs one extra sort of a list already bounded by `max`.
+
+`tallyCards` stays the UNCAPPED stream (Codex P2 on #286): the proof-card pills derive from every card, not just the ones inside the window.
 
 ## `ProofFeed` — the page and the trigger
 
@@ -41,6 +43,6 @@ No virtualization (the DOM cost of a few hundred cards is not what hurts here), 
 
 ## Test coverage
 
-`src/hooks/feed-paging.test.tsx`: `useFeed` returns at most `max` entries in merged newest-first order; `hasMore` is true exactly when an entry sits past the window and false when the stream fits; growing `max` reveals the next entries without disturbing the ones already shown; `tallyCards` stays uncapped.
+`src/hooks/feed-paging.test.tsx`: `useFeed` returns at most `max` entries in merged newest-first order; `hasMore` is true exactly when an entry sits past the window (including the exactly-full window that would otherwise strand the tail) and false when the stream fits; growing `max` reveals the next entries without disturbing the ones already shown; Proofs and Moments page as one merged stream; `hasMore` stays exact when a pinned Notice spends part of the window; `tallyCards` stays uncapped.
 
 `src/components/feed-paging.test.tsx`: the Feed renders one page and the "Load older posts" control while `hasMore`; clicking it asks `useFeed` for the next page and the older entries render; the control disappears once the stream is exhausted; with an `IntersectionObserver` present the sentinel is observed and an intersection loads the next page without a click; and the `.feed-more` CSS pin exists.
