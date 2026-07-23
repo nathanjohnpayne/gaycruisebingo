@@ -83,9 +83,19 @@ service cloud.firestore {
     // One Square is not PLAYER-marked. The free centre is always `marked` and never
     // counts (CONTEXT.md § "Free Space": "Counts toward lines but is never a
     // Player-marked square"), so it is excluded by its own `free` flag rather than
-    // by position.
+    // by position. An ECHO Mark doesn't count either (specs/echo-marks.md): an
+    // echoed Square records something the Player did on ANOTHER card — this card
+    // still produced nothing of its own (no Tally entry, no Claim, no Proof), so
+    // an echo-only card stays tradeable. Presence-guarded with `in` (the key is
+    // absent on every pre-echo cell) and matched to the client's `isPristine`
+    // (src/game/logic.ts), which must agree or the chip renders a write the
+    // server denies. A MANUAL Mark can't hide under the flag: `computeMark`
+    // strips `echo` from any manually toggled Square, and a hand-built write
+    // that forges `echo: true` onto its own marks only launders its own
+    // allowance-gated reshuffle — the same self-harm class as the unpaired
+    // counter increment specs/reshuffle.md § Residuals already accepts.
     function cellUnmarked(c) {
-      return c.free == true || c.marked == false;
+      return c.free == true || c.marked == false || (('echo' in c) && c.echo == true);
     }
 
     // "Pristine" = ZERO player-marked Squares. The rules language has no iteration,
