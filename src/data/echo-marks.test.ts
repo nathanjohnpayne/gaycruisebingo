@@ -21,7 +21,9 @@ const H = vi.hoisted(() => ({
   txSet: vi.fn(),
   txDelete: vi.fn(),
   txGet: vi.fn(),
-  setDoc: vi.fn(),
+  // Returns a real promise: pinDayFirstBingo chains `.catch` onto it, and a
+  // bare vi.fn() (undefined return) would throw an unhandled rejection.
+  setDoc: vi.fn(async (..._args: unknown[]) => {}),
 }));
 
 vi.mock('../firebase', () => ({
