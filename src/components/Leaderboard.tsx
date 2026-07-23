@@ -58,10 +58,13 @@ function proofChips(proof: ProofDoc | undefined): string[] {
 }
 
 // Share Card row cap (issue #36; lowered 8→5 for the text-message-first
-// redesign, issue #423): the card shows the top MAX_SHARE_ROWS by rank —
-// the renderer lays the first three out as a podium and the remainder as
-// compact rows, so five (podium + two) is the frame's shape.
-const MAX_SHARE_ROWS = 5;
+// redesign, issue #423; raised 5→10 by issue #444 — five left the fixed
+// frame looking bare mid-cruise): the card shows the top MAX_SHARE_ROWS by
+// rank — the renderer lays the first three out as a podium and the
+// remainder as compact rows, so ten (podium + seven) is the frame's shape,
+// eleven (podium + eight) when the First-BINGO pin is appended from outside
+// the top ten.
+const MAX_SHARE_ROWS = 10;
 
 export function leaderboardShareCopy(
   event: Pick<EventDoc, 'name' | 'days'> | null | undefined,

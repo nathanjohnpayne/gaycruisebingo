@@ -49,9 +49,34 @@ function mountOffscreen(node: HTMLElement): () => void {
   return () => host.remove();
 }
 
+/**
+ * Post-mount shrink-to-fit for cell prompt text (Codex P2, PR #445 round 3).
+ * The length-tiered classes (see buildBingoCardNode) are the deterministic
+ * base, but character counts are glyph-blind — a permitted 80-char prompt of
+ * unusually wide glyphs can still overflow the tile, and overflow: hidden
+ * would clip it out of the raster. The card is mounted with REAL layout
+ * before html-to-image walks it (mountOffscreen's whole point), so measure
+ * the truth instead of guessing: any overflowing cell steps its font down
+ * until the text fits, floored at 4px. No-ops in jsdom (scroll metrics are
+ * 0 there) and on the Leaderboard card (no .share-card-cell nodes).
+ */
+function fitCellText(card: HTMLElement): void {
+  for (const cell of card.querySelectorAll<HTMLElement>('.share-card-cell')) {
+    if (!cell.textContent) continue;
+    let size = parseFloat(getComputedStyle(cell).fontSize);
+    while (cell.scrollHeight > cell.clientHeight && size > 4) {
+      // Clamped, not bare subtraction (CodeRabbit, PR #445): a fractional
+      // computed size (4.25px) must step onto the 4px floor, never past it.
+      size = Math.max(4, size - 0.5);
+      cell.style.fontSize = `${size}px`;
+    }
+  }
+}
+
 async function rasterize(node: HTMLElement): Promise<Blob> {
   const unmount = mountOffscreen(node);
   try {
+    fitCellText(node);
     const blob = await toBlob(node, { pixelRatio: PIXEL_RATIO });
     if (!blob) throw new Error('Share Card render produced no image data.');
     return blob;
@@ -123,8 +148,11 @@ function buildBingoCardNode(data: BingoShareCardData): HTMLDivElement {
   // the flex.
   const lineCells = data.kind === 'blackout' ? new Set<number>() : newestLineCells(data.cells);
   for (const c of data.cells) {
-    // Textless by design (issue #423): at iMessage-bubble size prompt text is
-    // gray noise — the board reads as SHAPE, not data. Marked squares fill
+    // Turned-over squares carry their prompt text (issue #444, refining
+    // #423's all-textless rule): the marked squares — free centre included —
+    // are the brag, so their text renders again (small, readable on
+    // pinch-to-zoom), while UNMARKED squares stay textless so the board
+    // still reads as shape at iMessage-bubble size. Marked squares fill
     // with the theme gradient (`.marked`), the newest winning line adds a
     // glow (`.line`), the free centre stays accent (`.free`), and a
     // marked-but-unconfirmed square (admin_confirmed mode) reads faded/dashed
@@ -132,13 +160,25 @@ function buildBingoCardNode(data: BingoShareCardData): HTMLDivElement {
     // withholds credit from pending marks, so the card must not overstate
     // them either (Codex P2, PR #111 finding 2). `.pending` layers on top of
     // `.marked`, mirroring Board.tsx's own on-page cell className.
+    const showText = c.free || c.marked;
+    // Length-tiered type (Codex P2, PR #445): the pool's prompt ceiling is 80
+    // chars (firestore.rules' text.size() <= 80), and at the base 9px a
+    // ~58px tile fits only ~50 — wrapping alone just grows more lines than
+    // the tile can show, and overflow: hidden would clip the receipt out of
+    // the rasterized image where pinch-to-zoom can't recover it. Two smaller
+    // steps keep the full ceiling renderable, sized against the tightest
+    // tile (a `.line` cell's 3px border): >40 chars drops to 7px, >70 to
+    // 6px. Thresholds are chars, not pixels — the card is a fixed frame, so
+    // a deterministic class beats a measure-and-fit pass here.
+    const fit = !showText ? '' : c.text.length > 70 ? ' xlong' : c.text.length > 40 ? ' long' : '';
     const cls =
       'share-card-cell' +
       (c.free ? ' free' : '') +
       (c.marked ? ' marked' : '') +
       (lineCells.has(c.index) ? ' line' : '') +
-      (c.status === 'pending' ? ' pending' : '');
-    grid.append(el('div', cls));
+      (c.status === 'pending' ? ' pending' : '') +
+      fit;
+    grid.append(el('div', cls, showText ? c.text : undefined));
   }
   card.append(grid);
   if (data.statLine) card.append(el('div', 'share-card-stat', data.statLine));

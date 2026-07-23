@@ -158,11 +158,14 @@
     background:none;font-size:10px;padding:2px 8px;text-transform:none;box-shadow:none}
   .schedfix .done{margin-left:auto;color:var(--ink);opacity:.85}
 
-  /* share-card redesign artboards (share-cards-redesign ticket): drawn at HALF
-     scale — 300×375 here represents the rendered 600×750 (@3x PNG). Design rule:
-     the image must read at iMessage-bubble size (~300px), so the word and the
-     name are the picture; the board is SHAPE (textless lit squares, winning
-     line glowing), never 25 cells of tiny prompt text. */
+  /* share-card redesign artboards (share-cards-redesign ticket; refined by
+     issue #444): drawn at HALF scale — 300×375 here represents the rendered
+     600×750 (@3x PNG). Design rule: the image must read at iMessage-bubble
+     size (~300px), so the word and the name are the picture. The board reads
+     as SHAPE at bubble size — but the TURNED-OVER squares carry their prompt
+     text (small, legible on pinch-to-zoom); unmarked squares stay blank, so
+     the card never regresses to 25 cells of gray noise. Leaderboard runs to
+     the top ten (podium + seven compact rows). */
   .shc{width:300px;height:375px;border-radius:14px;overflow:hidden;position:relative;
     display:flex;flex-direction:column;align-items:center;box-sizing:border-box;
     padding:16px 16px 12px;border:2px solid var(--primary);color:var(--ink);background:
@@ -178,10 +181,14 @@
   .shc .stat{font-size:10px;color:var(--dim);margin-top:3px}
   .shc .mini5{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;width:185px;margin:10px 0 4px}
   .shc .sq{aspect-ratio:1/1;border-radius:5px;background:color-mix(in srgb,var(--ink) 8%,var(--cell));
-    border:1px solid var(--border)}
-  .shc .sq.on{background:linear-gradient(145deg,var(--primary),var(--secondary));border-color:transparent}
+    border:1px solid var(--border);display:flex;align-items:center;justify-content:center;
+    text-align:center;box-sizing:border-box;padding:1.5px;font-size:4.5px;font-weight:600;
+    line-height:1.1;word-break:break-word;overflow:hidden}
+  .shc .sq.on{background:linear-gradient(145deg,var(--primary),var(--secondary));border-color:transparent;
+    color:var(--on-gradient)}
   .shc .sq.line{box-shadow:0 0 9px var(--primary);border:1.5px solid var(--ink)}
-  .shc .sq.freec{background:color-mix(in srgb,var(--accent) 32%,var(--cell));border-color:var(--accent)}
+  .shc .sq.freec{background:color-mix(in srgb,var(--accent) 32%,var(--cell));border-color:var(--accent);
+    color:var(--ink)}
   .shc .foot{margin-top:auto;font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
   .shc .pod{display:flex;align-items:flex-end;gap:8px;margin:12px 0 4px}
   .shc .col{display:flex;flex-direction:column;align-items:center;gap:3px;width:72px}
@@ -191,7 +198,7 @@
     padding-top:4px;font-family:'Bebas Neue',sans-serif;font-size:17px;color:var(--on-gradient);
     background:linear-gradient(180deg,var(--primary),color-mix(in srgb,var(--primary) 30%,var(--bg)))}
   .shc .pin{font-size:9px;color:var(--accent)}
-  .shc .lrow{display:flex;gap:7px;width:210px;font-size:10px;color:var(--dim);padding:2px 4px}
+  .shc .lrow{display:flex;gap:7px;width:210px;font-size:8.5px;color:var(--dim);padding:1px 4px}
   .shc .lrow b{color:var(--ink);font-weight:600}
 
   /* admin Messages / Notices (admin-messages ticket): compose fields + the
@@ -972,7 +979,7 @@
 </div>
 
 <h2>Share Cards—text-message-first redesign</h2>
-<p class="sub">Replaces the current data-dense 600×750 cards (25 prompt-text cells, small title). In an iMessage bubble the image shows ~300px wide, so the word and the name ARE the picture; the board appears as textless shape with the winning line lit; one stat line carries the brag. Same 600×750 canvas, same on-device html-to-image render, same theme tokens (--on-gradient on gradient fills, --ink against --bg) — only the composition changes. Drawn at half scale in three day themes to prove theming holds.</p>
+<p class="sub">Replaces the current data-dense 600×750 cards (25 prompt-text cells, small title). In an iMessage bubble the image shows ~300px wide, so the word and the name ARE the picture; the winning line is lit; one stat line carries the brag. Refined by issue #444: the TURNED-OVER squares carry their prompt text again (--on-gradient over the gradient fill, --ink on the free centre) so the card doubles as receipts on pinch-to-zoom, while unmarked squares stay blank shape; the leaderboard runs to the top ten (podium + seven compact rows, eight with an appended ★ pin). Same 600×750 canvas, same on-device html-to-image render, same theme tokens — only the composition changes. Drawn at half scale in three day themes to prove theming holds.</p>
 <div class="frames">
 
   <div class="unit" id="frame-share-bingo">
@@ -981,16 +988,16 @@
       <div class="big">BINGO!</div>
       <div class="who">Theo</div>
       <div class="mini5">
-        <div class="sq on line"></div><div class="sq"></div><div class="sq on"></div><div class="sq"></div><div class="sq"></div>
-        <div class="sq"></div><div class="sq on line"></div><div class="sq"></div><div class="sq on"></div><div class="sq"></div>
-        <div class="sq on"></div><div class="sq"></div><div class="sq freec line"></div><div class="sq"></div><div class="sq"></div>
-        <div class="sq"></div><div class="sq on"></div><div class="sq"></div><div class="sq on line"></div><div class="sq"></div>
-        <div class="sq"></div><div class="sq"></div><div class="sq on"></div><div class="sq"></div><div class="sq on line"></div>
+        <div class="sq on line">Poppers spill</div><div class="sq"></div><div class="sq on">Matching Speedos</div><div class="sq"></div><div class="sq"></div>
+        <div class="sq"></div><div class="sq on line">Sunset selfie</div><div class="sq"></div><div class="sq on">Eat carbs</div><div class="sq"></div>
+        <div class="sq on">Late-night pizza</div><div class="sq"></div><div class="sq freec line">Complain about circuit music</div><div class="sq"></div><div class="sq"></div>
+        <div class="sq"></div><div class="sq on">Cruise boyfriend</div><div class="sq"></div><div class="sq on line">Three-way kiss</div><div class="sq"></div>
+        <div class="sq"></div><div class="sq"></div><div class="sq on">Lost bracelet</div><div class="sq"></div><div class="sq on line">Dance-floor k-hole</div>
       </div>
       <div class="stat">Bingo #2 · 16 squares · 💦 Splash T-Dance night</div>
       <div class="foot">Gay Cruise Bingo 🚢</div>
     </div>
-    <p class="cap"><b>BINGO card—the word, the name, the line</b>Diagonal blazes (lit + outlined + glow); other marked squares glow dimmer; free centre in accent. No prompt text on squares—at bubble size text is noise, shape is signal. Context line names the day and port; the stat line carries bingo count + squares + the party night.</p>
+    <p class="cap"><b>BINGO card—the word, the name, the line</b>Diagonal blazes (lit + outlined + glow); other marked squares glow dimmer; free centre in accent. Turned-over squares carry their prompt text (issue #444)—the brag is legible on pinch-to-zoom—while unmarked squares stay blank, so the board still reads as shape at bubble size. Context line names the day and port; the stat line carries bingo count + squares + the party night.</p>
   </div>
 
   <div class="unit" id="frame-share-blackout">
@@ -999,16 +1006,16 @@
       <div class="big">BLACKOUT</div>
       <div class="who">Jess</div>
       <div class="mini5">
-        <div class="sq on"></div><div class="sq on"></div><div class="sq on"></div><div class="sq on"></div><div class="sq on"></div>
-        <div class="sq on"></div><div class="sq on"></div><div class="sq on"></div><div class="sq on"></div><div class="sq on"></div>
-        <div class="sq on"></div><div class="sq on"></div><div class="sq freec line"></div><div class="sq on"></div><div class="sq on"></div>
-        <div class="sq on"></div><div class="sq on"></div><div class="sq on"></div><div class="sq on"></div><div class="sq on"></div>
-        <div class="sq on"></div><div class="sq on"></div><div class="sq on"></div><div class="sq on"></div><div class="sq on"></div>
+        <div class="sq on">Lost passport</div><div class="sq on">Matching Speedos</div><div class="sq on">Poppers spill</div><div class="sq on">Eat carbs</div><div class="sq on">Cruise boyfriend</div>
+        <div class="sq on">Three-way kiss</div><div class="sq on">Late-night pizza</div><div class="sq on">Dance-floor k-hole</div><div class="sq on">Sunset selfie</div><div class="sq on">30-year age gap</div>
+        <div class="sq on">Suite orgy</div><div class="sq on">Lost bracelet</div><div class="sq freec line">Complain about circuit music</div><div class="sq on">Use a condom</div><div class="sq on">Threesome</div>
+        <div class="sq on">Mirror-hall selfie</div><div class="sq on">Breakfast in sunglasses</div><div class="sq on">Become ship-famous</div><div class="sq on">Overpacked toiletries</div><div class="sq on">Selfie with HAYLA</div>
+        <div class="sq on">Cafeteria k-hole</div><div class="sq on">Get lost on the ship</div><div class="sq on">Matching tank tops</div><div class="sq on">Suspiciously perfect tan</div><div class="sq on">Nap through the main event</div>
       </div>
       <div class="stat">All 24 squares · 💖 Seriously Pink T-Dance night</div>
       <div class="foot">Gay Cruise Bingo 🚢</div>
     </div>
-    <p class="cap"><b>Blackout—the full grid lit is the flex</b>Same layout as BINGO with every square on and the centre accented; the solid wall of gradient reads instantly in a chat thread. Title swaps to BLACKOUT; stat line says all 24.</p>
+    <p class="cap"><b>Blackout—the full grid lit is the flex</b>Same layout as BINGO with every square on and the centre accented; the solid wall of gradient reads instantly in a chat thread, and every square carries its prompt (issue #444)—a blackout is all receipts. Title swaps to BLACKOUT; stat line says all 24.</p>
   </div>
 
   <div class="unit" id="frame-share-leaderboard">
@@ -1016,16 +1023,21 @@
       <div class="ev">Gay Cruise Bingo · Day 5 · Palermo</div>
       <div class="big mid">LEADERBOARD</div>
       <div class="pod">
-        <div class="col"><span class="nm">Marco</span><span class="bc">6 bingos</span><div class="bar" style="height:44px">2</div></div>
-        <div class="col"><span class="pin">★ First BINGO</span><span class="nm">Jess</span><span class="bc">7 bingos</span><div class="bar" style="height:64px">1</div></div>
-        <div class="col"><span class="nm">Dan</span><span class="bc">6 bingos</span><div class="bar" style="height:32px">3</div></div>
+        <div class="col"><span class="nm">Marco</span><span class="bc">6 bingos</span><div class="bar" style="height:38px">2</div></div>
+        <div class="col"><span class="pin">★ First BINGO</span><span class="nm">Jess</span><span class="bc">7 bingos</span><div class="bar" style="height:52px">1</div></div>
+        <div class="col"><span class="nm">Dan</span><span class="bc">6 bingos</span><div class="bar" style="height:26px">3</div></div>
       </div>
       <div class="lrow"><b>4</b> Theo <span style="margin-left:auto">5 bingos · 80 sq</span></div>
       <div class="lrow"><b>5</b> Big Denver Chris <span style="margin-left:auto">4 bingos · 62 sq</span></div>
+      <div class="lrow"><b>6</b> Sam <span style="margin-left:auto">4 bingos · 58 sq</span></div>
+      <div class="lrow"><b>7</b> Luca <span style="margin-left:auto">3 bingos · 61 sq</span></div>
+      <div class="lrow"><b>8</b> Miguel <span style="margin-left:auto">3 bingos · 49 sq</span></div>
+      <div class="lrow"><b>9</b> Andy P <span style="margin-left:auto">2 bingos · 44 sq</span></div>
+      <div class="lrow"><b>10</b> Ray <span style="margin-left:auto">2 bingos · 37 sq</span></div>
       <div class="stat">Through Day 5 of 10</div>
       <div class="foot">Gay Cruise Bingo 🚢</div>
     </div>
-    <p class="cap"><b>Leaderboard—podium first, rows second</b>Top three as a podium with rank baked into the bars and the ★ First-BINGO pin above the leader; ranks 4–5 as compact rows; "Through Day N" dates the snapshot so stale screenshots read as stale. Caps at five players—the chat knows who's sixth.</p>
+    <p class="cap"><b>Leaderboard—podium first, rows second</b>Top three as a podium with rank baked into the bars and the ★ First-BINGO pin above the leader; ranks 4–10 as compact rows (issue #444 raised the cap from five—five left the frame bare); "Through Day N" dates the snapshot so stale screenshots read as stale. Caps at ten players, eleven only when the ★ pin holder sits outside the top ten and is appended so the honor never drops off the card.</p>
   </div>
 
 </div>
