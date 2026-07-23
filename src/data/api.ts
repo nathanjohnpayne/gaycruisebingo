@@ -44,6 +44,7 @@ import {
   type StatWrite,
 } from '../game/logic';
 import { enqueueWinMoments } from './moments';
+import { pinDayFirstBingo } from './dayMeta';
 import type { Cell, ClaimMode, DayDef, EventDoc, ItemDoc, PlayerDoc, UserDoc } from '../types';
 
 // Raw (converter-free) refs for writes, to keep partial merges simple.
@@ -612,10 +613,18 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
   const boardRef = rawDayBoard(dayIndex, u.uid);
   const playerRef = rawPlayer(u.uid);
   // The deal-time echo's win transitions, captured OUTSIDE the transaction
-  // callback (a retry recomputes them) and enqueued only after a successful
+  // callback (a retry recomputes them) and acted on only after a successful
   // commit — a card can arrive with echo-completed lines, and those wins route
-  // through the existing pending-Moment queue like every echo win.
-  let dealtEcho: { bingoTransition: boolean; blackoutTransition: boolean } | null = null;
+  // through the existing pending-Moment queue like every echo win. `pinAs`
+  // carries the saved player-row name for the Day-honor pin (Codex P2 on
+  // #447), resolved inside the transaction where the row was read; null when
+  // the pin is gated off (no known identity, or the post-freeze narrowing).
+  let dealtEcho: {
+    bingoTransition: boolean;
+    blackoutTransition: boolean;
+    pinAs: string | null;
+    at: number;
+  } | null = null;
   const dealt = await runTransaction(db, async (tx) => {
     const [latestEventSnap, latestBoardSnap, playerSnap] = await Promise.all([
       tx.get(rawEvent()),
@@ -642,9 +651,7 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
     // returns the ORIGINAL cells untouched when nothing echoes, so a Player
     // with no repeated Prompts deals byte-identically to today.
     const echoRes = applyEchoes(cells, achieved, now);
-    dealtEcho = echoRes.changed
-      ? { bingoTransition: echoRes.bingoTransition, blackoutTransition: echoRes.blackoutTransition }
-      : null;
+    dealtEcho = null;
     tx.set(boardRef, { uid: u.uid, dayIndex, seed, createdAt: now, cells: echoRes.cells, easyMixRatio });
     if (echoRes.changed) {
       // The echoed card's REAL opening bucket, folded with the cruise root
@@ -656,16 +663,30 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
       const tutorialSet = tutorialDayIndexSet(latestDays);
       const ceremonialSet = ceremonialDayIndexSet(latestDays);
       const frozen = standingsFrozen({ frozenAt: latestEventData?.frozenAt, days: latestDays });
-      if (frozen && !ceremonialSet.has(dayIndex)) {
+      const playerData = playerSnap.exists() ? (playerSnap.data() as Partial<PlayerDoc>) : undefined;
+      const statsAllowed = !frozen || ceremonialSet.has(dayIndex);
+      // The Day-honor pin identity (Codex P2 on #447): the saved player-row
+      // name, never the auth value — an unknown identity skips the pin (the
+      // honors strip's roster-derived fallback covers it), same gate as
+      // Board's own pin path. Narrowed post-freeze like the stats.
+      const savedName = typeof playerData?.displayName === 'string' ? playerData.displayName : undefined;
+      dealtEcho = {
+        bingoTransition: echoRes.bingoTransition,
+        blackoutTransition: echoRes.blackoutTransition,
+        pinAs:
+          echoRes.bingoTransition && statsAllowed && savedName && savedName.trim().length > 0
+            ? markerDisplayName(undefined, savedName)
+            : null,
+        at: now,
+      };
+      if (!statsAllowed) {
         tx.set(
           playerRef,
           { dayStats: { [dayIndex]: { bingoCount: 0, squaresMarked: 0, firstBingoAt: null } } },
           { merge: true },
         );
       } else {
-        const priorDayStats = playerSnap.exists()
-          ? ((playerSnap.data() as Partial<PlayerDoc>).dayStats as DayStats | undefined)
-          : undefined;
+        const priorDayStats = playerData?.dayStats as DayStats | undefined;
         const write = foldEchoStats({
           priorDayStats,
           echoes: [
@@ -679,6 +700,7 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
           now,
           isTutorialDay: (i) => tutorialSet.has(i),
           isCeremonialDay: (i) => ceremonialSet.has(i),
+          priorBlackout: playerData?.blackout === true,
         });
         tx.set(playerRef, write, { merge: true });
       }
@@ -695,7 +717,12 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
     return true; // dealt a NEW Day Card
   });
   if (dealt && dealtEcho) {
-    const echo = dealtEcho as { bingoTransition: boolean; blackoutTransition: boolean };
+    const echo = dealtEcho as {
+      bingoTransition: boolean;
+      blackoutTransition: boolean;
+      pinAs: string | null;
+      at: number;
+    };
     if (echo.bingoTransition || echo.blackoutTransition) {
       enqueueWinMoments({
         uid: u.uid,
@@ -703,6 +730,12 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
         blackoutTransition: echo.blackoutTransition,
         dayIndex,
       });
+    }
+    // The write-once Day-honor pin for a card that ARRIVED winning (Codex P2
+    // on #447) — fired after the commit so a retried transaction can't pin
+    // twice (the create-once rule backstops besides).
+    if (echo.pinAs) {
+      void pinDayFirstBingo(dayIndex, { uid: u.uid, displayName: echo.pinAs, photoURL: null }, echo.at);
     }
   }
   return dealt;
@@ -868,8 +901,14 @@ export async function reshuffleBoard(params: {
   const boardRef = rawDayBoard(dayIndex, uid);
   const playerRef = rawPlayer(uid);
   // The re-deal echo's win transitions (specs/echo-marks.md § Deal-time),
-  // captured per attempt and enqueued only after the transaction commits.
-  let reshuffleEcho: { bingoTransition: boolean; blackoutTransition: boolean } | null = null;
+  // captured per attempt and acted on only after the transaction commits.
+  // `pinAs` mirrors dealDayCard's Day-honor pin identity (Codex P2 on #447).
+  let reshuffleEcho: {
+    bingoTransition: boolean;
+    blackoutTransition: boolean;
+    pinAs: string | null;
+    at: number;
+  } | null = null;
   const spend = await runTransaction(db, async (tx) => {
     // Every read first (Firestore's transaction contract), and every one of them
     // re-runs on a retry — which is the point: a retry must re-decide from
@@ -949,9 +988,39 @@ export async function reshuffleBoard(params: {
       peerSnaps.filter((s) => s.exists()).map((s) => (s.data() as { cells?: Cell[] }).cells ?? []),
     );
     const echoRes = applyEchoes(cells, achieved, now);
+    const statsAllowed = !standingsFrozen({ frozenAt: eventData?.frozenAt, days }) ||
+      ceremonialDayIndexSet(days).has(dayIndex);
+    const savedName = typeof player?.displayName === 'string' ? player.displayName : undefined;
     reshuffleEcho = echoRes.changed
-      ? { bingoTransition: echoRes.bingoTransition, blackoutTransition: echoRes.blackoutTransition }
+      ? {
+          bingoTransition: echoRes.bingoTransition,
+          blackoutTransition: echoRes.blackoutTransition,
+          pinAs:
+            echoRes.bingoTransition && statsAllowed && savedName && savedName.trim().length > 0
+              ? markerDisplayName(undefined, savedName)
+              : null,
+          at: now,
+        }
       : null;
+    // Orphaned-marker cleanup (Codex P2 on #447): the discarded card can only
+    // carry ECHO Marks, and an echo whose SOURCE was since unmarked may be the
+    // Prompt's LAST carrier — its single Tally marker was deliberately kept
+    // alive by that unmark (the marker-preservation rule) because this echo
+    // still stood. Trading the card away removes that last carrier, so the
+    // marker must go with it: delete the marker for every discarded echo whose
+    // Prompt no peer board still holds confirmed. A Prompt still achieved on a
+    // peer keeps its marker (and re-echoes onto the replacement).
+    for (const discarded of board.cells ?? []) {
+      if (
+        discarded.echo === true &&
+        discarded.marked &&
+        !discarded.free &&
+        discarded.itemId &&
+        !achieved.has(discarded.itemId)
+      ) {
+        tx.delete(doc(db, 'events', EVENT_ID, 'tally', discarded.itemId, 'markers', uid));
+      }
+    }
     const priorDayStats = player?.dayStats as DayStats | undefined;
     const priorBucket = priorDayStats?.[dayIndex];
     const bucketDirty =
@@ -959,9 +1028,8 @@ export async function reshuffleBoard(params: {
       (priorBucket.bingoCount > 0 || priorBucket.squaresMarked > 0 || priorBucket.firstBingoAt != null);
     const tutorialSet = tutorialDayIndexSet(days);
     const ceremonialSet = ceremonialDayIndexSet(days);
-    const frozen = standingsFrozen({ frozenAt: eventData?.frozenAt, days });
     const statWrite =
-      (echoRes.changed || bucketDirty) && (!frozen || ceremonialSet.has(dayIndex))
+      (echoRes.changed || bucketDirty) && statsAllowed
         ? foldEchoStats({
             priorDayStats,
             echoes: [
@@ -975,6 +1043,13 @@ export async function reshuffleBoard(params: {
             now,
             isTutorialDay: (i) => tutorialSet.has(i),
             isCeremonialDay: (i) => ceremonialSet.has(i),
+            // Root blackout: preserve one standing on ANOTHER board — unless
+            // the DISCARDED card itself stood blackout, in which case the
+            // latch would wrongly survive trading away the only blackout.
+            // (An echo-only blackout card being reshuffled while a SECOND
+            // board also stands blackout drops the flag until that board's
+            // next fold re-asserts it — accepted, vanishingly rare.)
+            priorBlackout: player?.blackout === true && !isBlackout(board.cells ?? []),
           })
         : null;
 
@@ -988,7 +1063,12 @@ export async function reshuffleBoard(params: {
     return nextUsed;
   });
   if (reshuffleEcho) {
-    const echo = reshuffleEcho as { bingoTransition: boolean; blackoutTransition: boolean };
+    const echo = reshuffleEcho as {
+      bingoTransition: boolean;
+      blackoutTransition: boolean;
+      pinAs: string | null;
+      at: number;
+    };
     if (echo.bingoTransition || echo.blackoutTransition) {
       enqueueWinMoments({
         uid,
@@ -996,6 +1076,9 @@ export async function reshuffleBoard(params: {
         blackoutTransition: echo.blackoutTransition,
         dayIndex,
       });
+    }
+    if (echo.pinAs) {
+      void pinDayFirstBingo(dayIndex, { uid, displayName: echo.pinAs, photoURL: null }, echo.at);
     }
   }
   return spend;
@@ -1293,6 +1376,10 @@ async function runSetMark(
   // breakdown, folded onto below so the cruise-wide root aggregate re-derives.
   let dayIndex = params.dayIndex ?? 0;
   let priorDayStats: DayStats | undefined;
+  // The prior root `blackout`, preserved through the echo fold (Codex P2 on
+  // #447): echoes only add Marks, so a blackout standing on an untouched board
+  // must never be stripped by an aggregated write that folds only touched ones.
+  let priorRootBlackout = false;
   const [cachedBoard, cachedPlayer] = await Promise.allSettled([
     getDocFromCache(boardRef),
     getDocFromCache(playerRef),
@@ -1323,10 +1410,12 @@ async function runSetMark(
       firstBingoAt?: number | null;
       displayName?: unknown;
       dayStats?: DayStats;
+      blackout?: boolean;
     };
     baseFirstBingoAt = cachedData.firstBingoAt ?? null;
     cachedPlayerName = cachedData.displayName;
     priorDayStats = cachedData.dayStats;
+    priorRootBlackout = cachedData.blackout === true;
   }
 
   const now = Date.now();
@@ -1423,6 +1512,7 @@ async function runSetMark(
           isCeremonialDay: params.ceremonialDayIndexes
             ? (i: number) => params.ceremonialDayIndexes!.includes(i)
             : undefined,
+          priorBlackout: priorRootBlackout,
           base: playerWrite,
         })
       : playerWrite;
@@ -1561,6 +1651,18 @@ async function runSetMark(
   // the Feed through the same gates as any win — never directly from the echo
   // path (specs/echo-marks.md § Moments). The acted board's own transition
   // stays doMark's job, off the returned verdict below, unchanged.
+  //
+  // An echo bingo also pins its Day's write-once First to BINGO honor (Codex
+  // P2 on #447): the stats fold stamps dayStats[d].firstBingoAt, so the
+  // create-once meta pin must go to the same win or a LATER manual winner
+  // would capture the permanent honor. Identity-gated like Board's own pin
+  // path — never stamp 'Anonymous' onto a permanent public honor (the honors
+  // strip's roster-derived fallback covers a skipped pin) — and narrowed
+  // post-freeze exactly like the stats. The event-level ceremonial
+  // First-to-BINGO candidate is deliberately NOT minted from the echo path
+  // (spec § Moments — conservative: a ceremony can be lost, never wrongly
+  // posted).
+  const pinName = markerDisplayName(params.displayName, cachedPlayerName);
   for (const echoBoard of echoBoards) {
     if (echoBoard.bingoTransition || echoBoard.blackoutTransition) {
       enqueueWinMoments({
@@ -1569,6 +1671,13 @@ async function runSetMark(
         blackoutTransition: echoBoard.blackoutTransition,
         dayIndex: echoBoard.dayIndex,
       });
+    }
+    if (
+      echoBoard.bingoTransition &&
+      pinName !== 'Anonymous' &&
+      (!params.statsFrozen || params.ceremonialDayIndexes?.includes(echoBoard.dayIndex))
+    ) {
+      void pinDayFirstBingo(echoBoard.dayIndex, { uid, displayName: pinName, photoURL: null }, now);
     }
   }
 
@@ -1608,7 +1717,7 @@ export async function reconcileEchoes(params: {
   ceremonialDayIndexes?: number[];
   statsFrozen?: boolean;
   database?: Firestore;
-}): Promise<{ changed: boolean; bingoTransition: boolean; blackoutTransition: boolean }> {
+}): Promise<{ changed: boolean; bingoTransition: boolean; blackoutTransition: boolean; complete: boolean }> {
   const database = params.database ?? db;
   const chainKey = `${(database as unknown as { app?: { name?: string } }).app?.name ?? 'default'}/${params.uid}`;
   const prev = markChains.get(chainKey) ?? Promise.resolve();
@@ -1636,9 +1745,8 @@ async function runReconcileEchoes(
     statsFrozen?: boolean;
   },
   database: Firestore,
-): Promise<{ changed: boolean; bingoTransition: boolean; blackoutTransition: boolean }> {
+): Promise<{ changed: boolean; bingoTransition: boolean; blackoutTransition: boolean; complete: boolean }> {
   const { uid, dayIndex } = params;
-  const none = { changed: false, bingoTransition: false, blackoutTransition: false };
   const boardRef = doc(database, 'events', EVENT_ID, 'days', String(dayIndex), 'boards', uid);
   const playerRef = doc(database, 'events', EVENT_ID, 'players', uid);
   const siblingDays = params.dayIndexes.filter((d) => d !== dayIndex);
@@ -1649,11 +1757,23 @@ async function runReconcileEchoes(
       getDocFromCache(doc(database, 'events', EVENT_ID, 'days', String(d), 'boards', uid)),
     ),
   ]);
+  // COMPLETENESS (Codex P2 on #447): a REJECTED cache read is an unknowable
+  // doc — this device may simply never have loaded the sibling that carries
+  // the source Mark — so a pass with any rejected read must not count as a
+  // settled reconcile. The caller (Board) drops its once-per-board guard on
+  // `complete: false` and retries on a later open, when more of the Player's
+  // boards may be cached. (A fulfilled exists-false read IS knowledge: the
+  // cache holds a tombstone for a board that does not exist.)
+  const complete =
+    boardSnap.status === 'fulfilled' &&
+    playerSnap.status === 'fulfilled' &&
+    sibSnaps.every((s) => s.status === 'fulfilled');
+  const none = { changed: false, bingoTransition: false, blackoutTransition: false, complete };
   // No cached board to reconcile (or it isn't this Player's) → no-op; the next
   // open retries once the subscription has cached it.
-  if (boardSnap.status !== 'fulfilled' || !boardSnap.value.exists()) return none;
+  if (boardSnap.status !== 'fulfilled' || !boardSnap.value.exists()) return { ...none, complete: false };
   const board = boardSnap.value.data() as { uid?: string; cells?: Cell[]; seed?: number };
-  if (board.uid !== uid) return none;
+  if (board.uid !== uid) return { ...none, complete: false };
   const boardCells = board.cells ?? [];
 
   const allBoards: Cell[][] = [boardCells];
@@ -1666,10 +1786,11 @@ async function runReconcileEchoes(
   const res = applyEchoes(boardCells, achieved, now);
   if (!res.changed) return none;
 
-  const priorDayStats =
+  const cachedPlayerData =
     playerSnap.status === 'fulfilled' && playerSnap.value.exists()
-      ? ((playerSnap.value.data() as Partial<PlayerDoc>).dayStats as DayStats | undefined)
+      ? (playerSnap.value.data() as Partial<PlayerDoc>)
       : undefined;
+  const priorDayStats = cachedPlayerData?.dayStats as DayStats | undefined;
   const write = foldEchoStats({
     priorDayStats,
     echoes: [
@@ -1687,6 +1808,7 @@ async function runReconcileEchoes(
     isCeremonialDay: params.ceremonialDayIndexes
       ? (i: number) => params.ceremonialDayIndexes!.includes(i)
       : undefined,
+    priorBlackout: cachedPlayerData?.blackout === true,
   });
 
   const batch = writeBatch(database);
@@ -1722,7 +1844,27 @@ async function runReconcileEchoes(
       dayIndex,
     });
   }
-  return { changed: true, bingoTransition: res.bingoTransition, blackoutTransition: res.blackoutTransition };
+  // The write-once Day-honor pin for a reconcile-completed first line (Codex
+  // P2 on #447) — same identity gate and post-freeze narrowing as the
+  // mark-time echo pin; an unknown identity skips (the roster-derived honors
+  // fallback covers it).
+  if (res.bingoTransition && (!params.statsFrozen || params.ceremonialDayIndexes?.includes(dayIndex))) {
+    const savedName =
+      typeof cachedPlayerData?.displayName === 'string' ? cachedPlayerData.displayName : undefined;
+    if (savedName && savedName.trim().length > 0) {
+      void pinDayFirstBingo(
+        dayIndex,
+        { uid, displayName: markerDisplayName(undefined, savedName), photoURL: null },
+        now,
+      );
+    }
+  }
+  return {
+    changed: true,
+    bingoTransition: res.bingoTransition,
+    blackoutTransition: res.blackoutTransition,
+    complete,
+  };
 }
 
 // --- Phase 0 client-side rate limiting (add / report a Prompt, #28) ---

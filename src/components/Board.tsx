@@ -869,10 +869,20 @@ export default function Board() {
       tutorialDayIndexes: [...tutorialDayIndexSet(schedule)],
       ceremonialDayIndexes: [...ceremonialDayIndexSet(schedule)],
       statsFrozen: standingsFrozen(event),
-    }).catch(() => {
-      // A synchronous failure (nothing written) may retry on the next open.
-      reconciledBoardsRef.current.delete(key);
-    });
+    })
+      .then((res) => {
+        // An INCOMPLETE pass (a sibling board this device has never cached —
+        // its cache read rejected, so the achieved set may be missing the
+        // source Mark) must not settle the once-per-board guard: drop the key
+        // so a later open retries with more of the cache populated (Codex P2
+        // on #447). The pass itself is idempotent and write-free when nothing
+        // echoed, so retrying is cheap.
+        if (!res.complete) reconciledBoardsRef.current.delete(key);
+      })
+      .catch(() => {
+        // A synchronous failure (nothing written) may retry on the next open.
+        reconciledBoardsRef.current.delete(key);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `schedule` derives from event?.days; deps track what the reconcile reads.
   }, [hasDays, user, board, identityKnown, dayBoardConfirmed, event?.days]);
   // Edge refs for the COSMETIC Celebration UI only (issue #104). The public Moment

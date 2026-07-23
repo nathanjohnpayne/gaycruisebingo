@@ -21,6 +21,7 @@ const H = vi.hoisted(() => ({
   txSet: vi.fn(),
   txDelete: vi.fn(),
   txGet: vi.fn(),
+  setDoc: vi.fn(),
 }));
 
 vi.mock('../firebase', () => ({
@@ -71,7 +72,7 @@ vi.mock('firebase/firestore', () => {
       };
       return fn(tx);
     },
-    setDoc: vi.fn(),
+    setDoc: H.setDoc,
     onSnapshot: vi.fn(),
     serverTimestamp: vi.fn(),
     getFirestore: vi.fn(),
@@ -268,6 +269,17 @@ describe('setMark — mark-time propagation (spec § Mark-time)', () => {
     await markShared();
     expect(peekPendingMoments('u1').bingo).toBe(true);
     expect(pendingBingoDayIndexes('u1')).toEqual([3]);
+    // The echo-completed first line also pins Day 3's write-once honor
+    // (Codex P2 on #447) — a fire-and-forget setDoc to days/3/meta/3.
+    const pin = H.setDoc.mock.calls.find((call) => {
+      const a = segs(call as unknown[]);
+      return a[2] === 'days' && a[3] === '3' && a[4] === 'meta';
+    });
+    expect(pin).toBeDefined();
+    expect((pin![1] as { firstBingo: { uid: string; displayName: string } }).firstBingo).toMatchObject({
+      uid: 'u1',
+      displayName: 'Alice',
+    });
   });
 
   it('does NOT echo a pending (admin_confirmed) Mark', async () => {
@@ -420,6 +432,30 @@ describe('reshuffleBoard — the post-Reshuffle re-deal echo (spec § Reshuffle 
     await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).resolves.toBe(1);
     expect(H.txSet).toHaveBeenCalledTimes(2);
     expect(H.txSet.mock.calls.find(isPlayerWrite)![1]).toEqual({ reshufflesUsed: 1 });
+    expect(H.txDelete).not.toHaveBeenCalled();
+  });
+
+  it('deletes the orphaned Tally marker when the LAST carrier of a Prompt is traded away (Codex P2 #447)', async () => {
+    // Day 1 wears an echo of s0 whose SOURCE was since unmarked: NO peer board
+    // exists, so nothing still confirms s0 — the reshuffle must take the
+    // stranded marker with the discarded card.
+    seedShuffle({
+      day1Cells: { 0: { marked: true, markedAt: 1, status: 'confirmed', echo: true } },
+      playerExtra: { dayStats: { 1: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null } } },
+    });
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).resolves.toBe(1);
+    const deleted = H.txDelete.mock.calls.map((c) => segs(c as unknown[]));
+    expect(deleted).toContainEqual(['events', EVENT_ID, 'tally', 's0', 'markers', 'u1']);
+  });
+
+  it('keeps the marker when a peer board still confirms the Prompt (it re-echoes instead)', async () => {
+    seedShuffle({
+      day1Cells: { 0: { marked: true, markedAt: 1, status: 'confirmed', echo: true } },
+      day0Overrides: { 0: { marked: true, markedAt: 1, status: 'confirmed' } },
+      playerExtra: { dayStats: { 1: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null } } },
+    });
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).resolves.toBe(1);
+    expect(H.txDelete).not.toHaveBeenCalled();
   });
 });
 
@@ -462,8 +498,38 @@ describe('reconcileEchoes — open-time backfill (spec § Open-time)', () => {
     });
     const res = await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
     expect(res.changed).toBe(false);
+    expect(res.complete).toBe(true);
     expect(H.batchSet).not.toHaveBeenCalled();
     expect(H.batchCommit).not.toHaveBeenCalled();
+  });
+
+  it('reports complete: false when a sibling board is not in the cache (Codex P2 #447)', async () => {
+    seedReconcile();
+    const { getDocFromCache } = await import('firebase/firestore');
+    const mocked = vi.mocked(getDocFromCache);
+    try {
+      mocked.mockImplementation(async (ref) => {
+        const a = ((ref as { args?: unknown[] }).args ?? []).filter((x): x is string => typeof x === 'string');
+        if (a[2] === 'days' && a[3] === '1') throw new Error('cache miss'); // the sibling with the source Mark
+        return route(ref as { args?: unknown[] }) as never;
+      });
+      const res = await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
+      // With Day 1 unknowable, `shared` is not in the derivable achieved set —
+      // nothing echoes, and the pass reports itself incomplete so the caller
+      // retries on a later open instead of settling the once-per-board guard.
+      expect(res.changed).toBe(false);
+      expect(res.complete).toBe(false);
+    } finally {
+      mocked.mockImplementation(async (ref) => route(ref as { args?: unknown[] }) as never);
+    }
+  });
+
+  it('preserves a blackout standing on an untouched board through the reconcile fold (Codex P2 #447)', async () => {
+    seedReconcile();
+    H.player = { ...(H.player as Record<string, unknown>), blackout: true };
+    await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
+    const playerWrite = H.batchSet.mock.calls.find(isPlayerWrite)![1] as { blackout: boolean };
+    expect(playerWrite.blackout).toBe(true);
   });
 });
 
@@ -520,5 +586,28 @@ describe('confirmClaim — the admin_confirmed echo moment (spec § Contract)', 
     seedClaim();
     await rejectClaim(claim(), 'admin-1');
     expect(H.txSet.mock.calls.some((c) => isDayBoardWrite(c, 2))).toBe(false);
+  });
+
+  it("pins the echo Day's write-once honor when the echo completes its first line (Codex P2 #447)", async () => {
+    seedClaim();
+    // Day 2's row 2 (10..14, crossing the free centre) is one echo short:
+    // the shared Prompt sits at 14, the rest already confirmed.
+    H.dayBoards.set(2, {
+      uid: 'u1',
+      seed: 222,
+      dayIndex: 2,
+      cells: card((i) => (i === 14 ? 'shared' : `b${i}`), {
+        10: { marked: true, markedAt: 1, status: 'confirmed' },
+        11: { marked: true, markedAt: 1, status: 'confirmed' },
+        13: { marked: true, markedAt: 1, status: 'confirmed' },
+      }),
+    });
+    await confirmClaim(claim(), 'admin-1');
+    const metaWrite = H.txSet.mock.calls.find((call) => {
+      const a = segs(call as unknown[]);
+      return a[2] === 'days' && a[3] === '2' && a[4] === 'meta';
+    });
+    expect(metaWrite).toBeDefined();
+    expect((metaWrite![1] as { firstBingo: { uid: string } }).firstBingo.uid).toBe('u1');
   });
 });

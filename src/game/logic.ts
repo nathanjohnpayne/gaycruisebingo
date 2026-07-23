@@ -508,6 +508,13 @@ export function foldEchoStats(params: {
   now: number;
   isTutorialDay?: (dayIndex: number) => boolean;
   isCeremonialDay?: (dayIndex: number) => boolean;
+  /** The Player's PRIOR root `blackout`, preserved through the fold (Codex P2
+   *  on #447): every echo path only ADDS Marks, so a blackout standing on an
+   *  UNTOUCHED board must survive a write that folds only the touched boards —
+   *  without this, a non-winning echo on Day B would strip a Day-A blackout
+   *  from the roster filter. The root flag is a latch here; the paths that can
+   *  legitimately remove a blackout (unmark, reject) run the base fold alone. */
+  priorBlackout?: boolean;
   /** The acted-day `foldDayStat` result to compose with (mark-time). */
   base?: {
     dayStats: Record<number, StatWrite>;
@@ -558,7 +565,8 @@ export function foldEchoStats(params: {
   }
 
   const { bingoCount, squaresMarked } = sumDayStats(merged, params.isCeremonialDay);
-  const blackout = (base?.blackout ?? false) || echoes.some((e) => e.blackout);
+  const blackout =
+    (params.priorBlackout ?? false) || (base?.blackout ?? false) || echoes.some((e) => e.blackout);
   const out: {
     dayStats: Record<number, StatWrite>;
     bingoCount: number;

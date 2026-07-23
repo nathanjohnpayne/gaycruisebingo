@@ -179,6 +179,23 @@ describe('foldEchoStats — the ONE aggregated player write (spec § Contract)',
     expect(out.firstBingoAt).toBe(NOW); // day 4's (and 9's) stamp, not blocked by day 0
     expect(out.blackout).toBe(true); // any touched board completing sets it
   });
+
+  it('preserves a blackout standing on an UNTOUCHED board (priorBlackout latch — Codex P2 #447)', () => {
+    const out = foldEchoStats({
+      priorDayStats: { 1: { bingoCount: 3, squaresMarked: 24, firstBingoAt: 100 } },
+      echoes: [{ dayIndex: 4, bingoCount: 0, squaresMarked: 1, blackout: false }],
+      now: NOW,
+      priorBlackout: true, // Day 1 stands blackout; this write touches only Day 4
+    });
+    expect(out.blackout).toBe(true);
+    // And absent the latch, a non-winning echo reports no blackout of its own.
+    const bare = foldEchoStats({
+      priorDayStats: {},
+      echoes: [{ dayIndex: 4, bingoCount: 0, squaresMarked: 1, blackout: false }],
+      now: NOW,
+    });
+    expect(bare.blackout).toBe(false);
+  });
 });
 
 describe('isPristine — the Reshuffle echo exemption (spec § Reshuffle pristine-ness)', () => {
