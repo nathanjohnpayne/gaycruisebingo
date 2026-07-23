@@ -1,9 +1,6 @@
 # Echo Marks: a Mark carries to every card that has the same Prompt
 
-**Track:** play/core · **Phase:** 0 · **Size:** L · **Epic:** Daily Cards (play)
-**Refs:** ADR 0001 (client-authoritative marks — this stays entirely client-side; no server function), ADR 0003 (boards freeze at deal), daily-cards-spec (per-day boards), `specs/reshuffle.md`, the Notice copy that promises this mechanic ("once a thing has happened, it's happened — if it's on three of your cards, that's three squares", `plans/admin-messages-ticket.md`).
-**No wireframe changes** — this is game logic; the only visual is an optional subtle echo indicator on auto-marked Squares (decision below).
-**Suggested runner:** Claude Opus 4.8, high reasoning effort (cross-board stat folds, rules-guard interplay, Moment-queue and reshuffle interactions; the seams are enumerated but the composition is intricate).
+**Track:** play/core · **Phase:** 0 · **Size:** L · **Epic:** Daily Cards (play) **Refs:** ADR 0001 (client-authoritative marks — this stays entirely client-side; no server function), ADR 0003 (boards freeze at deal), daily-cards-spec (per-day boards), `specs/reshuffle.md`, the Notice copy that promises this mechanic ("once a thing has happened, it's happened — if it's on three of your cards, that's three squares", `plans/admin-messages-ticket.md`). **No wireframe changes** — this is game logic; the only visual is an optional subtle echo indicator on auto-marked Squares (decision below). **Suggested runner:** Claude Opus 4.8, high reasoning effort (cross-board stat folds, rules-guard interplay, Moment-queue and reshuffle interactions; the seams are enumerated but the composition is intricate).
 
 ## Problem
 
