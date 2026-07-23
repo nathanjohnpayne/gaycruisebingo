@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { contrastRatio, hexToRgb, mixSrgb, parseThemeBlocks } from '../theme/contrast';
 import type { Cell, EventDoc, PlayerDoc } from '../types';
 
 // specs/w2-share-cards.md (issue #36): on-device Share Cards (BINGO +
@@ -483,7 +484,37 @@ describe('ShareCard CSS — fixed-frame safety', () => {
     // stays opaque on --ink.
     expect(rule![1]).not.toMatch(/opacity\s*:/);
     expect(rule![1]).toMatch(/color:\s*var\(--ink\)/);
-    expect(rule![1]).toMatch(/color-mix\(in srgb, var\(--primary\) 45%, var\(--bg\)\)/);
+    expect(rule![1]).toMatch(/color-mix\(in srgb, var\(--primary\) \d+%, var\(--bg\)\)/);
+  });
+
+  // Codex P2, PR #445 round 2: get-sporty's near-white --secondary at a 45%
+  // mix over its near-black --bg left --ink at ~4.29:1 — under WCAG AA's
+  // 4.5:1. Rather than pin a magic weight, compute the REAL contrast of
+  // --ink over both pending-wash endpoints (the same color-mix srgb math,
+  // via src/theme/contrast.ts) for every theme at whatever weight the CSS
+  // declares, so any future token or weight change re-proves itself.
+  it('keeps pending-wash text at WCAG AA contrast in every theme', () => {
+    const weightMatch = indexCss.match(
+      /\.share-card-cell\.pending\s*\{[^}]*color-mix\(in srgb, var\(--primary\) (\d+)%, var\(--bg\)\)/,
+    );
+    expect(weightMatch, 'pending-wash color-mix weight not found').not.toBeNull();
+    const weight = Number(weightMatch![1]) / 100;
+
+    const themesCss = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../theme/themes.css'), 'utf8');
+    const themes = parseThemeBlocks(themesCss);
+    expect(Object.keys(themes).length).toBeGreaterThan(0);
+    for (const [themeId, vars] of Object.entries(themes)) {
+      const ink = hexToRgb(vars['ink']);
+      const bg = hexToRgb(vars['bg']);
+      for (const endpoint of ['primary', 'secondary'] as const) {
+        const wash = mixSrgb(hexToRgb(vars[endpoint]), bg, weight);
+        const ratio = contrastRatio(ink, wash);
+        expect(
+          ratio,
+          `${themeId}: --ink over ${endpoint} pending wash is ${ratio.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 
   it('steps the cell font down for the length-tiered fit classes', () => {

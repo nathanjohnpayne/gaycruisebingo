@@ -2907,11 +2907,16 @@ body:has(.sheet-backdrop) .guidelines-trigger {
      the card background too and wash it out, summer-white's light theme
      worst (Codex P2, PR #445) — so the FILL fades while the text stays
      opaque, switched to --ink, the token tuned to read against
-     --bg-adjacent washes (same reasoning as .share-card-cell.free above). */
+     --bg-adjacent washes (same reasoning as .share-card-cell.free above).
+     35% endpoint weight, not 45%: get-sporty's near-white --secondary at
+     45% over its near-black --bg left --ink at ~4.29:1 (Codex P2, PR #445
+     round 2) — 35% clears WCAG AA's 4.5:1 for BOTH endpoints in every
+     theme, computed against the real tokens by w2-share-cards.test.tsx's
+     pending-wash contrast test. */
   background: linear-gradient(
     145deg,
-    color-mix(in srgb, var(--primary) 45%, var(--bg)),
-    color-mix(in srgb, var(--secondary) 45%, var(--bg))
+    color-mix(in srgb, var(--primary) 35%, var(--bg)),
+    color-mix(in srgb, var(--secondary) 35%, var(--bg))
   );
   color: var(--ink);
   border-style: dashed;
