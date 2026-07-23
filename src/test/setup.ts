@@ -2,9 +2,27 @@
 // matchers (toBeInTheDocument, toHaveTextContent, …) on Vitest's `expect` and
 // augments its Assertion types, and auto-cleans the RTL DOM after each test.
 import '@testing-library/jest-dom/vitest';
-import { afterEach } from 'vitest';
+import { afterEach, beforeEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
+
+function clearBrowserStorage() {
+  try {
+    localStorage?.clear();
+  } catch {
+    /* storage can be absent or disabled in Node/jsdom variants */
+  }
+  try {
+    sessionStorage?.clear();
+  } catch {
+    /* storage can be absent or disabled in Node/jsdom variants */
+  }
+}
+
+beforeEach(() => {
+  clearBrowserStorage();
+});
 
 afterEach(() => {
   cleanup();
+  clearBrowserStorage();
 });
