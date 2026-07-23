@@ -1020,15 +1020,14 @@ export default function ProofFeed() {
   // of the node (both `loadMore` and this callback are `useCallback`-pinned),
   // so the observer is created once per sentinel and torn down with it —
   // re-creating it every render would re-fire `isIntersecting` immediately and
-  // run away through the whole stream.
-  const feedObserver = useRef<IntersectionObserver | null>(null);
+  // run away through the whole stream. The returned disconnect is React 19's
+  // ref-cleanup form: it replaces the legacy `ref(null)` teardown, so there is
+  // no observer handle to park in a ref of our own.
   const attachFeedSentinel = useCallback(
-    (node: HTMLDivElement | null) => {
-      feedObserver.current?.disconnect();
-      feedObserver.current = null;
+    (node: HTMLDivElement) => {
       // jsdom (and any browser old enough to matter) has no IntersectionObserver;
       // the "Load older posts" button below is the path that still works there.
-      if (!node || typeof IntersectionObserver === 'undefined') return;
+      if (typeof IntersectionObserver === 'undefined') return;
       const observer = new IntersectionObserver(
         (records) => {
           if (records.some((r) => r.isIntersecting)) loadMore();
@@ -1036,7 +1035,7 @@ export default function ProofFeed() {
         { rootMargin: FEED_SENTINEL_MARGIN },
       );
       observer.observe(node);
-      feedObserver.current = observer;
+      return () => observer.disconnect();
     },
     [loadMore],
   );
