@@ -85,10 +85,19 @@ const colSnap = (docs: object[]) => ({
   metadata: { fromCache: false },
 });
 // The tally collectionGroup snapshot shape useTallyCards reads: each doc carries
-// a ref whose grandparent chain identifies the Event. No markers here — these
-// fixtures page over Proofs and Moments, and the tally fold has its own suite
-// (d15-tally-cards.test.ts).
-const groupSnap = { docs: [] as unknown[], metadata: { fromCache: false } };
+// a ref whose grandparent chain identifies the Event. Most fixtures page over
+// Proofs and Moments and deliver none; the uncapped-`tallyCards` case below
+// needs real ones. The tally FOLD itself has its own suite (d15-tally-cards.test.ts).
+const groupSnapOf = (docs: unknown[]) => ({ docs, metadata: { fromCache: false } });
+const groupSnap = groupSnapOf([]);
+
+/** One Tally marker as the collection group delivers it: the doc's ref chain is
+ * what `useTallyCards` reads the itemId and the owning Event from
+ * (events/{EVENT_ID}/tally/{itemId}/markers/{uid}). */
+const marker = (itemId: string, uid: string, markedAt: number) => ({
+  data: () => ({ uid, displayName: uid, markedAt, dayIndex: 0, itemText: `prompt ${itemId}` }),
+  ref: { parent: { parent: { id: itemId, parent: { id: 'tally', parent: { id: 'test-event' } } } } },
+});
 
 const proof = (n: number): ProofDoc =>
   ({
@@ -226,10 +235,27 @@ describe('useFeed — the render window and hasMore (#441)', () => {
   });
 
   it('tallyCards stays UNCAPPED by the window (the proof-card pills read every card)', () => {
-    const { view } = feedOf(1, 1);
-    // No markers delivered, so the fold emits none — the point is that the
-    // window never reaches this field. It is the raw stream, not a slice of it.
+    // Three live Tally Cards, a window of ONE. The two that fall outside the
+    // window must still reach `tallyCards`, because the proof-card pills
+    // ("cleared N doubts", "tally N") derive from every card — capping this
+    // field would zero the pills on any Proof whose Prompt sits past the
+    // window (Codex P2 on #286).
+    const fire = capture();
+    const view = renderHook(() => useFeed(1));
+    fire.fireEvent(eventSnap);
+    fire.fireProofs(colSnap([]));
+    fire.fireMoments(colSnap([]));
+    fire.fireNotices(colSnap([]));
+    fire.fireTally(
+      groupSnapOf([marker('i1', 'alice', 100), marker('i2', 'bob', 200), marker('i3', 'carol', 300)]),
+    );
+
+    // The window shows only the newest card…
+    expect(ids(view.result.current.entries)).toEqual(['i3']);
+    expect(view.result.current.hasMore).toBe(true);
+    // …while the uncapped stream still carries all three.
     const cards: TallyCard[] = view.result.current.tallyCards;
-    expect(Array.isArray(cards)).toBe(true);
+    expect(cards.map((c) => c.itemId).sort()).toEqual(['i1', 'i2', 'i3']);
+    expect(cards.every((c) => c.count === 1)).toBe(true);
   });
 });
