@@ -1,7 +1,7 @@
 import { addDoc, collection, doc, getDoc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, EVENT_ID } from '../firebase';
-import { completedLines, countMarked, isBlackout, foldDayStat, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats } from '../game/logic';
+import { completedLines, countMarked, isBlackout, foldDayStat, foldEchoStats, applyEchoes, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats, type EchoBucket, type StatWrite } from '../game/logic';
 import { markerDisplayName } from './attribution';
 import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef } from '../types';
@@ -345,6 +345,12 @@ async function resolve(
   const boardRef = daily ? dayBoard(c.dayIndex as number, c.uid) : board(c.uid);
   let isTutorialDay: ((i: number) => boolean) | undefined;
   let isCeremonialDay: ((i: number) => boolean) | undefined;
+  // The claim owner's OTHER Day indexes (specs/echo-marks.md, #446): a CONFIRM
+  // is the moment an admin_confirmed Mark reaches confirmed, so it is the
+  // moment the Prompt echoes onto the owner's sibling Day Cards — inside this
+  // same transaction, each echoed board carrying its own markSeed, all stat
+  // deltas folded into the ONE player write below. A reject echoes nothing.
+  let echoSiblingDays: number[] = [];
   // The freeze gate is a GETTER re-evaluated inside the transaction callback
   // (Codex P2 on #278 round 4): a resolve started seconds before 08:00 must
   // fold with the post-boundary truth on retry/commit, not a pre-read capture.
@@ -362,6 +368,9 @@ async function resolve(
     isCeremonialDay = (i: number) => ceremonial.has(i);
     const frozenAt = evSnap?.data()?.frozenAt as number | undefined;
     isStatsFrozen = () => standingsFrozen({ frozenAt, days });
+    if (status === 'confirmed') {
+      echoSiblingDays = days.map((d) => d.index).filter((i) => i !== (c.dayIndex as number));
+    }
   }
   await runTransaction(db, async (tx) => {
     // Read board + player inside the txn so a concurrent mark/proof from the same
@@ -369,6 +378,11 @@ async function resolve(
     const bSnap = await tx.get(boardRef);
     if (!bSnap.exists()) return;
     const pSnap = await tx.get(player(c.uid));
+    // The owner's sibling Day Cards, read in the SAME transaction (before any
+    // write, per Firestore's reads-first contract) so a retry re-derives the
+    // echo set from committed state (specs/echo-marks.md).
+    const echoSiblingRefs = echoSiblingDays.map((i) => dayBoard(i, c.uid));
+    const echoSiblingSnaps = await Promise.all(echoSiblingRefs.map((ref) => tx.get(ref)));
     const boardData = bSnap.data() as { cells?: Cell[]; seed?: number };
     const cells = boardData.cells ?? [];
     const next = transform(cells);
@@ -401,6 +415,40 @@ async function resolve(
       },
       { merge: true },
     );
+    // Echo Marks (specs/echo-marks.md, #446): a CONFIRM is the moment the
+    // Prompt reaches confirmed, so echo it onto every sibling Day Card of the
+    // owner's that carries it unmarked — in this SAME transaction, each echoed
+    // board carrying ITS OWN markSeed. Echoed cells are born `confirmed`: the
+    // achievement was already admin-confirmed once, so they raise no second
+    // Claim. A reject echoes nothing (echoSiblingSnaps is empty), and unmarking
+    // a rejected cell never cascades to prior echoes. No Feed Moment is posted
+    // from here — this runs on the ADMIN's device and a Moment must be written
+    // by its winner (see the spec's Moments residual for this mode).
+    const confirmedCell = status === 'confirmed' ? next.find((x) => isClaimCell(x, c)) : undefined;
+    const echoItemId =
+      confirmedCell && !confirmedCell.free && confirmedCell.marked ? confirmedCell.itemId : null;
+    const echoBuckets: EchoBucket[] = [];
+    if (echoItemId && echoSiblingSnaps.length > 0) {
+      const achieved = new Set([echoItemId]);
+      const echoNow = Date.now();
+      echoSiblingSnaps.forEach((snap, idx) => {
+        if (!snap.exists()) return;
+        const sib = snap.data() as { cells?: Cell[]; seed?: number };
+        const res = applyEchoes(sib.cells ?? [], achieved, echoNow);
+        if (!res.changed) return;
+        tx.set(
+          echoSiblingRefs[idx],
+          { cells: res.cells, ...(typeof sib.seed === 'number' ? { markSeed: sib.seed } : {}) },
+          { merge: true },
+        );
+        echoBuckets.push({
+          dayIndex: echoSiblingDays[idx],
+          bingoCount: res.bingoCount,
+          squaresMarked: res.squaresMarked,
+          blackout: res.blackout,
+        });
+      });
+    }
     if (daily) {
       const playerWrite = foldDayStat({
         priorDayStats,
@@ -410,15 +458,33 @@ async function resolve(
         isTutorialDay,
         isCeremonialDay,
       });
+      // The ONE aggregated player write: the claim Day's fold composed with
+      // every echoed board's bucket (specs/echo-marks.md § Scoring).
+      const aggregatedWrite =
+        echoBuckets.length > 0
+          ? foldEchoStats({
+              priorDayStats,
+              echoes: echoBuckets,
+              now: Date.now(),
+              isTutorialDay,
+              isCeremonialDay,
+              base: playerWrite,
+            })
+          : playerWrite;
       const canWriteStats = !isStatsFrozen() || !!isCeremonialDay?.(c.dayIndex as number);
       if (isStatsFrozen()) {
-        // Ceremonial-day-only post-freeze bucket, mirroring setMark (Codex P2
-        // on #278 round 2): any other Day's bucket would drift settled honors.
-        if (isCeremonialDay?.(c.dayIndex as number)) {
-          tx.set(player(c.uid), { dayStats: playerWrite.dayStats }, { merge: true });
+        // Ceremonial-day-only post-freeze buckets, mirroring setMark (Codex P2
+        // on #278 round 2): any other Day's bucket would drift settled honors —
+        // echoed main-day buckets are dropped with the root aggregates.
+        const ceremonialBuckets: Record<number, StatWrite> = {};
+        for (const [k, v] of Object.entries(aggregatedWrite.dayStats)) {
+          if (isCeremonialDay?.(Number(k))) ceremonialBuckets[Number(k)] = v;
+        }
+        if (Object.keys(ceremonialBuckets).length > 0) {
+          tx.set(player(c.uid), { dayStats: ceremonialBuckets }, { merge: true });
         }
       } else {
-        tx.set(player(c.uid), playerWrite, { merge: true });
+        tx.set(player(c.uid), aggregatedWrite, { merge: true });
       }
       if (canWriteStats && shouldPinDayHonor) {
         if (metaRef && !metaSnap?.exists()) {

@@ -88,6 +88,11 @@ vi.mock('../data/api', () => ({
   // `if (board) return` guard short-circuits and this is never actually invoked;
   // stubbed so the import resolves.
   dealDayCard: vi.fn(() => Promise.resolve(false)),
+  // Open-time echo reconcile (specs/echo-marks.md): a no-op stub — the reconcile
+  // write path is proven in src/data/echo-marks.test.ts.
+  reconcileEchoes: vi.fn(() =>
+    Promise.resolve({ changed: false, bingoTransition: false, blackoutTransition: false }),
+  ),
   resolveDisplayName: (
     profile: { displayName?: unknown } | null | undefined,
     fallback: string | null | undefined,

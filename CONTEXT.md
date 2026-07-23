@@ -40,6 +40,8 @@ A phone-first, live, social bingo game for one cruise at a time. The card's prom
 
 **Mark**: The act (and resulting state) of a Player tapping a Square to say the thing happened. Marks are self-recorded on the Player's own Board — nobody else's approval is required by default.
 
+**Echo Mark**: A Square auto-marked because the same Player's Mark on the same Prompt reached confirmed on another of their Day Cards — once a thing has happened, it's happened; if it's on three of your cards, that's three squares. Echoes are real Marks for scoring, but they never cost a card its Reshuffle pristine-ness (the Player did nothing on *that* card), and unmarking never cascades in either direction. _Avoid_: carry-over, sync mark
+
 **BINGO**: Five marked squares in any one line — row, column, or diagonal. The centre counts. A Player can score several.
 
 **Blackout**: All 24 non-free squares marked. The maximal win.

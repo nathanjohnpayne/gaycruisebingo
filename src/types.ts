@@ -162,6 +162,16 @@ export interface Cell {
   markedAt: number | null;     // ms epoch
   proofId?: string | null;     // Phase 1
   status?: 'confirmed' | 'pending'; // used only in admin_confirmed claim mode
+  // An Echo Mark (specs/echo-marks.md): this Square was auto-marked because the
+  // Player's Mark on the SAME Prompt reached confirmed on another of their
+  // boards — the Player did the thing; the cards just agree. Absent/false = a
+  // manual Mark. PERSISTED (not inferred) because the Reshuffle pristine check
+  // counts only non-echo Marks: an echo-only card is still tradeable, and both
+  // `isPristine` (src/game/logic.ts) and the firestore.rules `boardPristine()`
+  // gate read this flag. A manual toggle of the Square clears it (`computeMark`
+  // strips `echo` on the toggled cell), so a real Mark can never ride under an
+  // echo's pristine exemption.
+  echo?: boolean;
 }
 
 export interface BoardDoc {

@@ -379,12 +379,201 @@ export function countMarked(cells: Cell[]): number {
  *
  * That distinction is also what keeps this predicate honest against
  * `firestore.rules` `boardPristine()`, which gates the write on `free == true ||
- * marked == false` and cannot see `status` semantics. The two MUST agree, or the
- * chip renders on a card whose reshuffle the server then denies. Pinned by
- * src/game/reshuffle.test.ts.
+ * marked == false || echo == true` and cannot see `status` semantics. The two
+ * MUST agree, or the chip renders on a card whose reshuffle the server then
+ * denies. Pinned by src/game/reshuffle.test.ts.
+ *
+ * An ECHO Mark does NOT cost pristine-ness (specs/echo-marks.md): an echoed
+ * Square records something the Player did on ANOTHER card — this card still
+ * produced nothing of its own (no Tally entry, no Claim, no Proof), so trading
+ * it away unwinds nothing. `computeMark` strips `echo` from any manually
+ * toggled Square, so a real Mark can never ride under the exemption.
  */
 export function isPristine(cells: Cell[]): boolean {
-  return cells.every((c) => c.free || !c.marked);
+  return cells.every((c) => c.free || !c.marked || c.echo === true);
+}
+
+// --- Echo Marks (specs/echo-marks.md, #446) ---------------------------------
+//
+// When a Player's Mark on Prompt P reaches CONFIRMED, the same Prompt
+// auto-marks (`echo: true`) on every other board of theirs that carries P and
+// isn't already marked. Echoes are real Marks for scoring — the Player did the
+// thing; the cards just agree. These pure helpers own the derivation; the write
+// paths (src/data/api.ts, src/data/admin.ts) compose them into the existing
+// batch/transaction patterns.
+//
+// NOTE on `isPristine` above: an echoed Square is exempt from the Reshuffle
+// pristine check — it records something the Player did on ANOTHER card, so this
+// card has still produced nothing of its own. The firestore.rules
+// `boardPristine()` carries the same `echo == true` exemption.
+
+/**
+ * The Player's ACHIEVED set: every Prompt id with a CONFIRMED (non-pending)
+ * Mark on any of the given boards' cells. The free centre carries no itemId and
+ * is excluded by construction; a `status: 'pending'` Mark (an admin_confirmed
+ * Claim awaiting resolution) is NOT achieved — only confirmed Marks echo.
+ * Echoed cells count too: an echo IS a confirmed Mark, and including it keeps
+ * the derivation stable no matter which board the achievement is read from
+ * (`applyEchoes` is idempotent, so re-deriving from an echo changes nothing).
+ */
+export function achievedItemIds(boards: ReadonlyArray<readonly Cell[]>): Set<string> {
+  const achieved = new Set<string>();
+  for (const cells of boards) {
+    for (const c of cells) {
+      if (!c.free && c.marked && c.status !== 'pending' && c.itemId) achieved.add(c.itemId);
+    }
+  }
+  return achieved;
+}
+
+/** What `applyEchoes` did to one board: the next cells plus the per-board
+ *  deltas the ONE aggregated player write folds (specs/echo-marks.md). */
+export interface EchoResult {
+  /** The next cells — the ORIGINAL array reference when nothing echoed, so an
+   *  unchanged board is byte-identical (the no-repeats regression contract). */
+  cells: Cell[];
+  changed: boolean;
+  /** The Prompt ids this pass newly echoed (marked → true) on this board. */
+  echoedItemIds: string[];
+  /** This board's resulting stat bucket (the `DayStat` shape sans firstBingoAt,
+   *  which needs prior-server context the caller owns — see `foldEchoStats`). */
+  bingoCount: number;
+  squaresMarked: number;
+  blackout: boolean;
+  /** Rising edges this pass crossed — routed into the existing pending-Moment
+   *  queue by the caller, never broadcast directly from the echo path. */
+  bingoTransition: boolean;
+  blackoutTransition: boolean;
+}
+
+/**
+ * Auto-mark every unmarked carrier of an achieved Prompt on ONE board. Pure and
+ * IDEMPOTENT: an already-marked Square (echo, manual, or `pending` — the Player
+ * has tapped it and a Claim may be riding on it) is never touched, and a board
+ * carrying no achieved Prompt returns the original array reference unchanged.
+ * Echoed cells are born `confirmed` (the underlying achievement was already
+ * confirmed once — in admin_confirmed mode they need no second admin pass).
+ */
+export function applyEchoes(cells: Cell[], achieved: ReadonlySet<string>, now: number): EchoResult {
+  const echoedItemIds: string[] = [];
+  const next = cells.map((c) => {
+    if (c.free || c.marked || !c.itemId || !achieved.has(c.itemId)) return c;
+    echoedItemIds.push(c.itemId);
+    return { ...c, marked: true, markedAt: now, status: 'confirmed' as const, echo: true };
+  });
+  const changed = echoedItemIds.length > 0;
+  const resultCells = changed ? next : cells;
+  const prevLines = changed ? completedLines(cells).length : 0;
+  const lines = changed ? completedLines(resultCells).length : prevLines;
+  const blackout = changed ? isBlackout(resultCells) : false;
+  return {
+    cells: resultCells,
+    changed,
+    echoedItemIds,
+    bingoCount: changed ? lines : completedLines(cells).length,
+    squaresMarked: changed ? countMarked(resultCells) : countMarked(cells),
+    blackout: changed ? blackout : isBlackout(cells),
+    bingoTransition: changed && prevLines === 0 && lines > 0,
+    blackoutTransition: changed && blackout && !isBlackout(cells),
+  };
+}
+
+/** One echoed board's contribution to the aggregated player write. */
+export interface EchoBucket {
+  dayIndex: number;
+  bingoCount: number;
+  squaresMarked: number;
+  blackout: boolean;
+}
+
+/**
+ * Fold one or more echoed boards' buckets — plus, optionally, an acted-day
+ * `foldDayStat` result to compose with (the mark-time path) — into the ONE
+ * aggregated `{ merge: true }` player write (specs/echo-marks.md § Scoring).
+ *
+ * Per-Day `firstBingoAt` follows the same discipline as `foldDayStat`: an
+ * echoed Day that HOLDS a bingo keeps its earlier stamp when it has one, else
+ * stamps `now` (the echo completed this Day's first line); a Day left with no
+ * bingo clears to null. The cruise-wide root `firstBingoAt` is re-derived over
+ * the merged view — and OMITTED exactly when the composed `base` omitted it
+ * (the #75 unknown-state preserve), so an echo fold can never clobber a server
+ * stamp the acted-day fold deliberately left alone. Root `blackout` is true
+ * when ANY board touched by this write completes (ticket: "blackout if any
+ * board completes"); root sums/exclusions reuse `sumDayStats` /
+ * `cruiseFirstBingoAt` so the tutorial and ceremonial rules hold unchanged.
+ */
+export function foldEchoStats(params: {
+  priorDayStats: DayStats | undefined;
+  echoes: ReadonlyArray<EchoBucket>;
+  now: number;
+  isTutorialDay?: (dayIndex: number) => boolean;
+  isCeremonialDay?: (dayIndex: number) => boolean;
+  /** The acted-day `foldDayStat` result to compose with (mark-time). */
+  base?: {
+    dayStats: Record<number, StatWrite>;
+    bingoCount: number;
+    squaresMarked: number;
+    blackout: boolean;
+    firstBingoAt?: number | null;
+  };
+}): {
+  dayStats: Record<number, StatWrite>;
+  bingoCount: number;
+  squaresMarked: number;
+  blackout: boolean;
+  firstBingoAt?: number | null;
+} {
+  const { priorDayStats, echoes, now, base } = params;
+  const isTutorialDay = params.isTutorialDay ?? (() => false);
+  const prior = priorDayStats ?? {};
+
+  // The merged view every root derives from: prior buckets, overlaid by the
+  // base (acted-day) bucket, overlaid by the echoed buckets. An omitted
+  // per-day firstBingoAt resolves to the Day's prior stamp (the preserve case).
+  const merged: DayStats = { ...prior };
+  const outDayStats: Record<number, StatWrite> = {};
+  for (const [key, bucket] of Object.entries(base?.dayStats ?? {})) {
+    const dayIndex = Number(key);
+    merged[dayIndex] = {
+      bingoCount: bucket.bingoCount,
+      squaresMarked: bucket.squaresMarked,
+      firstBingoAt:
+        'firstBingoAt' in bucket ? (bucket.firstBingoAt ?? null) : (prior[dayIndex]?.firstBingoAt ?? null),
+    };
+    outDayStats[dayIndex] = bucket;
+  }
+  for (const echo of echoes) {
+    const firstBingoAt =
+      echo.bingoCount > 0 ? (prior[echo.dayIndex]?.firstBingoAt ?? now) : null;
+    merged[echo.dayIndex] = {
+      bingoCount: echo.bingoCount,
+      squaresMarked: echo.squaresMarked,
+      firstBingoAt,
+    };
+    outDayStats[echo.dayIndex] = {
+      bingoCount: echo.bingoCount,
+      squaresMarked: echo.squaresMarked,
+      firstBingoAt,
+    };
+  }
+
+  const { bingoCount, squaresMarked } = sumDayStats(merged, params.isCeremonialDay);
+  const blackout = (base?.blackout ?? false) || echoes.some((e) => e.blackout);
+  const out: {
+    dayStats: Record<number, StatWrite>;
+    bingoCount: number;
+    squaresMarked: number;
+    blackout: boolean;
+    firstBingoAt?: number | null;
+  } = { dayStats: outDayStats, bingoCount, squaresMarked, blackout };
+  // Root firstBingoAt: omitted iff the composed base omitted it (the acted
+  // day's prior stamp is UNKNOWN — writing a min over unknown state could
+  // clobber the server's earlier value). With no base (deal/reconcile paths)
+  // the prior view came from a real read, so the root always writes.
+  if (!base || 'firstBingoAt' in base) {
+    out.firstBingoAt = cruiseFirstBingoAt(merged, isTutorialDay);
+  }
+  return out;
 }
 
 export type Rankable = Pick<PlayerDoc, 'bingoCount' | 'squaresMarked' | 'firstBingoAt'>;

@@ -421,6 +421,25 @@ a {
   opacity: 0.7;
   border-style: dashed;
 }
+/* An Echo Mark (specs/echo-marks.md): a Square auto-marked because the Player's
+   confirmed Mark on the SAME Prompt carried over from another Day Card. The
+   subtle ⟲ glyph (top-left — the ✓ owns top-right, proof ＋ bottom-left, tally
+   bottom-right) plus a slightly dimmed check explain why a card lit up on
+   arrival, without making an echo look different in weight from a real mark.
+   --on-gradient for the same gradient-fill contrast reasoning as .cell.marked's
+   ✓ (a graphical object under WCAG 1.4.11's 3:1 floor). */
+.cell.echo::before {
+  content: '⟲';
+  position: absolute;
+  top: 2px;
+  left: 5px;
+  font-size: 11px;
+  color: var(--on-gradient);
+  opacity: 0.85;
+}
+.cell.echo.marked::after {
+  opacity: 0.75;
+}
 /* The winning line's payline sweep (specs/motion-polish.md): each Square in
    the line shimmers in turn — `--win-order` (Board.tsx, game/motion.ts) is the
    cell's position along the line, so the glow travels it like a slot payline

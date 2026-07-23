@@ -3,7 +3,7 @@ import { Lock, Shuffle } from 'lucide-react';
 import { getDoc } from 'firebase/firestore';
 import { useAuth } from '../auth/AuthContext';
 import { useBoard, useDayBoard, useDayMeta, useMyPlayer, useEventDoc, useItems, useTally, useLeaderboard, useDoubts, useMyProofs, useProofsForItemText, useDayMetasStatus, isBanned } from '../hooks/useData';
-import { setMark, dealDayCard, resolveDisplayName, RESHUFFLE_ALLOWANCE } from '../data/api';
+import { setMark, dealDayCard, reconcileEchoes, resolveDisplayName, RESHUFFLE_ALLOWANCE } from '../data/api';
 import { saveCardSnapshot, loadCardSnapshot } from '../data/cardCache';
 import { dayBoardRef } from '../data/paths';
 import { raiseDoubt, openDoubts, doubtStatusFor } from '../data/doubts';
@@ -843,6 +843,38 @@ export default function Board() {
       .finally(() => dealingDaysRef.current.delete(key));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `days`/`day` derive from event?.days; deps track the fields the deal actually reads.
   }, [hasDays, user, event?.days, viewedIndex, board, dayBoardConfirmed, now, dealNonce]);
+  // Open-time echo reconcile (specs/echo-marks.md, #446): once per board
+  // identity per session, bring the opened Day Card up to date against the
+  // Player's achieved set — the lazy backfill that self-heals pre-feature
+  // boards and mops up echo writes dropped offline. Gated on an ATTRIBUTABLE,
+  // server-confirmed board and a settled player row (identityKnown), so the
+  // cache reads inside `reconcileEchoes` see real state, and keyed by board
+  // identity (uid + Day + seed) so a reshuffle re-reconciles its replacement
+  // card. Fire-and-forget: the batch's latency-compensated write re-renders
+  // the board, and any echo win it enqueued drains through the standard
+  // cells-effect drain — nothing posts directly from here.
+  const reconciledBoardsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!hasDays || !user || !board || board.uid !== user.uid) return;
+    if (!identityKnown || !dayBoardConfirmed) return;
+    const schedule = event?.days ?? [];
+    if (schedule.length === 0) return;
+    const key = `${user.uid}:${board.dayIndex}:${board.seed}`;
+    if (reconciledBoardsRef.current.has(key)) return;
+    reconciledBoardsRef.current.add(key);
+    void reconcileEchoes({
+      uid: user.uid,
+      dayIndex: board.dayIndex,
+      dayIndexes: schedule.map((d) => d.index),
+      tutorialDayIndexes: [...tutorialDayIndexSet(schedule)],
+      ceremonialDayIndexes: [...ceremonialDayIndexSet(schedule)],
+      statsFrozen: standingsFrozen(event),
+    }).catch(() => {
+      // A synchronous failure (nothing written) may retry on the next open.
+      reconciledBoardsRef.current.delete(key);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `schedule` derives from event?.days; deps track what the reconcile reads.
+  }, [hasDays, user, board, identityKnown, dayBoardConfirmed, event?.days]);
   // Edge refs for the COSMETIC Celebration UI only (issue #104). The public Moment
   // broadcast moved OFF this snapshot-diffing machinery and ONTO the action path —
   // doMark reads `setMark`'s synchronous win-transition verdict and enqueues into a
@@ -1668,6 +1700,10 @@ export default function Board() {
         tutorialDayIndexes,
         ceremonialDayIndexes,
         statsFrozen,
+        // Echo Marks (specs/echo-marks.md, #446): the full schedule, so a Mark
+        // that lands confirmed can auto-mark its Prompt on the Player's other
+        // Day Cards in the same batch. Legacy events pass nothing (no echo).
+        echoDayIndexes: hasDays ? days.map((d) => d.index) : undefined,
       });
       track('mark_square', { mode: claimMode, marked: nextMarked });
       if (nextMarked && res.bingo) track('bingo');
@@ -2020,6 +2056,7 @@ export default function Board() {
               'cell' +
               (c.free ? ' free' : '') +
               (c.marked ? ' marked' : '') +
+              (c.marked && c.echo === true ? ' echo' : '') +
               (c.status === 'pending' ? ' pending' : '') +
               (wins.has(c.index) ? ' win' : '') +
               (stamped.has(c.index) ? ' just-marked' : '') +
