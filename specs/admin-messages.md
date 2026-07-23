@@ -54,7 +54,7 @@ While a Notice is pinned, the Card tab shows it once as a dismissible banner (�
 
 ## Feed merge (`mergeFeed`, `src/hooks/useData.ts`)
 
-`mergeFeed(proofs, moments, tallyCards, notices, max)`: pinned Notices form the masthead (filtered, sorted newest-first); everything else — proofs, moments, non-zero tally cards, and unpinned Notices — interleaves newest-first below; the concatenation is capped to `max`. With no Notices the output is byte-identical to the pre-Notice merge (the `notices` default is `[]`, contributing no entries) — the regression guard below pins this.
+`mergeFeed(proofs, moments, tallyCards, notices, max)`: pinned Notices form a capped masthead (newest-first, at most five visible pinned Notices, and when `max > 1`, at least one slot reserved for the normal stream); everything else — proofs, moments, non-zero tally cards, and unpinned Notices — interleaves newest-first below; the concatenation is capped to `max`. With no Notices the output is byte-identical to the pre-Notice merge (the `notices` default is `[]`, contributing no entries) — the regression guard below pins this.
 
 ## Decisions (from the ticket, resolved)
 
@@ -70,7 +70,7 @@ None this wave. `track('notice_post')` / `track('notice_dismiss')` ship only if 
 ## Tests (spec ↔ test alignment)
 
 - **Rules** (`tests/rules/notices.test.ts`): any signed-in read allowed; non-admin create/update/delete denied; admin create/update/delete allowed; `title` > 60, `body` > 400, and non-boolean `pinned` each denied on create.
-- **`mergeFeed` unit** (`src/data/w2-feed-moments.test.ts`): a pinned Notice sorts above newer Proofs/Moments; an unpinned Notice interleaves by `createdAt`; the `max` cap still holds; an empty-notices stream leaves the merge byte-identical to the pre-Notice output (regression guard).
+- **`mergeFeed` unit** (`src/data/w2-feed-moments.test.ts`): a pinned Notice sorts above newer Proofs/Moments; the pinned masthead is capped without evicting the normal stream; an unpinned Notice interleaves by `createdAt`; the `max` cap still holds; an empty-notices stream leaves the merge byte-identical to the pre-Notice output (regression guard).
 - **Banner** (`src/components/NoticeBanner.test.tsx`): renders the newest pinned Notice while undismissed; ✕ writes the per-device key and hides it; a remount with the key present does not render (persist-across-reload), a different notice id still renders; dismissal never touches the Feed copy.
 - **Admin IA** (`src/components/admin-console-ia.test.tsx`): the hub renders the Messages door and routes to `/more/admin/messages`, opening the "Messages" dialog under the existing dismissal contract.
 - **MessagesPanel** (`src/components/MessagesPanel.test.tsx`): compose posts with title + body + pin and clears; `Unpin` flips `pinned` false; `Delete` removes the row from history.

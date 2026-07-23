@@ -818,6 +818,11 @@ describe('mergeFeed — Proofs + Moments into one newest-first stream (specs/w2-
     expect(merged[0].createdAt).toBe(79); // the newest survives the cap
   });
 
+  it('preserves the legacy fourth-argument cap call shape', () => {
+    const many = Array.from({ length: 4 }, (_, i) => proof(`p${i}`, i));
+    expect(mergeFeed(many, [], [], 2).map((e) => e.createdAt)).toEqual([3, 2]);
+  });
+
   it('a bare Mark (neither a Proof nor a Moment) yields no Feed entry (ADR 0002)', () => {
     expect(mergeFeed([], [])).toEqual([]);
   });
@@ -847,6 +852,26 @@ describe('mergeFeed — Proofs + Moments into one newest-first stream (specs/w2-
       'old-pin',
     ]);
     expect(merged[2]).toMatchObject({ feedKind: 'proof', proof: { id: 'a' } });
+  });
+
+  it('caps the pinned Notice masthead without evicting the normal stream', () => {
+    const pinnedNotices = Array.from({ length: 8 }, (_, i) => notice(`pin-${i}`, 1000 + i, true));
+    const merged = mergeFeed(
+      [proof('proof', 9000)],
+      [moment('moment', 8000, 'bingo')],
+      [],
+      pinnedNotices,
+      6,
+    );
+    expect(merged).toHaveLength(6);
+    expect(merged.slice(0, 5).map((e) => (e.feedKind === 'notice' ? e.notice.id : e.feedKind))).toEqual([
+      'pin-7',
+      'pin-6',
+      'pin-5',
+      'pin-4',
+      'pin-3',
+    ]);
+    expect(merged[5]).toMatchObject({ feedKind: 'proof', proof: { id: 'proof' } });
   });
 
   it('an unpinned Notice interleaves by createdAt in the newest-first stream', () => {

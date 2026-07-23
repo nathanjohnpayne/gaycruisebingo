@@ -524,26 +524,44 @@ export type FeedEntry =
   | { feedKind: 'tallyCard'; createdAt: number; card: TallyCard }
   | { feedKind: 'notice'; createdAt: number; notice: NoticeDoc };
 
+const PINNED_NOTICE_MASTHEAD_LIMIT = 5;
+
 /**
  * Merge Proofs, Moments, Tally Cards, and Notices into ONE Feed stream (ADR 0002 /
  * #216 / specs/admin-messages.md), capped to `max` — the honest Feed. Pure (no
  * Firestore, no clock) so the interleave/cap is unit-testable and shared as the
  * single source of Feed order. PINNED Notices sort to the very top, newest pinned
- * first, above every Proof/Moment/Tally Card regardless of time; everything else —
- * including UNPINNED Notices — interleaves newest-first below them. A Proof/Moment
- * sorts by its `createdAt`; a Tally Card sorts by its DEBOUNCED `displayBump` (not
- * raw `lastMarkedAt`), so a hot square can't churn the stream and bury photo
- * proofs. A zero-count Tally Card is excluded — an emptied Tally drops out of the
- * Feed entirely. With no Notices the output is byte-identical to the pre-Notice
- * merge (the `notices` default is `[]`, contributing no entries).
+ * first, above every Proof/Moment/Tally Card regardless of time, with a capped
+ * masthead that cannot evict the whole normal stream; everything else — including
+ * UNPINNED Notices — interleaves newest-first below them. A Proof/Moment sorts by
+ * its `createdAt`; a Tally Card sorts by its DEBOUNCED `displayBump` (not raw
+ * `lastMarkedAt`), so a hot square can't churn the stream and bury photo proofs.
+ * A zero-count Tally Card is excluded — an emptied Tally drops out of the Feed
+ * entirely. With no Notices the output is byte-identical to the pre-Notice merge
+ * (the `notices` default is `[]`, contributing no entries).
  */
 export function mergeFeed(
   proofs: ProofDoc[],
   moments: MomentDoc[],
+  tallyCards?: TallyCard[],
+  max?: number,
+): FeedEntry[];
+export function mergeFeed(
+  proofs: ProofDoc[],
+  moments: MomentDoc[],
+  tallyCards?: TallyCard[],
+  notices?: NoticeDoc[],
+  max?: number,
+): FeedEntry[];
+export function mergeFeed(
+  proofs: ProofDoc[],
+  moments: MomentDoc[],
   tallyCards: TallyCard[] = [],
-  notices: NoticeDoc[] = [],
+  noticesOrMax: NoticeDoc[] | number = [],
   max = 60,
 ): FeedEntry[] {
+  const notices = Array.isArray(noticesOrMax) ? noticesOrMax : [];
+  const effectiveMax = typeof noticesOrMax === 'number' ? noticesOrMax : max;
   const noticeEntries = notices.map((notice) => ({
     feedKind: 'notice' as const,
     createdAt: notice.createdAt,
@@ -554,6 +572,9 @@ export function mergeFeed(
   const pinned = noticeEntries
     .filter((e) => e.notice.pinned)
     .sort((a, b) => b.createdAt - a.createdAt);
+  const cappedMax = Math.max(0, effectiveMax);
+  const pinnedLimit = cappedMax <= 1 ? cappedMax : Math.min(PINNED_NOTICE_MASTHEAD_LIMIT, cappedMax - 1);
+  const masthead = pinned.slice(0, pinnedLimit);
   const stream: FeedEntry[] = [
     ...proofs.map((proof) => ({ feedKind: 'proof' as const, createdAt: proof.createdAt, proof })),
     ...moments.map((moment) => ({ feedKind: 'moment' as const, createdAt: moment.createdAt, moment })),
@@ -562,7 +583,7 @@ export function mergeFeed(
       .map((card) => ({ feedKind: 'tallyCard' as const, createdAt: card.displayBump, card })),
     ...noticeEntries.filter((e) => !e.notice.pinned),
   ].sort((a, b) => b.createdAt - a.createdAt);
-  return [...pinned, ...stream].slice(0, max);
+  return [...masthead, ...stream.slice(0, cappedMax - masthead.length)];
 }
 
 /** One Tally marker row for the Feed derivation: the marker doc plus the `itemId`
