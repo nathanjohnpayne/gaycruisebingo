@@ -2842,11 +2842,31 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   border: 1px solid var(--border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--ink) 8%, var(--cell));
+  /* Turned-over squares carry their prompt text again (issue #444) — the
+     renderer only writes text into marked/free cells, so unmarked squares
+     stay blank shape. Same wrapping pair as the on-page .cell (word-break +
+     hyphens) so a long unbroken token wraps instead of vanishing off the
+     tile (the pre-#423 parity rule, live again now that text is back). */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  box-sizing: border-box;
+  padding: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1.1;
+  word-break: break-word;
+  hyphens: auto;
+  overflow: hidden;
 }
 .share-card-cell.marked {
-  /* Lit square — the app's own marked gradient. Textless (issue #423), so no
-     --on-gradient text is needed; the transparent border lets the fill read
+  /* Lit square — the app's own marked gradient. Prompt text fills with
+     --on-gradient, the per-theme token tuned to clear 4.5:1 against both
+     gradient endpoints (issue #72, specs/theme-on-color-contrast.md), same
+     as the on-page .cell.marked; the transparent border lets the fill read
      as a solid tile. No hardcoded #fff (theme-on-color-contrast.test.tsx). */
+  color: var(--on-gradient);
   background: linear-gradient(145deg, var(--primary), var(--secondary));
   border-color: transparent;
 }
@@ -2859,7 +2879,10 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 }
 .share-card-cell.free {
   /* Free centre — accent. After .marked so it wins over the gradient (the
-     centre is always "marked"). */
+     centre is always "marked"). Text on --ink: the accent-tinted wash is a
+     --cell mix, not the gradient, so --on-gradient is the wrong token here
+     — mirrors the on-page .cell.free.marked. */
+  color: var(--ink);
   background: color-mix(in srgb, var(--accent) 32%, var(--cell));
   border-color: var(--accent);
 }
@@ -2880,14 +2903,20 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   color: var(--ink);
   margin-top: 6px;
 }
-/* ---- Leaderboard: podium (top 3) + compact rows (issue #423) ---- */
+/* ---- Leaderboard: podium (top 3) + compact rows (issue #423) ----
+   Sized for the top-TEN roster (issue #444): the fixed 600×750 frame must
+   hold the podium plus up to seven compact rows — eight when the
+   First-BINGO pin is appended from outside the top ten — so the podium
+   bars shed a step and the compact rows run tighter than the five-row
+   layout did. Worst case budget (2-line context line, 2-line podium name,
+   8 rows, stat + footer) stays inside 750px. */
 .share-card-podium {
   display: flex;
   align-items: flex-end;
   justify-content: center;
   gap: 16px;
   width: 100%;
-  margin: 28px 0 8px;
+  margin: 18px 0 6px;
 }
 .share-card-col {
   display: flex;
@@ -2927,9 +2956,9 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   color: var(--on-gradient);
   background: linear-gradient(180deg, var(--primary), color-mix(in srgb, var(--primary) 30%, var(--bg)));
 }
-.share-card-col.rank-1 .share-card-bar { height: 128px; }
-.share-card-col.rank-2 .share-card-bar { height: 88px; }
-.share-card-col.rank-3 .share-card-bar { height: 64px; }
+.share-card-col.rank-1 .share-card-bar { height: 104px; }
+.share-card-col.rank-2 .share-card-bar { height: 76px; }
+.share-card-col.rank-3 .share-card-bar { height: 52px; }
 .share-card-pin {
   font-size: 18px;
   color: var(--accent);
@@ -2938,22 +2967,22 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 .share-card-rows {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
   width: 420px;
-  margin: 6px 0;
+  margin: 4px 0;
 }
 .share-card-row {
   display: flex;
   align-items: baseline;
   gap: 14px;
-  padding: 4px 8px;
-  font-size: 20px;
+  padding: 2px 8px;
+  font-size: 17px;
   color: var(--dim);
 }
 .share-card-rank {
   font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
-  font-size: 22px;
-  min-width: 24px;
+  font-size: 19px;
+  min-width: 22px;
   color: var(--ink);
   text-align: center;
 }
@@ -2965,7 +2994,11 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   overflow-wrap: anywhere;
   word-break: break-word;
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  /* One line, not two (issue #444): with up to eight compact rows in the
+     fixed frame, a wrapping name would blow the height budget — clip it
+     instead and keep every row a uniform height. Podium names keep their
+     two-line clamp; they have the room. */
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
 }
 .share-card-row.pinned .share-card-name {
@@ -2974,12 +3007,14 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 .share-card-sub {
   margin-left: auto;
   color: var(--ink);
-  font-size: 18px;
+  font-size: 16px;
+  white-space: nowrap;
 }
 .share-card-row .share-card-pin {
   margin-left: 10px;
-  font-size: 16px;
+  font-size: 14px;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 .share-card-footer {
   margin-top: auto;

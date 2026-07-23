@@ -123,8 +123,11 @@ function buildBingoCardNode(data: BingoShareCardData): HTMLDivElement {
   // the flex.
   const lineCells = data.kind === 'blackout' ? new Set<number>() : newestLineCells(data.cells);
   for (const c of data.cells) {
-    // Textless by design (issue #423): at iMessage-bubble size prompt text is
-    // gray noise — the board reads as SHAPE, not data. Marked squares fill
+    // Turned-over squares carry their prompt text (issue #444, refining
+    // #423's all-textless rule): the marked squares — free centre included —
+    // are the brag, so their text renders again (small, readable on
+    // pinch-to-zoom), while UNMARKED squares stay textless so the board
+    // still reads as shape at iMessage-bubble size. Marked squares fill
     // with the theme gradient (`.marked`), the newest winning line adds a
     // glow (`.line`), the free centre stays accent (`.free`), and a
     // marked-but-unconfirmed square (admin_confirmed mode) reads faded/dashed
@@ -138,7 +141,7 @@ function buildBingoCardNode(data: BingoShareCardData): HTMLDivElement {
       (c.marked ? ' marked' : '') +
       (lineCells.has(c.index) ? ' line' : '') +
       (c.status === 'pending' ? ' pending' : '');
-    grid.append(el('div', cls));
+    grid.append(el('div', cls, c.free || c.marked ? c.text : undefined));
   }
   card.append(grid);
   if (data.statLine) card.append(el('div', 'share-card-stat', data.statLine));

@@ -250,18 +250,25 @@ describe('ShareCard — renderBingoShareCard', () => {
     expect(pendingCell).toHaveClass('share-card-cell', 'marked', 'pending');
   });
 
-  // issue #423 — the board is textless: at iMessage-bubble size prompt text is
-  // gray noise, so the redesign renders shape, not data. The old "cell text
-  // renders" assertion flips to asserting its ABSENCE, even for a long token.
-  it('renders textless board squares — no prompt text on any cell', async () => {
+  // issue #444 (narrowing #423's all-textless rule): the turned-over squares
+  // are the brag, so their prompt text renders again — free centre included —
+  // while unmarked squares stay textless shape. A long unbroken token still
+  // lands in full; `.share-card-cell`'s reinstated word-break/hyphens pair
+  // (see the CSS fixed-frame describe below) wraps it on the tile.
+  it('renders prompt text on turned-over squares only — unmarked squares stay textless', async () => {
     const longToken = `${'w'.repeat(60)}.example/very-long-unbroken-url-ish-prompt`;
     const cells = makeCells([0]);
     cells[0] = { ...cells[0], text: longToken };
     await renderBingoShareCard({ kind: 'bingo', playerName: 'A', eventName: 'E', cells });
 
-    const cellNodes = toBlobNode().querySelectorAll('.share-card-cell');
+    const cellNodes = Array.from(toBlobNode().querySelectorAll('.share-card-cell'));
     expect(cellNodes).toHaveLength(25);
-    for (const cell of cellNodes) expect(cell.textContent).toBe('');
+    expect(cellNodes[0].textContent).toBe(longToken); // marked → its prompt, in full
+    expect(cellNodes[12].textContent).toBe('FREE'); // free centre → its own text
+    for (const [i, cell] of cellNodes.entries()) {
+      if (i === 0 || i === 12) continue;
+      expect(cell.textContent).toBe(''); // unmarked → textless shape
+    }
   });
 
   // issue #423 (resolved decision: newest line only) — only the most-recently
@@ -384,13 +391,44 @@ describe('ShareCard CSS — .share-card-title contrast', () => {
 
 describe('ShareCard CSS — fixed-frame safety', () => {
   it('bounds long winner and leaderboard names inside the fixed card', () => {
-    for (const selector of ['.share-card-player', '.share-card-col .share-card-name', '.share-card-row .share-card-name']) {
+    // Winner + podium names may wrap to two lines; compact-row names clamp
+    // to ONE line (issue #444) — with up to eight compact rows in the fixed
+    // frame, a wrapping name would blow the height budget, so it clips and
+    // every row keeps a uniform height.
+    const clampFor: Record<string, string> = {
+      '.share-card-player': '2',
+      '.share-card-col .share-card-name': '2',
+      '.share-card-row .share-card-name': '1',
+    };
+    for (const [selector, clamp] of Object.entries(clampFor)) {
       const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const rule = indexCss.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`));
       expect(rule, `${selector} rule not found in src/index.css`).not.toBeNull();
       expect(rule![1]).toMatch(/overflow-wrap:\s*anywhere/);
-      expect(rule![1]).toMatch(/-webkit-line-clamp:\s*2/);
+      expect(rule![1]).toMatch(new RegExp(`-webkit-line-clamp:\\s*${clamp}`));
     }
+  });
+
+  // issue #444: prompt text is back on turned-over squares, so the on-page
+  // `.cell`'s wrapping pair is load-bearing on the card again (the Codex P3,
+  // PR #111 round 3 finding 2 parity, reinstated), and the gradient fill
+  // takes the per-theme --on-gradient token — never a hardcoded hex
+  // (issue #72, specs/theme-on-color-contrast.md).
+  it('wraps cell prompt text like the on-page board and fills it with the on-gradient token', () => {
+    const cellRule = indexCss.match(/\.share-card-cell\s*\{([^}]*)\}/);
+    expect(cellRule, '.share-card-cell rule not found in src/index.css').not.toBeNull();
+    expect(cellRule![1]).toMatch(/word-break:\s*break-word/);
+    expect(cellRule![1]).toMatch(/hyphens:\s*auto/);
+    expect(cellRule![1]).toMatch(/overflow:\s*hidden/);
+
+    const markedRule = indexCss.match(/\.share-card-cell\.marked\s*\{([^}]*)\}/);
+    expect(markedRule, '.share-card-cell.marked rule not found in src/index.css').not.toBeNull();
+    expect(markedRule![1]).toMatch(/color:\s*var\(--on-gradient\)/);
+    expect(markedRule![1]).not.toMatch(/color:\s*#fff/);
+
+    const freeRule = indexCss.match(/\.share-card-cell\.free\s*\{([^}]*)\}/);
+    expect(freeRule, '.share-card-cell.free rule not found in src/index.css').not.toBeNull();
+    expect(freeRule![1]).toMatch(/color:\s*var\(--ink\)/);
   });
 
   it('reserves fixed-frame space for two winner-name lines', () => {
@@ -1144,12 +1182,13 @@ describe('Leaderboard — share affordance', () => {
     expect(changed.cacheKey).not.toBe(first.cacheKey);
   });
 
-  it('includes the First to BINGO Player on the card even when their rank falls outside the top 5', async () => {
-    // 9 Players, already in rank order (bingos desc): topDog, 7 "Mid"
+  it('includes the First to BINGO Player on the card even when their rank falls outside the top 10', async () => {
+    // 12 Players, already in rank order (bingos desc): topDog, 10 "Mid"
     // Players tied at 4 bingos, then Late Bloomer — who has the fewest
-    // bingos (rank #9, outside the card's top-5 slice, MAX_SHARE_ROWS = 5)
-    // but the EARLIEST firstBingoAt of anyone, so they still hold the pin.
-    const mids = Array.from({ length: 7 }, (_, i) =>
+    // bingos (rank #12, outside the card's top-10 slice, MAX_SHARE_ROWS =
+    // 10, issue #444) but the EARLIEST firstBingoAt of anyone, so they
+    // still hold the pin.
+    const mids = Array.from({ length: 10 }, (_, i) =>
       mkPlayer({ uid: `mid-${i}`, displayName: `Mid ${i}`, bingoCount: 4, squaresMarked: 10, firstBingoAt: 5000 + i }),
     );
     const lateBloomer = mkPlayer({
@@ -1170,11 +1209,12 @@ describe('Leaderboard — share affordance', () => {
 
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     const node = toBlobNode();
-    // Top 5 by rank + Late Bloomer appended (rank 9, outside the top 5) →
-    // the renderer lays the first three as a podium and the remaining three
-    // (ranks 4, 5, and the appended pin) as compact rows.
+    // Top 10 by rank + Late Bloomer appended (rank 12, outside the top 10) →
+    // the renderer lays the first three as a podium and the remaining eight
+    // (ranks 4–10 and the appended pin) as compact rows — the card's
+    // worst-case row count.
     expect(node.querySelectorAll('.share-card-col')).toHaveLength(3);
-    expect(node.querySelectorAll('.share-card-row')).toHaveLength(3);
+    expect(node.querySelectorAll('.share-card-row')).toHaveLength(8);
     const pinned = node.querySelectorAll('.share-card-row.pinned');
     expect(pinned).toHaveLength(1);
     expect(pinned[0].textContent).toContain('Late Bloomer');
