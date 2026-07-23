@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { MomentDoc, MomentKind, ProofDoc } from '../types';
+import type { MomentDoc, MomentKind, NoticeDoc, ProofDoc } from '../types';
 
 // specs/w2-feed-moments.md, unit layer. Two Feed halves proven here:
 //
@@ -789,6 +789,15 @@ const moment = (id: string, createdAt: number, kind: MomentKind): MomentDoc => (
   photoURL: null,
   createdAt,
 });
+const notice = (id: string, createdAt: number, pinned: boolean): NoticeDoc => ({
+  id,
+  title: id,
+  body: `${id} body`,
+  uid: `u-${id}`,
+  displayName: id,
+  createdAt,
+  pinned,
+});
 
 describe('mergeFeed — Proofs + Moments into one newest-first stream (specs/w2-feed-moments.md)', () => {
   it('interleaves Proofs and Moments strictly newest-first', () => {
@@ -804,13 +813,84 @@ describe('mergeFeed — Proofs + Moments into one newest-first stream (specs/w2-
 
   it('keeps the slice cap so the Feed stays light on ship wifi', () => {
     const many = Array.from({ length: 80 }, (_, i) => proof(`p${i}`, i));
-    const merged = mergeFeed(many, [], [], 60);
+    const merged = mergeFeed(many, [], [], [], 60);
     expect(merged).toHaveLength(60);
     expect(merged[0].createdAt).toBe(79); // the newest survives the cap
   });
 
+  it('preserves the legacy fourth-argument cap call shape', () => {
+    const many = Array.from({ length: 4 }, (_, i) => proof(`p${i}`, i));
+    expect(mergeFeed(many, [], [], 2).map((e) => e.createdAt)).toEqual([3, 2]);
+  });
+
   it('a bare Mark (neither a Proof nor a Moment) yields no Feed entry (ADR 0002)', () => {
     expect(mergeFeed([], [])).toEqual([]);
+  });
+
+  // Notices (specs/admin-messages.md) — pinned masthead, unpinned interleave, cap,
+  // and the empty-notices regression guard.
+  it('a pinned Notice sorts above newer Proofs and Moments regardless of time', () => {
+    const merged = mergeFeed(
+      [proof('a', 5000)],
+      [moment('c', 6000, 'bingo')],
+      [],
+      [notice('pin', 1000, true)], // OLD but pinned
+    );
+    expect(merged[0]).toMatchObject({ feedKind: 'notice', notice: { id: 'pin' } });
+    expect(merged.map((e) => e.feedKind)).toEqual(['notice', 'moment', 'proof']);
+  });
+
+  it('multiple pinned Notices lead the Feed newest-pinned-first', () => {
+    const merged = mergeFeed(
+      [proof('a', 4000)],
+      [],
+      [],
+      [notice('old-pin', 1000, true), notice('new-pin', 2000, true)],
+    );
+    expect(merged.slice(0, 2).map((e) => (e.feedKind === 'notice' ? e.notice.id : e.feedKind))).toEqual([
+      'new-pin',
+      'old-pin',
+    ]);
+    expect(merged[2]).toMatchObject({ feedKind: 'proof', proof: { id: 'a' } });
+  });
+
+  it('caps the pinned Notice masthead without evicting the normal stream', () => {
+    const pinnedNotices = Array.from({ length: 8 }, (_, i) => notice(`pin-${i}`, 1000 + i, true));
+    const merged = mergeFeed(
+      [proof('proof', 9000)],
+      [moment('moment', 8000, 'bingo')],
+      [],
+      pinnedNotices,
+      6,
+    );
+    expect(merged).toHaveLength(6);
+    expect(merged.slice(0, 5).map((e) => (e.feedKind === 'notice' ? e.notice.id : e.feedKind))).toEqual([
+      'pin-7',
+      'pin-6',
+      'pin-5',
+      'pin-4',
+      'pin-3',
+    ]);
+    expect(merged[5]).toMatchObject({ feedKind: 'proof', proof: { id: 'proof' } });
+  });
+
+  it('an unpinned Notice interleaves by createdAt in the newest-first stream', () => {
+    const merged = mergeFeed(
+      [proof('a', 3000), proof('b', 1000)],
+      [moment('c', 500, 'bingo')],
+      [],
+      [notice('mid', 2000, false)], // unpinned — falls into place by time
+    );
+    expect(merged.map((e) => e.createdAt)).toEqual([3000, 2000, 1000, 500]);
+    expect(merged.map((e) => e.feedKind)).toEqual(['proof', 'notice', 'proof', 'moment']);
+  });
+
+  it('an empty notices stream leaves the merge byte-identical to the pre-Notice output', () => {
+    const proofs = [proof('a', 3000), proof('b', 1000)];
+    const moments = [moment('c', 2000, 'bingo')];
+    // The pre-Notice three-arg call and the new four-arg call with [] notices must
+    // produce deep-equal output — the regression guard for a Notice-free Feed.
+    expect(mergeFeed(proofs, moments, [], [])).toEqual(mergeFeed(proofs, moments, []));
   });
 });
 

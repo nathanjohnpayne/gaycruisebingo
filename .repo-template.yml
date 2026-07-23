@@ -49,6 +49,15 @@ spec_test_map:
   easy-mix:
     - src/game/easy-mix.test.ts
     - tests/functions/easy-mix-snapshot.test.ts
+  # admin-messages (Notices, #439) spans a rules block, the mergeFeed unit,
+  # two player surfaces, and the admin door — none named for the spec
+  # basename, so map each layer's test explicitly (the spec's own Tests list).
+  admin-messages:
+    - tests/rules/notices.test.ts
+    - src/data/w2-feed-moments.test.ts
+    - src/components/NoticeBanner.test.tsx
+    - src/components/admin-console-ia.test.tsx
+    - src/components/MessagesPanel.test.tsx
 # Glob patterns that identify test files. Supplements the default
 # ("tests/**/*.test.*") which doesn't cover shell-based tests or the
 # Vite app's colocated unit tests under src/.

@@ -15,6 +15,7 @@ import GameSettings from './admin/GameSettings';
 import SchedulePanel from './admin/SchedulePanel';
 import PromptPool from './admin/PromptPool';
 import PlayersPanel from './admin/PlayersPanel';
+import MessagesPanel from './admin/MessagesPanel';
 
 /**
  * The admin console (specs/admin-console-ia.md): a hub-and-detail IA over REAL
@@ -35,6 +36,7 @@ const SECTION_TITLES: Record<AdminSection, string> = {
   schedule: 'Schedule',
   pool: 'Prompt pool',
   players: 'Players',
+  messages: 'Messages',
 };
 
 /**
@@ -173,6 +175,7 @@ function AdminConsole({ userUid, event }: { userUid: string; event: ReturnType<t
         />
       )}
       {section === 'players' && <PlayersPanel bannedUids={bannedUids} />}
+      {section === 'messages' && <MessagesPanel adminUid={userUid} days={event?.days ?? []} />}
     </AdminSheet>
   );
 }

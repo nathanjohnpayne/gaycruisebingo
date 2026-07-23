@@ -192,10 +192,11 @@ function captureOnNext(): {
   fire: (tally: unknown, proofs?: unknown, moments?: unknown, event?: unknown, player?: unknown, doubts?: unknown) => void;
   fireBoard: (dayIndex: number, board: BoardDoc | null) => void;
 } {
-  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; events: ((s: unknown) => void)[]; tally: ((s: unknown) => void) | null; doubtsAll: ((s: unknown) => void) | null; heartsAll: ((s: unknown) => void) | null; player: ((s: unknown) => void) | null; boards: Record<number, (s: unknown) => void> } = {
+  const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; events: ((s: unknown) => void)[]; tally: ((s: unknown) => void) | null; doubtsAll: ((s: unknown) => void) | null; heartsAll: ((s: unknown) => void) | null; notices: ((s: unknown) => void) | null; player: ((s: unknown) => void) | null; boards: Record<number, (s: unknown) => void> } = {
     proofs: null,
     moments: null,
     heartsAll: null,
+    notices: null,
     // EVERY event-doc subscription (#262: useAllDoubts' moderation read opens
     // a second one) — fire() feeds them all so none starves.
     events: [],
@@ -226,6 +227,9 @@ function captureOnNext(): {
     // same clobber-proofing; this suite never fixtures hearts, so fire() feeds
     // it the empty snapshot.
     else if (kind === 'collection' && args[3] === 'hearts') captured.heartsAll = onNext;
+    // specs/admin-messages.md: useFeed's fourth stream (useNotices) — the flat
+    // `notices` collection, routed by segment so it can't clobber the moments slot.
+    else if (kind === 'collection' && args[3] === 'notices') captured.notices = onNext;
     else captured.moments = onNext;
     return () => {};
   });
@@ -239,6 +243,7 @@ function captureOnNext(): {
         captured.tally?.(tally);
         captured.doubtsAll?.(doubts);
         captured.heartsAll?.(emptyColSnap);
+        captured.notices?.(emptyColSnap);
       });
     },
     fireBoard: (dayIndex: number, board: BoardDoc | null) => {

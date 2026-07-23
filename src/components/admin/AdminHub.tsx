@@ -1,10 +1,10 @@
-import { ShieldAlert, Wrench, CalendarDays, Lightbulb, Users } from 'lucide-react';
+import { ShieldAlert, Wrench, CalendarDays, Lightbulb, Users, Megaphone } from 'lucide-react';
 import { MoreRow } from '../MoreRow';
 import type { AdminSection } from './route';
 import type { EventDoc } from '../../types';
 
 /**
- * The admin hub (specs/admin-console-ia.md § "Hub"): one screen, five doors —
+ * The admin hub (specs/admin-console-ia.md § "Hub"): one screen, six doors —
  * a compact card per section with a live badge where a queue waits behind it.
  * Replaces the old three-tab, six-section scroll. The Review-queue badge is
  * the merged inbox's total (reports + approvals + claims-in-admin-confirmed-
@@ -92,6 +92,12 @@ export default function AdminHub({
         title="Players"
         sub={`Banned roster · ${bannedCount} banned`}
         onClick={() => onOpen('players')}
+      />
+      <MoreRow
+        icon={Megaphone}
+        title="Messages"
+        sub="Post a Notice to everyone · pin to the Feed + Card banner"
+        onClick={() => onOpen('messages')}
       />
     </div>
   );

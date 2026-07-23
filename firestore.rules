@@ -884,6 +884,46 @@ service cloud.firestore {
         // schema evolution.
         allow delete: if isAdmin(eventId) || isOwner(resource.data.uid);
       }
+
+      // Notices (specs/admin-messages.md): admin-authored broadcasts — title +
+      // body, optionally pinned — that render at the top of the shared Feed. Any
+      // signed-in Player READS them (the delivery surface everyone watches); only
+      // an admin creates, updates (pin/unpin), or deletes them. Unlike a Moment, a
+      // Notice IS mutable — the pin toggle is an admin update — so create AND update
+      // both revalidate the title/body caps and the boolean `pinned`. There is no
+      // report counter (Notices are admin-authored, not player-reportable) and no
+      // owner-write path (a Notice belongs to the admin role, not one uid).
+      match /notices/{noticeId} {
+        allow read: if signedIn();
+        allow create: if isAdmin(eventId)
+          // Bind attribution to the authenticated admin (Codex P2, PR #440) so a
+          // Notice's public "📌 Nathan" byline cannot be forged as another admin —
+          // the same isOwner-of-uid discipline markers/moments/proofs use.
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.title is string
+          && request.resource.data.title.size() <= 60
+          && request.resource.data.body is string
+          && request.resource.data.body.size() <= 400
+          && request.resource.data.pinned is bool
+          // createdAt is client-set and the Feed sorts by it; require a numeric,
+          // near-now value (within +60s / -24h of request.time, the moments/proofs
+          // bound) so a forged far-future stamp can't pin a Notice above all Feed
+          // activity (Codex P2, PR #440). The client writes Date.now() — in bounds
+          // by construction.
+          && request.resource.data.createdAt is number
+          && request.resource.data.createdAt <= request.time.toMillis() + 60000
+          && request.resource.data.createdAt >= request.time.toMillis() - 86400000;
+        // The ONLY mutable operation is the pin toggle (Unpin/Pin). A Notice's
+        // content, attribution, and createdAt are immutable once posted (Codex P2,
+        // PR #440): require the update diff to touch NOTHING but `pinned`, so a
+        // stale or hand-built admin client cannot rewrite an already-delivered
+        // Notice's title/body/attribution/feed-ordering. The rules are the
+        // enforcement boundary here, not just the client writer.
+        allow update: if isAdmin(eventId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned'])
+          && request.resource.data.pinned is bool;
+        allow delete: if isAdmin(eventId);
+      }
     }
 
     // Collection-group READ for the Feed's Tally Cards (#216/#294): the client

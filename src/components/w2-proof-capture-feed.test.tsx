@@ -64,13 +64,14 @@ type SnapCb = (snap: unknown) => void;
 // doc, so existing call sites — `sub.fire(colSnap([...]))` — keep working.
 const emptyDocSnap = { exists: () => false, data: () => undefined, metadata: { fromCache: false } };
 function captureOnNext(): { fire: (proofs: unknown, moments?: unknown, event?: unknown) => void } {
-  const captured: { proofs: SnapCb | null; moments: SnapCb | null; events: SnapCb[]; tally: SnapCb | null; doubtsAll: SnapCb | null; heartsAll: SnapCb | null } = {
+  const captured: { proofs: SnapCb | null; moments: SnapCb | null; events: SnapCb[]; tally: SnapCb | null; doubtsAll: SnapCb | null; heartsAll: SnapCb | null; notices: SnapCb | null } = {
     proofs: null,
     moments: null,
     events: [],
     tally: null,
     doubtsAll: null,
     heartsAll: null,
+    notices: null,
   };
   H.onSnapshot.mockImplementation(((target: unknown, optionsOrNext: unknown, maybeNext?: SnapCb) => {
     // #262: useAllDoubts subscribes WITHOUT an options arg; normalize.
@@ -89,6 +90,10 @@ function captureOnNext(): { fire: (proofs: unknown, moments?: unknown, event?: u
     // specs/feed-hearts.md: the flat hearts stream, routed by segment so it
     // never clobbers the moments slot; fed empty below.
     else if (args[3] === 'hearts') captured.heartsAll = onNext;
+    // specs/admin-messages.md: useFeed's fourth stream (useNotices) is a flat
+    // `notices` collection — route it by segment so it never clobbers the moments
+    // slot, and fire it empty below so useFeed's notices half stops loading.
+    else if (args[3] === 'notices') captured.notices = onNext;
     else captured.moments = onNext;
     return () => {};
   }) as never);
@@ -104,6 +109,7 @@ function captureOnNext(): { fire: (proofs: unknown, moments?: unknown, event?: u
         captured.tally?.(colSnap([]));
         captured.doubtsAll?.(colSnap([]));
         captured.heartsAll?.(colSnap([]));
+        captured.notices?.(colSnap([]));
       });
     },
   };

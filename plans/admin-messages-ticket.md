@@ -1,9 +1,6 @@
 # Notices: reusable admin-to-players messaging (Admin "Messages" door)
 
-**Track:** admin/social · **Phase:** 0 · **Size:** M · **Epic:** Daily Cards (admin console)
-**Refs:** ADR 0002 (Feed as the shared public surface), `specs/admin-console-ia.md` (hub-and-detail IA), `docs/agents/ticket-workflow.md`. New feature — data model + rules + two player surfaces + one admin surface. No push notifications; delivery is the existing Firestore realtime + offline cache.
-**Target mockups (the parity reference):** `plans/daily-cards-wireframes.html` — `#frame-admin-messages` (compose + sent history, the sixth hub door), `#frame-feed-notice` (the pinned Notice as players see it), and the updated `#frame-admin-hub` (six doors).
-**Suggested runner:** Claude Sonnet 5, high reasoning effort (cross-cutting: rules + data + Feed merge + two surfaces; every seam is specced below).
+**Track:** admin/social · **Phase:** 0 · **Size:** M · **Epic:** Daily Cards (admin console) **Refs:** ADR 0002 (Feed as the shared public surface), `specs/admin-console-ia.md` (hub-and-detail IA), `docs/agents/ticket-workflow.md`. New feature — data model + rules + two player surfaces + one admin surface. No push notifications; delivery is the existing Firestore realtime + offline cache. **Target mockups (the parity reference):** `plans/daily-cards-wireframes.html` — `#frame-admin-messages` (compose + sent history, the sixth hub door), `#frame-feed-notice` (the pinned Notice as players see it), and the updated `#frame-admin-hub` (six doors). **Suggested runner:** Claude Sonnet 5, high reasoning effort (cross-cutting: rules + data + Feed merge + two surfaces; every seam is specced below).
 
 ## Problem
 

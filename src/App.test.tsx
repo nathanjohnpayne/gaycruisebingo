@@ -26,6 +26,7 @@ vi.mock('./auth/AuthContext', () => ({
 // real so the genuine DealError panel renders; CachedCardFallback + cardCache
 // stay real so the durable-cache path is exercised end to end.
 vi.mock('./components/Board', () => ({ default: () => <div data-testid="board" /> }));
+vi.mock('./components/NoticeBanner', () => ({ default: () => null }));
 vi.mock('./components/Leaderboard', () => ({ default: () => <div data-testid="ranks" /> }));
 vi.mock('./components/ProofFeed', () => ({ default: () => <div data-testid="feed" /> }));
 vi.mock('./components/More', () => ({ default: () => <div data-testid="more" /> }));

@@ -58,6 +58,8 @@ A phone-first, live, social bingo game for one cruise at a time. The card's prom
 
 **Moment**: A broadcast announcement of a big social beat — a BINGO, a Blackout, or the First to BINGO — posted to the Feed for everyone. Unlike a Proof it carries no attached evidence; it marks *that* something happened, not what it looked like. _Avoid_: Milestone, highlight, announcement
 
+**Notice**: An admin-authored broadcast to every Player — a title and body the admin writes, optionally pinned — posted to the Feed and, while pinned, shown once as a dismissible Card-tab banner. Distinct from a Moment: a Moment announces a game beat and carries no authored copy, whereas a Notice IS the admin's own words. Not a chat — no recipients, threading, or read receipts. _Avoid_: Announcement, bulletin, message (as a chat), Moment
+
 **Tally**: The public, attributed record of which Players have marked a given Prompt — shown on the card as a count plus a tap-to-see-who list, so you can see who else "got" it. An aggregate surface, separate from the Feed. _Avoid_: Count, score
 
 **Share Card**: A retina image a Player generates on their own device — for a BINGO or the Leaderboard — to drop into the group chat. Out-of-app, unlike a Moment (which lives in the in-app Feed) or a Proof. _Avoid_: OG image, unfurl

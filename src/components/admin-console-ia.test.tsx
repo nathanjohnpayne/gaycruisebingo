@@ -171,7 +171,7 @@ beforeEach(() => {
 });
 
 describe('Admin hub (specs/admin-console-ia.md)', () => {
-  it('renders five section cards with the merged-inbox badge math (2 reports + 3 approvals + 2 claims = 7)', () => {
+  it('renders six section cards with the merged-inbox badge math (2 reports + 3 approvals + 2 claims = 7)', () => {
     H.flagged = [proof('r1'), proof('r2')];
     H.pendingItems = [item('a1'), item('a2'), item('a3')];
     H.claims = [
@@ -180,7 +180,7 @@ describe('Admin hub (specs/admin-console-ia.md)', () => {
     ];
     renderAt('/more/admin');
 
-    for (const title of ['Review queue', 'Game settings', 'Schedule', 'Prompt pool', 'Players']) {
+    for (const title of ['Review queue', 'Game settings', 'Schedule', 'Prompt pool', 'Players', 'Messages']) {
       expect(screen.getByText(title)).toBeInTheDocument();
     }
     const queueCard = screen.getByText('Review queue').closest('.more-row') as HTMLElement;
@@ -221,6 +221,18 @@ describe('Admin hub (specs/admin-console-ia.md)', () => {
     expect(at()).toBe('/more/admin');
     expect(screen.getByRole('dialog', { name: 'Admin' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Admin' })).toBeNull();
+  });
+
+  it('opens the Messages door and routes to /more/admin/messages under the dismissal contract', () => {
+    renderAt('/more/admin');
+    fireEvent.click(screen.getByText('Messages').closest('.more-row') as HTMLElement);
+    expect(at()).toBe('/more/admin/messages');
+    expect(screen.getByRole('dialog', { name: 'Messages' })).toBeInTheDocument();
+    // Compose surface is present…
+    expect(screen.getByRole('button', { name: 'Post to everyone' })).toBeInTheDocument();
+    // …and Done from the detail closes the whole admin to /more.
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(at()).toBe('/more');
   });
 
   it('an unknown section deep link lands on the hub, and a non-admin gets a dismissible "Admins only." sheet', () => {

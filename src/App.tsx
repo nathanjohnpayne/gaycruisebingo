@@ -6,6 +6,7 @@ import CachedCardFallback from './components/CachedCardFallback';
 import { loadCardSnapshot } from './data/cardCache';
 import Nav from './components/Nav';
 import Board from './components/Board';
+import NoticeBanner from './components/NoticeBanner';
 import Leaderboard from './components/Leaderboard';
 import ProofFeed from './components/ProofFeed';
 import More from './components/More';
@@ -61,14 +62,27 @@ export default function App() {
   const cachedCard =
     dealError && dealErrorReason === 'connection' && canRenderEventContent ? loadCardSnapshot(user.uid) : null;
   const pages: Record<TabId, ReactElement> = {
-    card: dealError ? (
-      cachedCard ? (
-        <CachedCardFallback snapshot={cachedCard} onRetry={retryDeal} retrying={dealing} />
-      ) : (
-        <DealError message={dealError} onRetry={retryDeal} retrying={dealing} />
-      )
-    ) : (
-      <Board />
+    // A pinned admin Notice shows once as a dismissible banner above WHATEVER the
+    // Card tab renders (specs/admin-messages.md): the live Board, the durable
+    // cached-card fallback, OR the DealError retry surface (Codex P2, PR #440) — a
+    // pinned Notice already in Firestore's offline cache must reach every signed-in
+    // Player, including the ones hitting a startup problem, which is exactly who an
+    // urgent admin message is for. The banner self-gates to nothing when none is
+    // pinned or this device already dismissed it, so each card state is otherwise
+    // unchanged. Mounted once, outside the deal-state conditional.
+    card: (
+      <>
+        <NoticeBanner />
+        {dealError ? (
+          cachedCard ? (
+            <CachedCardFallback snapshot={cachedCard} onRetry={retryDeal} retrying={dealing} />
+          ) : (
+            <DealError message={dealError} onRetry={retryDeal} retrying={dealing} />
+          )
+        ) : (
+          <Board />
+        )}
+      </>
     ),
     feed: <ProofFeed />,
     ranks: <Leaderboard />,

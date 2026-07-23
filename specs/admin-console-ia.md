@@ -5,7 +5,7 @@ status: accepted
 
 # admin-console-ia — hub-and-detail IA, sticky dismissal, Easy mix slider
 
-Implements `plans/admin-redesign-ticket.md` (issue #404), matching `plans/daily-cards-wireframes.html` frames `#frame-admin-hub` / `#frame-admin-queue` / `#frame-admin-settings` / `#frame-admin-schedule`. The tabbed, six-section Admin scroll (taller than a phone viewport, dismissible only by a CLOSE button at the very bottom) becomes a compact hub of five section cards with live badges, each opening a detail surface, under one shared navigation-and-dismissal contract. **UI-only**: every write path stays exactly as built — this is a re-housing, not a rebuild.
+Implements `plans/admin-redesign-ticket.md` (issue #404), matching `plans/daily-cards-wireframes.html` frames `#frame-admin-hub` / `#frame-admin-queue` / `#frame-admin-settings` / `#frame-admin-schedule`. The tabbed, six-section Admin scroll (taller than a phone viewport, dismissible only by a CLOSE button at the very bottom) becomes a compact hub of section cards with live badges, each opening a detail surface, under one shared navigation-and-dismissal contract. **UI-only**: every write path stays exactly as built — this is a re-housing, not a rebuild. The hub shipped with five doors; a sixth, **Messages**, was added by `admin-messages` (#439) — the door/route/mapping/coverage additions below are kept in sync there.
 
 ## Contract
 
@@ -13,7 +13,7 @@ Implements `plans/admin-redesign-ticket.md` (issue #404), matching `plans/daily-
 
 - `src/App.tsx` — the More tab alone mounts with a splat (`/more/*`); the other three tab routes are unchanged, and the TAB SET itself is untouched (`src/components/tabs.ts` stays the frozen four-entry contract).
 - `src/components/More.tsx` — the admin console is ROUTE-driven, not panel-state-driven: the Admin row navigates to `/more/admin`, and More renders `<Admin />` as an overlay whenever the location is under `/more/admin`. The other More panels (schedule / suggest / how-to-play / coach) stay local state.
-- `src/components/Admin.tsx` — `adminSectionFromPath(pathname)`: `'hub'` for `/more/admin`, a section id for `/more/admin/queue|settings|schedule|pool|players`, `null` outside the admin; an unknown section segment resolves to `'hub'` (a stale deep link lands on the hub, not a dead end). Because hub → detail navigations are real pushes, the browser/PWA back button walks detail → hub → More with no extra code.
+- `src/components/Admin.tsx` — `adminSectionFromPath(pathname)`: `'hub'` for `/more/admin`, a section id for `/more/admin/queue|settings|schedule|pool|players|messages` (`messages` added by #439), `null` outside the admin; an unknown section segment resolves to `'hub'` (a stale deep link lands on the hub, not a dead end). Because hub → detail navigations are real pushes, the browser/PWA back button walks detail → hub → More with no extra code.
 - A non-admin at any `/more/admin` URL gets the same sheet chrome with the "Admins only." body — dismissible, never a redirect loop (`Admin` self-guards exactly as before).
 
 ### Navigation & dismissal (every admin surface)
@@ -23,13 +23,14 @@ Implements `plans/admin-redesign-ticket.md` (issue #404), matching `plans/daily-
 
 ### Hub (`/more/admin`)
 
-`src/components/admin/AdminHub.tsx` — five section cards (reusing the More menu's exported `MoreRow` chrome), each with a live subtitle and badge:
+`src/components/admin/AdminHub.tsx` — section cards (reusing the More menu's exported `MoreRow` chrome), each with a live subtitle and, where a queue waits behind it, a badge:
 
 - **Review queue** — badge = reports + approvals + claims total, where claims count ONLY in `admin_confirmed` claim mode; subtitle enumerates the parts ("Reports N · Approvals N · Claims N — one inbox, oldest first"), or "All clear".
 - **Game settings** — static subtitle enumerating the dials.
 - **Schedule** — subtitle: day count + next locked unlock formatted in the Event's own IANA timezone (the `ScheduleList` convention).
 - **Prompt pool** — badge = pending-approvals count (the same number the More menu's Admin row badges, derived from the console's own subscription so they can never disagree).
 - **Players** — subtitle: banned-roster count.
+- **Messages** (#439, `megaphone`, no badge) — subtitle: "Post a Notice to everyone · pin to the Feed + Card banner"; opens the admin messaging compose + sent-history surface (`specs/admin-messages.md`).
 
 ### Section mapping (nothing dropped, nothing duplicated)
 
@@ -81,7 +82,7 @@ The Proof & Claims panel's "Pending claims" count-plus-jump-link row (`#admin-pe
 
 ## Test coverage
 
-- `src/components/admin-console-ia.test.tsx` (RTL-jsdom) — hub renders five cards with correct badge math; card → detail → back → hub; Done from a detail closes admin entirely (lands on `/more`); the sticky header is present on every surface; the Review queue shows the claims group only in admin-confirmed mode and orders groups oldest-first; the slider commits on release with the correct ratio, dedups a repeat release, and renders the squares bubble while dragging; Escape, backdrop, and header swipe-down dismiss.
+- `src/components/admin-console-ia.test.tsx` (RTL-jsdom) — hub renders its section cards (six since #439) with correct badge math, and the Messages door routes to `/more/admin/messages`; card → detail → back → hub; Done from a detail closes admin entirely (lands on `/more`); the sticky header is present on every surface; the Review queue shows the claims group only in admin-confirmed mode and orders groups oldest-first; the slider commits on release with the correct ratio, dedups a repeat release, and renders the squares bubble while dragging; Escape, backdrop, and header swipe-down dismiss.
 - `src/components/Admin.test.tsx`, `w2-admin-console.test.tsx`, `w2-ban-console.test.tsx`, `w3-claim-modes.test.tsx`, `d15-more-menu.test.tsx` — the pre-existing per-section behavior pins, re-anchored to the new surfaces (each renders `<Admin />` at its section route under a `MemoryRouter`). `Admin.test.tsx`'s "Admin Schedule repair line (#413)" block pins the repair-line pattern: a re-snapshot-eligible and a due-for-unlock Day each grow a `Day N repair` group carrying the right anomaly text and fallback button, the top line holds no buttons (theme select is the trailing control), an ineligible Day renders no repair line, and a fallback's result message stays inside the row after a tap; its quiet-variant test (#416) pins sentence-case DOM labels and the result rendering as `.schedule-row-result` plain text, never `.pill`; its provenance/persistence tests (#415/#418) pin that a ratio-bearing snapshot draws no deploy-race line, a tapped fallback keeps anomaly + result after the event-doc echo retires its button, and an untapped externally-resolved Day retires cleanly.
 - `tests/e2e/d15-mockup-parity.spec.ts` — hub + settings + queue structural walk and screenshots at 393×852; a taller-than-viewport detail (Prompt pool) still shows Done without scrolling.
 - No new rules/functions tests — nothing server-side changes.
