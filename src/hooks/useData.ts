@@ -695,19 +695,38 @@ export function useTallyCards() {
 }
 
 /**
- * The combined Feed (ADR 0002 / #216): Proofs + Moments + Tally Cards merged
- * newest-first, capped. Composes `useProofFeed` + `useMoments` + `useTallyCards`
- * (each with its own subscription) and folds them through `mergeFeed`; it does not
- * open a subscription of its own. `loading` stays true until ALL three streams have
- * delivered a first snapshot so the empty state never flashes before one arrives.
+ * The combined Feed (ADR 0002 / #216 / specs/admin-messages.md): Proofs +
+ * Moments + Tally Cards + Notices merged newest-first (pinned Notices first),
+ * capped to `max`. Composes `useProofFeed` + `useMoments` + `useTallyCards` +
+ * `useNotices` (each with its own subscription) and folds them through
+ * `mergeFeed`; it does not open a subscription of its own. `loading` stays true
+ * until ALL four streams have delivered a first snapshot so the empty state
+ * never flashes before one arrives.
+ *
+ * `max` is a WINDOW, not a ceiling (#441): `ProofFeed` grows it a page at a time
+ * as the reader scrolls, and `hasMore` says whether growing it would actually
+ * reveal anything. The window is purely presentational — every stream already
+ * subscribes to its whole collection and slices client-side — so a bigger
+ * window costs render work, never another read.
+ *
+ * `hasMore` comes from running the SAME merge one entry wider (`max + 1`) and
+ * asking whether it yielded more. Counting the raw streams instead would
+ * overcount: each sub-hook slices to its own `max` before `mergeFeed` sees it,
+ * `mergeFeed` drops zero-count Tally Cards, and the pinned-Notice masthead has
+ * its own limit that interacts with the cap. Asking `mergeFeed` itself, twice,
+ * needs none of that reasoning to stay true as the merge rules evolve — it is
+ * one extra sort of an already-`max`-bounded list, and `entries` is the plain
+ * `mergeFeed(..., max)` it always was.
  */
 export function useFeed(max = 60) {
-  const { proofs, loading: proofsLoading } = useProofFeed(max);
-  const { moments, loading: momentsLoading } = useMoments(max);
+  const { proofs, loading: proofsLoading } = useProofFeed(max + 1);
+  const { moments, loading: momentsLoading } = useMoments(max + 1);
   const { cards, loading: tallyLoading } = useTallyCards();
   const { notices, loading: noticesLoading } = useNotices();
+  const entries = mergeFeed(proofs, moments, cards, notices, max);
   return {
-    entries: mergeFeed(proofs, moments, cards, notices, max),
+    entries,
+    hasMore: mergeFeed(proofs, moments, cards, notices, max + 1).length > entries.length,
     // The UNCAPPED tally stream (Codex P2 on #286): the proof-card pills
     // (itemId → text for the doubts derivation, itemText → live count) must be
     // derived from EVERY Tally Card, not just the ones that survived the

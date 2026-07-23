@@ -112,6 +112,16 @@ function isBannedUid(uid: string | undefined, bannedUids: readonly string[]): bo
   return !!uid && bannedUids.includes(uid);
 }
 
+// How many entries the Feed reveals per page (#441) — the first paint AND the
+// amount each subsequent page adds. 60 keeps the first page byte-identical to
+// the pre-paging Feed, so this change only ever adds a floor below it.
+export const FEED_PAGE_SIZE = 60;
+
+// How early the bottom sentinel triggers the next page: far enough below the
+// fold that the page is on screen by the time the reader gets there, close
+// enough that a single scroll doesn't run through several pages at once.
+const FEED_SENTINEL_MARGIN = '400px 0px';
+
 function lastCallLineFromPlayers(players: LastCallMomentPayload['players']): string {
   const ranked = [...players].sort((a, b) => {
     if (b.bingoCount !== a.bingoCount) return b.bingoCount - a.bingoCount;
@@ -913,7 +923,13 @@ function FeedWhoListSheet({
  * play is no longer invisible; Proofs and Moments keep their existing rendering.
  */
 export default function ProofFeed() {
-  const { entries, tallyCards, loading } = useFeed();
+  // The render window (#441). The Feed used to render a hard-capped 60 entries
+  // and then simply END — everything older was unreachable, even though the
+  // client already held it (all three streams subscribe to their whole
+  // collections). One page is still 60; reaching the bottom adds another.
+  const [pageCount, setPageCount] = useState(1);
+  const { entries, tallyCards, loading, hasMore } = useFeed(pageCount * FEED_PAGE_SIZE);
+  const loadMore = useCallback(() => setPageCount((n) => n + 1), []);
   const { user } = useAuth();
   const navigate = useNavigate();
   // The event's days[] resolves a dayIndex to its theme label for the Day chip
@@ -995,6 +1011,35 @@ export default function ProofFeed() {
   // is stable, so an empty-dep `useCallback` pins the identity and the effect runs
   // once per open/close.
   const closeWhoList = useCallback(() => setWhoListCard(null), []);
+  // The paging trigger (#441): a CALLBACK ref rather than `useRef` + an effect,
+  // so the observer attaches exactly when the sentinel node mounts. An effect
+  // keyed on `hasMore` would miss the common case — `hasMore` is already true
+  // on the very first render, while the loading early-return means the sentinel
+  // node does not exist yet, so the effect would run once against a null ref
+  // and never re-run. React calls a STABLE callback ref only on mount/unmount
+  // of the node (both `loadMore` and this callback are `useCallback`-pinned),
+  // so the observer is created once per sentinel and torn down with it —
+  // re-creating it every render would re-fire `isIntersecting` immediately and
+  // run away through the whole stream.
+  const feedObserver = useRef<IntersectionObserver | null>(null);
+  const attachFeedSentinel = useCallback(
+    (node: HTMLDivElement | null) => {
+      feedObserver.current?.disconnect();
+      feedObserver.current = null;
+      // jsdom (and any browser old enough to matter) has no IntersectionObserver;
+      // the "Load older posts" button below is the path that still works there.
+      if (!node || typeof IntersectionObserver === 'undefined') return;
+      const observer = new IntersectionObserver(
+        (records) => {
+          if (records.some((r) => r.isIntersecting)) loadMore();
+        },
+        { rootMargin: FEED_SENTINEL_MARGIN },
+      );
+      observer.observe(node);
+      feedObserver.current = observer;
+    },
+    [loadMore],
+  );
   // The Feed's visible proofs — the read-side context the who-list sheet's Doubt
   // affordance needs to derive answered-vs-open status. Computed here (before the
   // loading/empty early returns) so the sheet, itself built before those returns
@@ -1129,6 +1174,17 @@ export default function ProofFeed() {
           />
         );
       })}
+      {/* The bottom of the window (#441). The observer above grows the page as
+          this scrolls into view; the button is the path that still works when
+          there is no IntersectionObserver, and doubles as the keyboard/AT
+          affordance — "scroll further" is not operable without a pointer. */}
+      {hasMore && (
+        <div className="feed-more" ref={attachFeedSentinel}>
+          <button type="button" className="btn feed-more-btn" onClick={loadMore}>
+            Load older posts
+          </button>
+        </div>
+      )}
       {whoListSheet}
     </div>
   );
