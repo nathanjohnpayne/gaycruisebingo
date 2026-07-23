@@ -65,7 +65,9 @@ function fitCellText(card: HTMLElement): void {
     if (!cell.textContent) continue;
     let size = parseFloat(getComputedStyle(cell).fontSize);
     while (cell.scrollHeight > cell.clientHeight && size > 4) {
-      size -= 0.5;
+      // Clamped, not bare subtraction (CodeRabbit, PR #445): a fractional
+      // computed size (4.25px) must step onto the 4px floor, never past it.
+      size = Math.max(4, size - 0.5);
       cell.style.fontSize = `${size}px`;
     }
   }
