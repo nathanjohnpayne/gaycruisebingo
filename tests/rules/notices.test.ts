@@ -9,12 +9,14 @@ import {
 } from '@firebase/rules-unit-testing';
 import { deleteDoc, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
-// specs/admin-messages.md (#439) — the Notices rules contract. A Notice is an
+// specs/admin-messages.md (#439, #455) — the Notices rules contract. A Notice is an
 // admin-authored broadcast at events/{eventId}/notices/{noticeId}: any signed-in
 // Player READS it (the Feed everyone watches); only an admin creates, updates
-// (pin/unpin), or deletes it, and both create and update validate the title/body
-// caps + boolean `pinned`. The PERMISSION_DENIED lines the SDK logs are the
-// expected assertFails denials.
+// (pin/unpin and an in-place copy correction), or deletes it, and both create and
+// update validate the title/body caps + boolean `pinned`. On update the diff is
+// pinned to title/body/pinned/editedAt, so attribution (`uid`, `displayName`) and
+// Feed ordering (`createdAt`) are immutable. The PERMISSION_DENIED lines the SDK
+// logs are the expected assertFails denials.
 
 const RULES_PATH = fileURLToPath(new URL('../../firestore.rules', import.meta.url));
 const EVENT = 'cruise';
@@ -87,17 +89,49 @@ describe('firestore.rules — Notices (specs/admin-messages.md)', () => {
     await assertSucceeds(deleteDoc(doc(db(ADMIN), noticePath('seed'))));
   });
 
-  it('the ONLY mutable field is `pinned` — content/attribution edits are denied (Codex #440)', async () => {
-    // The pin toggle is the sole update; a stale/hand-built admin client cannot
-    // rewrite an already-delivered Notice's content, attribution, or ordering.
-    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { title: 'Rewritten' }));
-    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { body: 'Rewritten' }));
+  it('attribution and Feed ordering stay immutable — only copy + pin are mutable (#455)', async () => {
+    // #455 opened title/body to an in-place copy correction, but kept the integrity
+    // half PR #440 hardened: a stale or hand-built admin client still cannot re-attribute
+    // an already-delivered Notice or re-sort it to the top of the Feed.
+    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { uid: ALICE }));
     await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { displayName: 'Someone else' }));
     await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { createdAt: 1 }));
-    // A pin toggle alongside a content change is still denied (the diff isn't pin-only).
-    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { pinned: false, title: 'x' }));
+    await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { dayIndex: 3 }));
+    // Smuggling an immutable field alongside a legal copy edit is still denied.
+    await assertFails(
+      updateDoc(doc(db(ADMIN), noticePath('seed')), { title: 'Legal', createdAt: 1 }),
+    );
+    await assertFails(
+      updateDoc(doc(db(ADMIN), noticePath('seed')), { body: 'Legal', displayName: 'Nope' }),
+    );
     // A non-boolean pinned is denied even alone.
     await assertFails(updateDoc(doc(db(ADMIN), noticePath('seed')), { pinned: 'no' }));
+  });
+
+  it('an admin corrects the copy in place and stamps editedAt (#455)', async () => {
+    const p = () => doc(db(ADMIN), noticePath('seed'));
+    // The whole point of the ticket: fix the copy without a Delete + repost.
+    await assertSucceeds(
+      updateDoc(p(), { title: 'Final stretch 🏁', body: 'happened—if', editedAt: NOW() }),
+    );
+    // Title alone (no editedAt) is legal too — editedAt is optional in the rule.
+    await assertSucceeds(updateDoc(p(), { title: 'Retitled' }));
+    // The create caps are revalidated on update — an edit can't smuggle in overlong copy.
+    await assertFails(updateDoc(p(), { title: 'x'.repeat(61) }));
+    await assertFails(updateDoc(p(), { body: 'x'.repeat(401) }));
+    await assertFails(updateDoc(p(), { title: 42 }));
+    // editedAt is bounded like createdAt, so an edit can't backdate or future-date
+    // its own provenance.
+    await assertFails(updateDoc(p(), { title: 'ok', editedAt: 'now' }));
+    await assertFails(updateDoc(p(), { title: 'ok', editedAt: NOW() + 3_600_000 }));
+    await assertFails(updateDoc(p(), { title: 'ok', editedAt: NOW() - 2 * 86_400_000 }));
+  });
+
+  it('a non-admin cannot edit a Notice (#455)', async () => {
+    await assertFails(updateDoc(doc(db(ALICE), noticePath('seed')), { body: 'Hijacked' }));
+    await assertFails(
+      updateDoc(doc(db(ALICE), noticePath('seed')), { title: 'Hijacked', editedAt: NOW() }),
+    );
   });
 
   it('enforces the title ≤60, body ≤400, and boolean-pinned caps on create', async () => {

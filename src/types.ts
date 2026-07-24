@@ -459,6 +459,11 @@ export interface NoticeDoc {
   // post time (Moment-style). Optional so a legacy/minimal doc still renders.
   dayIndex?: number;
   pinned: boolean;
+  // When the copy was last corrected in place (#455). Absent on a never-edited
+  // Notice — so every doc written before Edit shipped stays valid with no
+  // backfill. Present means the Feed card and the admin history show "edited":
+  // a delivered broadcast may be corrected, never silently rewritten.
+  editedAt?: number; // ms epoch
 }
 
 // Per-Day honor doc at events/{eventId}/days/{dayIndex}/meta/{dayIndex} — a

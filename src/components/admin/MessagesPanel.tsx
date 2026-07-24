@@ -7,6 +7,7 @@ import {
   postNotice,
   setNoticePinned,
   deleteNotice,
+  editNotice,
   NOTICE_TITLE_MAX,
   NOTICE_BODY_MAX,
 } from '../../data/notices';
@@ -17,9 +18,9 @@ import type { DayDef, NoticeDoc } from '../../types';
  * Admin → Messages (specs/admin-messages.md, #frame-admin-messages): the sixth hub
  * door. Compose a Notice — title + body + a "Pin to Feed + show Card banner" toggle
  * (default on) + one "Post to everyone" button — then a newest-first sent history
- * with quiet Unpin / Delete controls (the repair-line quiet-controls convention:
- * compact, sentence-case, no primary pill). A broadcast, never a chat: no player
- * picker, no threading, no read receipts.
+ * with quiet Edit / Unpin / Delete controls (the repair-line quiet-controls
+ * convention: compact, sentence-case, no primary pill). A broadcast, never a chat:
+ * no player picker, no threading, no read receipts.
  */
 
 /**
@@ -107,25 +108,102 @@ function ComposeNotice({ adminUid, adminName, days }: { adminUid: string; adminN
 }
 
 /**
- * One sent-history row: title + a "Day N · Name · 📌 pinned" attribution line, with
- * the quiet Unpin (when pinned) / Delete controls trailing (AsyncButton — disables
- * in flight, surfaces a failure pill instead of a silent rejection).
+ * The inline copy editor for one sent Notice (#455): the same fields and caps as
+ * Compose, prefilled with the current copy. Save writes and closes; Cancel closes
+ * without writing. A rejected save KEEPS the editor open with the draft intact and
+ * surfaces an inline `role="alert"` (the #411 / specs/admin-async-feedback.md
+ * convention) so a retry is one tap. Only the copy is editable — the byline, Day,
+ * and Feed position are immutable, in the rules as well as here.
+ */
+function EditNoticeRow({ notice, onDone }: { notice: NoticeDoc; onDone: () => void }) {
+  const [title, setTitle] = useState(notice.title);
+  const [body, setBody] = useState(notice.body);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const canSave = title.trim().length > 0 && body.trim().length > 0 && !busy;
+
+  const save = async () => {
+    if (!canSave) return;
+    setBusy(true);
+    setFailed(false);
+    try {
+      await editNotice(notice.id, { title, body });
+      onDone();
+    } catch {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="row notice-edit-row">
+      <div className="grow">
+        <input
+          className="notice-input"
+          value={title}
+          maxLength={NOTICE_TITLE_MAX}
+          aria-label="Edit notice title"
+          disabled={busy}
+          onChange={(e) => setTitle(e.target.value)}
+        />
+        <textarea
+          className="notice-input notice-textarea"
+          value={body}
+          maxLength={NOTICE_BODY_MAX}
+          aria-label="Edit notice body"
+          rows={4}
+          disabled={busy}
+          onChange={(e) => setBody(e.target.value)}
+        />
+        <div className="notice-post-row">
+          <button className="btn" disabled={!canSave} onClick={() => void save()}>
+            Save
+          </button>
+          <button className="btn" disabled={busy} onClick={onDone}>
+            Cancel
+          </button>
+          {failed && (
+            <span className="pill pill-error" role="alert">
+              Didn’t save — try again.
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One sent-history row: title + a "Day N · Name · 📌 pinned · edited" attribution
+ * line, with the quiet Edit / Unpin (when pinned) / Delete controls trailing
+ * (AsyncButton — disables in flight, surfaces a failure pill instead of a silent
+ * rejection). Tapping Edit swaps the row for the inline copy editor above.
  */
 function SentNoticeRow({ notice, days }: { notice: NoticeDoc; days: DayDef[] }) {
+  const [editing, setEditing] = useState(false);
   const hasDay = typeof notice.dayIndex === 'number' && days[notice.dayIndex] != null;
   const meta = [
     hasDay ? `Day ${(notice.dayIndex as number) + 1}` : null,
     notice.displayName,
     notice.pinned ? '📌 pinned' : null,
+    // Provenance, not a timestamp: an edit is visible but never shouted (#455).
+    notice.editedAt !== undefined ? 'edited' : null,
   ]
     .filter(Boolean)
     .join(' · ');
+
+  if (editing) return <EditNoticeRow notice={notice} onDone={() => setEditing(false)} />;
+
   return (
-    <div className="row">
+    <div className="row notice-sent-row">
       <div className="grow">
         {notice.title}
         <span className="sub">{meta}</span>
       </div>
+      <button className="btn" onClick={() => setEditing(true)}>
+        Edit
+      </button>
       {notice.pinned ? (
         <AsyncButton className="btn" onAction={() => setNoticePinned(notice.id, false)}>
           Unpin

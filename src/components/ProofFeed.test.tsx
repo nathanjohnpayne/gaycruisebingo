@@ -189,7 +189,7 @@ const viewerPlayerSnap = {
 };
 
 function captureOnNext(): {
-  fire: (tally: unknown, proofs?: unknown, moments?: unknown, event?: unknown, player?: unknown, doubts?: unknown) => void;
+  fire: (tally: unknown, proofs?: unknown, moments?: unknown, event?: unknown, player?: unknown, doubts?: unknown, notices?: unknown) => void;
   fireBoard: (dayIndex: number, board: BoardDoc | null) => void;
 } {
   const captured: { proofs: ((s: unknown) => void) | null; moments: ((s: unknown) => void) | null; events: ((s: unknown) => void)[]; tally: ((s: unknown) => void) | null; doubtsAll: ((s: unknown) => void) | null; heartsAll: ((s: unknown) => void) | null; notices: ((s: unknown) => void) | null; player: ((s: unknown) => void) | null; boards: Record<number, (s: unknown) => void> } = {
@@ -234,7 +234,7 @@ function captureOnNext(): {
     return () => {};
   });
   return {
-    fire: (tally, proofs = emptyColSnap, moments = emptyColSnap, event = emptyDocSnap, player = viewerPlayerSnap, doubts = emptyColSnap) => {
+    fire: (tally, proofs = emptyColSnap, moments = emptyColSnap, event = emptyDocSnap, player = viewerPlayerSnap, doubts = emptyColSnap, notices = emptyColSnap) => {
       act(() => {
         captured.proofs?.(proofs);
         captured.moments?.(moments);
@@ -243,7 +243,7 @@ function captureOnNext(): {
         captured.tally?.(tally);
         captured.doubtsAll?.(doubts);
         captured.heartsAll?.(emptyColSnap);
-        captured.notices?.(emptyColSnap);
+        captured.notices?.(notices);
       });
     },
     fireBoard: (dayIndex: number, board: BoardDoc | null) => {
@@ -682,5 +682,53 @@ describe('doubtsClearedByProof — the wireframes\' "👀 cleared N doubts" pill
     // 200s before the doubt — outside the satisfaction skew, so NOT satisfying.
     const before = { id: 'p-before', uid: 'bob', itemText: 'Lost passport', createdAt: 800000 - 999999 };
     expect(doubtsClearedByProof(proof, doubts, mapping, [before, proof])).toBe(1);
+  });
+});
+
+// specs/admin-messages.md (#455) — an in-place copy correction is VISIBLE on the
+// player-facing Feed card, never silent. The rules let an admin fix a typo without
+// letting anyone rewrite a delivered Notice; `editedAt` is how a reader can tell.
+describe('ProofFeed — a corrected Notice is marked "edited" (#455)', () => {
+  const noticeDoc = (over: Record<string, unknown> = {}) => ({
+    data: () => ({
+      id: 'n1',
+      title: 'Final stretch 🏁',
+      body: 'happened—if',
+      uid: 'admin-uid',
+      displayName: 'Nathan',
+      createdAt: 5000,
+      dayIndex: 0,
+      pinned: true,
+      ...over,
+    }),
+  });
+  const noticesSnap = (over?: Record<string, unknown>) => ({
+    docs: [noticeDoc(over)],
+    metadata: { fromCache: false },
+  });
+  const eventSnap = {
+    exists: () => true,
+    data: () => ({ days: [{ index: 0, date: '2026-07-15', port: 'Sea', theme: 't', pool: 'main', tutorial: false, unlockAt: 0 }] }),
+    metadata: { fromCache: false },
+  };
+
+  it('renders "edited" once the Notice carries editedAt', () => {
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+    sub.fire(emptyColSnap, emptyColSnap, emptyColSnap, eventSnap, viewerPlayerSnap, emptyColSnap, noticesSnap({ editedAt: 6000 }));
+
+    expect(screen.getByText('Final stretch 🏁')).toBeInTheDocument();
+    expect(screen.getByText(/edited/)).toBeInTheDocument();
+  });
+
+  it('an unedited Notice renders exactly as before — no "edited" marker', () => {
+    H.onSnapshot.mockReset();
+    const sub = captureOnNext();
+    render(<ProofFeed />);
+    sub.fire(emptyColSnap, emptyColSnap, emptyColSnap, eventSnap, viewerPlayerSnap, emptyColSnap, noticesSnap());
+
+    expect(screen.getByText('Final stretch 🏁')).toBeInTheDocument();
+    expect(screen.queryByText(/edited/)).toBeNull();
   });
 });

@@ -5,11 +5,14 @@ import type { NoticeDoc } from '../types';
 
 // Notices (specs/admin-messages.md): an admin-authored broadcast — title + body,
 // optionally pinned — posted to the shared Feed for everyone (ADR 0002). This
-// module is the admin write half: create, pin/unpin, delete. Unlike Moments and
-// Doubts (create-once, immutable, deterministic id), a Notice is MUTABLE (pinned
-// toggles) and DELETABLE, so it takes a Firestore auto-id, not a deterministic
-// slot. firestore.rules gates every write on `isAdmin(eventId)` and validates the
-// title/body caps + `pinned: bool` on create AND update.
+// module is the admin write half: create, pin/unpin, edit, delete. Unlike Moments
+// and Doubts (create-once, immutable, deterministic id), a Notice is MUTABLE (the
+// pin toggle and an in-place copy correction, #455) and DELETABLE, so it takes a
+// Firestore auto-id, not a deterministic slot. firestore.rules gates every write on
+// `isAdmin(eventId)` and validates the title/body caps + `pinned: bool` on create
+// AND update; on update it additionally pins the diff to title/body/pinned/editedAt,
+// so attribution (`uid`, `displayName`) and Feed ordering (`createdAt`) are immutable
+// server-side.
 //
 // Raw (converter-free) refs for writes, matching moments.ts's rawMoment and
 // doubts.ts's rawDoubts — the read side attaches `noticeConverter` via
@@ -70,6 +73,32 @@ export async function postNotice(args: PostNoticeArgs): Promise<string> {
  */
 export async function setNoticePinned(id: string, pinned: boolean): Promise<void> {
   await updateDoc(rawNotice(id), { pinned });
+}
+
+/**
+ * Correct a sent Notice's copy in place (#455). Trims and caps title/body to the
+ * same contract `postNotice` enforces, and stamps `editedAt` so the Feed card and
+ * the admin history can show "edited" — a delivered broadcast may be corrected,
+ * never silently rewritten.
+ *
+ * Only the copy moves: `uid`, `displayName`, `createdAt`, and `dayIndex` are never
+ * written here, and the rules deny them outright, so an edit can neither re-attribute
+ * a Notice nor re-sort it to the top of the Feed. Editing in place (rather than
+ * Delete + repost) also keeps the Notice's Feed position and leaves every player's
+ * Card-banner dismissal intact.
+ *
+ * Awaited so the inline editor closes only on success and surfaces a failure
+ * otherwise. Rejects on a rules denial or network error.
+ */
+export async function editNotice(
+  id: string,
+  edits: { title: string; body: string },
+): Promise<void> {
+  await updateDoc(rawNotice(id), {
+    title: edits.title.trim().slice(0, NOTICE_TITLE_MAX),
+    body: edits.body.trim().slice(0, NOTICE_BODY_MAX),
+    editedAt: Date.now(),
+  });
 }
 
 /** Delete a Notice — removes it from the Feed, the banner, and the sent history. */
