@@ -2,7 +2,7 @@ import { addDoc, collection, doc, getDoc, updateDoc, deleteDoc, runTransaction, 
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout, foldDayStat, foldEchoStats, applyEchoes, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats, type EchoBucket, type StatWrite } from '../game/logic';
-import { markerDisplayName } from './attribution';
+import { honorDisplayName, markerDisplayName } from './attribution';
 import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef, PlayerDoc } from '../types';
 
@@ -391,6 +391,7 @@ async function resolve(
     const bingoTransition = completedLines(cells).length === 0 && bingoCount > 0;
     const squares = countMarked(next);
     const blackout = isBlackout(next);
+    const dayHonorName = honorDisplayName(c.displayName, pSnap.exists() ? pSnap.data().displayName : undefined);
     // The prior first-bingo stamp is per-BOARD: in daily mode read the VIEWED Day's
     // bucket, not the cruise-wide root (which would restamp a cross-Day time).
     const priorDayStats = pSnap.exists() ? (pSnap.data().dayStats as DayStats | undefined) : undefined;
@@ -404,7 +405,8 @@ async function resolve(
       daily &&
       status === 'confirmed' &&
       bingoTransition &&
-      typeof firstBingoAt === 'number';
+      typeof firstBingoAt === 'number' &&
+      dayHonorName !== null;
     const metaRef = shouldPinDayHonor ? dayMeta(c.dayIndex as number) : null;
     const metaSnap = metaRef ? await tx.get(metaRef) : null;
 
@@ -447,7 +449,7 @@ async function resolve(
           squaresMarked: res.squaresMarked,
           blackout: res.blackout,
         });
-        if (res.bingoTransition) echoPinDays.push(echoSiblingDays[idx]);
+        if (res.bingoTransition && dayHonorName) echoPinDays.push(echoSiblingDays[idx]);
       });
     }
     // Echo Day-honor meta reads — the same post-freeze narrowing as the stats.
@@ -474,17 +476,24 @@ async function resolve(
       tx.set(dayMeta(echoDay), {
         firstBingo: {
           uid: c.uid,
-          displayName: markerDisplayName(c.displayName, pSnap.exists() ? pSnap.data().displayName : undefined),
+          displayName: dayHonorName!,
           at: echoNow,
         },
       });
     }
     if (daily) {
+      const siblingBlackout =
+        status === 'rejected' &&
+        pSnap.exists() &&
+        (pSnap.data() as Partial<PlayerDoc>).blackout === true &&
+        echoSiblingSnaps.some(
+          (snap) => snap.exists() && isBlackout((snap.data() as { cells?: Cell[] }).cells ?? []),
+        );
       const playerWrite = foldDayStat({
         priorDayStats,
         dayIndex: c.dayIndex as number,
         bucket: { bingoCount, squaresMarked: squares, firstBingoAt },
-        blackout,
+        blackout: blackout || siblingBlackout,
         isTutorialDay,
         isCeremonialDay,
       });
@@ -524,7 +533,7 @@ async function resolve(
           tx.set(metaRef, {
             firstBingo: {
               uid: c.uid,
-              displayName: markerDisplayName(c.displayName, pSnap.exists() ? pSnap.data().displayName : undefined),
+              displayName: dayHonorName!,
               at: firstBingoAt,
             },
           });
@@ -546,14 +555,14 @@ async function resolve(
     // a write, so the reads-before-writes transaction contract holds unchanged.
     next.forEach((after, i) => {
       const before = cells[i];
-      const siblingStillConfirms = echoSiblingSnaps.some(
+      const siblingStillCarriesMarker = echoSiblingSnaps.some(
         (snap) =>
           snap.exists() &&
           ((snap.data() as { cells?: Cell[] }).cells ?? []).some(
-            (cell) => !cell.free && cell.marked && cell.status !== 'pending' && cell.itemId === before.itemId,
+            (cell) => !cell.free && cell.marked && cell.itemId === before.itemId,
           ),
       );
-      if (before.marked && !after.marked && before.itemId && !siblingStillConfirms) {
+      if (before.marked && !after.marked && before.itemId && !siblingStillCarriesMarker) {
         tx.delete(marker(before.itemId, c.uid));
       }
     });

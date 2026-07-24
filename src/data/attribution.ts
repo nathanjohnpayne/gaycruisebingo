@@ -24,3 +24,9 @@ export function markerDisplayName(preferred: string | undefined, cachedPlayerNam
         : 'Anonymous';
   return candidate.slice(0, 100);
 }
+
+/** A permanent public honor must wait for a resolved Player identity. */
+export function honorDisplayName(preferred: string | undefined, cachedPlayerName: unknown): string | null {
+  const name = markerDisplayName(preferred, cachedPlayerName);
+  return name === 'Anonymous' ? null : name;
+}

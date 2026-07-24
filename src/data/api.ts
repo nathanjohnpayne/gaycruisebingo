@@ -20,7 +20,7 @@ import {
 } from 'firebase/firestore';
 import type { User } from 'firebase/auth';
 import { db, EVENT_ID } from '../firebase';
-import { markerDisplayName } from './attribution';
+import { honorDisplayName, markerDisplayName } from './attribution';
 import { isReportHidden, isBanned } from './moderation';
 import { itemsCol } from './paths';
 import { FREE_TEXT } from './seed';
@@ -570,12 +570,11 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
   // one; reading only days 0..dayIndex-1 would let that later card's Prompts
   // repeat. `dealBoard`'s exclusion resets on its own once the pool is exhausted,
   // so we always pass the full cross-cruise history.
-  const otherCards = await Promise.all(
-    days
-      .map((_, i) => i)
-      .filter((i) => i !== dayIndex)
-      .map((i) => getDoc(rawDayBoard(i, u.uid)).catch(() => null)),
-  );
+  const otherBoardRefs = days
+    .map((_, i) => i)
+    .filter((i) => i !== dayIndex)
+    .map((i) => rawDayBoard(i, u.uid));
+  const otherCards = await Promise.all(otherBoardRefs.map((ref) => getDoc(ref).catch(() => null)));
   const excludeIds = new Set<string>();
   const otherCardCells: Cell[][] = [];
   for (const snap of otherCards) {
@@ -584,11 +583,10 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
     otherCardCells.push(cells);
     for (const c of cells) if (c.itemId) excludeIds.add(c.itemId);
   }
-  // Echo Marks (specs/echo-marks.md, #446): the Player's ACHIEVED set — every
-  // Prompt with a confirmed Mark on any of their other Day Cards — derived from
-  // the SAME sibling reads the no-repeat exclusion already makes, so deal-time
-  // echo costs no extra round trip. The new card arrives already echoing.
-  const achieved = achievedItemIds(otherCardCells);
+  // Echo Marks (specs/echo-marks.md, #446): the preflight reads give the
+  // no-repeat exclusion its current card view. The transaction re-reads these
+  // refs and derives the achieved set it commits against, so a concurrent unmark
+  // cannot leave a permanent stale Echo on a newly dealt card.
 
   // Tutorial pools (embark/farewell) are seeded all-tame → deal unstratified so
   // no spicy target is forced against an all-tame snapshot. Main days keep the
@@ -626,10 +624,12 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
     at: number;
   } | null = null;
   const dealt = await runTransaction(db, async (tx) => {
-    const [latestEventSnap, latestBoardSnap, playerSnap] = await Promise.all([
+    dealtEcho = null;
+    const [latestEventSnap, latestBoardSnap, playerSnap, ...latestOtherCardSnaps] = await Promise.all([
       tx.get(rawEvent()),
       tx.get(boardRef),
       tx.get(playerRef),
+      ...otherBoardRefs.map((ref) => tx.get(ref)),
     ]);
     if (latestBoardSnap.exists()) return false;
 
@@ -650,8 +650,12 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
     // (specs/echo-marks.md § Deal-time). `applyEchoes` is idempotent and
     // returns the ORIGINAL cells untouched when nothing echoes, so a Player
     // with no repeated Prompts deals byte-identically to today.
+    const achieved = achievedItemIds(
+      latestOtherCardSnaps
+        .filter((snap) => snap.exists())
+        .map((snap) => (snap.data() as { cells?: Cell[] }).cells ?? []),
+    );
     const echoRes = applyEchoes(cells, achieved, now);
-    dealtEcho = null;
     tx.set(boardRef, { uid: u.uid, dayIndex, seed, createdAt: now, cells: echoRes.cells, easyMixRatio });
     if (echoRes.changed) {
       // The echoed card's REAL opening bucket, folded with the cruise root
@@ -673,10 +677,7 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
       dealtEcho = {
         bingoTransition: echoRes.bingoTransition,
         blackoutTransition: echoRes.blackoutTransition,
-        pinAs:
-          echoRes.bingoTransition && statsAllowed && savedName && savedName.trim().length > 0
-            ? markerDisplayName(undefined, savedName)
-            : null,
+        pinAs: echoRes.bingoTransition && statsAllowed ? honorDisplayName(undefined, savedName) : null,
         at: now,
       };
       if (!statsAllowed) {
@@ -1006,10 +1007,7 @@ export async function reshuffleBoard(params: {
       ? {
           bingoTransition: echoRes.bingoTransition,
           blackoutTransition: echoRes.blackoutTransition,
-          pinAs:
-            echoRes.bingoTransition && statsAllowed && savedName && savedName.trim().length > 0
-              ? markerDisplayName(undefined, savedName)
-              : null,
+          pinAs: echoRes.bingoTransition && statsAllowed ? honorDisplayName(undefined, savedName) : null,
           at: now,
         }
       : null;
@@ -1251,14 +1249,54 @@ const markChains = new Map<string, Promise<unknown>>();
 
 // A cache tombstone alone cannot distinguish this device's incomplete-cache
 // unmark from an authoritative admin deletion. Remember only a deletion this
-// module issued while one or more sibling reads were unknowable; reconciliation
-// may repair that narrow case and never recreates an arbitrary tombstone.
+// module issued while one or more sibling reads were unknowable; the narrow
+// witness survives reloads because Firestore's own persistent tombstone does.
 const pendingMarkerRepairs = new Set<string>();
 const markerRepairKey = (uid: string, itemId: string) => `${uid}:${itemId}`;
+const markerRepairStorageKey = (repairKey: string) => `gcb:echo-marker-repair:${EVENT_ID}:${repairKey}`;
+
+function markerRepairStore(): Storage | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function rememberMarkerRepair(repairKey: string): void {
+  pendingMarkerRepairs.add(repairKey);
+  try {
+    markerRepairStore()?.setItem(markerRepairStorageKey(repairKey), '1');
+  } catch {
+    // Storage is an enhancement over the in-memory candidate (private mode etc.).
+  }
+}
+
+function forgetMarkerRepair(repairKey: string): void {
+  pendingMarkerRepairs.delete(repairKey);
+  try {
+    markerRepairStore()?.removeItem(markerRepairStorageKey(repairKey));
+  } catch {
+    // Storage is best-effort; the in-memory candidate is already cleared.
+  }
+}
+
+function hasMarkerRepair(repairKey: string): boolean {
+  if (pendingMarkerRepairs.has(repairKey)) return true;
+  try {
+    if (markerRepairStore()?.getItem(markerRepairStorageKey(repairKey)) === '1') {
+      pendingMarkerRepairs.add(repairKey);
+      return true;
+    }
+  } catch {
+    // A disabled store means only this session's candidate can be trusted.
+  }
+  return false;
+}
 
 /** Test-only. */
 export function __resetPendingMarkerRepairsForTests(): void {
-  pendingMarkerRepairs.clear();
+  for (const repairKey of [...pendingMarkerRepairs]) forgetMarkerRepair(repairKey);
 }
 
 // The shared marker-attribution helper (`markerDisplayName`) lives in the
@@ -1454,6 +1492,27 @@ async function runSetMark(
     now,
   });
 
+  const toggled = cells.find((c) => c.index === params.index);
+  const echoDayIndexes =
+    params.daily === true ? (params.echoDayIndexes ?? []).filter((d) => d !== dayIndex) : [];
+  // An unmark can remove the acted board's last blackout while a no-cascade
+  // sibling Echo still stands. Preserve the root latch when the local sibling
+  // view proves that other board remains blackout.
+  let siblingBlackout = false;
+  if (!params.nextMarked && priorRootBlackout && echoDayIndexes.length > 0) {
+    const siblingSnaps = await Promise.allSettled(
+      echoDayIndexes.map((d) =>
+        getDocFromCache(doc(database, 'events', EVENT_ID, 'days', String(d), 'boards', uid)),
+      ),
+    );
+    siblingBlackout = siblingSnaps.some(
+      (snap) =>
+        snap.status === 'fulfilled' &&
+        snap.value.exists() &&
+        isBlackout((snap.value.data() as { cells?: Cell[] }).cells ?? []),
+    );
+  }
+
   // Fold this Mark's per-Board result into the Player's per-Day `dayStats` and
   // re-derive the cruise-wide root totals (bingos/squares summed over every Day
   // Card, First to BINGO restricted to main-game Days). `foldDayStat` carries the
@@ -1464,7 +1523,7 @@ async function runSetMark(
     priorDayStats,
     dayIndex,
     bucket: player,
-    blackout: player.blackout,
+    blackout: player.blackout || siblingBlackout,
     isTutorialDay: params.tutorialDayIndexes
       ? (i: number) => params.tutorialDayIndexes!.includes(i)
       : undefined,
@@ -1482,9 +1541,6 @@ async function runSetMark(
   // cache-missed sibling is simply skipped — the open-time reconcile self-heals
   // it. Only confirmed Marks echo: an admin_confirmed-mode Mark starts
   // `pending` and echoes from `confirmClaim` instead. Unmarks never cascade.
-  const toggled = cells.find((c) => c.index === params.index);
-  const echoDayIndexes =
-    params.daily === true ? (params.echoDayIndexes ?? []).filter((d) => d !== dayIndex) : [];
   const echoItemId =
     params.nextMarked && params.claimMode !== 'admin_confirmed' && toggled && !toggled.free
       ? toggled.itemId
@@ -1631,8 +1687,9 @@ async function runSetMark(
       // deleting it while the Prompt is still CONFIRMED on another of the
       // Player's boards would strip the mark⇒tally invariant (and the Doubt
       // gate's `exists()` target) from every still-standing carrier. Keep the
-      // marker while any cached sibling board still holds the Prompt
-      // confirmed; delete only when this was the last carrier. Sibling state
+      // marker while any cached sibling board still holds the Prompt marked —
+      // pending claims publish their marker before they can echo — and delete
+      // only when this was the last carrier. Sibling state
       // is the cache's view (the same read discipline as the echo pass); an
       // unknowable sibling reads as "no carrier", matching today's delete.
       let stillAchievedElsewhere = false;
@@ -1649,7 +1706,7 @@ async function runSetMark(
             snap.status === 'fulfilled' &&
             snap.value.exists() &&
             ((snap.value.data() as { cells?: Cell[] }).cells ?? []).some(
-              (c) => !c.free && c.marked && c.status !== 'pending' && c.itemId === tallyItemId,
+              (c) => !c.free && c.marked && c.itemId === tallyItemId,
             ),
         );
       }
@@ -1657,10 +1714,10 @@ async function runSetMark(
         batch.delete(markerRef);
         const repairKey = markerRepairKey(uid, tallyItemId);
         if (siblingKnowledgeIncomplete) {
-          pendingMarkerRepairs.add(repairKey);
+          rememberMarkerRepair(repairKey);
           markerRepairCandidate = repairKey;
         } else {
-          pendingMarkerRepairs.delete(repairKey);
+          forgetMarkerRepair(repairKey);
         }
       }
     }
@@ -1668,7 +1725,7 @@ async function runSetMark(
 
   const committed = batch.commit();
   void committed.catch((err: unknown) => {
-    if (markerRepairCandidate) pendingMarkerRepairs.delete(markerRepairCandidate);
+    if (markerRepairCandidate) forgetMarkerRepair(markerRepairCandidate);
     // A rejection here is NOT the offline case. Offline, commit() PENDS — it
     // neither resolves nor rejects in this tab's lifetime — while the write sits
     // durably in the persistent cache and drains on reconnect (ADR 0006). So a
@@ -1704,7 +1761,7 @@ async function runSetMark(
   // First-to-BINGO candidate is deliberately NOT minted from the echo path
   // (spec § Moments — conservative: a ceremony can be lost, never wrongly
   // posted).
-  const pinName = markerDisplayName(params.displayName, cachedPlayerName);
+  const pinName = honorDisplayName(params.displayName, cachedPlayerName);
   for (const echoBoard of echoBoards) {
     if (echoBoard.bingoTransition || echoBoard.blackoutTransition) {
       enqueueWinMoments({
@@ -1716,7 +1773,7 @@ async function runSetMark(
     }
     if (
       echoBoard.bingoTransition &&
-      pinName !== 'Anonymous' &&
+      pinName &&
       (!params.statsFrozen || params.ceremonialDayIndexes?.includes(echoBoard.dayIndex))
     ) {
       // A meta pin is permanent, while a stale sibling markSeed can reject this
@@ -1859,10 +1916,10 @@ async function runReconcileEchoes(
     const read = markerReads[i];
     const repairKey = markerRepairKey(uid, c.itemId as string);
     if (read.status === 'fulfilled' && read.value.exists()) {
-      pendingMarkerRepairs.delete(repairKey);
+      forgetMarkerRepair(repairKey);
       return false;
     }
-    return read.status === 'fulfilled' && !read.value.exists() && pendingMarkerRepairs.has(repairKey);
+    return read.status === 'fulfilled' && !read.value.exists() && hasMarkerRepair(repairKey);
   });
 
   if (!res.changed && markerRepairs.length === 0) return none;
@@ -1925,7 +1982,7 @@ async function runReconcileEchoes(
     console.error('[reconcileEchoes] batch.commit() rejected — online write failure', { uid, dayIndex }, err);
   });
   if (markerRepairs.length > 0) {
-    void committed.then(() => markerRepairs.forEach((cell) => pendingMarkerRepairs.delete(markerRepairKey(uid, cell.itemId as string)))).catch(() => undefined);
+    void committed.then(() => markerRepairs.forEach((cell) => forgetMarkerRepair(markerRepairKey(uid, cell.itemId as string)))).catch(() => undefined);
   }
 
   if (res.bingoTransition || res.blackoutTransition) {
@@ -1941,14 +1998,13 @@ async function runReconcileEchoes(
   // mark-time echo pin; an unknown identity skips (the roster-derived honors
   // fallback covers it).
   if (res.bingoTransition && (!params.statsFrozen || params.ceremonialDayIndexes?.includes(dayIndex))) {
-    const savedName =
-      typeof cachedPlayerData?.displayName === 'string' ? cachedPlayerData.displayName : undefined;
-    if (savedName && savedName.trim().length > 0) {
+    const pinName = honorDisplayName(undefined, cachedPlayerData?.displayName);
+    if (pinName) {
       void committed
         .then(() =>
           pinDayFirstBingo(
             dayIndex,
-            { uid, displayName: markerDisplayName(undefined, savedName), photoURL: null },
+            { uid, displayName: pinName, photoURL: null },
             now,
           ),
         )

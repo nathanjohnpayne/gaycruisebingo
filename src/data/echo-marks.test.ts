@@ -344,6 +344,24 @@ describe('setMark — mark-time propagation (spec § Mark-time)', () => {
     expect(H.setDoc).not.toHaveBeenCalled();
   });
 
+  it('does not pin an Echo honor under the Anonymous fallback', async () => {
+    seedBoards();
+    H.player = { ...(H.player as Record<string, unknown>), displayName: 'Anonymous' };
+    H.dayBoards.set(3, {
+      uid: 'u1',
+      seed: 333,
+      dayIndex: 3,
+      cells: card((i) => (i === 14 ? 'shared' : `b${i}`), {
+        10: { marked: true, markedAt: 1 },
+        11: { marked: true, markedAt: 1 },
+        13: { marked: true, markedAt: 1 },
+      }),
+    });
+    await markShared({ displayName: undefined });
+    await Promise.resolve();
+    expect(H.setDoc).not.toHaveBeenCalled();
+  });
+
   it('does NOT echo a pending (admin_confirmed) Mark', async () => {
     seedBoards();
     await markShared({ claimMode: 'admin_confirmed' });
@@ -393,10 +411,49 @@ describe('setMark — mark-time propagation (spec § Mark-time)', () => {
     expect(H.batchDelete).not.toHaveBeenCalled();
 
     vi.clearAllMocks();
+    // Pending marks publish the same marker before admin confirmation, so they
+    // keep it alive just like a confirmed sibling.
+    H.dayBoards.set(3, {
+      uid: 'u1',
+      seed: 333,
+      dayIndex: 3,
+      cells: card((i) => (i === 8 ? 'shared' : `b${i}`), {
+        8: { marked: true, markedAt: 2, status: 'pending' },
+      }),
+    });
+    await markShared({ nextMarked: false });
+    expect(H.batchDelete).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
     // Sibling no longer carries it marked — the last carrier's unmark deletes.
     H.dayBoards.set(3, { uid: 'u1', seed: 333, dayIndex: 3, cells: card((i) => (i === 8 ? 'shared' : `b${i}`)) });
     await markShared({ nextMarked: false });
     expect(H.batchDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves root blackout when an unmark leaves a sibling Echo blacked out', async () => {
+    seedBoards();
+    H.dayBoards.set(2, {
+      uid: 'u1',
+      seed: 222,
+      dayIndex: 2,
+      cells: card((i) => (i === 5 ? 'shared' : `a${i}`), { 5: { marked: true, markedAt: 1 } }),
+    });
+    H.dayBoards.set(3, {
+      uid: 'u1',
+      seed: 333,
+      dayIndex: 3,
+      cells: card((i) => (i === 8 ? 'shared' : `b${i}`)).map((cell) =>
+        cell.free
+          ? cell
+          : { ...cell, marked: true, markedAt: 2, status: 'confirmed', ...(cell.index === 8 ? { echo: true } : {}) },
+      ),
+    });
+    H.player = { ...(H.player as Record<string, unknown>), blackout: true };
+
+    await markShared({ nextMarked: false });
+    const playerWrite = H.batchSet.mock.calls.find(isPlayerWrite)![1] as { blackout: boolean };
+    expect(playerWrite.blackout).toBe(true);
   });
 });
 
@@ -436,6 +493,24 @@ describe('dealDayCard — deal-time echo (spec § Deal-time)', () => {
     };
     expect(playerWrite.dayStats[0].squaresMarked).toBe(1);
     expect(playerWrite.squaresMarked).toBe(2); // Day 1 prior bucket + this echo
+  });
+
+  it('revalidates achieved prompts inside the deal transaction before it writes Echoes', async () => {
+    seedDeal({ 0: { marked: true, markedAt: 1, status: 'confirmed' } });
+    H.transactionRunner = async (fn, tx) => {
+      const source = H.dayBoards.get(1)!;
+      H.dayBoards.set(1, {
+        ...source,
+        cells: (source.cells as Cell[]).map((cell) =>
+          cell.itemId === 's0' ? { ...cell, marked: false, markedAt: null } : cell,
+        ),
+      });
+      return fn(tx);
+    };
+
+    await expect(dealDayCard(u, 0)).resolves.toBe(true);
+    const cells = (H.txSet.mock.calls.find((c) => isDayBoardWrite(c, 0))![1] as { cells: Cell[] }).cells;
+    expect(cells.find((cell) => cell.itemId === 's0')?.echo).toBeUndefined();
   });
 
   it('REGRESSION: with nothing achieved the player write is the zeroed seed bucket, exactly as today', async () => {
@@ -694,6 +769,33 @@ describe('reconcileEchoes — open-time backfill (spec § Open-time)', () => {
     expect(markerWrite![1]).toMatchObject({ uid: 'u1', markedAt: 7, dayIndex: 2 });
     expect(H.batchCommit).toHaveBeenCalledTimes(1);
   });
+
+  it('reuses a persisted marker-repair witness after a reload', async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    });
+    try {
+      H.dayBoards.set(2, {
+        uid: 'u1',
+        seed: 222,
+        dayIndex: 2,
+        cells: card((i) => (i === 9 ? 'shared' : `d${i}`), {
+          9: { marked: true, markedAt: 7, status: 'confirmed', echo: true },
+        }),
+      });
+      H.markerCache.set('shared', false);
+      values.set('gcb:echo-marker-repair:test-event:u1:shared', '1');
+
+      const res = await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [1, 2] });
+      expect(res.changed).toBe(false);
+      expect(H.batchSet.mock.calls.find(isMarkerWrite)).toBeDefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('confirmClaim — the admin_confirmed echo moment (spec § Contract)', () => {
@@ -763,6 +865,39 @@ describe('confirmClaim — the admin_confirmed echo moment (spec § Contract)', 
     });
     await rejectClaim(claim(), 'admin-1');
     expect(H.txDelete).not.toHaveBeenCalled();
+  });
+
+  it('rejecting a repeated Prompt keeps its marker while a sibling Claim is pending', async () => {
+    seedClaim();
+    H.dayBoards.set(2, {
+      uid: 'u1',
+      seed: 222,
+      dayIndex: 2,
+      cells: card((i) => (i === 7 ? 'shared' : `b${i}`), {
+        7: { marked: true, markedAt: 1, status: 'pending' },
+      }),
+    });
+    await rejectClaim(claim(), 'admin-1');
+    expect(H.txDelete).not.toHaveBeenCalled();
+  });
+
+  it('rejecting a source keeps root blackout while a sibling Echo remains blackout', async () => {
+    seedClaim();
+    H.dayBoards.set(2, {
+      uid: 'u1',
+      seed: 222,
+      dayIndex: 2,
+      cells: card((i) => (i === 7 ? 'shared' : `b${i}`)).map((cell) =>
+        cell.free
+          ? cell
+          : { ...cell, marked: true, markedAt: 2, status: 'confirmed', ...(cell.index === 7 ? { echo: true } : {}) },
+      ),
+    });
+    H.player = { ...(H.player as Record<string, unknown>), blackout: true };
+
+    await rejectClaim(claim(), 'admin-1');
+    const playerWrite = H.txSet.mock.calls.find(isPlayerWrite)![1] as { blackout: boolean };
+    expect(playerWrite.blackout).toBe(true);
   });
 
   it("pins the echo Day's write-once honor when the echo completes its first line (Codex P2 #447)", async () => {
