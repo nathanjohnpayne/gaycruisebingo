@@ -433,11 +433,24 @@ export async function deleteProof(
               )
             : [];
         const existingFirst = (playerSnap.data()?.firstBingoAt as number | null | undefined) ?? null;
-        const next: Cell[] = cells.map((c) =>
-          c.index === proof.cellIndex
-            ? { ...c, marked: false, markedAt: null, proofId: null, status: 'confirmed' }
-            : c,
-        );
+        const next: Cell[] = cells.map((c) => {
+          if (c.index !== proof.cellIndex) return c;
+          // Deleting a proof unmarks the cell — mirror computeMark's manual
+          // unmark EXACTLY (Phase 4b P1 on #447): strip any echo flag and
+          // persist `echoOptOut` on a non-free Prompt cell, so open-time
+          // reconciliation cannot restore the Prompt from a standing sibling
+          // and undo the deletion the Player just performed. A later manual
+          // re-mark clears the opt-out, exactly as after a manual unmark.
+          const { echo: _echo, echoOptOut: _echoOptOut, ...manual } = c;
+          return {
+            ...manual,
+            marked: false,
+            markedAt: null,
+            proofId: null,
+            status: 'confirmed' as const,
+            ...(!c.free && c.itemId !== null ? { echoOptOut: true } : {}),
+          };
+        });
         const bingoCount = completedLines(next).length;
         const squares = countMarked(next);
         const blackout = isBlackout(next);

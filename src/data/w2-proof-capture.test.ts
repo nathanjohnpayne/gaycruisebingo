@@ -531,9 +531,18 @@ describe('deleteProof — resolves the backing cell by the proof doc cellIndex (
 
     // Storage first so a doc is never left referencing deleted media.
     expect(deleteStorageSpy).toHaveBeenCalledWith(`proofs/${EVENT_ID}/u1/P.jpg`);
-    // The backing cell — resolved by the proof's cellIndex — is unmarked + unlinked.
+    // The backing cell — resolved by the proof's cellIndex — is unmarked +
+    // unlinked, and carries the SAME echoOptOut a manual unmark persists
+    // (Phase 4b P1 on #447): open-time reconciliation must not restore the
+    // Prompt from a standing sibling and undo this deletion.
     const written = setPayload('/boards/') as { cells: Cell[] };
-    expect(written.cells[5]).toMatchObject({ marked: false, markedAt: null, proofId: null });
+    expect(written.cells[5]).toMatchObject({
+      marked: false,
+      markedAt: null,
+      proofId: null,
+      echoOptOut: true,
+    });
+    expect('echo' in written.cells[5]).toBe(false);
     expect(setPayload('/players/')).toMatchObject({ squaresMarked: 0 });
     // The proof doc itself is removed...
     const proofDelete = txDelete.mock.calls.find((c) => (c[0] as Ref).path.includes('/proofs/'));
