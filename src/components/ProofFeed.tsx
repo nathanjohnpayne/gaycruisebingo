@@ -422,6 +422,9 @@ function NoticeCard({ notice, days }: { notice: NoticeDoc; days: DayDef[] | unde
   const meta = [
     notice.pinned ? `📌 ${notice.displayName}` : notice.displayName,
     hasDay ? `Day ${(notice.dayIndex as number) + 1}` : null,
+    // An in-place copy correction is visible, never silent (#455) — the reason the
+    // rules let an admin fix a typo without letting anyone rewrite a Notice.
+    notice.editedAt !== undefined ? 'edited' : null,
   ]
     .filter(Boolean)
     .join(' · ');

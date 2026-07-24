@@ -14,6 +14,7 @@ const writers = vi.hoisted(() => ({
   postNotice: vi.fn((..._a: unknown[]) => Promise.resolve('new-id')),
   setNoticePinned: vi.fn((..._a: unknown[]) => Promise.resolve()),
   deleteNotice: vi.fn((..._a: unknown[]) => Promise.resolve()),
+  editNotice: vi.fn((..._a: unknown[]) => Promise.resolve()),
 }));
 
 vi.mock('../auth/AuthContext', () => ({ useAuth: () => ({ user: { uid: 'admin-uid', displayName: 'Nathan (auth)' } }) }));
@@ -29,6 +30,7 @@ vi.mock('../data/notices', () => ({
   postNotice: writers.postNotice,
   setNoticePinned: writers.setNoticePinned,
   deleteNotice: writers.deleteNotice,
+  editNotice: writers.editNotice,
   NOTICE_TITLE_MAX: 60,
   NOTICE_BODY_MAX: 400,
 }));
@@ -54,6 +56,8 @@ describe('MessagesPanel (specs/admin-messages.md)', () => {
     writers.postNotice.mockClear();
     writers.setNoticePinned.mockClear();
     writers.deleteNotice.mockClear();
+    writers.editNotice.mockClear();
+    writers.editNotice.mockImplementation(() => Promise.resolve());
   });
 
   it('posts a Notice with title + body + pin, then clears the draft', async () => {
@@ -119,5 +123,98 @@ describe('MessagesPanel (specs/admin-messages.md)', () => {
     render(<MessagesPanel adminUid="admin-uid" days={days} />);
     expect(screen.getByText('n1 title')).toBeInTheDocument();
     expect(screen.getByText(/📌 pinned/)).toBeInTheDocument();
+  });
+
+  // ---- in-place copy correction (#455) ----
+
+  it('Edit opens an editor prefilled with the current copy, and Save writes it', async () => {
+    H.notices = [notice('n1', true)];
+    render(<MessagesPanel adminUid="admin-uid" days={days} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    // Prefilled with what was posted — this is a correction, not a fresh compose.
+    const title = screen.getByLabelText('Edit notice title');
+    const body = screen.getByLabelText('Edit notice body');
+    expect(title).toHaveValue('n1 title');
+    expect(body).toHaveValue('n1 body');
+
+    // The motivating case: spaced em dashes → CMOS-compliant unspaced.
+    fireEvent.change(body, { target: { value: 'happened—if' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(writers.editNotice).toHaveBeenCalledWith('n1', {
+        title: 'n1 title',
+        body: 'happened—if',
+      }),
+    );
+    // The editor closes on a settled success, back to the summary row.
+    await waitFor(() => expect(screen.queryByLabelText('Edit notice body')).toBeNull());
+  });
+
+  it('Save with nothing changed closes without writing — no spurious "edited" (CodeRabbit #456)', async () => {
+    H.notices = [notice('n1', true)];
+    render(<MessagesPanel adminUid="admin-uid" days={days} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    // Straight to Save, no edits — and again with only trailing whitespace, which
+    // the writer would trim away anyway.
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByLabelText('Edit notice body')).toBeNull());
+    expect(writers.editNotice).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Edit notice body'), { target: { value: 'n1 body  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByLabelText('Edit notice body')).toBeNull());
+    expect(writers.editNotice).not.toHaveBeenCalled();
+  });
+
+  it('Cancel closes the editor without writing', () => {
+    H.notices = [notice('n1', false)];
+    render(<MessagesPanel adminUid="admin-uid" days={days} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Edit notice body'), { target: { value: 'discarded' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(writers.editNotice).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText('Edit notice body')).toBeNull();
+    expect(screen.getByText('n1 title')).toBeInTheDocument();
+  });
+
+  it('a rejected save keeps the editor open with the draft intact and alerts', async () => {
+    writers.editNotice.mockImplementation(() => Promise.reject(new Error('denied')));
+    H.notices = [notice('n1', false)];
+    render(<MessagesPanel adminUid="admin-uid" days={days} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Edit notice body'), { target: { value: 'kept draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toBeInTheDocument());
+    // The draft survives the failure so a retry is one tap (#411 convention).
+    expect(screen.getByLabelText('Edit notice body')).toHaveValue('kept draft');
+  });
+
+  it('Save is disabled while either field is empty', () => {
+    H.notices = [notice('n1', false)];
+    render(<MessagesPanel adminUid="admin-uid" days={days} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const save = screen.getByRole('button', { name: 'Save' });
+    expect(save).toBeEnabled();
+    fireEvent.change(screen.getByLabelText('Edit notice body'), { target: { value: '  ' } });
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Edit notice body'), { target: { value: 'B' } });
+    fireEvent.change(screen.getByLabelText('Edit notice title'), { target: { value: '' } });
+    expect(save).toBeDisabled();
+  });
+
+  it('an edited Notice is marked "edited" in the history; an unedited one is not', () => {
+    H.notices = [{ ...notice('n1', true), editedAt: 2000 }];
+    const { unmount } = render(<MessagesPanel adminUid="admin-uid" days={days} />);
+    expect(screen.getByText(/edited/)).toBeInTheDocument();
+    unmount();
+
+    H.notices = [notice('n2', true)];
+    render(<MessagesPanel adminUid="admin-uid" days={days} />);
+    expect(screen.queryByText(/edited/)).toBeNull();
   });
 });

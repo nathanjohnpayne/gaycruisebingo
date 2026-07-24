@@ -913,15 +913,49 @@ service cloud.firestore {
           && request.resource.data.createdAt is number
           && request.resource.data.createdAt <= request.time.toMillis() + 60000
           && request.resource.data.createdAt >= request.time.toMillis() - 86400000;
-        // The ONLY mutable operation is the pin toggle (Unpin/Pin). A Notice's
-        // content, attribution, and createdAt are immutable once posted (Codex P2,
-        // PR #440): require the update diff to touch NOTHING but `pinned`, so a
-        // stale or hand-built admin client cannot rewrite an already-delivered
-        // Notice's title/body/attribution/feed-ordering. The rules are the
-        // enforcement boundary here, not just the client writer.
+        // Two mutable operations: the pin toggle (Unpin/Pin) and an in-place COPY
+        // correction (#455 — a typo or off-house-style punctuation is otherwise
+        // unfixable without a Delete + repost, which loses the Notice's Feed
+        // position and re-banners everyone who dismissed it).
+        //
+        // What stays immutable is the integrity half PR #440 hardened (Codex P2):
+        // `uid` and `displayName` are absent from hasOnly, so a byline can never be
+        // moved onto another admin; `createdAt` likewise, so a Notice can't be
+        // re-sorted to the top of the Feed by editing it; `dayIndex` too. The rules
+        // are the enforcement boundary here, not just the client writer.
+        //
+        // An edit stamps `editedAt`, which the Feed card and admin history surface
+        // as "edited" — a delivered broadcast may be corrected, never silently
+        // rewritten.
         allow update: if isAdmin(eventId)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned'])
-          && request.resource.data.pinned is bool;
+          && request.resource.data.diff(resource.data).affectedKeys()
+               .hasOnly(['title', 'body', 'pinned', 'editedAt'])
+          && request.resource.data.title is string
+          && request.resource.data.title.size() <= 60
+          && request.resource.data.body is string
+          && request.resource.data.body.size() <= 400
+          && request.resource.data.pinned is bool
+          // A copy change MUST carry a fresh `editedAt` (Codex P2, PR #456). This is
+          // what makes "an edit is visible, never silent" an enforced invariant
+          // rather than a client-side convention: a stale or hand-built admin client
+          // cannot rewrite title/body while leaving the "edited" marker off. Reusing
+          // the doc's existing stamp doesn't count — an unchanged `editedAt` isn't in
+          // affectedKeys, so it fails this check.
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['title', 'body'])
+              || request.resource.data.diff(resource.data).affectedKeys().hasAny(['editedAt']))
+          // When `editedAt` CHANGES it must be a near-now number — the same +60s/-24h
+          // bound createdAt carries on create, so an edit can neither backdate nor
+          // future-date its own provenance, and (because absence fails `is number`)
+          // an existing stamp can never be stripped.
+          //
+          // Scoped to the diff, NOT to mere presence (Codex P1, PR #456): a pin-only
+          // updateDoc merges the STORED `editedAt` into request.resource.data, so a
+          // presence check would make every Pin/Unpin fail once the Notice's last
+          // edit fell outside the 24h window.
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['editedAt'])
+              || (request.resource.data.editedAt is number
+                  && request.resource.data.editedAt <= request.time.toMillis() + 60000
+                  && request.resource.data.editedAt >= request.time.toMillis() - 86400000));
         allow delete: if isAdmin(eventId);
       }
     }

@@ -1907,6 +1907,22 @@ textarea.input {
   gap: 8px;
   margin-top: 10px;
 }
+/* The inline copy editor (#455) stacks its fields, so it fills the sent-history
+   row rather than sitting centred in it like the one-line summary it replaces. */
+.notice-edit-row {
+  align-items: stretch;
+}
+/* A sent Notice carries three quiet controls (Edit / Pin / Delete, #455), which
+   don't fit beside the title and byline at phone width — the title was already
+   wrapping to three lines against two buttons. Give the text the full first line
+   and let the controls wrap onto their own, so they stay tappable instead of
+   crushing to a few characters each. */
+.notice-sent-row {
+  flex-wrap: wrap;
+}
+.notice-sent-row .grow {
+  flex-basis: 100%;
+}
 
 /* ---------- admin ---------- */
 .admin-section {
