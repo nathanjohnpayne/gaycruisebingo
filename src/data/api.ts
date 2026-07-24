@@ -1760,6 +1760,14 @@ async function runSetMark(
         itemText: toggled!.text,
         ...(typeof params.dayIndex === 'number' ? { dayIndex: params.dayIndex } : {}),
       });
+      // A normal mark recreates the marker ITSELF, superseding any persisted
+      // repair candidate for this Prompt (#454 finding 1): a stale candidate
+      // left behind here could later combine with an ADMIN delete's cache
+      // tombstone and let the open-time reconcile resurrect a moderated
+      // marker. Forgetting is the conservative direction — at worst it costs
+      // a repair, never resurrects one wrongly (the same posture as the
+      // rejected-commit cleanup below).
+      forgetMarkerRepair(markerRepairKey(uid, tallyItemId));
     } else {
       // Echo Marks (specs/echo-marks.md): the marker slot is ONE per
       // (Prompt, Player) — the doc id IS the marker uid, rules-enforced — so
@@ -2027,15 +2035,19 @@ async function runReconcileEchoes(
   // tombstone-gated — a REJECTED marker read (simply not cached, the common
   // case) proves nothing and never writes, so an existing marker's Day can
   // never be moved by a repair.
-  const confirmedCells = res.cells.filter(
-    (c) => !c.free && c.marked && c.status !== 'pending' && c.itemId,
-  );
+  // Marked PENDING carriers repair too (#454 finding 2): a pending Claim's
+  // marker legitimately exists from pending time (setMark writes it with the
+  // pending Mark), so an unknowable-sibling unmark that deleted it must be
+  // repairable for the pending cell as well — otherwise the Claim drops out of
+  // the public Tally and loses its Doubt target, and confirmation never
+  // recreates the marker. Only the free centre and unmarked cells are out.
+  const carrierCells = res.cells.filter((c) => !c.free && c.marked && c.itemId);
   const markerReads = await Promise.allSettled(
-    confirmedCells.map((c) =>
+    carrierCells.map((c) =>
       getDocFromCache(doc(database, 'events', EVENT_ID, 'tally', c.itemId as string, 'markers', uid)),
     ),
   );
-  const markerRepairs = confirmedCells.filter((c, i) => {
+  const markerRepairs = carrierCells.filter((c, i) => {
     const read = markerReads[i];
     const repairKey = markerRepairKey(uid, c.itemId as string);
     if (read.status === 'fulfilled' && read.value.exists()) {

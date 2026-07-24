@@ -911,6 +911,99 @@ describe('reconcileEchoes — open-time backfill (spec § Open-time)', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('a normal re-mark supersedes the repair candidate, so a later ADMIN delete stays deleted (#454 finding 1)', async () => {
+    seedReconcile();
+    // 1. Unmark with an unknowable sibling — a repair candidate is persisted.
+    const { getDocFromCache } = await import('firebase/firestore');
+    const mocked = vi.mocked(getDocFromCache);
+    try {
+      mocked.mockImplementation(async (ref) => {
+        const a = ((ref as { args?: unknown[] }).args ?? []).filter((x): x is string => typeof x === 'string');
+        if (a[2] === 'days' && a[3] === '2') throw new Error('sibling cache miss');
+        return H.defaultGetDocFromCache(ref as { args?: unknown[] }) as never;
+      });
+      await setMark({
+        uid: 'u1',
+        cells: (H.dayBoards.get(1)?.cells ?? []) as Cell[],
+        index: 4,
+        nextMarked: false,
+        claimMode: 'honor',
+        currentFirstBingoAt: null,
+        displayName: 'Alice',
+        dayIndex: 1,
+        daily: true,
+        boardSeed: 111,
+        echoDayIndexes: [1, 2],
+      });
+    } finally {
+      mocked.mockImplementation(((ref: { args?: unknown[] }) => H.defaultGetDocFromCache(ref)) as never);
+    }
+    // 2. A NORMAL re-mark of the same Prompt recreates the marker itself —
+    //    the fix makes it supersede (forget) the stale candidate.
+    await setMark({
+      uid: 'u1',
+      cells: (H.dayBoards.get(1)?.cells ?? []) as Cell[],
+      index: 4,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      displayName: 'Alice',
+      dayIndex: 1,
+      daily: true,
+      boardSeed: 111,
+      echoDayIndexes: [1, 2],
+    });
+    // 3. An admin then deletes the marker (this device caches the tombstone).
+    //    The stale candidate must NOT let the reconcile resurrect it.
+    H.dayBoards.set(2, {
+      uid: 'u1',
+      seed: 222,
+      dayIndex: 2,
+      cells: card((i) => (i === 9 ? 'shared' : `d${i}`), {
+        9: { marked: true, markedAt: 7, status: 'confirmed', echo: true },
+      }),
+    });
+    H.markerCache.set('shared', false); // the admin delete's tombstone
+    vi.clearAllMocks();
+    const res = await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [1, 2] });
+    expect(res.changed).toBe(false);
+    expect(H.batchSet.mock.calls.some((c) => isMarkerWrite(c))).toBe(false);
+    expect(H.batchCommit).not.toHaveBeenCalled();
+  });
+
+  it("repairs a marked PENDING carrier's marker too (#454 finding 2)", async () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    });
+    try {
+      // The opened board holds `shared` as a marked PENDING Claim — its marker
+      // legitimately existed from pending time and was deleted by an
+      // unknowable-sibling unmark (the persisted candidate below).
+      H.dayBoards.set(2, {
+        uid: 'u1',
+        seed: 222,
+        dayIndex: 2,
+        cells: card((i) => (i === 9 ? 'shared' : `d${i}`), {
+          9: { marked: true, markedAt: 7, status: 'pending' },
+        }),
+      });
+      H.player = { uid: 'u1', displayName: 'Alice', dayStats: {} };
+      H.markerCache.set('shared', false);
+      values.set('gcb:echo-marker-repair:test-event:u1:shared', '1');
+
+      const res = await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [1, 2] });
+      expect(res.changed).toBe(false); // a pending cell echoes nothing — the repair rides alone
+      const markerWrite = H.batchSet.mock.calls.find(isMarkerWrite);
+      expect(markerWrite).toBeDefined();
+      expect(markerWrite![1]).toMatchObject({ uid: 'u1', markedAt: 7, dayIndex: 2 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe('confirmClaim — the admin_confirmed echo moment (spec § Contract)', () => {
