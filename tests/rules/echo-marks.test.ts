@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertFails,
   assertSucceeds,
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 
 // specs/echo-marks.md — the rules side of Echo Marks (#446):
 //   1. the day-board write gate accepts the MULTI-BOARD echo batch (the mark's
@@ -32,17 +32,28 @@ const PAST = () => NOW() - 3_600_000;
 let testEnv: RulesTestEnvironment;
 const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
 
-/** A 25-cell board; overrides are per-index patches. */
+/** A 25-cell board in the #457 WIRE shape — a MAP keyed by decimal index. */
 function cells(overrides: Record<number, Record<string, unknown>> = {}) {
-  return Array.from({ length: 25 }, (_, index) => ({
-    index,
-    itemId: index === 12 ? null : `i${index}`,
-    text: index === 12 ? 'FREE' : `Prompt ${index}`,
-    free: index === 12,
-    marked: index === 12,
-    markedAt: null,
-    ...(overrides[index] ?? {}),
-  }));
+  return Object.fromEntries(
+    Array.from({ length: 25 }, (_, index) => [
+      String(index),
+      {
+        index,
+        itemId: index === 12 ? null : `i${index}`,
+        text: index === 12 ? 'FREE' : `Prompt ${index}`,
+        free: index === 12,
+        marked: index === 12,
+        markedAt: null,
+        ...(overrides[index] ?? {}),
+      },
+    ]),
+  );
+}
+
+/** A per-cell PATCH — only the given cells, the shape every Mark writes. */
+function cellsPatchOf(overrides: Record<number, Record<string, unknown>>) {
+  const full = cells(overrides);
+  return Object.fromEntries(Object.keys(overrides).map((i) => [String(i), full[String(i)]]));
 }
 
 const board = (uid: string, dayIndex: number, seed: number, overrides: Record<number, Record<string, unknown>> = {}) => ({
@@ -111,18 +122,18 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
     // The acted Mark on Day 0 (manual, confirmed).
     batch.set(
       doc(d, dayBoardPath(0, ALICE)),
-      { cells: cells({ 3: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 100, markVersion: 1 },
+      { cells: cellsPatchOf({ 3: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 100 },
       { merge: true },
     );
     // The echoes on Days 1 and 2, each stamped with THAT board's seed.
     batch.set(
       doc(d, dayBoardPath(1, ALICE)),
-      { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 111, markVersion: 1 },
+      { cells: cellsPatchOf({ 5: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 111 },
       { merge: true },
     );
     batch.set(
       doc(d, dayBoardPath(2, ALICE)),
-      { cells: cells({ 8: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 222, markVersion: 1 },
+      { cells: cellsPatchOf({ 8: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 222 },
       { merge: true },
     );
     // The ONE aggregated player write.
@@ -180,39 +191,37 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
     );
   });
 
-  it('DENIES a version-less cells write even on a PRE-VERSION board — the first write IS the upgrade (Phase 4b P1)', async () => {
-    // The seeded boards carry no markVersion; the strict gate has no legacy
-    // escape, so a cells change that fails to write markVersion: 1 is denied —
-    // otherwise a stale offline client could overwrite the full array forever
-    // and the upgrade would never be forced.
-    await assertFails(
-      setDoc(
-        doc(db(ALICE), dayBoardPath(1, ALICE)),
-        { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111 },
-        { merge: true },
-      ),
-    );
-  });
-
-  it('REJECTS a stale full-array projection after the board has a markVersion', async () => {
-    await testEnv.withSecurityRulesDisabled(async (ctx) => {
-      await setDoc(doc(ctx.firestore(), dayBoardPath(1, ALICE)), {
-        ...board(ALICE, 1, 111),
-        markVersion: 1,
-      });
-    });
+  it('#457: two devices marking DIFFERENT cells of one board both land — per-cell patches merge', async () => {
+    // The structural replacement for the retired markVersion counter: each
+    // write carries only its own cell, so neither can clobber the other no
+    // matter the order or staleness of the writers.
     const d = db(ALICE);
     await assertSucceeds(
       setDoc(
         doc(d, dayBoardPath(1, ALICE)),
-        { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111, markVersion: 2 },
+        { cells: cellsPatchOf({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111 },
         { merge: true },
       ),
     );
-    await assertFails(
+    await assertSucceeds(
       setDoc(
         doc(d, dayBoardPath(1, ALICE)),
-        { cells: cells({ 8: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111, markVersion: 2 },
+        { cells: cellsPatchOf({ 8: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111 },
+        { merge: true },
+      ),
+    );
+    // Both Marks stand on the stored doc — nothing was overwritten.
+    const stored = await getDoc(doc(db(ALICE), dayBoardPath(1, ALICE)));
+    const storedCells = stored.data()!.cells as Record<string, { marked: boolean }>;
+    expect(storedCells['5'].marked).toBe(true);
+    expect(storedCells['8'].marked).toBe(true);
+  });
+
+  it('#457: REJECTS a legacy ARRAY cells write — the resulting field must be the map', async () => {
+    await assertFails(
+      setDoc(
+        doc(db(ALICE), dayBoardPath(1, ALICE)),
+        { cells: Object.values(cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } })), markSeed: 111 },
         { merge: true },
       ),
     );

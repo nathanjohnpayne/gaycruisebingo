@@ -133,7 +133,7 @@ describe('firestore.rules — honor-system invariants', () => {
       dayIndex,
       seed: 1,
       createdAt: NOW(),
-      cells: [],
+      cells: {},
     });
     const player = (uid: string) => ({
       uid,

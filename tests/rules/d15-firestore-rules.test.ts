@@ -41,7 +41,7 @@ const board = (uid: string, dayIndex: number) => ({
   dayIndex,
   seed: 1,
   createdAt: NOW(),
-  cells: [],
+  cells: {},
 });
 
 beforeAll(async () => {

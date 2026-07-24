@@ -68,7 +68,7 @@ describe('firestore.rules — self-writable-by-design guard (w3-security-hardeni
     // + Migration); the self-writable-by-design posture is unchanged — it just
     // rides on the day-scoped path with the unlock-time gate on top (Day 0 is
     // unlocked, so the owner write clears the gate).
-    const board = (uid: string, dayIndex: number) => ({ uid, dayIndex, seed: 1, createdAt: NOW(), cells: [] });
+    const board = (uid: string, dayIndex: number) => ({ uid, dayIndex, seed: 1, createdAt: NOW(), cells: {} });
     const player = (uid: string) => ({ uid, displayName: uid, photoURL: null, joinedAt: NOW(), bingoCount: 0, squaresMarked: 0, firstBingoAt: null });
     // Self-write ALLOWED — the honor-system model, not a hole to lock down.
     await assertSucceeds(setDoc(doc(db(ALICE), at(`days/0/boards/${ALICE}`)), board(ALICE, 0)));

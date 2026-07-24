@@ -102,22 +102,24 @@ service cloud.firestore {
       );
     }
 
-    // "Pristine" = ZERO player-marked Squares. The rules language has no iteration,
+    // "Pristine" = ZERO player-marked Squares, over the #457 MAP shape (cells
+    // keyed by canonical decimal index — see the cells-is-map gate on the board
+    // rule). The rules language has no iteration,
     // so the 25 Squares are unrolled explicitly — the same idiom `daysThemeLockOk`
     // above uses for the 10-Day array. The `size() == 25` guard both pins the Board
     // contract (BoardDoc.cells "length 25", src/types.ts) and makes every index
     // access below safe.
     function boardPristine(cells) {
       return cells.size() == 25
-        && cellUnmarked(cells[0])  && cellUnmarked(cells[1])  && cellUnmarked(cells[2])
-        && cellUnmarked(cells[3])  && cellUnmarked(cells[4])  && cellUnmarked(cells[5])
-        && cellUnmarked(cells[6])  && cellUnmarked(cells[7])  && cellUnmarked(cells[8])
-        && cellUnmarked(cells[9])  && cellUnmarked(cells[10]) && cellUnmarked(cells[11])
-        && cellUnmarked(cells[12]) && cellUnmarked(cells[13]) && cellUnmarked(cells[14])
-        && cellUnmarked(cells[15]) && cellUnmarked(cells[16]) && cellUnmarked(cells[17])
-        && cellUnmarked(cells[18]) && cellUnmarked(cells[19]) && cellUnmarked(cells[20])
-        && cellUnmarked(cells[21]) && cellUnmarked(cells[22]) && cellUnmarked(cells[23])
-        && cellUnmarked(cells[24]);
+        && cellUnmarked(cells['0'])  && cellUnmarked(cells['1'])  && cellUnmarked(cells['2'])
+        && cellUnmarked(cells['3'])  && cellUnmarked(cells['4'])  && cellUnmarked(cells['5'])
+        && cellUnmarked(cells['6'])  && cellUnmarked(cells['7'])  && cellUnmarked(cells['8'])
+        && cellUnmarked(cells['9'])  && cellUnmarked(cells['10']) && cellUnmarked(cells['11'])
+        && cellUnmarked(cells['12']) && cellUnmarked(cells['13']) && cellUnmarked(cells['14'])
+        && cellUnmarked(cells['15']) && cellUnmarked(cells['16']) && cellUnmarked(cells['17'])
+        && cellUnmarked(cells['18']) && cellUnmarked(cells['19']) && cellUnmarked(cells['20'])
+        && cellUnmarked(cells['21']) && cellUnmarked(cells['22']) && cellUnmarked(cells['23'])
+        && cellUnmarked(cells['24']);
     }
 
     // The BOARD-side half of the reshuffle contract, and the load-bearing one: the
@@ -168,40 +170,6 @@ service cloud.firestore {
             && request.resource.data.markSeed == resource.data.seed);
     }
 
-    // A Board's `cells` projection is a full array replacement. A stale second
-    // device must therefore be rejected instead of overwriting the first device's
-    // unrelated Mark. New daily cards start at markVersion 0, and EVERY
-    // non-reshuffle cells-changing write must carry a STRICTLY LARGER version
-    // than the stored one — there is deliberately NO version-less escape for
-    // legacy boards (Phase 4b P1 on #447): an unconditional legacy allowance
-    // would let a stale offline client overwrite the full array forever and the
-    // upgrade would never be forced. Strictly-larger (not exactly +1) on
-    // purpose: a device's SEQUENCE of queued offline Marks drains as in-order
-    // batches whose versions (n+1, n+2, …) were each folded from that device's
-    // own cache, and the guard's job is only to reject a version at or below
-    // the stored one — a stale device's writes, computed from its stale cache,
-    // always are. Consequence, accepted: a pre-deploy PWA bundle's queued Mark
-    // on a day board is denied at drain and rolls back locally; the update
-    // prompt / next reload re-marks under the current bundle. Every current
-    // writer (setMark, reconcile, deal, reshuffle, proofs, admin resolve)
-    // stamps the version via the shared nextMarkVersion helpers. Admin repair
-    // flows are exempt, and a RESHUFFLE is version-exempt by the rule's own
-    // structure (its stale-write protection is the seed-pin + paired counter,
-    // and the replacement write still stamps the next version client-side).
-    function versionedMarkGuard(eventId) {
-      // The version logic FIRST: the common case is an owner's own Mark, and
-      // consulting isAdmin (a get()) before it both costs evaluation budget
-      // and is only needed for the rare admin-repair write.
-      return (('markVersion' in request.resource.data)
-            && request.resource.data.markVersion is int
-            && request.resource.data.markVersion > 0
-            && (
-              !('markVersion' in resource.data)
-              || (resource.data.markVersion is int
-                  && request.resource.data.markVersion > resource.data.markVersion)
-            ))
-        || isAdmin(eventId);
-    }
 
     // The COUNTER-side half (#378 Option A): `reshufflesUsed` is MONOTONIC — it may
     // only ever hold or rise by exactly 1, never fall, and never exceed the
@@ -556,17 +524,26 @@ service cloud.firestore {
           allow create, update: if (isOwner(uid) || isAdmin(eventId))
             && isCanonicalDay(dayIndex)
             && request.time.toMillis() >= get(/databases/$(database)/documents/events/$(eventId)).data.days[int(dayIndex)].unlockAt
+            // The #457 cells-map contract: the RESULTING doc's cells must be
+            // a MAP (keyed by canonical decimal index). A Mark is a per-cell
+            // `{ merge: true }` patch that merges into the map — which is what
+            // makes concurrent devices' writes to DIFFERENT cells commute
+            // instead of clobbering (the class the retired markVersion counter
+            // could not close). A legacy full-array write (a pre-migration
+            // bundle) makes the resulting field an array → denied. Cheap
+            // (single type check), so it runs unconditionally.
+            && request.resource.data.cells is map
             // Evaluation-budget ordering (the emulator caps a request at 1000
             // expressions, and `boardCellsChanged()`'s full-document diff is
-            // the expensive term): the cheap guards run FIRST so the common
+            // the expensive term): the cheap guard runs FIRST so the common
             // current-client Mark short-circuits without ever running the
-            // diff; the diff is reached only by writes that fail the guards —
-            // a cells-unchanged metadata merge (allowed) or a stale/legacy
-            // full-array overwrite (denied). `resource == null` keeps creates
-            // off the guards (they read resource.data).
+            // diff; the diff is reached only by writes that fail it — a
+            // cells-unchanged metadata merge (allowed) or a seed-stale write
+            // (denied). `resource == null` keeps creates off the guard (it
+            // reads resource.data).
             && (isReshuffleWrite()
                 || resource == null
-                || (seededMarkGuard() && versionedMarkGuard(eventId))
+                || seededMarkGuard()
                 || !boardCellsChanged())
             && (!isReshuffleWrite() || reshuffleOk(eventId, uid));
           allow delete: if isAdmin(eventId);
