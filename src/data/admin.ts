@@ -2,6 +2,8 @@ import { addDoc, collection, doc, getDoc, updateDoc, deleteDoc, runTransaction, 
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout, foldDayStat, foldEchoStats, applyEchoes, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats, type EchoBucket, type StatWrite } from '../game/logic';
+import { cellsPatch, changedCells, cellsFromData } from '../game/cells';
+import { cellsMergeSet } from './cellsMerge';
 import { honorDisplayName, markerDisplayName } from './attribution';
 import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef, PlayerDoc } from '../types';
@@ -389,8 +391,8 @@ async function resolve(
     // echo set from committed state (specs/echo-marks.md).
     const echoSiblingRefs = echoSiblingDays.map((i) => dayBoard(i, c.uid));
     const echoSiblingSnaps = await Promise.all(echoSiblingRefs.map((ref) => tx.get(ref)));
-    const boardData = bSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown };
-    const cells = boardData.cells ?? [];
+    const boardData = bSnap.data() as { cells?: unknown; seed?: number };
+    const cells = cellsFromData(boardData.cells);
     const next = transform(cells);
     const bingoCount = completedLines(next).length;
     const bingoTransition = completedLines(cells).length === 0 && bingoCount > 0;
@@ -434,23 +436,23 @@ async function resolve(
     const echoItemId =
       confirmedCell && !confirmedCell.free && confirmedCell.marked ? confirmedCell.itemId : null;
     const echoBuckets: EchoBucket[] = [];
-    const echoWrites: Array<{ ref: ReturnType<typeof dayBoard>; payload: Record<string, unknown> }> = [];
+    const echoWrites: Array<{ ref: ReturnType<typeof dayBoard>; set: ReturnType<typeof cellsMergeSet> }> = [];
     const echoPinDays: number[] = [];
     const echoNow = Date.now();
     if (echoItemId && echoSiblingSnaps.length > 0) {
       const achieved = new Set([echoItemId]);
       echoSiblingSnaps.forEach((snap, idx) => {
         if (!snap.exists()) return;
-        const sib = snap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown };
-        const res = applyEchoes(sib.cells ?? [], achieved, echoNow);
+        const sib = snap.data() as { cells?: unknown; seed?: number };
+        const sibCells = cellsFromData(sib.cells);
+        const res = applyEchoes(sibCells, achieved, echoNow);
         if (!res.changed) return;
         echoWrites.push({
           ref: echoSiblingRefs[idx],
-          payload: {
-            cells: res.cells,
+          // Per-cell merge (#457): only the newly echoed cells ride the write.
+          set: cellsMergeSet(cellsPatch(changedCells(sibCells, res.cells)), {
             ...(typeof sib.seed === 'number' ? { markSeed: sib.seed } : {}),
-            markVersion: nextMarkVersion(sib),
-          },
+          }),
         });
         echoBuckets.push({
           dayIndex: echoSiblingDays[idx],
@@ -471,15 +473,13 @@ async function resolve(
 
     tx.set(
       boardRef,
-      {
-        cells: next,
+      // Per-cell merge (#457): only the resolved claim's cell rides the write.
+      ...cellsMergeSet(cellsPatch(changedCells(cells, next)), {
         ...(typeof boardData.seed === 'number' ? { markSeed: boardData.seed } : {}),
-        ...(daily ? { markVersion: nextMarkVersion(boardData) } : {}),
-      },
-      { merge: true },
+      }),
     );
     for (const write of echoWrites) {
-      tx.set(write.ref, write.payload, { merge: true });
+      tx.set(write.ref, ...write.set);
     }
     for (const { dayIndex: echoDay, exists } of echoMetaSnaps) {
       if (exists) continue; // the write-once honor is already claimed
@@ -497,7 +497,7 @@ async function resolve(
         pSnap.exists() &&
         (pSnap.data() as Partial<PlayerDoc>).blackout === true &&
         echoSiblingSnaps.some(
-          (snap) => snap.exists() && isBlackout((snap.data() as { cells?: Cell[] }).cells ?? []),
+          (snap) => snap.exists() && isBlackout(cellsFromData((snap.data() as { cells?: unknown }).cells)),
         );
       const playerWrite = foldDayStat({
         priorDayStats,
@@ -568,7 +568,7 @@ async function resolve(
       const siblingStillCarriesMarker = echoSiblingSnaps.some(
         (snap) =>
           snap.exists() &&
-          ((snap.data() as { cells?: Cell[] }).cells ?? []).some(
+          cellsFromData((snap.data() as { cells?: unknown }).cells).some(
             (cell) => !cell.free && cell.marked && cell.itemId === before.itemId,
           ),
       );

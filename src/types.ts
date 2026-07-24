@@ -189,12 +189,15 @@ export interface BoardDoc {
   // Last Board seed a normal Mark write was computed against. Firestore rules use
   // this as a stale-write guard after a Reshuffle; legacy rows may omit it.
   markSeed?: number;
-  // Monotonic cell-projection revision. Every daily-card cells replacement carries
-  // the next value, so Firestore rules reject a stale full-array write instead of
-  // letting a second device erase a concurrent Mark.
-  markVersion?: number;
   createdAt: number;
-  cells: Cell[]; // length 25
+  // APP-SIDE shape: length 25, index order. The WIRE shape is a MAP keyed by
+  // the canonical decimal index ('0'..'24') since #457 — a Mark writes ONLY
+  // its touched cells as a { merge: true } patch, so concurrent devices
+  // marking different squares commute instead of clobbering (the class the
+  // retired markVersion counter could not close). src/game/cells.ts is the
+  // boundary: reads normalize either shape (legacy array docs/caches
+  // included), writes emit the map; boardConverter routes through it.
+  cells: Cell[];
 }
 
 // The durable localStorage card snapshot (#434) — this device's LATEST painted

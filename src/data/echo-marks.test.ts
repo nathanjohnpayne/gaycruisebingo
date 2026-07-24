@@ -48,12 +48,22 @@ vi.mock('../firebase', () => ({
 vi.mock('firebase/functions', () => ({ httpsCallable: vi.fn() }));
 
 vi.mock('firebase/firestore', () => {
+  class MockFieldPath {
+    segments: string[];
+    constructor(...segments: string[]) {
+      this.segments = segments;
+    }
+    isEqual(other: MockFieldPath) {
+      return this.segments.join('\u0001') === other.segments.join('\u0001');
+    }
+  }
   const makeRef = (kind: string, args: unknown[]) => {
     const ref: Record<string, unknown> = { kind, args };
     ref.withConverter = () => ref;
     return ref;
   };
   return {
+    FieldPath: MockFieldPath,
     doc: (...args: unknown[]) => makeRef('doc', args),
     collection: (...args: unknown[]) => makeRef('collection', args),
     collectionGroup: (...args: unknown[]) => makeRef('collectionGroup', args),
@@ -143,6 +153,7 @@ import {
 } from './api';
 import { confirmClaim, rejectClaim } from './admin';
 import { resetPendingMoments, peekPendingMoments, pendingBingoDayIndexes } from './moments';
+import { cellsFromData } from '../game/cells';
 
 const PAST = Date.now() - 3_600_000;
 
@@ -263,7 +274,8 @@ describe('setMark — mark-time propagation (spec § Mark-time)', () => {
     await markShared();
     const sibWrite = H.batchSet.mock.calls.find((c) => isDayBoardWrite(c, 3));
     expect(sibWrite).toBeDefined();
-    const payload = sibWrite![1] as { cells: Cell[]; markSeed: number };
+    const raw = sibWrite![1] as { cells: unknown; markSeed: number };
+    const payload = { ...raw, cells: cellsFromData(raw.cells) };
     expect(payload.markSeed).toBe(333); // the SIBLING board's seed, never the acted board's
     const echoed = payload.cells.find((c) => c.index === 8)!;
     expect(echoed).toMatchObject({ marked: true, status: 'confirmed', echo: true, itemId: 'shared' });
@@ -271,91 +283,27 @@ describe('setMark — mark-time propagation (spec § Mark-time)', () => {
     expect(H.batchSet.mock.calls.some((c) => isDayBoardWrite(c, 1))).toBe(false);
   });
 
-  it('refreshes and retries after a concurrent sibling projection wins, preserving both Marks', async () => {
+
+
+  it('#457: the sibling echo write is a PATCH of only the echoed cell — sibling Marks are structurally unclobberable', async () => {
+    // The map schema retires the markVersion retry machinery: a concurrent
+    // device's Mark on another cell of the sibling board survives because the
+    // echo write never carries that cell at all. This is the structural
+    // replacement for the retired refresh-and-retry tests.
     seedBoards();
-    H.batchCommit
-      .mockImplementationOnce(async () => {
-        // Another device marked `remote` on Day 3 and echoed it to Day 2 while
-        // this device was holding its stale sibling snapshots.
-        H.dayBoards.set(2, {
-          uid: 'u1',
-          seed: 222,
-          markVersion: 1,
-          dayIndex: 2,
-          cells: card((i) => (i === 5 ? 'shared' : i === 7 ? 'remote' : `a${i}`), {
-            7: { marked: true, markedAt: 10, status: 'confirmed', echo: true },
-          }),
-        });
-        H.dayBoards.set(3, {
-          uid: 'u1',
-          seed: 333,
-          markVersion: 1,
-          dayIndex: 3,
-          cells: card((i) => (i === 8 ? 'shared' : i === 9 ? 'remote' : `b${i}`), {
-            9: { marked: true, markedAt: 10, status: 'confirmed' },
-          }),
-        });
-        throw Object.assign(new Error('stale markVersion'), { code: 'permission-denied' });
-      })
-      .mockResolvedValueOnce(undefined);
-
-    await markShared();
-    await vi.waitFor(() => expect(H.batchCommit).toHaveBeenCalledTimes(2));
-
-    const retrySiblingWrite = H.batchSet.mock.calls.filter((c) => isDayBoardWrite(c, 3)).slice(-1)[0]!;
-    const retrySibling = retrySiblingWrite[1] as { cells: Cell[]; markVersion: number };
-    expect(retrySibling.markVersion).toBe(2);
-    expect(retrySibling.cells.find((c) => c.index === 8)).toMatchObject({ marked: true, echo: true });
-    expect(retrySibling.cells.find((c) => c.index === 9)).toMatchObject({ marked: true });
-
-    const retrySourceWrite = H.batchSet.mock.calls.filter((c) => isDayBoardWrite(c, 2)).slice(-1)[0]!;
-    const retrySource = retrySourceWrite[1] as { cells: Cell[]; markVersion: number };
-    expect(retrySource.markVersion).toBe(2);
-    expect(retrySource.cells.find((c) => c.index === 5)).toMatchObject({ marked: true });
-    expect(retrySource.cells.find((c) => c.index === 7)).toMatchObject({ marked: true, echo: true });
-  });
-
-  it('does not replay a rejected mark after a newer local toggle changes that square intent', async () => {
-    seedBoards();
-    let releaseServerReads!: () => void;
-    const serverReads = new Promise<void>((resolve) => {
-      releaseServerReads = resolve;
+    H.dayBoards.set(3, {
+      uid: 'u1',
+      seed: 333,
+      dayIndex: 3,
+      cells: card((i) => (i === 8 ? 'shared' : `b${i}`), {
+        9: { marked: true, markedAt: 10, status: 'confirmed' }, // another device's Mark
+      }),
     });
-    const { getDocFromServer } = await import('firebase/firestore');
-    const mockedServerRead = vi.mocked(getDocFromServer);
-    try {
-      mockedServerRead.mockImplementation(async (ref) => {
-        await serverReads;
-        return route(ref as { args?: unknown[] }) as never;
-      });
-      H.batchCommit
-        .mockImplementationOnce(async () => {
-          // The rejected mark lost a version race. While its retry waits on the
-          // server, the player changes their mind and unmarks this same square.
-          H.dayBoards.set(2, {
-            uid: 'u1',
-            seed: 222,
-            markVersion: 1,
-            dayIndex: 2,
-            cells: card((i) => (i === 5 ? 'shared' : `a${i}`)),
-          });
-          throw Object.assign(new Error('stale markVersion'), { code: 'permission-denied' });
-        })
-        .mockResolvedValueOnce(undefined);
-
-      await markShared();
-      await vi.waitFor(() => expect(mockedServerRead).toHaveBeenCalled());
-      await markShared({ nextMarked: false });
-      releaseServerReads();
-
-      await vi.waitFor(() => expect(H.batchCommit).toHaveBeenCalledTimes(2));
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      // First rejected batch + the newer unmark only. A third commit would be
-      // the stale retry wrongly restoring the original mark intent.
-      expect(H.batchCommit).toHaveBeenCalledTimes(2);
-    } finally {
-      mockedServerRead.mockImplementation(async (ref) => route(ref as { args?: unknown[] }) as never);
-    }
+    await markShared();
+    const sibWrite = H.batchSet.mock.calls.find((c) => isDayBoardWrite(c, 3))!;
+    const patch = (sibWrite[1] as { cells: Record<string, Cell> }).cells;
+    expect(Object.keys(patch)).toEqual(['8']); // ONLY the echoed cell rides
+    expect(patch['8']).toMatchObject({ marked: true, echo: true, itemId: 'shared' });
   });
 
   it('writes ONE aggregated player doc: acted bucket + echoed bucket + re-derived roots', async () => {
@@ -571,7 +519,7 @@ describe('dealDayCard — deal-time echo (spec § Deal-time)', () => {
     seedDeal({ 0: { marked: true, markedAt: 1, status: 'confirmed' } }); // s0 achieved on Day 1
     await expect(dealDayCard(u, 0)).resolves.toBe(true);
     const boardWrite = H.txSet.mock.calls.find((c) => isDayBoardWrite(c, 0));
-    const cells = (boardWrite![1] as { cells: Cell[] }).cells;
+    const cells = cellsFromData((boardWrite![1] as { cells: unknown }).cells);
     const echoed = cells.find((c) => c.itemId === 's0')!;
     expect(echoed).toMatchObject({ marked: true, status: 'confirmed', echo: true });
     const playerWrite = H.txSet.mock.calls.find(isPlayerWrite)![1] as {
@@ -596,7 +544,7 @@ describe('dealDayCard — deal-time echo (spec § Deal-time)', () => {
     };
 
     await expect(dealDayCard(u, 0)).resolves.toBe(true);
-    const cells = (H.txSet.mock.calls.find((c) => isDayBoardWrite(c, 0))![1] as { cells: Cell[] }).cells;
+    const cells = cellsFromData((H.txSet.mock.calls.find((c) => isDayBoardWrite(c, 0))![1] as { cells: unknown }).cells);
     expect(cells.find((cell) => cell.itemId === 's0')?.echo).toBeUndefined();
   });
 
@@ -605,7 +553,7 @@ describe('dealDayCard — deal-time echo (spec § Deal-time)', () => {
     await expect(dealDayCard(u, 0)).resolves.toBe(true);
     const playerWrite = H.txSet.mock.calls.find(isPlayerWrite)![1];
     expect(playerWrite).toEqual({ dayStats: { 0: { bingoCount: 0, squaresMarked: 0, firstBingoAt: null } } });
-    const cells = (H.txSet.mock.calls.find((c) => isDayBoardWrite(c, 0))![1] as { cells: Cell[] }).cells;
+    const cells = cellsFromData((H.txSet.mock.calls.find((c) => isDayBoardWrite(c, 0))![1] as { cells: unknown }).cells);
     expect(cells.some((c) => c.echo)).toBe(false);
   });
 
@@ -656,7 +604,8 @@ describe('reshuffleBoard — the post-Reshuffle re-deal echo (spec § Reshuffle 
       playerExtra: { dayStats: { 1: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null } } },
     });
     await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).resolves.toBe(1);
-    const boardWrite = H.txSet.mock.calls.find((c) => isDayBoardWrite(c, 1))![1] as { cells: Cell[] };
+    const rawBoardWrite = H.txSet.mock.calls.find((c) => isDayBoardWrite(c, 1))![1] as { cells: unknown };
+    const boardWrite = { ...rawBoardWrite, cells: cellsFromData(rawBoardWrite.cells) };
     // The peer Day-0 card still holds s0 confirmed, so the replacement (same
     // 24-Prompt pool after the exclusion reset) arrives echoing it again.
     const echoed = boardWrite.cells.find((c) => c.itemId === 's0')!;
@@ -737,43 +686,18 @@ describe('reconcileEchoes — open-time backfill (spec § Open-time)', () => {
     const res = await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
     expect(res.changed).toBe(true);
     const boardWrite = H.batchSet.mock.calls.find((c) => isDayBoardWrite(c, 2))![1] as {
-      cells: Cell[];
+      cells: Record<string, Cell>;
       markSeed: number;
     };
     expect(boardWrite.markSeed).toBe(222);
-    expect(boardWrite.cells.find((c) => c.index === 9)).toMatchObject({ marked: true, echo: true });
+    // #457 per-cell merge: the reconcile patch carries ONLY the missing echo.
+    expect(Object.keys(boardWrite.cells)).toEqual(['9']);
+    expect(boardWrite.cells['9']).toMatchObject({ marked: true, echo: true });
     const playerWrite = H.batchSet.mock.calls.find(isPlayerWrite)![1] as { squaresMarked: number };
     expect(playerWrite.squaresMarked).toBe(2);
     expect(H.batchCommit).toHaveBeenCalledTimes(1);
   });
 
-  it('refreshes and retries a rejected echo projection once', async () => {
-    seedReconcile();
-    H.batchCommit
-      .mockImplementationOnce(async () => {
-        // Another device advanced this exact board without adding the echo the
-        // cache-backed pass was about to write.
-        H.dayBoards.set(2, {
-          uid: 'u1',
-          seed: 222,
-          markVersion: 1,
-          dayIndex: 2,
-          cells: card((i) => (i === 9 ? 'shared' : `d${i}`)),
-        });
-        throw Object.assign(new Error('stale markVersion'), { code: 'permission-denied' });
-      })
-      .mockResolvedValueOnce(undefined);
-
-    await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
-    await vi.waitFor(() => expect(H.batchCommit).toHaveBeenCalledTimes(2));
-
-    const retryWrite = H.batchSet.mock.calls.filter((c) => isDayBoardWrite(c, 2)).slice(-1)[0]![1] as {
-      cells: Cell[];
-      markVersion: number;
-    };
-    expect(retryWrite.markVersion).toBe(2);
-    expect(retryWrite.cells.find((c) => c.index === 9)).toMatchObject({ marked: true, echo: true });
-  });
 
   it('is a zero-write no-op on an already-reconciled board', async () => {
     seedReconcile();
@@ -1080,7 +1004,8 @@ describe('confirmClaim — the admin_confirmed echo moment (spec § Contract)', 
     await confirmClaim(claim(), 'admin-1');
     const sibWrite = H.txSet.mock.calls.find((c) => isDayBoardWrite(c, 2));
     expect(sibWrite).toBeDefined();
-    const payload = sibWrite![1] as { cells: Cell[]; markSeed: number };
+    const raw = sibWrite![1] as { cells: unknown; markSeed: number };
+    const payload = { ...raw, cells: cellsFromData(raw.cells) };
     expect(payload.markSeed).toBe(222);
     expect(payload.cells.find((c) => c.index === 7)).toMatchObject({
       marked: true,

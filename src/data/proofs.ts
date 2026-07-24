@@ -4,6 +4,8 @@ import { uploadProofMedia, deleteStoragePath } from './storage';
 import { purgeProofMediaFromCaches } from './proofMediaCache';
 import { markerDisplayName } from './attribution';
 import { completedLines, countMarked, isBlackout, foldDayStat, type DayStats } from '../game/logic';
+import { cellsPatch, changedCells, cellsFromData } from '../game/cells';
+import { cellsMergeSet } from './cellsMerge';
 import type { Cell, ClaimMode, ProofDoc, ProofType } from '../types';
 
 const rawProofs = () => collection(db, 'events', EVENT_ID, 'proofs');
@@ -206,8 +208,9 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
     const boardSnap = await tx.get(boardRef);
     const playerSnap = await tx.get(playerRef);
     const markerSnap = markerRef ? await tx.get(markerRef) : null;
-    const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown } | undefined;
-    const liveCells = boardData?.cells ?? cells;
+    const boardData = boardSnap.data() as { cells?: unknown; seed?: number } | undefined;
+    const liveRaw = cellsFromData(boardData?.cells);
+    const liveCells = liveRaw.length > 0 ? liveRaw : cells;
     const existingCell = liveCells.find((cell) => cell.index === cellIndex);
     // A confirmed Echo has already passed the original admin confirmation. Adding
     // proof makes it a local mark, but must not create a second pending claim.
@@ -254,14 +257,12 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
       // The Day this claim belongs to, so the Feed reads "Day 2 · Get Sporty".
       dayIndex: typeof dayIndex === 'number' ? dayIndex : null,
     });
+    // Per-cell merge (#457): only the proofed cell rides the write.
     tx.set(
       boardRef,
-      {
-        cells: next,
+      ...cellsMergeSet(cellsPatch(changedCells(liveCells, next)), {
         ...(typeof boardData?.seed === 'number' ? { markSeed: boardData.seed } : {}),
-        ...(daily ? { markVersion: nextMarkVersion(boardData) } : {}),
-      },
-      { merge: true },
+      }),
     );
     // The standings freeze (#265): a post-freeze proofed Mark keeps the card +
     // Tally + Proof honest and still records its PER-DAY bucket (the farewell
@@ -397,8 +398,9 @@ export async function deleteProof(
       const boardRef = daily ? rawDayBoard(proofDayIndex, proof.uid) : rawBoard(proof.uid);
       const playerRef = rawPlayer(proof.uid);
       const boardSnap = await tx.get(boardRef);
-      const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown } | undefined;
-      const cells = boardData?.cells;
+      const boardData = boardSnap.data() as { cells?: unknown; seed?: number } | undefined;
+      const normalized = cellsFromData(boardData?.cells);
+      const cells = normalized.length > 0 ? normalized : undefined;
       // Resolve the backing cell from the proof's OWN cellIndex — the
       // authoritative proof→cell link (specs/w1-board-mark-win.md § cross-writer)
       // — rather than scanning for `cells[i].proofId === id`. Given `proofId`'s
@@ -457,12 +459,10 @@ export async function deleteProof(
         const firstBingoAt = bingoCount > 0 ? existingFirst : null;
         tx.set(
           boardRef,
-          {
-            cells: next,
+          // Per-cell merge (#457): only the cleared cell rides the write.
+          ...cellsMergeSet(cellsPatch(changedCells(cells, next)), {
             ...(typeof boardData?.seed === 'number' ? { markSeed: boardData.seed } : {}),
-            ...(daily ? { markVersion: nextMarkVersion(boardData) } : {}),
-          },
-          { merge: true },
+          }),
         );
         // The standings freeze (#265): a post-freeze proof deletion unmarks the
         // cell and updates its PER-DAY bucket only (symmetric with setMark's
@@ -476,7 +476,7 @@ export async function deleteProof(
             bingoCount,
             squaresMarked: squares,
             firstBingoAt,
-            blackout: blackout || siblingBoards.some((sibling) => isBlackout(((sibling.data()?.cells as Cell[] | undefined) ?? []))),
+            blackout: blackout || siblingBoards.some((sibling) => isBlackout((cellsFromData(sibling.data()?.cells)))),
             tutorialDayIndexes: opts?.tutorialDayIndexes,
             ceremonialDayIndexes: opts?.ceremonialDayIndexes,
           });
@@ -494,7 +494,7 @@ export async function deleteProof(
         // THIS proof (a genuine unmark), and only for a non-free Prompt. Same marker
         // path setMark writes; the owner is the proof's uid.
         const markedOnSibling = siblingBoards.some((sibling) =>
-          ((sibling.data()?.cells as Cell[] | undefined) ?? []).some(
+          (cellsFromData(sibling.data()?.cells)).some(
             (cell) => !cell.free && cell.marked && cell.itemId === backing.itemId,
           ),
         );

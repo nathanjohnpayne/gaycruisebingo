@@ -38,15 +38,21 @@ const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
 
 /** A 25-cell board. `markedIndex` marks one PLAYER square (index 12 is the free
  *  centre, always marked, and never counts against pristine). */
+// The #457 WIRE shape: cells as a MAP keyed by canonical decimal index.
 function cells(markedIndex?: number) {
-  return Array.from({ length: 25 }, (_, index) => ({
-    index,
-    itemId: index === 12 ? null : `i${index}`,
-    text: index === 12 ? 'FREE' : `Prompt ${index}`,
-    free: index === 12,
-    marked: index === 12 || index === markedIndex,
-    markedAt: index === markedIndex ? NOW() : null,
-  }));
+  return Object.fromEntries(
+    Array.from({ length: 25 }, (_, index) => [
+      String(index),
+      {
+        index,
+        itemId: index === 12 ? null : `i${index}`,
+        text: index === 12 ? 'FREE' : `Prompt ${index}`,
+        free: index === 12,
+        marked: index === 12 || index === markedIndex,
+        markedAt: index === markedIndex ? NOW() : null,
+      },
+    ]),
+  );
 }
 
 const board = (uid: string, dayIndex: number, seed: number, markedIndex?: number) => ({
@@ -293,7 +299,7 @@ describe('reshuffle — the cap cannot be laundered around', () => {
     await assertSucceeds(
       setDoc(
         doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
-        { cells: cells(0), markVersion: 1 },
+        { cells: cells(0) },
         { merge: true },
       ),
     );
@@ -306,7 +312,7 @@ describe('reshuffle — ordinary board writes are unaffected', () => {
     await assertSucceeds(
       setDoc(
         doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
-        { cells: cells(0), markSeed: 111, markVersion: 1 },
+        { cells: cells(0), markSeed: 111 },
         { merge: true },
       ),
     );
@@ -318,7 +324,7 @@ describe('reshuffle — ordinary board writes are unaffected', () => {
     await assertSucceeds(
       setDoc(
         doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
-        { cells: cells(1), markSeed: 111, markVersion: 1 },
+        { cells: cells(1), markSeed: 111 },
         { merge: true },
       ),
     );

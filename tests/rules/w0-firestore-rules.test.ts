@@ -9,6 +9,19 @@ import {
 } from '@firebase/rules-unit-testing';
 import { deleteDoc, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
+// A minimal CANONICAL cells map (#458: the board rule requires exactly the 25
+// decimal keys) — these suites test gates other than cell mechanics, so the
+// cells are inert placeholders.
+function fullCellsMap() {
+  return Object.fromEntries(
+    Array.from({ length: 25 }, (_, i) => [
+      String(i),
+      { index: i, itemId: i === 12 ? null : `i${i}`, text: 'p', free: i === 12, marked: i === 12, markedAt: null },
+    ]),
+  );
+}
+
+
 // Substantive firestore.rules invariants on the w0-test-harness (#8) rules layer.
 // This extends firestore-harness.test.ts (which only proves the emulator boots and
 // enforces rules) with the honor-system contract the ADRs pin:
@@ -133,7 +146,7 @@ describe('firestore.rules — honor-system invariants', () => {
       dayIndex,
       seed: 1,
       createdAt: NOW(),
-      cells: [],
+      cells: fullCellsMap(),
     });
     const player = (uid: string) => ({
       uid,

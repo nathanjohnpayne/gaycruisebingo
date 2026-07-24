@@ -9,6 +9,19 @@ import {
 } from '@firebase/rules-unit-testing';
 import { deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 
+// A minimal CANONICAL cells map (#458: the board rule requires exactly the 25
+// decimal keys) — these suites test gates other than cell mechanics, so the
+// cells are inert placeholders.
+function fullCellsMap() {
+  return Object.fromEntries(
+    Array.from({ length: 25 }, (_, i) => [
+      String(i),
+      { index: i, itemId: i === 12 ? null : `i${i}`, text: 'p', free: i === 12, marked: i === 12, markedAt: null },
+    ]),
+  );
+}
+
+
 // Documentation-guard for the honor-system design this ticket (w3-security-
 // hardening) documents in firestore.rules. It test-pins the INTENT so a future
 // reviewer who "locks down" the self-writable rules trips a named test:
@@ -68,7 +81,7 @@ describe('firestore.rules — self-writable-by-design guard (w3-security-hardeni
     // + Migration); the self-writable-by-design posture is unchanged — it just
     // rides on the day-scoped path with the unlock-time gate on top (Day 0 is
     // unlocked, so the owner write clears the gate).
-    const board = (uid: string, dayIndex: number) => ({ uid, dayIndex, seed: 1, createdAt: NOW(), cells: [] });
+    const board = (uid: string, dayIndex: number) => ({ uid, dayIndex, seed: 1, createdAt: NOW(), cells: fullCellsMap() });
     const player = (uid: string) => ({ uid, displayName: uid, photoURL: null, joinedAt: NOW(), bingoCount: 0, squaresMarked: 0, firstBingoAt: null });
     // Self-write ALLOWED — the honor-system model, not a hole to lock down.
     await assertSucceeds(setDoc(doc(db(ALICE), at(`days/0/boards/${ALICE}`)), board(ALICE, 0)));

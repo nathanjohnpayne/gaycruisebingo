@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertFails,
   assertSucceeds,
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, writeBatch } from 'firebase/firestore';
+import { doc, FieldPath, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 
 // specs/echo-marks.md — the rules side of Echo Marks (#446):
 //   1. the day-board write gate accepts the MULTI-BOARD echo batch (the mark's
@@ -32,17 +32,28 @@ const PAST = () => NOW() - 3_600_000;
 let testEnv: RulesTestEnvironment;
 const db = (uid: string) => testEnv.authenticatedContext(uid).firestore();
 
-/** A 25-cell board; overrides are per-index patches. */
+/** A 25-cell board in the #457 WIRE shape — a MAP keyed by decimal index. */
 function cells(overrides: Record<number, Record<string, unknown>> = {}) {
-  return Array.from({ length: 25 }, (_, index) => ({
-    index,
-    itemId: index === 12 ? null : `i${index}`,
-    text: index === 12 ? 'FREE' : `Prompt ${index}`,
-    free: index === 12,
-    marked: index === 12,
-    markedAt: null,
-    ...(overrides[index] ?? {}),
-  }));
+  return Object.fromEntries(
+    Array.from({ length: 25 }, (_, index) => [
+      String(index),
+      {
+        index,
+        itemId: index === 12 ? null : `i${index}`,
+        text: index === 12 ? 'FREE' : `Prompt ${index}`,
+        free: index === 12,
+        marked: index === 12,
+        markedAt: null,
+        ...(overrides[index] ?? {}),
+      },
+    ]),
+  );
+}
+
+/** A per-cell PATCH — only the given cells, the shape every Mark writes. */
+function cellsPatchOf(overrides: Record<number, Record<string, unknown>>) {
+  const full = cells(overrides);
+  return Object.fromEntries(Object.keys(overrides).map((i) => [String(i), full[String(i)]]));
 }
 
 const board = (uid: string, dayIndex: number, seed: number, overrides: Record<number, Record<string, unknown>> = {}) => ({
@@ -111,18 +122,18 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
     // The acted Mark on Day 0 (manual, confirmed).
     batch.set(
       doc(d, dayBoardPath(0, ALICE)),
-      { cells: cells({ 3: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 100, markVersion: 1 },
+      { cells: cellsPatchOf({ 3: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 100 },
       { merge: true },
     );
     // The echoes on Days 1 and 2, each stamped with THAT board's seed.
     batch.set(
       doc(d, dayBoardPath(1, ALICE)),
-      { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 111, markVersion: 1 },
+      { cells: cellsPatchOf({ 5: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 111 },
       { merge: true },
     );
     batch.set(
       doc(d, dayBoardPath(2, ALICE)),
-      { cells: cells({ 8: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 222, markVersion: 1 },
+      { cells: cellsPatchOf({ 8: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 222 },
       { merge: true },
     );
     // The ONE aggregated player write.
@@ -170,6 +181,122 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
     await assertFails(batch.commit());
   });
 
+  it('a cells-UNCHANGED metadata merge on a legacy-ARRAY straggler is allowed; a cells-changing patch on it stays denied (4b round-9 on #458)', async () => {
+    // The canonical-25 gate binds writes that create a board or CHANGE its
+    // cells. A not-yet-migrated straggler (array cells — the migration-gap
+    // class the mop-up converges) must stay metadata-writable, while any
+    // cells write on it is still denied (a patch would replace the whole
+    // array field with a 1-key map — the 24-cell wipe the gate exists for).
+    const legacy = { ...board(ALICE, 3, 333), cells: Object.values(cells()) };
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `events/${EVENT}`), {
+        name: 'Cruise',
+        status: 'active',
+        admins: [],
+        days: [
+          { index: 0, unlockAt: PAST(), pool: 'main', tutorial: false },
+          { index: 1, unlockAt: PAST(), pool: 'main', tutorial: false },
+          { index: 2, unlockAt: PAST(), pool: 'main', tutorial: false },
+          { index: 3, unlockAt: PAST(), pool: 'main', tutorial: false },
+        ],
+      });
+      await setDoc(doc(ctx.firestore(), dayBoardPath(3, ALICE)), legacy);
+    });
+    const d = db(ALICE);
+    await assertSucceeds(setDoc(doc(d, dayBoardPath(3, ALICE)), { lastOpenedAt: NOW() }, { merge: true }));
+    await assertFails(
+      setDoc(
+        doc(d, dayBoardPath(3, ALICE)),
+        { cells: cellsPatchOf({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 333 },
+        { mergeFields: [new FieldPath('cells', '5'), 'markSeed'] },
+      ),
+    );
+  });
+
+  it('a CREATE without canonical cells is still denied — the metadata exemption never covers creates (4b round-9 on #458)', async () => {
+    const d = db('bob');
+    await assertFails(setDoc(doc(d, dayBoardPath(1, 'bob')), { uid: 'bob', dayIndex: 1, seed: 7, createdAt: NOW() }));
+    await assertFails(
+      setDoc(doc(d, dayBoardPath(1, 'bob')), {
+        uid: 'bob',
+        dayIndex: 1,
+        seed: 7,
+        createdAt: NOW(),
+        cells: cellsPatchOf({ 5: { marked: false } }), // partial map — not canonical
+      }),
+    );
+  });
+
+  it('a mergeFields cell write passes the rules AND replaces the cell WHOLESALE — omission-removed fields (echo) do not survive (4b round-8 on #458)', async () => {
+    // The client writes patches as set(..., { mergeFields: [FieldPath('cells', i), ...] })
+    // precisely because { merge: true } deep-merges nested maps: a transform
+    // that strips `echo` by destructuring (attachProof / deleteProof / manual
+    // unmark) would otherwise leave the stored `echo: true` standing. Seed an
+    // echoed cell, rewrite it without the flag, and prove BOTH halves: the
+    // rules accept the mergeFields post-image, and the flag is gone on read.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), dayBoardPath(0, ALICE)),
+        board(ALICE, 0, 100, { 5: { marked: true, markedAt: 1, status: 'confirmed', echo: true } }),
+      );
+    });
+    const d = db(ALICE);
+    const proofed = cellsPatchOf({ 5: { marked: true, markedAt: NOW(), status: 'confirmed', proofId: 'p1' } });
+    await assertSucceeds(
+      setDoc(
+        doc(d, dayBoardPath(0, ALICE)),
+        { cells: proofed, markSeed: 100 },
+        { mergeFields: [new FieldPath('cells', '5'), 'markSeed'] },
+      ),
+    );
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const snap = await getDoc(doc(ctx.firestore(), dayBoardPath(0, ALICE)));
+      const stored = (snap.data() as { cells: Record<string, Record<string, unknown>> }).cells;
+      expect(stored['5'].proofId).toBe('p1');
+      expect('echo' in stored['5']).toBe(false); // replaced wholesale, not deep-merged
+      expect(stored['3'].marked).toBe(false); // sibling cells untouched by the mask
+    });
+  });
+
+  it('a STALE-markSeed Mark batch is rejected WHOLE — board patch, player projection, and Tally marker all roll back (4b round-6 on #458)', async () => {
+    // The stale-seed recovery story under per-cell patches IS batch atomicity:
+    // setMark computes its player/tally side effects from the cached board and
+    // commits them in the SAME writeBatch as the board patch, so a reshuffle
+    // that invalidates the queued Mark (seededMarkGuard denies markSeed 99 on
+    // a board seeded 100) must take the derived writes down with it — no
+    // partial projection may land for a Mark that never applied. (Moments and
+    // meta pins are commit-ack gated in setMark for the same reason.)
+    const d = db(ALICE);
+    const batch = writeBatch(d);
+    batch.set(
+      doc(d, dayBoardPath(0, ALICE)),
+      { cells: cellsPatchOf({ 3: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 99 },
+      { merge: true },
+    );
+    batch.set(
+      doc(d, `events/${EVENT}/players/${ALICE}`),
+      { dayStats: { 0: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null } }, squaresMarked: 1 },
+      { merge: true },
+    );
+    batch.set(doc(d, `events/${EVENT}/tally/i3/markers/${ALICE}`), {
+      uid: ALICE,
+      displayName: 'Alice',
+      markedAt: NOW(),
+      itemText: 'Prompt 3',
+      dayIndex: 0,
+    });
+    await assertFails(batch.commit());
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const raw = ctx.firestore();
+      const boardSnap = await getDoc(doc(raw, dayBoardPath(0, ALICE)));
+      expect((boardSnap.data() as { cells: Record<string, { marked: boolean }> }).cells['3'].marked).toBe(false);
+      const playerSnap = await getDoc(doc(raw, `events/${EVENT}/players/${ALICE}`));
+      expect((playerSnap.data() as { squaresMarked: number }).squaresMarked).toBe(0);
+      const markerSnap = await getDoc(doc(raw, `events/${EVENT}/tally/i3/markers/${ALICE}`));
+      expect(markerSnap.exists()).toBe(false);
+    });
+  });
+
   it('REJECTS an echoed board write with no markSeed at all on a seeded board', async () => {
     await assertFails(
       setDoc(
@@ -180,39 +307,57 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
     );
   });
 
-  it('DENIES a version-less cells write even on a PRE-VERSION board — the first write IS the upgrade (Phase 4b P1)', async () => {
-    // The seeded boards carry no markVersion; the strict gate has no legacy
-    // escape, so a cells change that fails to write markVersion: 1 is denied —
-    // otherwise a stale offline client could overwrite the full array forever
-    // and the upgrade would never be forced.
+  it('#457: two devices marking DIFFERENT cells of one board both land — per-cell patches merge', async () => {
+    // The structural replacement for the retired markVersion counter: each
+    // write carries only its own cell, so neither can clobber the other no
+    // matter the order or staleness of the writers.
+    const d = db(ALICE);
+    await assertSucceeds(
+      setDoc(
+        doc(d, dayBoardPath(1, ALICE)),
+        { cells: cellsPatchOf({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111 },
+        { merge: true },
+      ),
+    );
+    await assertSucceeds(
+      setDoc(
+        doc(d, dayBoardPath(1, ALICE)),
+        { cells: cellsPatchOf({ 8: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111 },
+        { merge: true },
+      ),
+    );
+    // Both Marks stand on the stored doc — nothing was overwritten.
+    const stored = await getDoc(doc(db(ALICE), dayBoardPath(1, ALICE)));
+    const storedCells = stored.data()!.cells as Record<string, { marked: boolean }>;
+    expect(storedCells['5'].marked).toBe(true);
+    expect(storedCells['8'].marked).toBe(true);
+  });
+
+  it('#457: REJECTS a one-cell patch onto a STILL-ARRAY board — the migration-gap 24-cell wipe', async () => {
+    // A merge patch landing on a board whose stored cells are the legacy
+    // ARRAY replaces the whole field with a one-key map. The canonical-25
+    // requirement denies it (Phase 4b P1 on #458) instead of blessing the
+    // loss of the other 24 cells.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), dayBoardPath(1, ALICE)), {
+        ...board(ALICE, 1, 111),
+        cells: Object.values(cells()), // legacy array-shaped stored doc
+      });
+    });
     await assertFails(
       setDoc(
         doc(db(ALICE), dayBoardPath(1, ALICE)),
-        { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111 },
+        { cells: cellsPatchOf({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111 },
         { merge: true },
       ),
     );
   });
 
-  it('REJECTS a stale full-array projection after the board has a markVersion', async () => {
-    await testEnv.withSecurityRulesDisabled(async (ctx) => {
-      await setDoc(doc(ctx.firestore(), dayBoardPath(1, ALICE)), {
-        ...board(ALICE, 1, 111),
-        markVersion: 1,
-      });
-    });
-    const d = db(ALICE);
-    await assertSucceeds(
-      setDoc(
-        doc(d, dayBoardPath(1, ALICE)),
-        { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111, markVersion: 2 },
-        { merge: true },
-      ),
-    );
+  it('#457: REJECTS a legacy ARRAY cells write — the resulting field must be the map', async () => {
     await assertFails(
       setDoc(
-        doc(d, dayBoardPath(1, ALICE)),
-        { cells: cells({ 8: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111, markVersion: 2 },
+        doc(db(ALICE), dayBoardPath(1, ALICE)),
+        { cells: Object.values(cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } })), markSeed: 111 },
         { merge: true },
       ),
     );

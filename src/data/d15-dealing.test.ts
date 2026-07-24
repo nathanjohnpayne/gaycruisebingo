@@ -72,6 +72,7 @@ vi.mock('firebase/firestore', () => {
   };
 });
 
+import { cellsFromData } from '../game/cells';
 import { dealDayCard } from './api';
 
 const snap = (exists: boolean, id = '', data: unknown = undefined) => ({
@@ -173,7 +174,9 @@ function writtenBoard(): { ref: { args?: unknown[] }; data: { cells: Cell[]; day
     const ref = call[0] as { args?: unknown[] };
     const a = (ref.args ?? []).filter((x): x is string => typeof x === 'string');
     if (a[2] === 'days' && a[4] === 'boards') {
-      return { ref, data: call[1] as { cells: Cell[]; dayIndex: number; easyMixRatio?: number } };
+      const payload = call[1] as { cells: unknown; dayIndex: number; easyMixRatio?: number };
+      // The wire shape is the #457 cells MAP; assertions read the app shape.
+      return { ref, data: { ...payload, cells: cellsFromData(payload.cells) } };
     }
   }
   return null;

@@ -44,7 +44,18 @@ vi.mock('./storage', () => ({ uploadProofMedia: uploadSpy, deleteStoragePath: de
 vi.mock('./proofMediaCache', () => ({ purgeProofMediaFromCaches: purgeCacheSpy }));
 
 let autoSeq = 0;
-vi.mock('firebase/firestore', () => ({
+vi.mock('firebase/firestore', () => {
+  class MockFieldPath {
+    segments: string[];
+    constructor(...segments: string[]) {
+      this.segments = segments;
+    }
+    isEqual(other: MockFieldPath) {
+      return this.segments.join('\u0001') === other.segments.join('\u0001');
+    }
+  }
+  return {
+  FieldPath: MockFieldPath,
   collection: (_db: unknown, ...segments: string[]): Ref => ({
     __kind: 'collection',
     path: segments.join('/'),
@@ -62,7 +73,8 @@ vi.mock('firebase/firestore', () => ({
   runTransaction: (_db: unknown, fn: (tx: unknown) => unknown) => runTx(_db, fn),
   increment: (n: number) => ({ __inc: n }),
   updateDoc: vi.fn(),
-}));
+  };
+});
 
 import { attachProof, deleteProof } from './proofs';
 
@@ -274,9 +286,11 @@ describe('attachProof — posts an active Proof to the Feed and marks the cell (
       proof: { type: 'text', text: 'both' },
     });
 
-    const board = setPayload('/boards/') as { cells: Cell[] };
-    expect(board.cells[3].marked).toBe(true); // survived, from the live read
-    expect(board.cells[7].marked).toBe(true); // this proof's mark
+    const board = setPayload('/boards/') as { cells: Record<string, Cell> };
+    // #457 per-cell merge: only the proofed cell rides the write; the live
+    // concurrent mark at 3 survives by never being written.
+    expect(board.cells['7'].marked).toBe(true); // this proof's mark
+    expect('3' in board.cells).toBe(false); // untouched → never clobbered
     expect(setPayload('/players/')).toMatchObject({ squaresMarked: 2 });
   });
 });

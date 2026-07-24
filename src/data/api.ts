@@ -44,6 +44,8 @@ import {
   type StatWrite,
 } from '../game/logic';
 import { enqueueWinMoments } from './moments';
+import { cellsToMap, cellsPatch, changedCells, cellsFromData } from '../game/cells';
+import { cellsMergeSet } from './cellsMerge';
 import { pinDayFirstBingo } from './dayMeta';
 import type { Cell, ClaimMode, DayDef, EventDoc, ItemDoc, PlayerDoc, UserDoc } from '../types';
 
@@ -59,12 +61,6 @@ const rawPlayer = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
 const rawItems = () => collection(db, 'events', EVENT_ID, 'items');
 const rawItem = (id: string) => doc(db, 'events', EVENT_ID, 'items', id);
 const rawEvent = () => doc(db, 'events', EVENT_ID);
-
-/** The next optimistic-concurrency revision for a full Board `cells` replacement. */
-function nextMarkVersion(board: { markVersion?: unknown } | undefined): number {
-  const previous = board?.markVersion;
-  return typeof previous === 'number' && Number.isSafeInteger(previous) && previous >= 0 ? previous + 1 : 1;
-}
 
 /**
  * True only for a well-formed `https://` URL — the only photo shape the public
@@ -589,7 +585,7 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
   const otherCardCells: Cell[][] = [];
   for (const snap of otherCards) {
     if (!snap || !snap.exists()) continue;
-    const cells = (snap.data() as { cells?: Cell[] }).cells ?? [];
+    const cells = cellsFromData((snap.data() as { cells?: unknown }).cells);
     otherCardCells.push(cells);
     for (const c of cells) if (c.itemId) excludeIds.add(c.itemId);
   }
@@ -663,10 +659,10 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
     const achieved = achievedItemIds(
       latestOtherCardSnaps
         .filter((snap) => snap.exists())
-        .map((snap) => (snap.data() as { cells?: Cell[] }).cells ?? []),
+        .map((snap) => cellsFromData((snap.data() as { cells?: unknown }).cells)),
     );
     const echoRes = applyEchoes(cells, achieved, now);
-    tx.set(boardRef, { uid: u.uid, dayIndex, seed, createdAt: now, cells: echoRes.cells, easyMixRatio, markVersion: 0 });
+    tx.set(boardRef, { uid: u.uid, dayIndex, seed, createdAt: now, cells: cellsToMap(echoRes.cells), easyMixRatio });
     if (echoRes.changed) {
       // The echoed card's REAL opening bucket, folded with the cruise root
       // aggregates in the ONE player write this transaction already makes.
@@ -946,11 +942,11 @@ export async function reshuffleBoard(params: {
 
     if (!boardSnap.exists()) throw new Error('reshuffleBoard: no Day Card to reshuffle.');
     const board = boardSnap.data() as {
-      cells?: Cell[];
+      cells?: unknown;
       seed?: number;
       easyMixRatio?: number;
-      markVersion?: unknown;
     };
+    const priorBoardCells = cellsFromData(board.cells);
 
     // The card must still be the one the Player confirmed. This is what makes a
     // retry a REFUSAL rather than a second spend: when two tabs confirm the same
@@ -966,7 +962,7 @@ export async function reshuffleBoard(params: {
     // button that looks broken; this turns the same contract into a refusal the
     // caller can explain. `isPristine` (not `countMarked`) is the predicate the
     // rules mirror — see its doc comment for why a pending Mark is not pristine.
-    if (!isPristine(board.cells ?? [])) {
+    if (!isPristine(priorBoardCells)) {
       throw new Error('reshuffleBoard: the card is no longer pristine.');
     }
 
@@ -991,7 +987,7 @@ export async function reshuffleBoard(params: {
     const excludeIds = new Set<string>();
     for (const snap of peerSnaps) {
       if (!snap.exists()) continue;
-      const peerCells = (snap.data() as { cells?: Cell[] }).cells ?? [];
+      const peerCells = cellsFromData((snap.data() as { cells?: unknown }).cells);
       for (const c of peerCells) if (c.itemId) excludeIds.add(c.itemId);
     }
 
@@ -1014,7 +1010,7 @@ export async function reshuffleBoard(params: {
     // zeroed prior bucket) keeps the exact two-write shape of today.
     const now = Date.now();
     const achieved = achievedItemIds(
-      peerSnaps.filter((s) => s.exists()).map((s) => (s.data() as { cells?: Cell[] }).cells ?? []),
+      peerSnaps.filter((s) => s.exists()).map((s) => cellsFromData((s.data() as { cells?: unknown }).cells)),
     );
     // Pending claims are not confirmed achievements, so they must not echo onto
     // the replacement card. They are still marked carriers for the shared Tally
@@ -1022,7 +1018,7 @@ export async function reshuffleBoard(params: {
     const peerMarkedItems = new Set<string>();
     for (const snap of peerSnaps) {
       if (!snap.exists()) continue;
-      for (const cell of (snap.data() as { cells?: Cell[] }).cells ?? []) {
+      for (const cell of cellsFromData((snap.data() as { cells?: unknown }).cells)) {
         if (!cell.free && cell.marked && cell.itemId) peerMarkedItems.add(cell.itemId);
       }
     }
@@ -1046,7 +1042,7 @@ export async function reshuffleBoard(params: {
     // marker must go with it: delete the marker for every discarded echo whose
     // Prompt no peer board still holds confirmed. A Prompt still achieved on a
     // peer keeps its marker (and re-echoes onto the replacement).
-    for (const discarded of board.cells ?? []) {
+    for (const discarded of priorBoardCells) {
       if (
         discarded.echo === true &&
         discarded.marked &&
@@ -1085,7 +1081,7 @@ export async function reshuffleBoard(params: {
             // (An echo-only blackout card being reshuffled while a SECOND
             // board also stands blackout drops the flag until that board's
             // next fold re-asserts it — accepted, vanishingly rare.)
-            priorBlackout: player?.blackout === true && !isBlackout(board.cells ?? []),
+            priorBlackout: player?.blackout === true && !isBlackout(priorBoardCells),
           })
         : null;
 
@@ -1099,9 +1095,8 @@ export async function reshuffleBoard(params: {
       dayIndex,
       seed,
       createdAt: now,
-      cells: echoRes.cells,
+      cells: cellsToMap(echoRes.cells),
       easyMixRatio: boardEasyMixRatio,
-      markVersion: nextMarkVersion(board),
     });
     // Post-freeze, even a ceremonial Day's re-derive narrows to its bucket
     // (Codex P2 on #447 round 2) — no root field moves once the standings
@@ -1282,29 +1277,10 @@ export function computeMark(params: {
 // call's read runs only after the previous call has issued its batch.
 const markChains = new Map<string, Promise<unknown>>();
 
-// A rejected server batch is retried only while it still represents the latest
-// local intent for that square. `commit()` settles after `setMark` has returned,
-// so a second tap can otherwise be overtaken by the first tap's async retry.
-const markIntentGenerations = new Map<string, number>();
-
 function markChainKey(database: Firestore, uid: string): string {
   return `${(database as unknown as { app?: { name?: string } }).app?.name ?? 'default'}/${uid}`;
 }
 
-function markIntentKey(database: Firestore, params: {
-  uid: string;
-  index: number;
-  daily?: boolean;
-  dayIndex?: number;
-}): string {
-  const boardKey = params.daily === true ? `day-${params.dayIndex ?? 0}` : 'legacy';
-  return `${markChainKey(database, params.uid)}/${boardKey}/${params.index}`;
-}
-
-// A cache tombstone alone cannot distinguish this device's incomplete-cache
-// unmark from an authoritative admin deletion. Remember only a deletion this
-// module issued while one or more sibling reads were unknowable; the narrow
-// witness survives reloads because Firestore's own persistent tombstone does.
 const pendingMarkerRepairs = new Set<string>();
 const markerRepairKey = (uid: string, itemId: string) => `${uid}:${itemId}`;
 const markerRepairStorageKey = (repairKey: string) => `gcb:echo-marker-repair:${EVENT_ID}:${repairKey}`;
@@ -1417,13 +1393,6 @@ export async function setMark(params: {
   // offline-safe read discipline as the base fold above); a cache-missed
   // sibling simply isn't echoed here — the open-time reconcile self-heals it.
   echoDayIndexes?: number[];
-  // Internal bounded retry after the rules reject a stale daily-board revision.
-  // Not a user-visible retry policy: offline batches still queue unchanged.
-  markRetryCount?: number;
-  // Captures the user action that originated an internal retry. A later tap on
-  // this same square invalidates the retry rather than letting it replay stale
-  // intent after its server refresh.
-  markRetryIntentGeneration?: number;
   database?: Firestore;
 }): Promise<{
   cells: Cell[];
@@ -1435,21 +1404,10 @@ export async function setMark(params: {
   const { uid } = params;
   const database = params.database ?? db;
   const chainKey = markChainKey(database, uid);
-  const intentKey = markIntentKey(database, params);
-  const isInitialIntent = (params.markRetryCount ?? 0) === 0;
-  const runParams = isInitialIntent
-    ? {
-        ...params,
-        markRetryIntentGeneration: (markIntentGenerations.get(intentKey) ?? 0) + 1,
-      }
-    : params;
-  if (isInitialIntent) {
-    markIntentGenerations.set(intentKey, runParams.markRetryIntentGeneration!);
-  }
   const prev = markChains.get(chainKey) ?? Promise.resolve();
   const next = prev.then(
-    () => runSetMark(runParams, database),
-    () => runSetMark(runParams, database),
+    () => runSetMark(params, database),
+    () => runSetMark(params, database),
   );
   // The stored tail never rejects, so one failed Mark cannot poison the chain.
   markChains.set(
@@ -1480,8 +1438,6 @@ async function runSetMark(
     daily?: boolean;
     boardSeed?: number;
     echoDayIndexes?: number[];
-    markRetryCount?: number;
-    markRetryIntentGeneration?: number;
   },
   database: Firestore,
 ): Promise<{
@@ -1506,7 +1462,6 @@ async function runSetMark(
 
   let baseCells = params.cells;
   let markSeed = params.boardSeed;
-  let markVersion = 1;
   let baseFirstBingoAt = params.currentFirstBingoAt;
   // The already-denormalized public name on the player row is the fallback
   // attribution for the Tally marker when the caller omits `displayName`.
@@ -1530,13 +1485,11 @@ async function runSetMark(
   // cache) — that is the pre-fix behavior, unchanged.
   if (cachedBoard.status === 'fulfilled' && cachedBoard.value.exists()) {
     const boardData = cachedBoard.value.data() as {
-      cells: Cell[];
+      cells: unknown;
       dayIndex?: number;
       seed?: number;
-      markVersion?: unknown;
     };
-    baseCells = boardData.cells;
-    markVersion = nextMarkVersion(boardData);
+    baseCells = cellsFromData(boardData.cells);
     if (typeof boardData.seed === 'number') {
       markSeed = boardData.seed;
     }
@@ -1590,7 +1543,7 @@ async function runSetMark(
       (snap) =>
         snap.status === 'fulfilled' &&
         snap.value.exists() &&
-        isBlackout((snap.value.data() as { cells?: Cell[] }).cells ?? []),
+        isBlackout(cellsFromData((snap.value.data() as { cells?: unknown }).cells)),
     );
   }
 
@@ -1628,9 +1581,9 @@ async function runSetMark(
       : null;
   const echoBoards: Array<{
     dayIndex: number;
-    cells: Cell[];
+    /** ONLY the newly echoed cells — the per-cell merge patch (#457). */
+    cellsPatch: Record<string, Cell>;
     markSeed: number | undefined;
-    markVersion: number;
     bucket: EchoBucket;
     bingoTransition: boolean;
     blackoutTransition: boolean;
@@ -1644,15 +1597,15 @@ async function runSetMark(
     );
     sibSnaps.forEach((snap, i) => {
       if (snap.status !== 'fulfilled' || !snap.value.exists()) return;
-      const sib = snap.value.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown };
-      const res = applyEchoes(sib.cells ?? [], achieved, now);
+      const sib = snap.value.data() as { cells?: unknown; seed?: number };
+      const sibCells = cellsFromData(sib.cells);
+      const res = applyEchoes(sibCells, achieved, now);
       if (!res.changed) return;
       const sibDay = echoDayIndexes[i];
       echoBoards.push({
         dayIndex: sibDay,
-        cells: res.cells,
+        cellsPatch: cellsPatch(changedCells(sibCells, res.cells)),
         markSeed: typeof sib.seed === 'number' ? sib.seed : undefined,
-        markVersion: nextMarkVersion(sib),
         bucket: {
           dayIndex: sibDay,
           bingoCount: res.bingoCount,
@@ -1685,14 +1638,14 @@ async function runSetMark(
       : playerWrite;
 
   const batch = writeBatch(database);
+  // Per-cell merge (#457): write ONLY the toggled cell, keyed by index, so a
+  // concurrent write to any OTHER cell — another device, a queued echo —
+  // merges instead of being clobbered by a full-array replacement.
   batch.set(
     boardRef,
-    {
-      cells,
+    ...cellsMergeSet(cellsPatch(changedCells(baseCells, cells)), {
       ...(typeof markSeed === 'number' ? { markSeed } : {}),
-      ...(params.daily === true ? { markVersion } : {}),
-    },
-    { merge: true },
+    }),
   );
   // Echoed sibling boards ride the SAME batch, each carrying ITS OWN board's
   // markSeed — the stale-write rules gate (`seededMarkWriteOk`) is per-board,
@@ -1700,12 +1653,9 @@ async function runSetMark(
   for (const echoBoard of echoBoards) {
     batch.set(
       doc(database, 'events', EVENT_ID, 'days', String(echoBoard.dayIndex), 'boards', uid),
-      {
-        cells: echoBoard.cells,
+      ...cellsMergeSet(echoBoard.cellsPatch, {
         ...(typeof echoBoard.markSeed === 'number' ? { markSeed: echoBoard.markSeed } : {}),
-        markVersion: echoBoard.markVersion,
-      },
-      { merge: true },
+      }),
     );
   }
   // The standings freeze (#265): post-freeze marks keep the card honest, and
@@ -1798,7 +1748,7 @@ async function runSetMark(
           (snap) =>
             snap.status === 'fulfilled' &&
             snap.value.exists() &&
-            ((snap.value.data() as { cells?: Cell[] }).cells ?? []).some(
+            cellsFromData((snap.value.data() as { cells?: unknown }).cells).some(
               (c) => !c.free && c.marked && c.itemId === tallyItemId,
             ),
         );
@@ -1835,46 +1785,6 @@ async function runSetMark(
       { uid, index: params.index, nextMarked: params.nextMarked },
       err,
     );
-    // Retry only after proving a concurrent revision won. A generic denial or a
-    // stale-seed rejection must never replay this index onto a reshuffled card.
-    // The refresh includes the Player row, so the retry re-folds aggregates from
-    // the same committed state as every board it reads.
-    if (params.daily === true && (params.markRetryCount ?? 0) === 0) {
-      const siblingRefs = echoDayIndexes.map((d) =>
-        doc(database, 'events', EVENT_ID, 'days', String(d), 'boards', uid),
-      );
-      void Promise.all([
-        getDocFromServer(playerRef),
-        getDocFromServer(boardRef),
-        ...siblingRefs.map((ref) => getDocFromServer(ref)),
-      ])
-        .then(([, freshSource, ...freshSiblings]) => {
-          const freshByDay = new Map(echoDayIndexes.map((day, i) => [day, freshSiblings[i]]));
-          const retryTargets = [
-            { snap: freshSource, expectedSeed: markSeed, attemptedVersion: markVersion },
-            ...echoBoards.map((echoBoard) => ({
-              snap: freshByDay.get(echoBoard.dayIndex),
-              expectedSeed: echoBoard.markSeed,
-              attemptedVersion: echoBoard.markVersion,
-            })),
-          ];
-          const isConflictingCurrentProjection = retryTargets.some((target) => {
-            if (!target.snap?.exists()) return false;
-            const data = target.snap.data() as { seed?: unknown; markVersion?: unknown };
-            return data.seed === target.expectedSeed &&
-              typeof data.markVersion === 'number' &&
-              data.markVersion >= target.attemptedVersion;
-          });
-          const retryStillMatchesLatestIntent =
-            params.markRetryIntentGeneration !== undefined &&
-            markIntentGenerations.get(markIntentKey(database, params)) === params.markRetryIntentGeneration;
-          if (isConflictingCurrentProjection && retryStillMatchesLatestIntent) {
-            return setMark({ ...params, markRetryCount: 1 });
-          }
-          return undefined;
-        })
-        .catch(() => undefined);
-    }
   });
 
   // Echo-caused wins route through the EXISTING pending-Moment queue, keyed to
@@ -1963,9 +1873,6 @@ export async function reconcileEchoes(params: {
   tutorialDayIndexes?: number[];
   ceremonialDayIndexes?: number[];
   statsFrozen?: boolean;
-  // Internal bounded retry after a concurrent markVersion write. The retry is
-  // self-scheduled so Board's once-per-board guard need not await a rejection.
-  reconcileRetryCount?: number;
   database?: Firestore;
 }): Promise<{ changed: boolean; bingoTransition: boolean; blackoutTransition: boolean; complete: boolean }> {
   const database = params.database ?? db;
@@ -1993,7 +1900,6 @@ async function runReconcileEchoes(
     tutorialDayIndexes?: number[];
     ceremonialDayIndexes?: number[];
     statsFrozen?: boolean;
-    reconcileRetryCount?: number;
   },
   database: Firestore,
 ): Promise<{ changed: boolean; bingoTransition: boolean; blackoutTransition: boolean; complete: boolean }> {
@@ -2023,14 +1929,14 @@ async function runReconcileEchoes(
   // No cached board to reconcile (or it isn't this Player's) → no-op; the next
   // open retries once the subscription has cached it.
   if (boardSnap.status !== 'fulfilled' || !boardSnap.value.exists()) return { ...none, complete: false };
-  const board = boardSnap.value.data() as { uid?: string; cells?: Cell[]; seed?: number; markVersion?: unknown };
+  const board = boardSnap.value.data() as { uid?: string; cells?: unknown; seed?: number };
   if (board.uid !== uid) return { ...none, complete: false };
-  const boardCells = board.cells ?? [];
+  const boardCells = cellsFromData(board.cells);
 
   const allBoards: Cell[][] = [boardCells];
   for (const snap of sibSnaps) {
     if (snap.status !== 'fulfilled' || !snap.value.exists()) continue;
-    allBoards.push((snap.value.data() as { cells?: Cell[] }).cells ?? []);
+    allBoards.push(cellsFromData((snap.value.data() as { cells?: unknown }).cells));
   }
   const achieved = achievedItemIds(allBoards);
   const now = Date.now();
@@ -2122,14 +2028,12 @@ async function runReconcileEchoes(
 
   const batch = writeBatch(database);
   if (res.changed) {
+    // Per-cell merge (#457): only the newly echoed cells ride the write.
     batch.set(
       boardRef,
-      {
-        cells: res.cells,
+      ...cellsMergeSet(cellsPatch(changedCells(boardCells, res.cells)), {
         ...(typeof board.seed === 'number' ? { markSeed: board.seed } : {}),
-        markVersion: nextMarkVersion(board),
-      },
-      { merge: true },
+      }),
     );
     if (params.statsFrozen) {
       // The same post-freeze narrowing as the Mark path: only a ceremonial
@@ -2156,31 +2060,6 @@ async function runReconcileEchoes(
     // rejection is a genuine online failure, rolled back by latency
     // compensation, and must not vanish silently.
     console.error('[reconcileEchoes] batch.commit() rejected — online write failure', { uid, dayIndex }, err);
-    // A version conflict is recoverable: refresh every input that feeds the
-    // achieved set, then retry once through the same serialized chain. This is
-    // deliberately narrower than a generic retry so stale seeds and permission
-    // failures cannot replay a reconcile onto a different projection.
-    if (res.changed && (params.reconcileRetryCount ?? 0) === 0) {
-      const freshRefs = [
-        boardRef,
-        playerRef,
-        ...siblingDays.map((d) => doc(database, 'events', EVENT_ID, 'days', String(d), 'boards', uid)),
-      ];
-      void Promise.all(freshRefs.map((ref) => getDocFromServer(ref)))
-        .then(([freshBoard]) => {
-          if (!freshBoard.exists()) return undefined;
-          const freshData = freshBoard.data() as { seed?: unknown; markVersion?: unknown };
-          const attemptedVersion = nextMarkVersion(board);
-          const isCurrentProjectionConflict =
-            freshData.seed === board.seed &&
-            typeof freshData.markVersion === 'number' &&
-            freshData.markVersion >= attemptedVersion;
-          return isCurrentProjectionConflict
-            ? reconcileEchoes({ ...params, reconcileRetryCount: 1, database })
-            : undefined;
-        })
-        .catch(() => undefined);
-    }
   });
   if (markerRepairs.length > 0) {
     void committed.then(() => markerRepairs.forEach((cell) => forgetMarkerRepair(markerRepairKey(uid, cell.itemId as string)))).catch(() => undefined);
