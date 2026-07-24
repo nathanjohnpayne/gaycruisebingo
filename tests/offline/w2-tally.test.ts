@@ -45,7 +45,7 @@ import {
 import { setMark } from '../../src/data/api';
 import type { BoardDoc, Cell, PlayerDoc, TallyEntry } from '../../src/types';
 import { seedEventDoc } from './seedEvent';
-import { cellsToMap, cellsFromData } from '../../src/game/cells';
+import { cellsToMap, cellsFromData, type CellsMap } from '../../src/game/cells';
 
 const EVENT_ID = 'med-2026'; // must match src/firebase.ts default (setMark reads it)
 const PROJECT_ID = 'demo-w2-tally'; // distinct project → isolated data
@@ -102,7 +102,8 @@ async function makeObserver(): Promise<Client> {
   return { app, db, uid: cred.user.uid };
 }
 
-function unmarkedBoard(uid: string): BoardDoc {
+// The WIRE shape a seed writes (#457): BoardDoc with map-keyed cells.
+function unmarkedBoard(uid: string): Omit<BoardDoc, 'cells'> & { cells: CellsMap } {
   const cells: Cell[] = Array.from({ length: 25 }, (_, index) => ({
     index,
     itemId: index === 12 ? null : `item-${index}`,

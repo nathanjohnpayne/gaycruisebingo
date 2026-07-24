@@ -24,7 +24,7 @@ import {
 } from 'firebase/firestore';
 import type { BoardDoc, Cell } from '../../src/types';
 import { seedEventDoc } from './seedEvent';
-import { cellsToMap, cellsFromData } from '../../src/game/cells';
+import { cellsToMap, cellsFromData, type CellsMap } from '../../src/game/cells';
 
 // ---------------------------------------------------------------- ADR 0006 ---
 // Offline persistence, the data half — the integration proof. Against the
@@ -132,7 +132,8 @@ async function makeObserver(): Promise<Client> {
 }
 
 // A board with exactly one Square marked — the offline Mark under test.
-function boardWithMarkedSquare(uid: string, marked: number): BoardDoc {
+// The WIRE shape a seed writes (#457): BoardDoc with map-keyed cells.
+function boardWithMarkedSquare(uid: string, marked: number): Omit<BoardDoc, 'cells'> & { cells: CellsMap } {
   const cells: Cell[] = Array.from({ length: 25 }, (_, index) => ({
     index,
     itemId: index === 12 ? null : `item-${index}`,
