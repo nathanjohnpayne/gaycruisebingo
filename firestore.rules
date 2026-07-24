@@ -935,11 +935,24 @@ service cloud.firestore {
           && request.resource.data.body is string
           && request.resource.data.body.size() <= 400
           && request.resource.data.pinned is bool
-          // editedAt is optional (a plain pin toggle never writes it) but, when
-          // present, must be a near-now number — the same +60s / -24h bound
-          // createdAt carries on create, so an edit can't backdate or future-date
-          // its own provenance.
-          && (!('editedAt' in request.resource.data.keys())
+          // A copy change MUST carry a fresh `editedAt` (Codex P2, PR #456). This is
+          // what makes "an edit is visible, never silent" an enforced invariant
+          // rather than a client-side convention: a stale or hand-built admin client
+          // cannot rewrite title/body while leaving the "edited" marker off. Reusing
+          // the doc's existing stamp doesn't count — an unchanged `editedAt` isn't in
+          // affectedKeys, so it fails this check.
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['title', 'body'])
+              || request.resource.data.diff(resource.data).affectedKeys().hasAny(['editedAt']))
+          // When `editedAt` CHANGES it must be a near-now number — the same +60s/-24h
+          // bound createdAt carries on create, so an edit can neither backdate nor
+          // future-date its own provenance, and (because absence fails `is number`)
+          // an existing stamp can never be stripped.
+          //
+          // Scoped to the diff, NOT to mere presence (Codex P1, PR #456): a pin-only
+          // updateDoc merges the STORED `editedAt` into request.resource.data, so a
+          // presence check would make every Pin/Unpin fail once the Notice's last
+          // edit fell outside the 24h window.
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['editedAt'])
               || (request.resource.data.editedAt is number
                   && request.resource.data.editedAt <= request.time.toMillis() + 60000
                   && request.resource.data.editedAt >= request.time.toMillis() - 86400000));

@@ -32,7 +32,7 @@ Editing exists so a typo or off-house-style punctuation is fixable without a Del
 - **Mutable:** `title`, `body`, `pinned`, `editedAt`.
 - **Immutable:** `uid` and `displayName` (a byline can never be moved onto another admin), `createdAt` (a Notice can never be re-sorted to the top of the Feed by editing it), and `dayIndex`.
 
-An edit is therefore always visible, never silent — the reason content was locked in the first place survives: a delivered broadcast may be **corrected**, but not **rewritten**.
+An edit is therefore always visible, never silent — and that visibility is enforced by the rules, not merely by the client: a copy change is rejected unless it stamps a fresh `editedAt`, and an existing stamp can never be removed. The reason content was locked in the first place survives: a delivered broadcast may be **corrected**, but not **rewritten**.
 
 ## Rules (`firestore.rules` § notices)
 
@@ -40,7 +40,13 @@ Inside `match /events/{eventId}`, a sibling of `moments`:
 
 - `read`: any signed-in user (the delivery surface everyone watches).
 - `create`: `isAdmin(eventId)` AND `uid == request.auth.uid` (attribution bound to the posting admin, the markers/moments isOwner discipline — a "📌 Nathan" byline can't be forged) AND `title is string && title.size() <= 60` AND `body is string && body.size() <= 400` AND `pinned is bool` AND `createdAt is number` within `+60s / -24h` of `request.time` (so a forged far-future stamp can't pin a Notice above all Feed activity, the moments/proofs bound).
-- `update`: `isAdmin(eventId)` AND the diff touches ONLY `title`, `body`, `pinned`, `editedAt` (`diff(resource.data).affectedKeys().hasOnly([...])`) AND the create-time title (≤ 60) / body (≤ 400) caps and `pinned is bool` revalidated AND `editedAt`, when present, a number within `+60s / -24h` of `request.time` (the same bound `createdAt` carries, so an edit cannot backdate or future-date its own provenance). Because `uid`, `displayName`, `createdAt`, and `dayIndex` are absent from `hasOnly`, any attempt to change them is denied — a stale or hand-built admin client can correct copy but can never re-attribute a delivered Notice or re-sort it in the Feed (the rules are the enforcement boundary, not just the client writer).
+- `update`: `isAdmin(eventId)` AND the diff touches ONLY `title`, `body`, `pinned`, `editedAt` (`diff(resource.data).affectedKeys().hasOnly([...])`) AND the create-time title (≤ 60) / body (≤ 400) caps and `pinned is bool` revalidated, plus two provenance clauses:
+  - **A copy change must stamp a fresh `editedAt`** — if the diff touches `title` or `body`, it must also touch `editedAt`. This is what makes "an edit is visible" an *enforced* invariant rather than a client-side convention: no client can rewrite copy while leaving the "edited" marker off. Reusing the stored stamp does not count, because an unchanged `editedAt` is not in `affectedKeys`.
+  - **When `editedAt` changes it must be near-now** — a number within `+60s / -24h` of `request.time`, the same bound `createdAt` carries, so an edit can neither backdate nor future-date its own provenance. Since an absent field fails `is number`, an existing stamp can never be stripped to hide a correction.
+
+  The freshness bound is scoped to the **diff**, not to mere presence. A pin-only `updateDoc` merges the *stored* `editedAt` into `request.resource.data`, so a presence-scoped check would reject every Pin/Unpin once a Notice's last edit fell outside the 24h window (Codex P1, PR #456).
+
+  Because `uid`, `displayName`, `createdAt`, and `dayIndex` are absent from `hasOnly`, any attempt to change them is denied — a stale or hand-built admin client can correct copy but can never re-attribute a delivered Notice or re-sort it in the Feed (the rules are the enforcement boundary, not just the client writer).
 - `delete`: `isAdmin(eventId)`.
 
 No owner-write path (a Notice belongs to the admin role, not one uid) and no report counter (admin-authored content is not player-reportable).
@@ -80,7 +86,7 @@ None this wave. `track('notice_post')` / `track('notice_dismiss')` ship only if 
 
 ## Tests (spec ↔ test alignment)
 
-- **Rules** (`tests/rules/notices.test.ts`): any signed-in read allowed; non-admin create/update/delete denied; admin create/update/delete allowed; `title` > 60, `body` > 400, and non-boolean `pinned` each denied on create. For the edit contract (#455): an admin corrects `title`/`body` (allowed, with or without `editedAt`); the caps are revalidated on update; a non-numeric or out-of-bounds `editedAt` denied; `uid`, `displayName`, `createdAt`, and `dayIndex` denied both alone and smuggled alongside a legal copy change; a non-admin edit denied.
+- **Rules** (`tests/rules/notices.test.ts`): any signed-in read allowed; non-admin create/update/delete denied; admin create/update/delete allowed; `title` > 60, `body` > 400, and non-boolean `pinned` each denied on create. For the edit contract (#455, #456): an admin corrects `title`/`body` with a fresh `editedAt` (allowed); a copy change WITHOUT a stamp denied; the caps revalidated on update; a non-numeric or out-of-bounds `editedAt` denied; `editedAt` deletion denied, alone and alongside a copy change; a Notice whose stored `editedAt` is three days old still pins/unpins (the diff-scoping regression guard); `uid`, `displayName`, `createdAt`, and `dayIndex` denied both alone and smuggled alongside a legal copy change; a non-admin edit denied.
 - **`mergeFeed` unit** (`src/data/w2-feed-moments.test.ts`): a pinned Notice sorts above newer Proofs/Moments; the pinned masthead is capped without evicting the normal stream; an unpinned Notice interleaves by `createdAt`; the `max` cap still holds; an empty-notices stream leaves the merge byte-identical to the pre-Notice output (regression guard).
 - **Banner** (`src/components/NoticeBanner.test.tsx`): renders the newest pinned Notice while undismissed; ✕ writes the per-device key and hides it; a remount with the key present does not render (persist-across-reload), a different notice id still renders; dismissal never touches the Feed copy.
 - **Admin IA** (`src/components/admin-console-ia.test.tsx`): the hub renders the Messages door and routes to `/more/admin/messages`, opening the "Messages" dialog under the existing dismissal contract.

@@ -7,7 +7,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { deleteDoc, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
+import { deleteDoc, deleteField, doc, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 
 // specs/admin-messages.md (#439, #455) — the Notices rules contract. A Notice is an
 // admin-authored broadcast at events/{eventId}/notices/{noticeId}: any signed-in
@@ -65,6 +65,12 @@ beforeEach(async () => {
       days: Array.from({ length: 10 }, (_, index) => ({ index })),
     });
     await setDoc(doc(s, noticePath('seed')), notice(ADMIN));
+    // A Notice corrected THREE DAYS AGO — its stored `editedAt` is well outside the
+    // 24h freshness window. The pin controls must still work on it (Codex P1, #456).
+    await setDoc(
+      doc(s, noticePath('stale-edit')),
+      notice(ADMIN, { editedAt: NOW() - 3 * 86_400_000 }),
+    );
   });
 });
 
@@ -114,12 +120,15 @@ describe('firestore.rules — Notices (specs/admin-messages.md)', () => {
     await assertSucceeds(
       updateDoc(p(), { title: 'Final stretch 🏁', body: 'happened—if', editedAt: NOW() }),
     );
-    // Title alone (no editedAt) is legal too — editedAt is optional in the rule.
-    await assertSucceeds(updateDoc(p(), { title: 'Retitled' }));
-    // The create caps are revalidated on update — an edit can't smuggle in overlong copy.
-    await assertFails(updateDoc(p(), { title: 'x'.repeat(61) }));
-    await assertFails(updateDoc(p(), { body: 'x'.repeat(401) }));
-    await assertFails(updateDoc(p(), { title: 42 }));
+    // A copy change WITHOUT a fresh stamp is denied — that is what makes the
+    // "edited" marker an enforced invariant, not a client convention (Codex P2, #456).
+    await assertFails(updateDoc(p(), { title: 'Retitled' }));
+    await assertFails(updateDoc(p(), { body: 'Rewritten' }));
+    // The create caps are revalidated on update — an edit can't smuggle in overlong
+    // copy. A fresh stamp is included so these isolate the CAP, not the stamp rule.
+    await assertFails(updateDoc(p(), { title: 'x'.repeat(61), editedAt: NOW() }));
+    await assertFails(updateDoc(p(), { body: 'x'.repeat(401), editedAt: NOW() }));
+    await assertFails(updateDoc(p(), { title: 42, editedAt: NOW() }));
     // editedAt is bounded like createdAt, so an edit can't backdate or future-date
     // its own provenance.
     await assertFails(updateDoc(p(), { title: 'ok', editedAt: 'now' }));
@@ -127,8 +136,30 @@ describe('firestore.rules — Notices (specs/admin-messages.md)', () => {
     await assertFails(updateDoc(p(), { title: 'ok', editedAt: NOW() - 2 * 86_400_000 }));
   });
 
+  it('a stale editedAt never expires the pin controls (Codex P1, #456)', async () => {
+    // 'stale-edit' was corrected three days ago. A pin-only updateDoc still MERGES
+    // that stored stamp into request.resource.data, so a presence-scoped freshness
+    // check would reject every Pin/Unpin on it forever. The bound is diff-scoped.
+    const p = () => doc(db(ADMIN), noticePath('stale-edit'));
+    await assertSucceeds(updateDoc(p(), { pinned: false }));
+    await assertSucceeds(updateDoc(p(), { pinned: true }));
+    // Correcting its copy again still works — with a fresh stamp.
+    await assertSucceeds(updateDoc(p(), { body: 'Corrected again', editedAt: NOW() }));
+  });
+
+  it('provenance cannot be stripped to hide an edit (Codex P2, #456)', async () => {
+    const p = () => doc(db(ADMIN), noticePath('stale-edit'));
+    // Deleting the stamp outright — with or without a copy change — is denied,
+    // because the diff touches editedAt and the survivor must be a number.
+    await assertFails(updateDoc(p(), { editedAt: deleteField() }));
+    await assertFails(updateDoc(p(), { body: 'Sneaky', editedAt: deleteField() }));
+  });
+
   it('a non-admin cannot edit a Notice (#455)', async () => {
-    await assertFails(updateDoc(doc(db(ALICE), noticePath('seed')), { body: 'Hijacked' }));
+    // A fresh stamp is included so this isolates the isAdmin gate, not the stamp rule.
+    await assertFails(
+      updateDoc(doc(db(ALICE), noticePath('seed')), { body: 'Hijacked', editedAt: NOW() }),
+    );
     await assertFails(
       updateDoc(doc(db(ALICE), noticePath('seed')), { title: 'Hijacked', editedAt: NOW() }),
     );
