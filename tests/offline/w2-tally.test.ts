@@ -12,6 +12,12 @@ import { initializeApp, deleteApp, type FirebaseApp } from 'firebase/app';
 // entry is removed. setMark reaches the prod firebase singleton for its default
 // `db`, whose getAuth() throws without a real env, so stub the module (same
 // EVENT_ID) — the test injects its own emulator-backed `database`.
+// The Board lives at the Phase 1.5 DAY-SCOPED path
+// events/{eventId}/days/{dayIndex}/boards/{uid} — the legacy
+// events/{eventId}/boards/{uid} match no longer exists in firestore.rules —
+// so setMark runs in `daily` mode and the event's `days[]` schedule (whose
+// `unlockAt` gates every day-board write) is seeded out-of-band first (see
+// seedEvent.ts).
 //   firebase emulators:exec --only auth,firestore \
 //     "vitest run --config vitest.offline.config.ts"
 vi.mock('../../src/firebase', () => ({ db: {}, EVENT_ID: 'med-2026' }));
@@ -38,6 +44,7 @@ import {
 } from 'firebase/firestore';
 import { setMark } from '../../src/data/api';
 import type { BoardDoc, Cell, PlayerDoc, TallyEntry } from '../../src/types';
+import { seedEventDoc } from './seedEvent';
 
 const EVENT_ID = 'med-2026'; // must match src/firebase.ts default (setMark reads it)
 const PROJECT_ID = 'demo-w2-tally'; // distinct project → isolated data
@@ -103,7 +110,7 @@ function unmarkedBoard(uid: string): BoardDoc {
     marked: index === 12,
     markedAt: null,
   }));
-  return { uid, seed: 42, createdAt: Date.now(), cells };
+  return { uid, dayIndex: 0, seed: 42, createdAt: Date.now(), cells };
 }
 
 function freshPlayer(uid: string): PlayerDoc {
@@ -125,8 +132,9 @@ afterAll(async () => {
 
 describe('w2 offline Tally marker via setMark (ADR 0002 + ADR 0006)', () => {
   it('queues an attributed marker offline, drains it to the Tally on reconnect, then unmark removes it — no Feed write', async () => {
+    await seedEventDoc(PROJECT_ID, EVENT_ID);
     const tab = await makeClient('gcb-tally-tab');
-    const boardPath = `events/${EVENT_ID}/boards/${tab.uid}`;
+    const boardPath = `events/${EVENT_ID}/days/0/boards/${tab.uid}`;
     const playerPath = `events/${EVENT_ID}/players/${tab.uid}`;
     const markerPath = `events/${EVENT_ID}/tally/${ITEM_ID}/markers/${tab.uid}`;
 
@@ -145,6 +153,9 @@ describe('w2 offline Tally marker via setMark (ADR 0002 + ADR 0006)', () => {
       claimMode: 'honor',
       currentFirstBingoAt: null,
       displayName: DISPLAY_NAME,
+      dayIndex: 0,
+      daily: true,
+      boardSeed: 42,
       database: tab.db,
     });
 
@@ -174,6 +185,9 @@ describe('w2 offline Tally marker via setMark (ADR 0002 + ADR 0006)', () => {
       claimMode: 'honor',
       currentFirstBingoAt: null,
       displayName: DISPLAY_NAME,
+      dayIndex: 0,
+      daily: true,
+      boardSeed: 42,
       database: tab.db,
     });
     await waitForPendingWrites(tab.db);
