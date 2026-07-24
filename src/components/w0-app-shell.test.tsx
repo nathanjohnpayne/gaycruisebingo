@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -103,5 +104,35 @@ describe('route table (mirrors App.tsx\'s TABS -> <Route> mapping)', () => {
     for (const tab of TABS) {
       expect(html).not.toContain(`data-tab="${tab.id}"`);
     }
+  });
+});
+
+// The one piece of the `.tabs` CSS that IS machine-checkable. The spec's
+// layout claims (44px targets, safe-area padding) still need a real layout
+// engine and stay a code-review/device check — but "the fixed bar carries no
+// compositing trigger" is a grep, and it is the rule that has now failed twice
+// in production (#422's backdrop-filter, then #451). Pin it so a future polish
+// pass has to argue with a red test instead of silently reintroducing it.
+describe('.tabs compositing contract (#422, #451)', () => {
+  const tabsRule = readFileSync('src/index.css', 'utf8').match(/^\.tabs\s*\{[^}]*\}/m)?.[0] ?? '';
+
+  it('finds the .tabs rule and keeps it pinned to the viewport bottom', () => {
+    expect(tabsRule).toMatch(/position:\s*fixed/);
+    expect(tabsRule).toMatch(/bottom:\s*0/);
+  });
+
+  // On iOS WebKit a `position: fixed` element promoted to its own compositing
+  // layer is not reliably kept pinned to the visual viewport during scroll: it
+  // detaches and freezes mid-screen, most visibly in a standalone home-screen
+  // PWA on a scrolling route. Every property below is a promotion trigger.
+  for (const trigger of ['backdrop-filter', 'filter', 'transform', 'will-change', 'perspective']) {
+    it(`carries no \`${trigger}\``, () => {
+      expect(tabsRule).not.toMatch(new RegExp(`(^|[^-])${trigger}\\s*:`, 'm'));
+    });
+  }
+
+  it('paints a fully opaque background (no blending work on the fixed layer)', () => {
+    expect(tabsRule).toMatch(/background:\s*var\(--bg\)/);
+    expect(tabsRule).not.toMatch(/transparent/);
   });
 });

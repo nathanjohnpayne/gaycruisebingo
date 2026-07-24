@@ -223,7 +223,7 @@ describe('PullToRefresh — gesture contract', () => {
     expect(onRefresh).not.toHaveBeenCalled();
   });
 
-  it('the non-passive touchmove listener exists ONLY while a touch is armed (Codex P2 on #432)', () => {
+  it('the non-passive touchmove listener spans exactly the armed touch — attached on arm, dropped at touch END, never mid-gesture (Codex P2 on #432, #451)', () => {
     const added: Array<{ type: string; passive: unknown }> = [];
     const original = window.addEventListener.bind(window);
     const addSpy = vi.spyOn(window, 'addEventListener').mockImplementation(
@@ -239,12 +239,34 @@ describe('PullToRefresh — gesture contract', () => {
     expect(added.filter((a) => a.type === 'touchmove')).toHaveLength(0);
     fireTouch('touchstart', 100, 10);
     expect(added.filter((a) => a.type === 'touchmove')).toEqual([{ type: 'touchmove', passive: false }]);
-    // A horizontal disarm drops it immediately — not just at touchend.
+    // A horizontal disarm must NOT drop it (#451): removing a non-passive
+    // listener mid-gesture recomputes WebKit's non-fast-scrollable region
+    // under an in-flight scroll, which strands the fixed tab bar partway up
+    // the page in the iOS home-screen PWA. The gate disarms by clearing the
+    // start point instead, so the rest of the touch no-ops.
     fireTouch('touchmove', 100 + 80, 10 + 40);
-    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(1);
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(0);
+    // The touch ending is the teardown boundary — no non-passive listener
+    // survives an idle app, so scrolling keeps its passive fast path.
     fireTouch('touchend', 180, 50);
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(1);
+    // And a disarmed touch cannot re-engage: a later downward drag inside the
+    // SAME touch is ignored, so the still-attached listener stays inert.
+    expect(added.filter((a) => a.type === 'touchmove')).toHaveLength(1);
     addSpy.mockRestore();
     removeSpy.mockRestore();
+  });
+
+  it('a disarmed gesture never preventDefaults again, however it continues (#451)', () => {
+    // The listener outliving the direction gate is only safe if a disarmed
+    // touch is genuinely inert — otherwise it would start swallowing the
+    // scroll it just handed back to the browser.
+    render(<PullToRefresh onRefresh={vi.fn()} />);
+    fireTouch('touchstart', 100, 10);
+    fireTouch('touchmove', 180, 50); // horizontal-dominant -> disarm
+    const resumed = fireTouch('touchmove', 100, 300); // downward, same touch
+    expect(resumed.defaultPrevented).toBe(false);
+    expect(document.querySelector('.ptr')?.className).not.toContain('ptr-pulling');
   });
 });
 

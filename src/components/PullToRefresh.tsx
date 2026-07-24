@@ -55,10 +55,11 @@ export async function refreshApp(reload: () => void = () => window.location.relo
  *  - never arms from inside an overlay (`.sheet-backdrop`, `.celebrate`,
  *    `.bug-report-pick`) — sheets own their own scroll;
  *  - the non-passive `touchmove` listener exists ONLY between an arming
- *    touchstart and that touch's end/cancel/disarm (Codex P2 on #432): a
- *    permanent `{ passive: false }` window listener would force every
- *    scroll's touchmove through the main thread for the app's whole life.
- *    While attached it preventDefaults only once the pull has engaged;
+ *    touchstart and that touch's END (Codex P2 on #432): a permanent
+ *    `{ passive: false }` window listener would force every scroll's
+ *    touchmove through the main thread for the app's whole life. A DISARM
+ *    does not drop it (#451) — see detachMove below. While attached it
+ *    preventDefaults only once the pull has engaged;
  *  - `touchcancel` ABORTS — snap back, never refresh (Codex P2 on #432):
  *    the system stealing the touch is not a release, however far the pull
  *    had traveled.
@@ -91,6 +92,20 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
     const atTop = () => window.scrollY <= 0;
     let moveAttached = false;
 
+    // Dropped at the END of the armed touch, never mid-gesture (#451). On
+    // WebKit the set of non-passive touch listeners defines the page's
+    // non-fast-scrollable region, so attaching one on touchstart and removing
+    // it again a few frames later — which is what disarming at the direction
+    // gate did — mutates the scrolling tree while that scroll is still in
+    // flight, and leaves viewport-anchored (`position: fixed`) layers stale:
+    // the bottom tab bar froze partway up the page in the iOS home-screen PWA
+    // (the same class of failure as #422's backdrop-filter promotion). A
+    // disarm now only clears `start.current`, which makes onTouchMove a no-op
+    // for the rest of the touch; the listener itself lives exactly as long as
+    // the touch that armed it. That still satisfies the Codex P2 that motivated
+    // this teardown — the concern was a PERMANENT window listener taxing every
+    // scroll for the app's whole life, not one that outlives a direction gate
+    // by the remainder of a single gesture.
     const detachMove = () => {
       if (moveAttached) {
         window.removeEventListener('touchmove', onTouchMove);
@@ -108,13 +123,14 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       if (!engaged.current) {
         // Direction gate: wait out the slop, then commit only to a
         // downward-dominant drag that STARTED at the top. Anything else is
-        // someone scrolling or swiping a carousel — disarm AND drop the
-        // non-passive listener immediately so the rest of their gesture
-        // scrolls on the fast path.
+        // someone scrolling or swiping a carousel — disarm, which makes every
+        // remaining touchmove in this gesture an early return. The listener
+        // stays attached until the touch ends (#451): tearing it down here
+        // re-computed the scrolling tree mid-scroll and stranded the fixed tab
+        // bar. Nothing is preventDefaulted after a disarm, so the scroll runs.
         if (Math.abs(dx) < PTR_SLOP_PX && Math.abs(dy) < PTR_SLOP_PX) return;
         if (dy <= PTR_SLOP_PX || Math.abs(dx) >= dy || !atTop()) {
           start.current = null;
-          detachMove();
           return;
         }
         engaged.current = true;
