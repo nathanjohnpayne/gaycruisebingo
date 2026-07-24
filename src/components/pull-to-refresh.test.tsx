@@ -250,8 +250,8 @@ describe('PullToRefresh — gesture contract', () => {
     // survives an idle app, so scrolling keeps its passive fast path.
     fireTouch('touchend', 180, 50);
     expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(1);
-    // And a disarmed touch cannot re-engage: a later downward drag inside the
-    // SAME touch is ignored, so the still-attached listener stays inert.
+    // Exactly one attach for the whole gesture — the disarm did not leave a
+    // hole that a later move in the same touch re-attached into.
     expect(added.filter((a) => a.type === 'touchmove')).toHaveLength(1);
     addSpy.mockRestore();
     removeSpy.mockRestore();
