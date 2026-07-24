@@ -1145,8 +1145,8 @@ export function computeMark(params: {
   const { cells, index, nextMarked, claimMode, currentFirstBingoAt, now } = params;
   const next: Cell[] = cells.map((c) => {
     if (c.index !== index) return c;
-    // A manual toggle STRIPS the Echo flag. Unmarking an Echo additionally
-    // persists an opt-out so reconciliation respects the Player's choice;
+    // A manual toggle STRIPS the Echo flag. Any manual unmark persists an
+    // opt-out so a standing sibling Echo cannot restore the Player's choice;
     // manually marking it again clears that opt-out.
     const { echo: _echo, echoOptOut: _echoOptOut, ...manual } = c;
     return {
@@ -1154,7 +1154,7 @@ export function computeMark(params: {
       marked: nextMarked,
       markedAt: nextMarked ? now : null,
       status: claimMode === 'admin_confirmed' && nextMarked ? 'pending' : 'confirmed',
-      ...(!nextMarked && c.echo === true ? { echoOptOut: true } : {}),
+      ...(!nextMarked && !c.free && c.itemId !== null ? { echoOptOut: true } : {}),
     };
   });
 

@@ -188,7 +188,7 @@ beforeEach(() => {
 });
 
 describe('computeMark preserves an Echo opt-out on manual unmark (spec § No unmark cascades)', () => {
-  it('unmarking an Echo records an opt-out, and manually re-marking clears both keys', () => {
+  it('records an opt-out for unmarked Echoes and sources, and clears it on a manual re-mark', () => {
     const cells = card((i) => `i${i}`, {
       2: { marked: true, markedAt: 5, status: 'confirmed', echo: true },
     });
@@ -214,6 +214,16 @@ describe('computeMark preserves an Echo opt-out on manual unmark (spec § No unm
     expect(cell.marked).toBe(true);
     expect('echo' in cell).toBe(false);
     expect('echoOptOut' in cell).toBe(false);
+
+    const sourceUnmarked = computeMark({
+      cells: card((i) => `i${i}`, { 3: { marked: true, markedAt: 5, status: 'confirmed' } }),
+      index: 3,
+      nextMarked: false,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      now: 12,
+    });
+    expect(sourceUnmarked.cells.find((c) => c.index === 3)?.echoOptOut).toBe(true);
   });
 });
 
