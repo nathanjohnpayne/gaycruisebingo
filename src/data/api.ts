@@ -1142,18 +1142,16 @@ export function computeMark(params: {
   const { cells, index, nextMarked, claimMode, currentFirstBingoAt, now } = params;
   const next: Cell[] = cells.map((c) => {
     if (c.index !== index) return c;
-    // A manual toggle STRIPS any echo flag (specs/echo-marks.md): from here on
-    // the Square is the Player's own act, so it must not keep the Reshuffle
-    // pristine exemption an Echo Mark carries — a real Mark riding under
-    // `echo: true` could trade away a card it made non-pristine. The key is
-    // DROPPED (not written `false`) so a board that never echoed produces a
-    // byte-identical cell to today's.
-    const { echo: _echo, ...manual } = c;
+    // A manual toggle STRIPS the Echo flag. Unmarking an Echo additionally
+    // persists an opt-out so reconciliation respects the Player's choice;
+    // manually marking it again clears that opt-out.
+    const { echo: _echo, echoOptOut: _echoOptOut, ...manual } = c;
     return {
       ...manual,
       marked: nextMarked,
       markedAt: nextMarked ? now : null,
       status: claimMode === 'admin_confirmed' && nextMarked ? 'pending' : 'confirmed',
+      ...(!nextMarked && c.echo === true ? { echoOptOut: true } : {}),
     };
   });
 
@@ -1247,6 +1245,18 @@ export function computeMark(params: {
 // closed (Codex P1, PR #75). setMark therefore serializes per board: each
 // call's read runs only after the previous call has issued its batch.
 const markChains = new Map<string, Promise<unknown>>();
+
+// A cache tombstone alone cannot distinguish this device's incomplete-cache
+// unmark from an authoritative admin deletion. Remember only a deletion this
+// module issued while one or more sibling reads were unknowable; reconciliation
+// may repair that narrow case and never recreates an arbitrary tombstone.
+const pendingMarkerRepairs = new Set<string>();
+const markerRepairKey = (uid: string, itemId: string) => `${uid}:${itemId}`;
+
+/** Test-only. */
+export function __resetPendingMarkerRepairsForTests(): void {
+  pendingMarkerRepairs.clear();
+}
 
 // The shared marker-attribution helper (`markerDisplayName`) lives in the
 // Firestore-free ./attribution module so proofs.ts can share it without
@@ -1590,6 +1600,7 @@ async function runSetMark(
   // tallies. A bare Mark still posts NOTHING to the Feed (moments/proofs) — the
   // Tally is a separate surface (ADR 0002).
   const tallyItemId = toggled && !toggled.free ? toggled.itemId : null;
+  let markerRepairCandidate: string | null = null;
   if (tallyItemId) {
     const markerRef = doc(database, 'events', EVENT_ID, 'tally', tallyItemId, 'markers', uid);
     if (params.nextMarked) {
@@ -1622,12 +1633,14 @@ async function runSetMark(
       // is the cache's view (the same read discipline as the echo pass); an
       // unknowable sibling reads as "no carrier", matching today's delete.
       let stillAchievedElsewhere = false;
+      let siblingKnowledgeIncomplete = false;
       if (echoDayIndexes.length > 0) {
         const sibSnaps = await Promise.allSettled(
           echoDayIndexes.map((d) =>
             getDocFromCache(doc(database, 'events', EVENT_ID, 'days', String(d), 'boards', uid)),
           ),
         );
+        siblingKnowledgeIncomplete = sibSnaps.some((snap) => snap.status !== 'fulfilled');
         stillAchievedElsewhere = sibSnaps.some(
           (snap) =>
             snap.status === 'fulfilled' &&
@@ -1637,11 +1650,22 @@ async function runSetMark(
             ),
         );
       }
-      if (!stillAchievedElsewhere) batch.delete(markerRef);
+      if (!stillAchievedElsewhere) {
+        batch.delete(markerRef);
+        const repairKey = markerRepairKey(uid, tallyItemId);
+        if (siblingKnowledgeIncomplete) {
+          pendingMarkerRepairs.add(repairKey);
+          markerRepairCandidate = repairKey;
+        } else {
+          pendingMarkerRepairs.delete(repairKey);
+        }
+      }
     }
   }
 
-  void batch.commit().catch((err: unknown) => {
+  const committed = batch.commit();
+  void committed.catch((err: unknown) => {
+    if (markerRepairCandidate) pendingMarkerRepairs.delete(markerRepairCandidate);
     // A rejection here is NOT the offline case. Offline, commit() PENDS — it
     // neither resolves nor rejects in this tab's lifetime — while the write sits
     // durably in the persistent cache and drains on reconnect (ADR 0006). So a
@@ -1692,7 +1716,12 @@ async function runSetMark(
       pinName !== 'Anonymous' &&
       (!params.statsFrozen || params.ceremonialDayIndexes?.includes(echoBoard.dayIndex))
     ) {
-      void pinDayFirstBingo(echoBoard.dayIndex, { uid, displayName: pinName, photoURL: null }, now);
+      // A meta pin is permanent, while a stale sibling markSeed can reject this
+      // whole batch. Wait for the board batch's server acknowledgement so a
+      // rejected Echo can never keep the honor it appeared to earn locally.
+      void committed
+        .then(() => pinDayFirstBingo(echoBoard.dayIndex, { uid, displayName: pinName, photoURL: null }, now))
+        .catch(() => undefined);
     }
   }
 
@@ -1825,7 +1854,12 @@ async function runReconcileEchoes(
   );
   const markerRepairs = confirmedCells.filter((c, i) => {
     const read = markerReads[i];
-    return read.status === 'fulfilled' && !read.value.exists();
+    const repairKey = markerRepairKey(uid, c.itemId as string);
+    if (read.status === 'fulfilled' && read.value.exists()) {
+      pendingMarkerRepairs.delete(repairKey);
+      return false;
+    }
+    return read.status === 'fulfilled' && !read.value.exists() && pendingMarkerRepairs.has(repairKey);
   });
 
   if (!res.changed && markerRepairs.length === 0) return none;
@@ -1880,12 +1914,16 @@ async function runReconcileEchoes(
       dayIndex,
     });
   }
-  void batch.commit().catch((err: unknown) => {
+  const committed = batch.commit();
+  void committed.catch((err: unknown) => {
     // Same posture as setMark: offline PENDS durably (never lands here); a
     // rejection is a genuine online failure, rolled back by latency
     // compensation, and must not vanish silently.
     console.error('[reconcileEchoes] batch.commit() rejected — online write failure', { uid, dayIndex }, err);
   });
+  if (markerRepairs.length > 0) {
+    void committed.then(() => markerRepairs.forEach((cell) => pendingMarkerRepairs.delete(markerRepairKey(uid, cell.itemId as string)))).catch(() => undefined);
+  }
 
   if (res.bingoTransition || res.blackoutTransition) {
     enqueueWinMoments({
@@ -1903,11 +1941,15 @@ async function runReconcileEchoes(
     const savedName =
       typeof cachedPlayerData?.displayName === 'string' ? cachedPlayerData.displayName : undefined;
     if (savedName && savedName.trim().length > 0) {
-      void pinDayFirstBingo(
-        dayIndex,
-        { uid, displayName: markerDisplayName(undefined, savedName), photoURL: null },
-        now,
-      );
+      void committed
+        .then(() =>
+          pinDayFirstBingo(
+            dayIndex,
+            { uid, displayName: markerDisplayName(undefined, savedName), photoURL: null },
+            now,
+          ),
+        )
+        .catch(() => undefined);
     }
   }
   return {

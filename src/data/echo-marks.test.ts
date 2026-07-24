@@ -131,7 +131,14 @@ const isDayBoardWrite = (call: unknown[], day: number) => {
 const isPlayerWrite = (call: unknown[]) => segs(call)[2] === 'players';
 const isMarkerWrite = (call: unknown[]) => segs(call)[2] === 'tally';
 
-import { setMark, dealDayCard, reshuffleBoard, reconcileEchoes, computeMark } from './api';
+import {
+  __resetPendingMarkerRepairsForTests,
+  computeMark,
+  dealDayCard,
+  reconcileEchoes,
+  reshuffleBoard,
+  setMark,
+} from './api';
 import { confirmClaim, rejectClaim } from './admin';
 import { resetPendingMoments, peekPendingMoments, pendingBingoDayIndexes } from './moments';
 
@@ -174,10 +181,11 @@ beforeEach(() => {
   H.dayBoards = new Map();
   H.markerCache.clear();
   H.player = null;
+  __resetPendingMarkerRepairsForTests();
 });
 
-describe('computeMark strips the echo flag on a manual toggle (spec § Reshuffle pristine-ness)', () => {
-  it('unmarking an echo, and manually re-marking it, both drop the key', () => {
+describe('computeMark preserves an Echo opt-out on manual unmark (spec § No unmark cascades)', () => {
+  it('unmarking an Echo records an opt-out, and manually re-marking clears both keys', () => {
     const cells = card((i) => `i${i}`, {
       2: { marked: true, markedAt: 5, status: 'confirmed', echo: true },
     });
@@ -190,6 +198,7 @@ describe('computeMark strips the echo flag on a manual toggle (spec § Reshuffle
       now: 10,
     });
     expect('echo' in unmarked.cells.find((c) => c.index === 2)!).toBe(false);
+    expect(unmarked.cells.find((c) => c.index === 2)?.echoOptOut).toBe(true);
     const remarked = computeMark({
       cells: unmarked.cells,
       index: 2,
@@ -201,6 +210,7 @@ describe('computeMark strips the echo flag on a manual toggle (spec § Reshuffle
     const cell = remarked.cells.find((c) => c.index === 2)!;
     expect(cell.marked).toBe(true);
     expect('echo' in cell).toBe(false);
+    expect('echoOptOut' in cell).toBe(false);
   });
 });
 
@@ -289,8 +299,9 @@ describe('setMark — mark-time propagation (spec § Mark-time)', () => {
     await markShared();
     expect(peekPendingMoments('u1').bingo).toBe(true);
     expect(pendingBingoDayIndexes('u1')).toEqual([3]);
-    // The echo-completed first line also pins Day 3's write-once honor
-    // (Codex P2 on #447) — a fire-and-forget setDoc to days/3/meta/3.
+    // The echo-completed first line pins only after the board batch is
+    // acknowledged, so a rejected stale-seed batch cannot create the honor.
+    await Promise.resolve();
     const pin = H.setDoc.mock.calls.find((call) => {
       const a = segs(call as unknown[]);
       return a[2] === 'days' && a[3] === '3' && a[4] === 'meta';
@@ -300,6 +311,24 @@ describe('setMark — mark-time propagation (spec § Mark-time)', () => {
       uid: 'u1',
       displayName: 'Alice',
     });
+  });
+
+  it('does not pin an Echo honor when the board batch is rejected', async () => {
+    seedBoards();
+    H.dayBoards.set(3, {
+      uid: 'u1',
+      seed: 333,
+      dayIndex: 3,
+      cells: card((i) => (i === 14 ? 'shared' : `b${i}`), {
+        10: { marked: true, markedAt: 1 },
+        11: { marked: true, markedAt: 1 },
+        13: { marked: true, markedAt: 1 },
+      }),
+    });
+    H.batchCommit.mockRejectedValueOnce(new Error('stale markSeed'));
+    await markShared();
+    await Promise.resolve();
+    expect(H.setDoc).not.toHaveBeenCalled();
   });
 
   it('does NOT echo a pending (admin_confirmed) Mark', async () => {
@@ -569,10 +598,7 @@ describe('reconcileEchoes — open-time backfill (spec § Open-time)', () => {
     expect(playerWrite.blackout).toBe(true);
   });
 
-  it('re-creates a cache-tombstoned marker for a standing confirmed cell (Codex P2 #447 round 2)', async () => {
-    // The opened board still holds `shared` confirmed (an echo), but this
-    // device's cache carries a TOMBSTONE for its marker — the trace of the
-    // unmark that deleted it while this sibling was unknowable.
+  it('does not repair a cache tombstone without a locally incomplete-unmark record', async () => {
     seedReconcile();
     H.dayBoards.set(2, {
       uid: 'u1',
@@ -584,18 +610,56 @@ describe('reconcileEchoes — open-time backfill (spec § Open-time)', () => {
     });
     H.markerCache.set('shared', false); // cached tombstone
     const res = await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
-    expect(res.changed).toBe(false); // no echo to write — the repair rides alone
-    const markerWrite = H.batchSet.mock.calls.find(isMarkerWrite);
-    expect(markerWrite).toBeDefined();
-    expect(segs(markerWrite! as unknown[])).toEqual(['events', EVENT_ID, 'tally', 'shared', 'markers', 'u1']);
-    expect(markerWrite![1]).toMatchObject({ uid: 'u1', markedAt: 7, dayIndex: 2 });
-    expect(H.batchCommit).toHaveBeenCalledTimes(1);
-    // And a NOT-CACHED marker (the common case) proves nothing — no write.
-    vi.clearAllMocks();
-    H.markerCache.clear();
-    await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
+    expect(res.changed).toBe(false);
     expect(H.batchSet.mock.calls.some((c) => isMarkerWrite(c))).toBe(false);
     expect(H.batchCommit).not.toHaveBeenCalled();
+  });
+
+  it('repairs only the tombstone created by this device after an incomplete sibling unmark', async () => {
+    seedReconcile();
+    const { getDocFromCache } = await import('firebase/firestore');
+    const mocked = vi.mocked(getDocFromCache);
+    try {
+      mocked.mockImplementation(async (ref) => {
+        const a = ((ref as { args?: unknown[] }).args ?? []).filter((x): x is string => typeof x === 'string');
+        if (a[2] === 'days' && a[3] === '2') throw new Error('sibling cache miss');
+        return H.defaultGetDocFromCache(ref as { args?: unknown[] }) as never;
+      });
+      await setMark({
+        uid: 'u1',
+        cells: (H.dayBoards.get(1)?.cells ?? []) as Cell[],
+        index: 4,
+        nextMarked: false,
+        claimMode: 'honor',
+        currentFirstBingoAt: null,
+        displayName: 'Alice',
+        dayIndex: 1,
+        daily: true,
+        boardSeed: 111,
+        echoDayIndexes: [1, 2],
+      });
+    } finally {
+      mocked.mockImplementation(((ref: { args?: unknown[] }) => H.defaultGetDocFromCache(ref)) as never);
+    }
+    expect(H.batchDelete).toHaveBeenCalledTimes(1);
+
+    H.dayBoards.set(1, { uid: 'u1', seed: 111, dayIndex: 1, cells: card((i) => (i === 4 ? 'shared' : `c${i}`)) });
+    H.dayBoards.set(2, {
+      uid: 'u1',
+      seed: 222,
+      dayIndex: 2,
+      cells: card((i) => (i === 9 ? 'shared' : `d${i}`), {
+        9: { marked: true, markedAt: 7, status: 'confirmed', echo: true },
+      }),
+    });
+    H.markerCache.set('shared', false);
+    vi.clearAllMocks();
+    const res = await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [1, 2] });
+    expect(res.changed).toBe(false);
+    const markerWrite = H.batchSet.mock.calls.find(isMarkerWrite);
+    expect(markerWrite).toBeDefined();
+    expect(markerWrite![1]).toMatchObject({ uid: 'u1', markedAt: 7, dayIndex: 2 });
+    expect(H.batchCommit).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -652,6 +716,20 @@ describe('confirmClaim — the admin_confirmed echo moment (spec § Contract)', 
     seedClaim();
     await rejectClaim(claim(), 'admin-1');
     expect(H.txSet.mock.calls.some((c) => isDayBoardWrite(c, 2))).toBe(false);
+  });
+
+  it('rejecting a repeated Prompt keeps its marker while a confirmed Echo remains', async () => {
+    seedClaim();
+    H.dayBoards.set(2, {
+      uid: 'u1',
+      seed: 222,
+      dayIndex: 2,
+      cells: card((i) => (i === 7 ? 'shared' : `b${i}`), {
+        7: { marked: true, markedAt: 1, status: 'confirmed', echo: true },
+      }),
+    });
+    await rejectClaim(claim(), 'admin-1');
+    expect(H.txDelete).not.toHaveBeenCalled();
   });
 
   it("pins the echo Day's write-once honor when the echo completes its first line (Codex P2 #447)", async () => {

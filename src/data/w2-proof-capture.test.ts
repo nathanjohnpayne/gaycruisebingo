@@ -163,6 +163,22 @@ describe('attachProof — posts an active Proof to the Feed and marks the cell (
     expect(setPayload('/players/')).toMatchObject({ squaresMarked: 1 });
   });
 
+  it('turns a proofed Echo into a local Mark so the card is no longer reshuffleable', async () => {
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 999, status: 'confirmed', echo: true };
+    boardState = { cells: board };
+
+    await attachProof({
+      ...baseArgs,
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'I saw it' },
+    });
+
+    const written = setPayload('/boards/') as { cells: Cell[] };
+    expect(written.cells[5]).not.toHaveProperty('echo');
+    expect(written.cells[5].proofId).toEqual(expect.any(String));
+  });
+
   it('the proof→cell link lives in the proof DOC (uid + cellIndex) — the authoritative, clobber-resilient link (PR #75)', async () => {
     await attachProof({
       ...baseArgs,

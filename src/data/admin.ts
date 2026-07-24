@@ -349,7 +349,8 @@ async function resolve(
   // is the moment an admin_confirmed Mark reaches confirmed, so it is the
   // moment the Prompt echoes onto the owner's sibling Day Cards — inside this
   // same transaction, each echoed board carrying its own markSeed, all stat
-  // deltas folded into the ONE player write below. A reject echoes nothing.
+  // deltas folded into the ONE player write below. A reject uses the same reads
+  // only to preserve a standing sibling's Tally marker; it never echoes.
   let echoSiblingDays: number[] = [];
   // The freeze gate is a GETTER re-evaluated inside the transaction callback
   // (Codex P2 on #278 round 4): a resolve started seconds before 08:00 must
@@ -368,7 +369,7 @@ async function resolve(
     isCeremonialDay = (i: number) => ceremonial.has(i);
     const frozenAt = evSnap?.data()?.frozenAt as number | undefined;
     isStatsFrozen = () => standingsFrozen({ frozenAt, days });
-    if (status === 'confirmed') {
+    if (status === 'confirmed' || status === 'rejected') {
       echoSiblingDays = days.map((d) => d.index).filter((i) => i !== (c.dayIndex as number));
     }
   }
@@ -412,8 +413,9 @@ async function resolve(
     // owner's that carries it unmarked — in this SAME transaction, each echoed
     // board carrying ITS OWN markSeed. Echoed cells are born `confirmed`: the
     // achievement was already admin-confirmed once, so they raise no second
-    // Claim. A reject echoes nothing (echoSiblingSnaps is empty), and unmarking
-    // a rejected cell never cascades to prior echoes. No Feed Moment is posted
+    // Claim. A reject writes no Echo, but uses the sibling snapshots below to
+    // preserve a marker while another confirmed carrier stands. Unmarking a
+    // rejected cell never cascades to prior echoes. No Feed Moment is posted
     // from here — this runs on the ADMIN's device and a Moment must be written
     // by its winner (see the spec's Moments residual for this mode) — but an
     // echo-completed first line DOES pin its Day's write-once honor below
@@ -544,7 +546,14 @@ async function resolve(
     // a write, so the reads-before-writes transaction contract holds unchanged.
     next.forEach((after, i) => {
       const before = cells[i];
-      if (before.marked && !after.marked && before.itemId) {
+      const siblingStillConfirms = echoSiblingSnaps.some(
+        (snap) =>
+          snap.exists() &&
+          ((snap.data() as { cells?: Cell[] }).cells ?? []).some(
+            (cell) => !cell.free && cell.marked && cell.status !== 'pending' && cell.itemId === before.itemId,
+          ),
+      );
+      if (before.marked && !after.marked && before.itemId && !siblingStillConfirms) {
         tx.delete(marker(before.itemId, c.uid));
       }
     });

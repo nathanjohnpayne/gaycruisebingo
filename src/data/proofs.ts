@@ -203,11 +203,14 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
     const markerSnap = markerRef ? await tx.get(markerRef) : null;
     const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number } | undefined;
     const liveCells = boardData?.cells ?? cells;
-    const next: Cell[] = liveCells.map((c) =>
-      c.index === cellIndex
-        ? { ...c, marked: true, markedAt: now, proofId, status: pending ? 'pending' : 'confirmed' }
-        : c,
-    );
+    const next: Cell[] = liveCells.map((c) => {
+      if (c.index !== cellIndex) return c;
+      // A proof creates a durable artifact anchored to this card. It must turn
+      // an Echo into a local Mark so the reshuffle gate cannot trade the card
+      // away and strand that artifact.
+      const { echo: _echo, echoOptOut: _echoOptOut, ...proofed } = c;
+      return { ...proofed, marked: true, markedAt: now, proofId, status: pending ? 'pending' : 'confirmed' };
+    });
 
     const bingoCount = completedLines(next).length;
     const squares = countMarked(next);

@@ -172,6 +172,9 @@ export interface Cell {
   // strips `echo` on the toggled cell), so a real Mark can never ride under an
   // echo's pristine exemption.
   echo?: boolean;
+  // A Player can explicitly unmark an Echo on this card. Keep that choice on
+  // the cell so open-time reconciliation does not add the same Echo back.
+  echoOptOut?: boolean;
 }
 
 export interface BoardDoc {

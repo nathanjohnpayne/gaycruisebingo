@@ -378,10 +378,9 @@ export function countMarked(cells: Cell[]): number {
  * though it scores nothing there.
  *
  * That distinction is also what keeps this predicate honest against
- * `firestore.rules` `boardPristine()`, which gates the write on `free == true ||
- * marked == false || echo == true` and cannot see `status` semantics. The two
- * MUST agree, or the chip renders on a card whose reshuffle the server then
- * denies. Pinned by src/game/reshuffle.test.ts.
+ * `firestore.rules` `boardPristine()`, which exempts only artifact-free Echoes.
+ * The two MUST agree, or the chip renders on a card whose reshuffle the server
+ * then denies. Pinned by src/game/reshuffle.test.ts.
  *
  * An ECHO Mark does NOT cost pristine-ness (specs/echo-marks.md): an echoed
  * Square records something the Player did on ANOTHER card — this card still
@@ -390,7 +389,9 @@ export function countMarked(cells: Cell[]): number {
  * toggled Square, so a real Mark can never ride under the exemption.
  */
 export function isPristine(cells: Cell[]): boolean {
-  return cells.every((c) => c.free || !c.marked || c.echo === true);
+  return cells.every(
+    (c) => c.free || !c.marked || (c.echo === true && c.proofId == null && c.status !== 'pending'),
+  );
 }
 
 // --- Echo Marks (specs/echo-marks.md, #446) ---------------------------------
@@ -449,15 +450,16 @@ export interface EchoResult {
 /**
  * Auto-mark every unmarked carrier of an achieved Prompt on ONE board. Pure and
  * IDEMPOTENT: an already-marked Square (echo, manual, or `pending` — the Player
- * has tapped it and a Claim may be riding on it) is never touched, and a board
- * carrying no achieved Prompt returns the original array reference unchanged.
+ * has tapped it and a Claim may be riding on it) and an explicit Echo opt-out are
+ * never touched, and a board carrying no achieved Prompt returns the original
+ * array reference unchanged.
  * Echoed cells are born `confirmed` (the underlying achievement was already
  * confirmed once — in admin_confirmed mode they need no second admin pass).
  */
 export function applyEchoes(cells: Cell[], achieved: ReadonlySet<string>, now: number): EchoResult {
   const echoedItemIds: string[] = [];
   const next = cells.map((c) => {
-    if (c.free || c.marked || !c.itemId || !achieved.has(c.itemId)) return c;
+    if (c.free || c.marked || c.echoOptOut === true || !c.itemId || !achieved.has(c.itemId)) return c;
     echoedItemIds.push(c.itemId);
     return { ...c, marked: true, markedAt: now, status: 'confirmed' as const, echo: true };
   });

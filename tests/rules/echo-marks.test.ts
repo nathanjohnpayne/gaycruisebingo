@@ -220,4 +220,16 @@ describe("boardPristine()'s echo exemption (spec § Reshuffle pristine-ness)", (
     });
     await assertFails(reshuffle(1, 111));
   });
+
+  it('a proof-backed Echo is not pristine — the proof cannot be stranded by a reshuffle', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), dayBoardPath(1, ALICE)),
+        board(ALICE, 1, 111, {
+          5: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true, proofId: 'proof-1' },
+        }),
+      );
+    });
+    await assertFails(reshuffle(1, 111));
+  });
 });

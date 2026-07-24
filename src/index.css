@@ -426,6 +426,7 @@ a {
    subtle ⟲ glyph (top-left — the ✓ owns top-right, proof ＋ bottom-left, tally
    bottom-right) plus a slightly dimmed check explain why a card lit up on
    arrival, without making an echo look different in weight from a real mark.
+   A live Doubt owns top-left, so the glyph steps below it in that state.
    --on-gradient for the same gradient-fill contrast reasoning as .cell.marked's
    ✓ (a graphical object under WCAG 1.4.11's 3:1 floor). */
 .cell.echo::before {
@@ -439,6 +440,9 @@ a {
 }
 .cell.echo.marked::after {
   opacity: 0.75;
+}
+.cell.echo:has(.doubt-badge)::before {
+  top: 20px;
 }
 /* The winning line's payline sweep (specs/motion-polish.md): each Square in
    the line shimmers in turn — `--win-order` (Board.tsx, game/motion.ts) is the

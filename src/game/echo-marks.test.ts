@@ -68,6 +68,13 @@ describe('applyEchoes — idempotent per-board application (spec § Contract)', 
     expect(res.cells).toBe(cells);
   });
 
+  it('does not re-add an Echo the Player explicitly opted out of', () => {
+    const cells = board({ 4: { echoOptOut: true } });
+    const res = applyEchoes(cells, new Set(['item-4']), NOW);
+    expect(res.changed).toBe(false);
+    expect(res.cells[4]).toMatchObject({ marked: false, echoOptOut: true });
+  });
+
   it('is idempotent, and a board with no carrier returns the ORIGINAL array reference', () => {
     const cells = board();
     const untouched = applyEchoes(cells, new Set(['not-here']), NOW);
@@ -199,11 +206,12 @@ describe('foldEchoStats — the ONE aggregated player write (spec § Contract)',
 });
 
 describe('isPristine — the Reshuffle echo exemption (spec § Reshuffle pristine-ness)', () => {
-  it('an echo-only card is still pristine; a manual Mark is not; pending is not', () => {
+  it('only artifact-free confirmed Echoes stay pristine', () => {
     expect(isPristine(board({ 2: { marked: true, markedAt: NOW, status: 'confirmed', echo: true } }))).toBe(
       true,
     );
     expect(isPristine(board({ 2: { marked: true, markedAt: NOW } }))).toBe(false);
     expect(isPristine(board({ 2: { marked: true, markedAt: NOW, status: 'pending' } }))).toBe(false);
+    expect(isPristine(board({ 2: { marked: true, markedAt: NOW, status: 'confirmed', echo: true, proofId: 'p1' } }))).toBe(false);
   });
 });
