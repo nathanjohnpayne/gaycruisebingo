@@ -77,9 +77,11 @@ vi.mock('../hooks/useData', () => ({
 import Celebration from './Celebration';
 import Leaderboard from './Leaderboard';
 import { leaderboardShareCopy } from './Leaderboard';
+import FarewellPodium, { FarewellPodiumView } from './FarewellPodium';
 import {
   renderBingoShareCard,
   renderLeaderboardShareCard,
+  renderFarewellShareCard,
   shareCardBlob,
   SHARE_CARD_APP_NAME,
   type LeaderboardShareRow,
@@ -440,10 +442,14 @@ describe('ShareCard CSS — fixed-frame safety', () => {
   // PR #111 round 3 finding 2 parity, reinstated), and the gradient fill
   // takes the per-theme --on-gradient token — never a hardcoded hex
   // (issue #72, specs/theme-on-color-contrast.md).
-  it('wraps cell prompt text like the on-page board and fills it with the on-gradient token', () => {
+  it('wraps cell prompt text hyphenate-first and fills it with the on-gradient token', () => {
     const cellRule = indexCss.match(/\.share-card-cell\s*\{([^}]*)\}/);
     expect(cellRule, '.share-card-cell rule not found in src/index.css').not.toBeNull();
-    expect(cellRule![1]).toMatch(/word-break:\s*break-word/);
+    // overflow-wrap, NOT word-break: break-word (issue #449): Chrome treats
+    // the latter as break-anywhere and skips hyphenation, printing raw
+    // mid-word breaks on real cards.
+    expect(cellRule![1]).toMatch(/overflow-wrap:\s*break-word/);
+    expect(cellRule![1]).not.toMatch(/word-break\s*:/);
     expect(cellRule![1]).toMatch(/hyphens:\s*auto/);
     expect(cellRule![1]).toMatch(/overflow:\s*hidden/);
 
@@ -457,10 +463,12 @@ describe('ShareCard CSS — fixed-frame safety', () => {
     expect(freeRule![1]).toMatch(/color:\s*var\(--ink\)/);
   });
 
-  it('reserves fixed-frame space for two winner-name lines', () => {
+  it('keeps the bingo frame budget: title size, grid metrics, and no dead name reserve', () => {
     const playerRule = indexCss.match(/\.share-card-player\s*\{([^}]*)\}/);
     expect(playerRule, '.share-card-player rule not found in src/index.css').not.toBeNull();
-    expect(playerRule![1]).toMatch(/min-height:\s*104px/);
+    // No two-line min-height reserve (issue #449): it left a dead band under
+    // a ONE-line name; the frame's slack pools above the footer instead.
+    expect(playerRule![1]).not.toMatch(/min-height\s*:/);
 
     const titleRule = indexCss.match(/\.share-card-bingo \.share-card-title\s*\{([^}]*)\}/);
     expect(titleRule, '.share-card-bingo .share-card-title rule not found in src/index.css').not.toBeNull();
@@ -471,6 +479,26 @@ describe('ShareCard CSS — fixed-frame safety', () => {
     expect(gridRule![1]).toMatch(/width:\s*330px/);
     expect(gridRule![1]).toMatch(/gap:\s*10px/);
     expect(gridRule![1]).toMatch(/margin:\s*18px 0 8px/);
+  });
+
+  it('keeps the winning-line glow a per-tile halo, never a merged bar', () => {
+    // Issue #449: five ADJACENT 18px glows on a column/row win merged into
+    // one solid hot bar down the grid — the blur is pinned at 8px.
+    const lineRule = indexCss.match(/\.share-card-cell\.line\s*\{([^}]*)\}/);
+    expect(lineRule, '.share-card-cell.line rule not found in src/index.css').not.toBeNull();
+    expect(lineRule![1]).toMatch(/box-shadow:\s*0 0 8px var\(--primary\)/);
+  });
+
+  it('clamps farewell honoree names and ellipsizes honor-row names inside the fixed frame', () => {
+    const nameRule = indexCss.match(/\.share-card-honoree-name\s*\{([^}]*)\}/);
+    expect(nameRule, '.share-card-honoree-name rule not found in src/index.css').not.toBeNull();
+    expect(nameRule![1]).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(nameRule![1]).toMatch(/-webkit-line-clamp:\s*1/);
+
+    const honorNameRule = indexCss.match(/\.share-card-honor-name\s*\{([^}]*)\}/);
+    expect(honorNameRule, '.share-card-honor-name rule not found in src/index.css').not.toBeNull();
+    expect(honorNameRule![1]).toMatch(/text-overflow:\s*ellipsis/);
+    expect(honorNameRule![1]).toMatch(/min-width:\s*0/);
   });
 
   it('keeps pending share-card cells visibly dashed even when also marked', () => {
@@ -652,6 +680,76 @@ describe('ShareCard — renderLeaderboardShareCard', () => {
     const node = toBlobNode();
     expect(node.querySelectorAll('.share-card-col')).toHaveLength(0);
     expect(node.querySelectorAll('.share-card-row')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ShareCard — renderFarewellShareCard (issue #449)
+// ---------------------------------------------------------------------------
+
+describe('ShareCard — renderFarewellShareCard', () => {
+  const data = {
+    eventName: 'Allure of the Seas',
+    champion: { displayName: 'Zacaria Arab', bingoCount: 16, squaresMarked: 124 },
+    firstBingo: { displayName: 'Turntilla' },
+    honors: [
+      { dayLabel: 'Day 1 · Trieste 🇮🇹', displayName: 'Andrew Levad' },
+      { dayLabel: 'Day 2 · Split 🇭🇷', displayName: 'Logan Murdock' },
+      { dayLabel: 'Day 3 · Sea Day 🌊', displayName: 'Ido Marcus' },
+    ],
+  };
+
+  it('lays out honoree blocks, honor rows, and the context/stat lines', async () => {
+    const blob = await renderFarewellShareCard({
+      ...data,
+      contextLine: 'Gay Cruise Bingo · Day 10 · Barcelona',
+      statLine: 'Final standings · 10 days',
+    });
+
+    expect(blob.size).toBeGreaterThan(0);
+    const node = toBlobNode();
+    expect(node.textContent).toContain('FINAL STANDINGS');
+    const honorees = node.querySelectorAll('.share-card-honoree');
+    expect(honorees).toHaveLength(2); // champion + first-to-bingo
+    expect(honorees[0].textContent).toContain('Cruise champion');
+    expect(honorees[0].textContent).toContain('Zacaria Arab');
+    expect(honorees[0].textContent).toContain('16 bingos · 124 squares');
+    expect(honorees[1].textContent).toContain('First to BINGO');
+    expect(honorees[1].textContent).toContain('Turntilla');
+    const rows = node.querySelectorAll('.share-card-honor-row');
+    expect(rows).toHaveLength(3);
+    expect(rows[0].textContent).toContain('Day 1 · Trieste');
+    expect(rows[0].textContent).toContain('Andrew Levad');
+    expect(node.querySelector('.share-card-event')?.textContent).toBe(
+      'Gay Cruise Bingo · Day 10 · Barcelona',
+    );
+    expect(node.querySelector('.share-card-stat')?.textContent).toBe('Final standings · 10 days');
+  });
+
+  it('renders a singular bingo stat without the plural s', async () => {
+    await renderFarewellShareCard({
+      ...data,
+      champion: { displayName: 'Solo', bingoCount: 1, squaresMarked: 9 },
+    });
+    expect(toBlobNode().querySelector('.share-card-honoree-stat')?.textContent).toBe(
+      '1 bingo · 9 squares',
+    );
+  });
+
+  it('omits missing podium parts: no champion block, no first block, no honors section', async () => {
+    await renderFarewellShareCard({
+      eventName: 'Just The Event',
+      champion: null,
+      firstBingo: null,
+      honors: [],
+    });
+
+    const node = toBlobNode();
+    expect(node.querySelectorAll('.share-card-honoree')).toHaveLength(0);
+    expect(node.querySelectorAll('.share-card-honor-row')).toHaveLength(0);
+    expect(node.querySelector('.share-card-honors-title')).toBeNull();
+    expect(node.querySelector('.share-card-event')?.textContent).toBe('Just The Event'); // eventName fallback
+    expect(node.querySelector('.share-card-stat')).toBeNull();
   });
 });
 
@@ -1344,5 +1442,90 @@ describe('Leaderboard — share affordance', () => {
     expect(shareArg.url).toBe(window.location.origin);
 
     await waitFor(() => expect(track).toHaveBeenCalledWith('share_click', { surface: 'leaderboard' }));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FarewellPodium — share affordance (issue #449)
+// ---------------------------------------------------------------------------
+
+describe('FarewellPodium — share affordance', () => {
+  // A minimal frozen roster: the wrapper runs the REAL buildPodium
+  // (data/finale.ts) over it — champion = top aggregates, First to BINGO =
+  // earliest firstBingoAt — so the card is proven against the same payload
+  // the on-page banner renders, not a hand-shaped stand-in.
+  const champ = mkPlayer({
+    uid: 'champ',
+    displayName: 'Zacaria Arab',
+    bingoCount: 16,
+    squaresMarked: 124,
+    firstBingoAt: 9000,
+  });
+  const early = mkPlayer({
+    uid: 'early',
+    displayName: 'Turntilla',
+    bingoCount: 5,
+    squaresMarked: 60,
+    firstBingoAt: 1000,
+  });
+
+  beforeEach(() => {
+    H.event = { name: 'Allure of the Seas' } as EventDoc;
+  });
+
+  it('renders the Share button at the bottom of the podium and shares the real card', async () => {
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
+    const user = userEvent.setup();
+
+    render(<FarewellPodium players={[champ, early]} days={undefined} />);
+    const podium = screen.getByRole('region', { name: 'Cruise podium' });
+    const btn = screen.getByRole('button', { name: 'Share final standings' });
+    // Bottom of the podium section: the button is the section's LAST element child.
+    expect(podium.lastElementChild).toContainElement(btn);
+
+    await user.click(btn);
+
+    await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
+    expect(shareMock.mock.calls[0][0].files).toHaveLength(1);
+    const node = toBlobNode();
+    expect(node.textContent).toContain('FINAL STANDINGS');
+    expect(node.textContent).toContain('Zacaria Arab'); // champion by aggregates
+    expect(node.textContent).toContain('16 bingos · 124 squares');
+    expect(node.textContent).toContain('Turntilla'); // earliest firstBingoAt holds the crown
+
+    await waitFor(() => expect(track).toHaveBeenCalledWith('share_click', { surface: 'farewell' }));
+    expect(track).toHaveBeenCalledTimes(1);
+  });
+
+  it('warms the render on hover and the tap reuses it — exactly one rasterization', async () => {
+    const shareMock = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'canShare', { value: () => true, configurable: true });
+    Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
+    const user = userEvent.setup();
+
+    render(<FarewellPodium players={[champ, early]} days={undefined} />);
+    expect(toBlobMock).not.toHaveBeenCalled(); // warm-on-intent, never mount-eager
+
+    await user.hover(screen.getByRole('button', { name: 'Share final standings' }));
+    expect(toBlobMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole('button', { name: 'Share final standings' }));
+    await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
+    expect(toBlobMock).toHaveBeenCalledTimes(1); // the tap reused the warmed render
+  });
+
+  it('renders no share button on the wrapper-less presentational view', () => {
+    render(
+      <FarewellPodiumView
+        podium={{
+          champion: { uid: 'c', displayName: 'C', bingoCount: 2, squaresMarked: 20 },
+          firstBingo: null,
+          dailyHonors: [],
+        }}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: 'Share final standings' })).toBeNull();
   });
 });

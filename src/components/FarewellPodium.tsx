@@ -1,5 +1,15 @@
+import { useRef } from 'react';
 import type { DayDef, DayMetaDoc, PlayerDoc } from '../types';
 import { buildPodium, type Podium } from '../data/finale';
+import { useEventDoc } from '../hooks/useData';
+import { track } from '../analytics';
+import {
+  renderFarewellShareCard,
+  shareCardBlob,
+  SHARE_CARD_APP_NAME,
+  type FarewellShareCardData,
+} from './ShareCard';
+import { leaderboardShareCopy } from './Leaderboard';
 
 /**
  * The farewell view's podium banner (#217, daily-cards-spec § "Farewell view"):
@@ -12,6 +22,11 @@ import { buildPodium, type Podium } from '../data/finale';
  * The standings are frozen: `buildPodium` excludes the farewell Day's own marks,
  * so a post-freeze goodbye mark never changes who is on the podium (the
  * "as of `frozenAt`, not live" rule).
+ *
+ * Issue #449 adds the podium's own share affordance — a "Share final standings"
+ * button at the BOTTOM of the section that renders the frozen podium as a Share
+ * Card (`renderFarewellShareCard`, specs/w2-share-cards.md) and hands it to the
+ * native share sheet, mirroring the Leaderboard's warm-on-intent pattern.
  */
 
 /** A Day-index → label mapper for the honors strip; mirrors the Leaderboard's
@@ -35,9 +50,12 @@ function makeDayLabel(days: readonly DayDef[] | undefined): (dayIndex: number) =
 export function FarewellPodiumView({
   podium,
   dayLabel = (i: number) => `Day ${i + 1}`,
+  share,
 }: {
   podium: Podium;
   dayLabel?: (dayIndex: number) => string;
+  /** The share affordance (issue #449) — absent (fixture/test renders without a wrapper) renders no button; the wrapper always supplies it. */
+  share?: { onShare: () => void; onWarm: () => void };
 }) {
   const { champion, firstBingo, dailyHonors } = podium;
   if (!champion && !firstBingo && dailyHonors.length === 0) return null;
@@ -79,8 +97,48 @@ export function FarewellPodiumView({
           </ul>
         </div>
       )}
+      {share && (
+        <div className="farewell-podium-actions">
+          <button
+            type="button"
+            className="btn"
+            onClick={share.onShare}
+            onPointerEnter={share.onWarm}
+            onFocus={share.onWarm}
+            onPointerDown={share.onWarm}
+          >
+            Share final standings
+          </button>
+        </div>
+      )}
     </section>
   );
+}
+
+/** Shapes the frozen `Podium` into the renderer's data — labels resolved here, so the renderer stays dumb (specs/w2-share-cards.md's caller-shapes rule). */
+function toFarewellCardData(
+  podium: Podium,
+  dayLabel: (dayIndex: number) => string,
+  copy: { eventName: string; contextLine: string | undefined },
+  dayCount: number,
+): FarewellShareCardData {
+  return {
+    eventName: copy.eventName,
+    champion: podium.champion
+      ? {
+          displayName: podium.champion.displayName,
+          bingoCount: podium.champion.bingoCount,
+          squaresMarked: podium.champion.squaresMarked,
+        }
+      : null,
+    firstBingo: podium.firstBingo ? { displayName: podium.firstBingo.displayName } : null,
+    honors: podium.dailyHonors.map((h) => ({
+      dayLabel: dayLabel(h.dayIndex),
+      displayName: h.displayName,
+    })),
+    contextLine: copy.contextLine,
+    statLine: dayCount > 0 ? `Final standings · ${dayCount} days` : 'Final standings',
+  };
 }
 
 /**
@@ -99,5 +157,53 @@ export default function FarewellPodium({
   dayMetas?: ReadonlyMap<number, DayMetaDoc>;
   dayMetasLoaded?: boolean;
 }) {
-  return <FarewellPodiumView podium={buildPodium(players, days, dayMetas, dayMetasLoaded)} dayLabel={makeDayLabel(days)} />;
+  const { data: event } = useEventDoc();
+  const podium = buildPodium(players, days, dayMetas, dayMetasLoaded);
+  const dayLabel = makeDayLabel(days);
+  // Warm-on-intent pre-render, mirroring Leaderboard.tsx (Codex P2, PR #111
+  // round 2 finding 2 lineage): hover/focus/press starts the rasterization so
+  // the tap's await reuses a settled render inside the activation window.
+  // Keyed on the CARD PAYLOAD (podium content + composed copy) rather than
+  // the roster array's identity: Board re-filters `players` every snapshot,
+  // so an identity key would invalidate on every render even though the
+  // frozen podium almost never changes.
+  const warmedCard = useRef<{ key: string; promise: Promise<Blob | null> } | null>(null);
+
+  const warmShareCard = (): Promise<Blob | null> => {
+    const copy = leaderboardShareCopy(event);
+    const data = toFarewellCardData(podium, dayLabel, copy, days?.length ?? 0);
+    const key = JSON.stringify(data);
+    if (warmedCard.current?.key === key) return warmedCard.current.promise;
+    // `.catch(() => null)` inside the cached promise (same rationale as the
+    // Leaderboard's): a render failure degrades to the text/URL leg and can
+    // never surface as an unhandled rejection from an unconsummated hover.
+    const promise = renderFarewellShareCard(data).catch(() => null);
+    warmedCard.current = { key, promise };
+    return promise;
+  };
+
+  const shareFinalStandings = async () => {
+    const blob = await warmShareCard();
+    try {
+      await shareCardBlob({
+        blob,
+        filename: 'gay-cruise-bingo-final-standings.png',
+        title: `${SHARE_CARD_APP_NAME}—Final standings`,
+        text: 'Final standings from Gay Cruise Bingo 🏆',
+        url: window.location.origin,
+      });
+    } catch {
+      // shareCardBlob never throws by design; belt-and-braces regardless.
+    } finally {
+      track('share_click', { surface: 'farewell' });
+    }
+  };
+
+  return (
+    <FarewellPodiumView
+      podium={podium}
+      dayLabel={dayLabel}
+      share={{ onShare: () => void shareFinalStandings(), onWarm: () => void warmShareCard() }}
+    />
+  );
 }
