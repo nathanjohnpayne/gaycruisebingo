@@ -293,6 +293,79 @@ export async function renderLeaderboardShareCard(data: LeaderboardShareCardData)
 }
 
 // ---------------------------------------------------------------------------
+// Final-standings (farewell podium) card — issue #449
+// ---------------------------------------------------------------------------
+
+export interface FarewellShareCardData {
+  eventName: string;
+  /** The frozen podium's champion — `null` renders no champion block. */
+  champion: { displayName: string; bingoCount: number; squaresMarked: number } | null;
+  /** The cruise-wide First to BINGO — `null` renders no block. */
+  firstBingo: { displayName: string } | null;
+  /** Daily honors, already labeled and ordered by the caller (FarewellPodium.tsx) — the renderer stays dumb, same contract as the Leaderboard card's rows. */
+  honors: Array<{ dayLabel: string; displayName: string }>;
+  /** Same contract as the other cards' `contextLine`. Absent → falls back to `eventName`. */
+  contextLine?: string;
+  /** e.g. "Final standings · 10 days". Absent → nothing renders. */
+  statLine?: string;
+}
+
+/** A labeled honoree block: medal-tagged role line, then the name (and optional stat). */
+function buildHonoree(
+  role: string,
+  name: string,
+  stat?: string,
+): HTMLDivElement {
+  const block = el('div', 'share-card-honoree');
+  block.append(el('span', 'share-card-honoree-role', role));
+  block.append(el('span', 'share-card-honoree-name', name));
+  if (stat) block.append(el('span', 'share-card-honoree-stat', stat));
+  return block;
+}
+
+function buildFarewellCardNode(data: FarewellShareCardData): HTMLDivElement {
+  const card = el('div', 'share-card share-card-farewell');
+  card.style.width = `${CARD_WIDTH}px`;
+  card.style.height = `${CARD_HEIGHT}px`;
+  card.append(el('div', 'share-card-event', data.contextLine ?? data.eventName));
+  card.append(el('div', 'share-card-title', 'FINAL STANDINGS'));
+
+  if (data.champion) {
+    card.append(
+      buildHonoree(
+        '🏆 Cruise champion',
+        data.champion.displayName,
+        `${data.champion.bingoCount} bingo${data.champion.bingoCount === 1 ? '' : 's'} · ${data.champion.squaresMarked} squares`,
+      ),
+    );
+  }
+  if (data.firstBingo) {
+    card.append(buildHonoree('👑 First to BINGO', data.firstBingo.displayName));
+  }
+
+  if (data.honors.length > 0) {
+    card.append(el('div', 'share-card-honors-title', 'Daily honors'));
+    const honors = el('div', 'share-card-honors');
+    for (const h of data.honors) {
+      const row = el('div', 'share-card-honor-row');
+      row.append(el('span', 'share-card-honor-day', h.dayLabel));
+      row.append(el('span', 'share-card-honor-name', h.displayName));
+      honors.append(row);
+    }
+    card.append(honors);
+  }
+
+  if (data.statLine) card.append(el('div', 'share-card-stat', data.statLine));
+  card.append(el('div', 'share-card-footer', `${SHARE_CARD_APP_NAME} 🚢`));
+  return card;
+}
+
+/** The farewell podium as a Share Card (issue #449) — same pipeline, third card kind. */
+export async function renderFarewellShareCard(data: FarewellShareCardData): Promise<Blob> {
+  return rasterize(buildFarewellCardNode(data));
+}
+
+// ---------------------------------------------------------------------------
 // Native share sheet + fallback chain — shared by Celebration.tsx and
 // Leaderboard.tsx so the degrade path lives exactly once.
 // ---------------------------------------------------------------------------

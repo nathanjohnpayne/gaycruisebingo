@@ -832,6 +832,15 @@ a {
   color: var(--ink);
   font-weight: 600;
 }
+.farewell-podium-actions {
+  /* The podium's own share affordance (issue #449), bottom of the section —
+     full-width like the Leaderboard's .lb-actions, so the ceremony ends on
+     the thing everyone actually wants to do with it. */
+  margin-top: 10px;
+}
+.farewell-podium-actions .btn {
+  width: 100%;
+}
 
 /* ---------- First-open coach overlay (specs/d15-coach-overlay.md) — reuses
    .sheet-backdrop/.sheet chrome plus a small legend-row layout. ---------- */
@@ -2812,14 +2821,18 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   font-size: 84px;
 }
 .share-card-player {
-  /* The name is half the picture (issue #423): big, in the theme accent. */
+  /* The name is half the picture (issue #423): big, in the theme accent.
+     No two-line min-height reserve (issue #449): the old 104px floor left a
+     dead band between a ONE-line name and the grid — the frame's slack now
+     pools above the footer (its auto margin), where empty reads as
+     breathing room instead of a hole. A two-line name still fits: the
+     worst-case budget was computed WITH both lines. */
   font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
   font-size: 52px;
   line-height: 1;
   letter-spacing: 0.03em;
   color: var(--accent);
   margin-top: 2px;
-  min-height: 104px;
   max-width: 100%;
   overflow: hidden;
   overflow-wrap: anywhere;
@@ -2844,9 +2857,13 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   background: color-mix(in srgb, var(--ink) 8%, var(--cell));
   /* Turned-over squares carry their prompt text again (issue #444) — the
      renderer only writes text into marked/free cells, so unmarked squares
-     stay blank shape. Same wrapping pair as the on-page .cell (word-break +
-     hyphens) so a long unbroken token wraps instead of vanishing off the
-     tile (the pre-#423 parity rule, live again now that text is back). */
+     stay blank shape. Hyphenate-first wrapping (issue #449): overflow-wrap,
+     NOT the on-page .cell's break-word keyword on the word-break property —
+     Chrome treats that as break-anywhere and skips hyphenation entirely,
+     which is what printed raw mid-word breaks ("sunglasse s") on the Day-10
+     card. overflow-wrap lets hyphens place a real hyphen first and
+     hard-breaks only a token with no hyphenation point (fitCellText
+     backstops the pathological wide-glyph case). */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2856,7 +2873,7 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   font-size: 9px;
   font-weight: 600;
   line-height: 1.1;
-  word-break: break-word;
+  overflow-wrap: break-word;
   hyphens: auto;
   overflow: hidden;
 }
@@ -2873,9 +2890,11 @@ body:has(.sheet-backdrop) .guidelines-trigger {
 .share-card-cell.line {
   /* The NEWEST winning line, lit brighter than other marks (issue #423):
      outlined in --ink (legible against --bg in every theme) with a --primary
-     glow. Applies on top of .marked. */
+     glow. Applies on top of .marked. 8px blur, not 18 (issue #449): on a
+     column/row win five ADJACENT 18px glows merged into one solid hot bar
+     down the grid — 8px keeps a per-tile halo that stays a halo. */
   border: 3px solid var(--ink);
-  box-shadow: 0 0 18px var(--primary);
+  box-shadow: 0 0 8px var(--primary);
 }
 .share-card-cell.free {
   /* Free centre — accent. After .marked so it wins over the gradient (the
@@ -3051,6 +3070,78 @@ body:has(.sheet-backdrop) .guidelines-trigger {
   font-size: 14px;
   text-transform: uppercase;
   white-space: nowrap;
+}
+/* ---- Final standings: the farewell podium as a card (issue #449) ---- */
+.share-card-farewell .share-card-title {
+  /* FINAL STANDINGS is the longest title of the three cards. */
+  font-size: 68px;
+}
+.share-card-honoree {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-top: 16px;
+}
+.share-card-honoree-role {
+  font-size: 16px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.share-card-honoree-name {
+  font-family: 'Bebas Neue', 'Arial Narrow', sans-serif;
+  font-size: 44px;
+  line-height: 1;
+  letter-spacing: 0.03em;
+  color: var(--accent);
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  display: -webkit-box;
+  /* One line each: two honoree blocks + ten honor rows leave no wrap
+     budget in the fixed frame — a long name clips, like the compact rows. */
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+.share-card-honoree-stat {
+  font-size: 18px;
+  color: var(--ink);
+}
+.share-card-honors-title {
+  margin-top: 18px;
+  font-size: 15px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.share-card-honors {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 460px;
+  margin: 8px 0 4px;
+}
+.share-card-honor-row {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 1px 8px;
+  font-size: 16px;
+}
+.share-card-honor-day {
+  color: var(--dim);
+  white-space: nowrap;
+}
+.share-card-honor-name {
+  margin-left: auto;
+  color: var(--ink);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .share-card-footer {
   margin-top: auto;
