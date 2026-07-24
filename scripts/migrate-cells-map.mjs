@@ -7,11 +7,12 @@
 // PR #447 review-loop class no version counter could close).
 //
 // DEPLOY ORDER (the whole point of this script): run this WITH --apply FIRST,
-// THEN deploy the #457 firestore.rules + hosting bundle together. The new
-// rules require `cells is map` on every board write, so a board this script
-// missed would strand its owner's Marks — which is why --apply ends with a
-// VERIFY pass that re-enumerates every board and fails loudly unless 100%
-// are map-shaped.
+// THEN deploy the #457 firestore.rules + hosting bundle together, THEN run
+// --apply ONCE MORE as a mop-up: a still-live pre-migration bundle can land a
+// full-array write in the gap between the first pass and the rules deploy;
+// the rules then deny any further array writes, so the mop-up converges the
+// stragglers and its VERIFY green is the terminal state. Each pass ends with
+// that VERIFY (re-enumerates every board, fails loudly unless 100% map).
 //
 // Scope: every `boards` collection-group doc — the day-scoped
 // events/*/days/*/boards/* AND the legacy events/*/boards/* (read-consistency
@@ -129,21 +130,26 @@ async function main() {
     return;
   }
 
-  // Batched writes, 400 per batch (headroom under the 500 cap).
+  // Per-doc TRANSACTIONS, not a batch from the enumeration snapshot
+  // (CodeRabbit Major on #458): a still-live pre-migration client can write a
+  // full array BETWEEN enumeration and this write, and converting from the
+  // stale snapshot would clobber that Mark. Each transaction re-reads the doc
+  // and converts whatever is CURRENT — a doc that turned map-shaped in the
+  // meantime gets only the markVersion cleanup.
   let written = 0;
-  for (let i = 0; i < toConvert.length; i += 400) {
-    const batch = db.batch();
-    for (const doc of toConvert.slice(i, i + 400)) {
-      const data = doc.data();
-      batch.update(doc.ref, {
+  for (const staleDoc of toConvert) {
+    await db.runTransaction(async (tx) => {
+      const fresh = await tx.get(staleDoc.ref);
+      if (!fresh.exists) return;
+      const data = fresh.data();
+      tx.update(staleDoc.ref, {
         ...(Array.isArray(data.cells) ? { cells: toCellsMap(data.cells) } : {}),
         markVersion: FieldValue.delete(),
       });
-      written += 1;
-    }
-    await batch.commit();
+    });
+    written += 1;
   }
-  console.log(`Converted ${written} board(s).`);
+  console.log(`Converted ${written} board(s) (fresh-read transactions).`);
 
   // VERIFY: re-enumerate; every board must now be map-shaped. This is the gate
   // that makes the rules deploy safe — do NOT deploy the #457 rules if it fails.
