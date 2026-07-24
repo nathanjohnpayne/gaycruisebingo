@@ -139,6 +139,9 @@ function ProofQueueRow({
         onAction={() =>
           deleteProof(p.id, p.storagePath, {
             daily: !!days?.length,
+            // Canonical DayDef.index values, not array positions (Phase 4b P1
+            // on #447) — same fix as ProofFeed's deleteProof call site.
+            dayIndexes: days?.map((d) => d.index),
             tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
             // #265 (Codex P2 on #278 round 3): the admin moderation delete
             // observes the same freeze/ceremonial gates as the player's own —

@@ -113,8 +113,16 @@ type Client = { app: FirebaseApp; db: Firestore; uid: string };
 // durable-queue property under test is tab-manager-orthogonal, and
 // src/firebase.test.ts pins the production multi-tab config). Each call models
 // one app load of the same installed PWA.
-async function makeClient(name: string): Promise<Client> {
-  const app = initializeApp({ apiKey: 'demo-api-key', projectId: PROJECT_ID }, name);
+// `projectId` is parameterizable because the RACE tests below each run in
+// their OWN emulator project: the emulator's rules engine has a cumulative
+// per-project expression-budget leak (later evaluations in one project can
+// spuriously report "maximum of 1000 expressions ... reached" once several
+// board-write evaluations have accumulated — observed after the day-board
+// rule grew the Echo Marks version/seed guards on #447; a test that fails in
+// a shared project passes byte-identically in a fresh one). Per-test project
+// isolation is the same containment the suite already uses per FILE.
+async function makeClient(name: string, projectId: string = PROJECT_ID): Promise<Client> {
+  const app = initializeApp({ apiKey: 'demo-api-key', projectId }, name);
   apps.push(app);
   const auth = getAuth(app);
   connectAuthEmulator(auth, authEmulatorUrl(), { disableWarnings: true });
@@ -301,7 +309,9 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
   // in `src/data/w1-board-mark-win.test.ts`, which fails the same way against
   // the pre-fix code).
   it('two Marks fired back-to-back off the same stale snapshot both survive (no clobber)', async () => {
-    const tab = await makeClient(RACE_TAB_APP_NAME);
+    const raceProject = `${PROJECT_ID}-race`;
+    await seedEventDoc(raceProject, EVENT_ID);
+    const tab = await makeClient(RACE_TAB_APP_NAME, raceProject);
     const boardPath = `events/${EVENT_ID}/days/0/boards/${tab.uid}`;
     const playerPath = `events/${EVENT_ID}/players/${tab.uid}`;
     const boardRef = doc(tab.db, boardPath);
@@ -360,7 +370,9 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
   // batch, fold onto the same cached board, and the later commit clobbers the
   // earlier Mark even WITH the cache fold in place.
   it('two OVERLAPPING unawaited Marks both survive (per-board serialization)', async () => {
-    const tab = await makeClient('gcb-mark-overlap-tab');
+    const overlapProject = `${PROJECT_ID}-overlap`;
+    await seedEventDoc(overlapProject, EVENT_ID);
+    const tab = await makeClient('gcb-mark-overlap-tab', overlapProject);
     const boardPath = `events/${EVENT_ID}/days/0/boards/${tab.uid}`;
     const playerPath = `events/${EVENT_ID}/players/${tab.uid}`;
     const boardRef = doc(tab.db, boardPath);

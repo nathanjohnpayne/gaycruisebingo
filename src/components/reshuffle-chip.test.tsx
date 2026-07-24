@@ -69,6 +69,11 @@ vi.mock('../data/doubts', () => ({
 vi.mock('../data/api', () => ({
   setMark: vi.fn(async () => ({ cells: [], bingo: false, blackout: false })),
   dealDayCard: vi.fn(() => Promise.resolve(false)),
+  // Open-time echo reconcile (specs/echo-marks.md): a no-op stub — the write
+  // path is proven in src/data/echo-marks.test.ts.
+  reconcileEchoes: vi.fn(() =>
+    Promise.resolve({ changed: false, bingoTransition: false, blackoutTransition: false }),
+  ),
   reshuffleBoard: H.reshuffleBoard,
   RESHUFFLE_ALLOWANCE: 3,
   resolveDisplayName: (profile: { displayName?: unknown } | null, fallback?: string | null) =>

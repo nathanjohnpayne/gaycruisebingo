@@ -71,6 +71,11 @@ vi.mock('../data/api', () => ({
   reshuffleBoard: vi.fn(async () => 1),
   setMark: H.setMark,
   dealDayCard: H.dealDayCard,
+  // Open-time echo reconcile (specs/echo-marks.md): a no-op stub — the write
+  // path is proven in src/data/echo-marks.test.ts.
+  reconcileEchoes: vi.fn(() =>
+    Promise.resolve({ changed: false, bingoTransition: false, blackoutTransition: false }),
+  ),
   resolveDisplayName: (p: { displayName?: unknown } | null | undefined, f: string | null | undefined) =>
     typeof p?.displayName === 'string' && p.displayName.trim().length > 0 ? p.displayName : (f ?? 'Anonymous'),
 }));

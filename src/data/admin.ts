@@ -1,10 +1,10 @@
 import { addDoc, collection, doc, getDoc, updateDoc, deleteDoc, runTransaction, arrayUnion, arrayRemove, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, EVENT_ID } from '../firebase';
-import { completedLines, countMarked, isBlackout, foldDayStat, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats } from '../game/logic';
-import { markerDisplayName } from './attribution';
+import { completedLines, countMarked, isBlackout, foldDayStat, foldEchoStats, applyEchoes, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats, type EchoBucket, type StatWrite } from '../game/logic';
+import { honorDisplayName, markerDisplayName } from './attribution';
 import { isSystemAuthor } from './moderation';
-import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef } from '../types';
+import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef, PlayerDoc } from '../types';
 
 const evt = () => doc(db, 'events', EVENT_ID);
 const item = (id: string) => doc(db, 'events', EVENT_ID, 'items', id);
@@ -21,6 +21,11 @@ const player = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
 // A per-Prompt Tally marker (ADR 0002): the same path setMark/attachProof write.
 const marker = (itemId: string, uid: string) =>
   doc(db, 'events', EVENT_ID, 'tally', itemId, 'markers', uid);
+
+function nextMarkVersion(board: { markVersion?: unknown }): number {
+  const previous = board.markVersion;
+  return typeof previous === 'number' && Number.isSafeInteger(previous) && previous >= 0 ? previous + 1 : 1;
+}
 
 export const hideItem = (id: string) => updateDoc(item(id), { status: 'hidden' });
 export const restoreItem = (id: string) => updateDoc(item(id), { status: 'active' });
@@ -345,6 +350,13 @@ async function resolve(
   const boardRef = daily ? dayBoard(c.dayIndex as number, c.uid) : board(c.uid);
   let isTutorialDay: ((i: number) => boolean) | undefined;
   let isCeremonialDay: ((i: number) => boolean) | undefined;
+  // The claim owner's OTHER Day indexes (specs/echo-marks.md, #446): a CONFIRM
+  // is the moment an admin_confirmed Mark reaches confirmed, so it is the
+  // moment the Prompt echoes onto the owner's sibling Day Cards — inside this
+  // same transaction, each echoed board carrying its own markSeed, all stat
+  // deltas folded into the ONE player write below. A reject uses the same reads
+  // only to preserve a standing sibling's Tally marker; it never echoes.
+  let echoSiblingDays: number[] = [];
   // The freeze gate is a GETTER re-evaluated inside the transaction callback
   // (Codex P2 on #278 round 4): a resolve started seconds before 08:00 must
   // fold with the post-boundary truth on retry/commit, not a pre-read capture.
@@ -362,6 +374,9 @@ async function resolve(
     isCeremonialDay = (i: number) => ceremonial.has(i);
     const frozenAt = evSnap?.data()?.frozenAt as number | undefined;
     isStatsFrozen = () => standingsFrozen({ frozenAt, days });
+    if (status === 'confirmed' || status === 'rejected') {
+      echoSiblingDays = days.map((d) => d.index).filter((i) => i !== (c.dayIndex as number));
+    }
   }
   await runTransaction(db, async (tx) => {
     // Read board + player inside the txn so a concurrent mark/proof from the same
@@ -369,13 +384,19 @@ async function resolve(
     const bSnap = await tx.get(boardRef);
     if (!bSnap.exists()) return;
     const pSnap = await tx.get(player(c.uid));
-    const boardData = bSnap.data() as { cells?: Cell[]; seed?: number };
+    // The owner's sibling Day Cards, read in the SAME transaction (before any
+    // write, per Firestore's reads-first contract) so a retry re-derives the
+    // echo set from committed state (specs/echo-marks.md).
+    const echoSiblingRefs = echoSiblingDays.map((i) => dayBoard(i, c.uid));
+    const echoSiblingSnaps = await Promise.all(echoSiblingRefs.map((ref) => tx.get(ref)));
+    const boardData = bSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown };
     const cells = boardData.cells ?? [];
     const next = transform(cells);
     const bingoCount = completedLines(next).length;
     const bingoTransition = completedLines(cells).length === 0 && bingoCount > 0;
     const squares = countMarked(next);
     const blackout = isBlackout(next);
+    const dayHonorName = honorDisplayName(c.displayName, pSnap.exists() ? pSnap.data().displayName : undefined);
     // The prior first-bingo stamp is per-BOARD: in daily mode read the VIEWED Day's
     // bucket, not the cruise-wide root (which would restamp a cross-Day time).
     const priorDayStats = pSnap.exists() ? (pSnap.data().dayStats as DayStats | undefined) : undefined;
@@ -389,43 +410,140 @@ async function resolve(
       daily &&
       status === 'confirmed' &&
       bingoTransition &&
-      typeof firstBingoAt === 'number';
+      typeof firstBingoAt === 'number' &&
+      dayHonorName !== null;
     const metaRef = shouldPinDayHonor ? dayMeta(c.dayIndex as number) : null;
     const metaSnap = metaRef ? await tx.get(metaRef) : null;
+
+    // Echo Marks (specs/echo-marks.md, #446): a CONFIRM is the moment the
+    // Prompt reaches confirmed, so echo it onto every sibling Day Card of the
+    // owner's that carries it unmarked — in this SAME transaction, each echoed
+    // board carrying ITS OWN markSeed. Echoed cells are born `confirmed`: the
+    // achievement was already admin-confirmed once, so they raise no second
+    // Claim. A reject writes no Echo, but uses the sibling snapshots below to
+    // preserve a marker while another confirmed carrier stands. Unmarking a
+    // rejected cell never cascades to prior echoes. No Feed Moment is posted
+    // from here — this runs on the ADMIN's device and a Moment must be written
+    // by its winner (see the spec's Moments residual for this mode) — but an
+    // echo-completed first line DOES pin its Day's write-once honor below
+    // (Codex P2 on #447), through the day-meta create rule's admin arm,
+    // attributed to the WINNER like the claim Day's own pin. Computed here —
+    // BEFORE any tx write — because the pin needs its meta doc read first
+    // (Firestore's reads-before-writes transaction contract).
+    const confirmedCell = status === 'confirmed' ? next.find((x) => isClaimCell(x, c)) : undefined;
+    const echoItemId =
+      confirmedCell && !confirmedCell.free && confirmedCell.marked ? confirmedCell.itemId : null;
+    const echoBuckets: EchoBucket[] = [];
+    const echoWrites: Array<{ ref: ReturnType<typeof dayBoard>; payload: Record<string, unknown> }> = [];
+    const echoPinDays: number[] = [];
+    const echoNow = Date.now();
+    if (echoItemId && echoSiblingSnaps.length > 0) {
+      const achieved = new Set([echoItemId]);
+      echoSiblingSnaps.forEach((snap, idx) => {
+        if (!snap.exists()) return;
+        const sib = snap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown };
+        const res = applyEchoes(sib.cells ?? [], achieved, echoNow);
+        if (!res.changed) return;
+        echoWrites.push({
+          ref: echoSiblingRefs[idx],
+          payload: {
+            cells: res.cells,
+            ...(typeof sib.seed === 'number' ? { markSeed: sib.seed } : {}),
+            markVersion: nextMarkVersion(sib),
+          },
+        });
+        echoBuckets.push({
+          dayIndex: echoSiblingDays[idx],
+          bingoCount: res.bingoCount,
+          squaresMarked: res.squaresMarked,
+          blackout: res.blackout,
+        });
+        if (res.bingoTransition && dayHonorName) echoPinDays.push(echoSiblingDays[idx]);
+      });
+    }
+    // Echo Day-honor meta reads — the same post-freeze narrowing as the stats.
+    const pinnableEchoDays = echoPinDays.filter((d) => !isStatsFrozen() || !!isCeremonialDay?.(d));
+    const echoMetaSnaps: Array<{ dayIndex: number; exists: boolean }> = [];
+    for (const d of pinnableEchoDays) {
+      const snap = await tx.get(dayMeta(d));
+      echoMetaSnaps.push({ dayIndex: d, exists: snap.exists() });
+    }
 
     tx.set(
       boardRef,
       {
         cells: next,
         ...(typeof boardData.seed === 'number' ? { markSeed: boardData.seed } : {}),
+        ...(daily ? { markVersion: nextMarkVersion(boardData) } : {}),
       },
       { merge: true },
     );
+    for (const write of echoWrites) {
+      tx.set(write.ref, write.payload, { merge: true });
+    }
+    for (const { dayIndex: echoDay, exists } of echoMetaSnaps) {
+      if (exists) continue; // the write-once honor is already claimed
+      tx.set(dayMeta(echoDay), {
+        firstBingo: {
+          uid: c.uid,
+          displayName: dayHonorName!,
+          at: echoNow,
+        },
+      });
+    }
     if (daily) {
+      const siblingBlackout =
+        status === 'rejected' &&
+        pSnap.exists() &&
+        (pSnap.data() as Partial<PlayerDoc>).blackout === true &&
+        echoSiblingSnaps.some(
+          (snap) => snap.exists() && isBlackout((snap.data() as { cells?: Cell[] }).cells ?? []),
+        );
       const playerWrite = foldDayStat({
         priorDayStats,
         dayIndex: c.dayIndex as number,
         bucket: { bingoCount, squaresMarked: squares, firstBingoAt },
-        blackout,
+        blackout: blackout || siblingBlackout,
         isTutorialDay,
         isCeremonialDay,
       });
+      // The ONE aggregated player write: the claim Day's fold composed with
+      // every echoed board's bucket (specs/echo-marks.md § Scoring).
+      const aggregatedWrite =
+        echoBuckets.length > 0
+          ? foldEchoStats({
+              priorDayStats,
+              echoes: echoBuckets,
+              now: echoNow,
+              isTutorialDay,
+              isCeremonialDay,
+              // Preserve a blackout standing on an UNTOUCHED board (Codex P2
+              // on #447): a confirm only adds Marks, so the latch is safe.
+              priorBlackout: pSnap.exists() && (pSnap.data() as Partial<PlayerDoc>).blackout === true,
+              base: playerWrite,
+            })
+          : playerWrite;
       const canWriteStats = !isStatsFrozen() || !!isCeremonialDay?.(c.dayIndex as number);
       if (isStatsFrozen()) {
-        // Ceremonial-day-only post-freeze bucket, mirroring setMark (Codex P2
-        // on #278 round 2): any other Day's bucket would drift settled honors.
-        if (isCeremonialDay?.(c.dayIndex as number)) {
-          tx.set(player(c.uid), { dayStats: playerWrite.dayStats }, { merge: true });
+        // Ceremonial-day-only post-freeze buckets, mirroring setMark (Codex P2
+        // on #278 round 2): any other Day's bucket would drift settled honors —
+        // echoed main-day buckets are dropped with the root aggregates.
+        const ceremonialBuckets: Record<number, StatWrite> = {};
+        for (const [k, v] of Object.entries(aggregatedWrite.dayStats)) {
+          if (isCeremonialDay?.(Number(k))) ceremonialBuckets[Number(k)] = v;
+        }
+        if (Object.keys(ceremonialBuckets).length > 0) {
+          tx.set(player(c.uid), { dayStats: ceremonialBuckets }, { merge: true });
         }
       } else {
-        tx.set(player(c.uid), playerWrite, { merge: true });
+        tx.set(player(c.uid), aggregatedWrite, { merge: true });
       }
       if (canWriteStats && shouldPinDayHonor) {
         if (metaRef && !metaSnap?.exists()) {
           tx.set(metaRef, {
             firstBingo: {
               uid: c.uid,
-              displayName: markerDisplayName(c.displayName, pSnap.exists() ? pSnap.data().displayName : undefined),
+              displayName: dayHonorName!,
               at: firstBingoAt,
             },
           });
@@ -447,7 +565,14 @@ async function resolve(
     // a write, so the reads-before-writes transaction contract holds unchanged.
     next.forEach((after, i) => {
       const before = cells[i];
-      if (before.marked && !after.marked && before.itemId) {
+      const siblingStillCarriesMarker = echoSiblingSnaps.some(
+        (snap) =>
+          snap.exists() &&
+          ((snap.data() as { cells?: Cell[] }).cells ?? []).some(
+            (cell) => !cell.free && cell.marked && cell.itemId === before.itemId,
+          ),
+      );
+      if (before.marked && !after.marked && before.itemId && !siblingStillCarriesMarker) {
         tx.delete(marker(before.itemId, c.uid));
       }
     });

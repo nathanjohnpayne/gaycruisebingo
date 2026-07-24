@@ -60,6 +60,7 @@ import {
   pendingActionGeneration,
   firstBingoCandidateCurrent,
   resetPendingMoments,
+  __resetPendingMomentsMemoryForTests,
 } from './moments';
 import { hasCanonicalMomentId, mergeFeed } from '../hooks/useData';
 import { addDoc, runTransaction } from 'firebase/firestore';
@@ -502,6 +503,26 @@ describe('the pending-Moment queue — module state that survives Board unmounts
     // …a Board unmount / remount happens between enqueue and drain in the app; here
     // the two calls are simply separated, and the flags are still queued.
     expect(peekPendingMoments('u1')).toEqual({ bingo: true, blackout: false, firstBingo: true });
+  });
+
+  it('persists an echoed sibling win across a reload until its Day drain consumes it', () => {
+    const values = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+    });
+    try {
+      enqueueWinMoments({ uid: 'u1', bingoTransition: true, blackoutTransition: true, dayIndex: 3 });
+      __resetPendingMomentsMemoryForTests();
+
+      expect(peekPendingMoments('u1')).toEqual({ bingo: true, blackout: true, firstBingo: false });
+      expect(pendingBingoDayIndexes('u1')).toEqual([3]);
+      expect(pendingBlackoutDayIndexes('u1')).toEqual([3]);
+    } finally {
+      resetPendingMoments();
+      vi.unstubAllGlobals();
+    }
   });
 
   it('clears one drained kind and drops the entry once empty', () => {

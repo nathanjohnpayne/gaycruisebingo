@@ -17,6 +17,11 @@ const rawDayBoard = (dayIndex: number, uid: string) =>
   doc(db, 'events', EVENT_ID, 'days', String(dayIndex), 'boards', uid);
 const rawPlayer = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
 
+function nextMarkVersion(board: { markVersion?: unknown } | undefined): number {
+  const previous = board?.markVersion;
+  return typeof previous === 'number' && Number.isSafeInteger(previous) && previous >= 0 ? previous + 1 : 1;
+}
+
 /**
  * The `{ merge: true }` player-stats write a proofed Mark / proof deletion
  * commits: in daily-cards mode (#246) the per-Board result is ONE Day Card's
@@ -201,13 +206,20 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
     const boardSnap = await tx.get(boardRef);
     const playerSnap = await tx.get(playerRef);
     const markerSnap = markerRef ? await tx.get(markerRef) : null;
-    const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number } | undefined;
+    const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown } | undefined;
     const liveCells = boardData?.cells ?? cells;
-    const next: Cell[] = liveCells.map((c) =>
-      c.index === cellIndex
-        ? { ...c, marked: true, markedAt: now, proofId, status: pending ? 'pending' : 'confirmed' }
-        : c,
-    );
+    const existingCell = liveCells.find((cell) => cell.index === cellIndex);
+    // A confirmed Echo has already passed the original admin confirmation. Adding
+    // proof makes it a local mark, but must not create a second pending claim.
+    const pendingClaim = pending && !(existingCell?.echo === true && existingCell.status === 'confirmed');
+    const next: Cell[] = liveCells.map((c) => {
+      if (c.index !== cellIndex) return c;
+      // A proof creates a durable artifact anchored to this card. It must turn
+      // an Echo into a local Mark so the reshuffle gate cannot trade the card
+      // away and strand that artifact.
+      const { echo: _echo, echoOptOut: _echoOptOut, ...proofed } = c;
+      return { ...proofed, marked: true, markedAt: now, proofId, status: pendingClaim ? 'pending' : 'confirmed' };
+    });
 
     const bingoCount = completedLines(next).length;
     const squares = countMarked(next);
@@ -234,7 +246,7 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
       reportCount: 0,
       // Admin-confirmed-mode proofs stay 'pending' (admin-only readable) until an admin
       // confirms the claim; otherwise the proof is public immediately.
-      status: pending ? 'pending' : 'active',
+      status: pendingClaim ? 'pending' : 'active',
       visionFlag: null,
       // #190: stamp which affordance produced a photo so the Feed badges a
       // library pick 🖼️; null for audio/text and camera picks that pass none.
@@ -247,6 +259,7 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
       {
         cells: next,
         ...(typeof boardData?.seed === 'number' ? { markSeed: boardData.seed } : {}),
+        ...(daily ? { markVersion: nextMarkVersion(boardData) } : {}),
       },
       { merge: true },
     );
@@ -308,7 +321,7 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
         markedAt: typeof priorMarkedAt === 'number' ? priorMarkedAt : now,
       });
     }
-    if (pending) {
+    if (pendingClaim) {
       tx.set(doc(rawClaims()), {
         uid,
         displayName,
@@ -350,7 +363,13 @@ export async function deleteProof(
   // the Proof's OWN `dayIndex` and fold the owner's stats into that Day's bucket,
   // mirroring `attachProof`. Absent/false keeps the pre-1.5 flat single-board
   // unmark. `tutorialDayIndexes` scopes the cruise-wide First-to-BINGO exclusion.
-  opts?: { daily?: boolean; tutorialDayIndexes?: number[]; ceremonialDayIndexes?: number[]; statsFrozen?: boolean | (() => boolean) },
+  opts?: {
+    daily?: boolean;
+    dayIndexes?: number[];
+    tutorialDayIndexes?: number[];
+    ceremonialDayIndexes?: number[];
+    statsFrozen?: boolean | (() => boolean);
+  },
 ): Promise<void> {
   // Storage first (ordering preserved): if the blob delete throws we keep the
   // doc so the media isn't orphaned.
@@ -378,7 +397,7 @@ export async function deleteProof(
       const boardRef = daily ? rawDayBoard(proofDayIndex, proof.uid) : rawBoard(proof.uid);
       const playerRef = rawPlayer(proof.uid);
       const boardSnap = await tx.get(boardRef);
-      const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number } | undefined;
+      const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown } | undefined;
       const cells = boardData?.cells;
       // Resolve the backing cell from the proof's OWN cellIndex — the
       // authoritative proof→cell link (specs/w1-board-mark-win.md § cross-writer)
@@ -401,12 +420,37 @@ export async function deleteProof(
       const backing = cells?.find((c) => c.index === proof.cellIndex);
       if (cells && backing && backing.proofId === id) {
         const playerSnap = await tx.get(playerRef);
+        // A proof can turn an Echo into a local proof-backed Mark while the
+        // original source remains confirmed on a sibling day. The tally marker
+        // is global per (Prompt, Player), so its deletion must see every known
+        // day board before removing a still-standing source's marker.
+        const siblingBoards =
+          daily && backing.itemId
+            ? await Promise.all(
+                (opts?.dayIndexes ?? [])
+                  .filter((dayIndex) => dayIndex !== proofDayIndex)
+                  .map((dayIndex) => tx.get(rawDayBoard(dayIndex, proof.uid))),
+              )
+            : [];
         const existingFirst = (playerSnap.data()?.firstBingoAt as number | null | undefined) ?? null;
-        const next: Cell[] = cells.map((c) =>
-          c.index === proof.cellIndex
-            ? { ...c, marked: false, markedAt: null, proofId: null, status: 'confirmed' }
-            : c,
-        );
+        const next: Cell[] = cells.map((c) => {
+          if (c.index !== proof.cellIndex) return c;
+          // Deleting a proof unmarks the cell — mirror computeMark's manual
+          // unmark EXACTLY (Phase 4b P1 on #447): strip any echo flag and
+          // persist `echoOptOut` on a non-free Prompt cell, so open-time
+          // reconciliation cannot restore the Prompt from a standing sibling
+          // and undo the deletion the Player just performed. A later manual
+          // re-mark clears the opt-out, exactly as after a manual unmark.
+          const { echo: _echo, echoOptOut: _echoOptOut, ...manual } = c;
+          return {
+            ...manual,
+            marked: false,
+            markedAt: null,
+            proofId: null,
+            status: 'confirmed' as const,
+            ...(!c.free && c.itemId !== null ? { echoOptOut: true } : {}),
+          };
+        });
         const bingoCount = completedLines(next).length;
         const squares = countMarked(next);
         const blackout = isBlackout(next);
@@ -416,6 +460,7 @@ export async function deleteProof(
           {
             cells: next,
             ...(typeof boardData?.seed === 'number' ? { markSeed: boardData.seed } : {}),
+            ...(daily ? { markVersion: nextMarkVersion(boardData) } : {}),
           },
           { merge: true },
         );
@@ -431,7 +476,7 @@ export async function deleteProof(
             bingoCount,
             squaresMarked: squares,
             firstBingoAt,
-            blackout,
+            blackout: blackout || siblingBoards.some((sibling) => isBlackout(((sibling.data()?.cells as Cell[] | undefined) ?? []))),
             tutorialDayIndexes: opts?.tutorialDayIndexes,
             ceremonialDayIndexes: opts?.ceremonialDayIndexes,
           });
@@ -448,7 +493,12 @@ export async function deleteProof(
         // mirroring the cell flip — reached only when the cell is still backed by
         // THIS proof (a genuine unmark), and only for a non-free Prompt. Same marker
         // path setMark writes; the owner is the proof's uid.
-        if (backing.itemId) tx.delete(rawMarker(backing.itemId, proof.uid));
+        const markedOnSibling = siblingBoards.some((sibling) =>
+          ((sibling.data()?.cells as Cell[] | undefined) ?? []).some(
+            (cell) => !cell.free && cell.marked && cell.itemId === backing.itemId,
+          ),
+        );
+        if (backing.itemId && !markedOnSibling) tx.delete(rawMarker(backing.itemId, proof.uid));
       }
     }
 

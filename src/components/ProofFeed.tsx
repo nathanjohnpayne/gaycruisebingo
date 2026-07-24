@@ -300,6 +300,11 @@ function ProofCard({
               // `days` present ⇒ daily; the Proof carries its own `dayIndex`.
               deleteProof(proof.id, proof.storagePath, {
                 daily: !!days?.length,
+                // The canonical DayDef.index values, NOT array positions
+                // (Phase 4b P1 on #447): day-board paths key on d.index
+                // everywhere, and a schedule whose indexes aren't 0..n would
+                // read the wrong sibling boards before a marker delete.
+                dayIndexes: days?.map((d) => d.index),
                 tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
                 // #265: symmetric with the mark path — the farewell bucket never
                 // sums, and a post-freeze deletion never unfolds frozen stats.

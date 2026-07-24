@@ -163,6 +163,22 @@ describe('attachProof — posts an active Proof to the Feed and marks the cell (
     expect(setPayload('/players/')).toMatchObject({ squaresMarked: 1 });
   });
 
+  it('turns a proofed Echo into a local Mark so the card is no longer reshuffleable', async () => {
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 999, status: 'confirmed', echo: true };
+    boardState = { cells: board };
+
+    await attachProof({
+      ...baseArgs,
+      claimMode: 'proof_required',
+      proof: { type: 'text', text: 'I saw it' },
+    });
+
+    const written = setPayload('/boards/') as { cells: Cell[] };
+    expect(written.cells[5]).not.toHaveProperty('echo');
+    expect(written.cells[5].proofId).toEqual(expect.any(String));
+  });
+
   it('the proof→cell link lives in the proof DOC (uid + cellIndex) — the authoritative, clobber-resilient link (PR #75)', async () => {
     await attachProof({
       ...baseArgs,
@@ -515,9 +531,18 @@ describe('deleteProof — resolves the backing cell by the proof doc cellIndex (
 
     // Storage first so a doc is never left referencing deleted media.
     expect(deleteStorageSpy).toHaveBeenCalledWith(`proofs/${EVENT_ID}/u1/P.jpg`);
-    // The backing cell — resolved by the proof's cellIndex — is unmarked + unlinked.
+    // The backing cell — resolved by the proof's cellIndex — is unmarked +
+    // unlinked, and carries the SAME echoOptOut a manual unmark persists
+    // (Phase 4b P1 on #447): open-time reconciliation must not restore the
+    // Prompt from a standing sibling and undo this deletion.
     const written = setPayload('/boards/') as { cells: Cell[] };
-    expect(written.cells[5]).toMatchObject({ marked: false, markedAt: null, proofId: null });
+    expect(written.cells[5]).toMatchObject({
+      marked: false,
+      markedAt: null,
+      proofId: null,
+      echoOptOut: true,
+    });
+    expect('echo' in written.cells[5]).toBe(false);
     expect(setPayload('/players/')).toMatchObject({ squaresMarked: 0 });
     // The proof doc itself is removed...
     const proofDelete = txDelete.mock.calls.find((c) => (c[0] as Ref).path.includes('/proofs/'));
@@ -527,6 +552,27 @@ describe('deleteProof — resolves the backing cell by the proof doc cellIndex (
     // entry) — the same marker path setMark deletes on a bare unmark.
     const markerDelete = txDelete.mock.calls.find((c) => (c[0] as Ref).path.includes('/tally/'));
     expect((markerDelete![0] as Ref).path).toBe(`events/${EVENT_ID}/tally/i5/markers/u1`);
+  });
+
+  it('keeps the shared tally marker when a sibling Day still carries the echoed Prompt', async () => {
+    proofState = { uid: 'u1', cellIndex: 5, dayIndex: 0, storagePath: null };
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 9, proofId: 'P', status: 'confirmed' };
+    boardState = { cells: board };
+    const sibling = dealt();
+    sibling[9] = { ...sibling[9], itemId: 'i5', marked: true, markedAt: 8, status: 'confirmed', echo: true };
+    txGet.mockImplementation((ref: Ref): Promise<Snap> => {
+      if (ref.path.includes('/days/1/boards/')) return Promise.resolve({ data: () => ({ cells: sibling }) });
+      if (ref.path.includes('/boards/')) return Promise.resolve({ data: () => boardState });
+      if (ref.path.includes('/players/')) return Promise.resolve({ data: () => playerState });
+      if (ref.path.includes('/proofs/')) return Promise.resolve({ data: () => proofState });
+      return Promise.resolve({ data: () => undefined });
+    });
+
+    await deleteProof('P', undefined, { daily: true, dayIndexes: [0, 1] });
+
+    expect(setPayload('/days/0/boards/')).toBeDefined();
+    expect(txDelete.mock.calls.find((c) => (c[0] as Ref).path.includes('/tally/'))).toBeUndefined();
   });
 
   it('after a bare-Mark drain dropped cells[i].proofId, it still deletes the proof but leaves the clobbered cell (accepted residual, ADR 0001)', async () => {
