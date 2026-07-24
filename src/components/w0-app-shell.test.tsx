@@ -141,8 +141,17 @@ describe('.tabs compositing contract (#422, #451)', () => {
   // detaches and freezes mid-screen, most visibly in a standalone home-screen
   // PWA on a scrolling route. Every property below is a promotion trigger.
   for (const trigger of ['backdrop-filter', 'filter', 'transform', 'will-change', 'perspective']) {
-    it(`carries no \`${trigger}\` in any .tabs rule`, () => {
-      const pattern = new RegExp(`(^|[^-])${trigger}\\s*:`, 'm');
+    it(`carries no \`${trigger}\` in any .tabs rule, vendor-prefixed spellings included`, () => {
+      // Anchored on a declaration boundary (`{`, `;`, or whitespace) with an
+      // OPTIONAL vendor prefix, which matters more here than anywhere else
+      // (Codex P2 on #452): the platform this contract protects is WebKit, and
+      // `-webkit-backdrop-filter` is the spelling iOS Safari actually honours.
+      // The first cut excluded any trigger preceded by `-`, so the one property
+      // most likely to detach the bar would have sailed through green.
+      // The boundary still keeps `backdrop-filter` off the bare `filter` case
+      // and `text-transform` off `transform` — neither `backdrop-` nor `text-`
+      // is a vendor prefix, and neither is a declaration boundary.
+      const pattern = new RegExp(`(?:^|[{;\\s])(?:-(?:webkit|moz|ms|o)-)?${trigger}\\s*:`, 'm');
       for (const rule of tabsRules) expect(rule).not.toMatch(pattern);
     });
   }

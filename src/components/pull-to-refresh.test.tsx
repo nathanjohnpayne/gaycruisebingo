@@ -274,12 +274,17 @@ describe('PullToRefresh — gesture contract', () => {
     removeSpy.mockRestore();
   });
 
-  it('still fires the latest onRefresh after the identity change (the ref is read, not captured)', () => {
+  it('fires the callback swapped in DURING the armed gesture (CodeRabbit on #452)', () => {
+    // The swap happens between touchstart and release, which is the sequence
+    // that matters: it proves the effect neither re-subscribed on the identity
+    // change nor captured the callback it saw at arming time.
     const stale = vi.fn();
     const fresh = vi.fn();
     const { rerender } = render(<PullToRefresh onRefresh={stale} />);
+    fireTouch('touchstart', 100, 0);
     rerender(<PullToRefresh onRefresh={fresh} />);
-    pullGesture(0, PTR_THRESHOLD_PX * 3);
+    fireTouch('touchmove', 100, PTR_THRESHOLD_PX * 3);
+    fireTouch('touchend', 100, PTR_THRESHOLD_PX * 3);
     act(() => {
       vi.advanceTimersByTime(1000);
     });
