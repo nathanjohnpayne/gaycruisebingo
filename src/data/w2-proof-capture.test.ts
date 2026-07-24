@@ -44,7 +44,18 @@ vi.mock('./storage', () => ({ uploadProofMedia: uploadSpy, deleteStoragePath: de
 vi.mock('./proofMediaCache', () => ({ purgeProofMediaFromCaches: purgeCacheSpy }));
 
 let autoSeq = 0;
-vi.mock('firebase/firestore', () => ({
+vi.mock('firebase/firestore', () => {
+  class MockFieldPath {
+    segments: string[];
+    constructor(...segments: string[]) {
+      this.segments = segments;
+    }
+    isEqual(other: MockFieldPath) {
+      return this.segments.join('\u0001') === other.segments.join('\u0001');
+    }
+  }
+  return {
+  FieldPath: MockFieldPath,
   collection: (_db: unknown, ...segments: string[]): Ref => ({
     __kind: 'collection',
     path: segments.join('/'),
@@ -62,7 +73,8 @@ vi.mock('firebase/firestore', () => ({
   runTransaction: (_db: unknown, fn: (tx: unknown) => unknown) => runTx(_db, fn),
   increment: (n: number) => ({ __inc: n }),
   updateDoc: vi.fn(),
-}));
+  };
+});
 
 import { attachProof, deleteProof } from './proofs';
 

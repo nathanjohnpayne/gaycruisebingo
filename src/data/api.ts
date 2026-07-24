@@ -44,7 +44,8 @@ import {
   type StatWrite,
 } from '../game/logic';
 import { enqueueWinMoments } from './moments';
-import { cellsToMap, cellsPatch, cellsPatchField, changedCells, cellsFromData } from '../game/cells';
+import { cellsToMap, cellsPatch, changedCells, cellsFromData } from '../game/cells';
+import { cellsMergeSet } from './cellsMerge';
 import { pinDayFirstBingo } from './dayMeta';
 import type { Cell, ClaimMode, DayDef, EventDoc, ItemDoc, PlayerDoc, UserDoc } from '../types';
 
@@ -1642,11 +1643,9 @@ async function runSetMark(
   // merges instead of being clobbered by a full-array replacement.
   batch.set(
     boardRef,
-    {
-      ...cellsPatchField(changedCells(baseCells, cells)),
+    ...cellsMergeSet(cellsPatch(changedCells(baseCells, cells)), {
       ...(typeof markSeed === 'number' ? { markSeed } : {}),
-    },
-    { merge: true },
+    }),
   );
   // Echoed sibling boards ride the SAME batch, each carrying ITS OWN board's
   // markSeed — the stale-write rules gate (`seededMarkWriteOk`) is per-board,
@@ -1654,11 +1653,9 @@ async function runSetMark(
   for (const echoBoard of echoBoards) {
     batch.set(
       doc(database, 'events', EVENT_ID, 'days', String(echoBoard.dayIndex), 'boards', uid),
-      {
-        cells: echoBoard.cellsPatch,
+      ...cellsMergeSet(echoBoard.cellsPatch, {
         ...(typeof echoBoard.markSeed === 'number' ? { markSeed: echoBoard.markSeed } : {}),
-      },
-      { merge: true },
+      }),
     );
   }
   // The standings freeze (#265): post-freeze marks keep the card honest, and
@@ -2034,11 +2031,9 @@ async function runReconcileEchoes(
     // Per-cell merge (#457): only the newly echoed cells ride the write.
     batch.set(
       boardRef,
-      {
-        ...cellsPatchField(changedCells(boardCells, res.cells)),
+      ...cellsMergeSet(cellsPatch(changedCells(boardCells, res.cells)), {
         ...(typeof board.seed === 'number' ? { markSeed: board.seed } : {}),
-      },
-      { merge: true },
+      }),
     );
     if (params.statsFrozen) {
       // The same post-freeze narrowing as the Mark path: only a ceremonial

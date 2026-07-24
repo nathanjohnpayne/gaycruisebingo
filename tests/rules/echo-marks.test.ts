@@ -7,7 +7,7 @@ import {
   initializeTestEnvironment,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, getDoc, setDoc, writeBatch } from 'firebase/firestore';
+import { doc, FieldPath, getDoc, setDoc, writeBatch } from 'firebase/firestore';
 
 // specs/echo-marks.md — the rules side of Echo Marks (#446):
 //   1. the day-board write gate accepts the MULTI-BOARD echo batch (the mark's
@@ -179,6 +179,37 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
       { merge: true },
     );
     await assertFails(batch.commit());
+  });
+
+  it('a mergeFields cell write passes the rules AND replaces the cell WHOLESALE — omission-removed fields (echo) do not survive (4b round-8 on #458)', async () => {
+    // The client writes patches as set(..., { mergeFields: [FieldPath('cells', i), ...] })
+    // precisely because { merge: true } deep-merges nested maps: a transform
+    // that strips `echo` by destructuring (attachProof / deleteProof / manual
+    // unmark) would otherwise leave the stored `echo: true` standing. Seed an
+    // echoed cell, rewrite it without the flag, and prove BOTH halves: the
+    // rules accept the mergeFields post-image, and the flag is gone on read.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), dayBoardPath(0, ALICE)),
+        board(ALICE, 0, 100, { 5: { marked: true, markedAt: 1, status: 'confirmed', echo: true } }),
+      );
+    });
+    const d = db(ALICE);
+    const proofed = cellsPatchOf({ 5: { marked: true, markedAt: NOW(), status: 'confirmed', proofId: 'p1' } });
+    await assertSucceeds(
+      setDoc(
+        doc(d, dayBoardPath(0, ALICE)),
+        { cells: proofed, markSeed: 100 },
+        { mergeFields: [new FieldPath('cells', '5'), 'markSeed'] },
+      ),
+    );
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const snap = await getDoc(doc(ctx.firestore(), dayBoardPath(0, ALICE)));
+      const stored = (snap.data() as { cells: Record<string, Record<string, unknown>> }).cells;
+      expect(stored['5'].proofId).toBe('p1');
+      expect('echo' in stored['5']).toBe(false); // replaced wholesale, not deep-merged
+      expect(stored['3'].marked).toBe(false); // sibling cells untouched by the mask
+    });
   });
 
   it('a STALE-markSeed Mark batch is rejected WHOLE — board patch, player projection, and Tally marker all roll back (4b round-6 on #458)', async () => {

@@ -48,12 +48,22 @@ vi.mock('../firebase', () => ({
 vi.mock('firebase/functions', () => ({ httpsCallable: vi.fn() }));
 
 vi.mock('firebase/firestore', () => {
+  class MockFieldPath {
+    segments: string[];
+    constructor(...segments: string[]) {
+      this.segments = segments;
+    }
+    isEqual(other: MockFieldPath) {
+      return this.segments.join('\u0001') === other.segments.join('\u0001');
+    }
+  }
   const makeRef = (kind: string, args: unknown[]) => {
     const ref: Record<string, unknown> = { kind, args };
     ref.withConverter = () => ref;
     return ref;
   };
   return {
+    FieldPath: MockFieldPath,
     doc: (...args: unknown[]) => makeRef('doc', args),
     collection: (...args: unknown[]) => makeRef('collection', args),
     collectionGroup: (...args: unknown[]) => makeRef('collectionGroup', args),

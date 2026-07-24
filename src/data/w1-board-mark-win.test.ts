@@ -54,7 +54,7 @@ vi.mock('firebase/firestore', async (importOriginal) => {
 
 import { computeMark, setMark } from './api';
 import { knownFirstBingoAt } from '../components/Board';
-import { addDoc, runTransaction } from 'firebase/firestore';
+import { addDoc, FieldPath, runTransaction } from 'firebase/firestore';
 
 // A dealt board: every non-free Square unmarked, the free center (12) "on".
 function dealt(): Cell[] {
@@ -325,7 +325,12 @@ describe('setMark (write shape)', () => {
     expect(setSpy.mock.calls[0][0].path).toBe(`events/${EVENT_ID}/boards/u1`);
     expect(setSpy.mock.calls[1][0].path).toBe(`events/${EVENT_ID}/players/u1`);
     expect(setSpy.mock.calls[2][0].path).toBe(`events/${EVENT_ID}/tally/i3/markers/u1`);
-    expect(setSpy.mock.calls[0][2]).toEqual({ merge: true });
+    // The board write's mask (#458 round 8): one FieldPath per changed cell
+    // (replace-wholesale, so omission-removed fields die) + the extras.
+    const boardOpts = setSpy.mock.calls[0][2] as { mergeFields: Array<{ isEqual?: (o: unknown) => boolean }> };
+    expect(boardOpts.mergeFields).toHaveLength(2);
+    expect(boardOpts.mergeFields[0].isEqual!(new FieldPath('cells', '3'))).toBe(true);
+    expect(boardOpts.mergeFields[1]).toBe('markSeed');
     expect(setSpy.mock.calls[1][2]).toEqual({ merge: true });
     expect(setSpy.mock.calls[0][1]).toMatchObject({ markSeed: 42 });
     expect((setSpy.mock.calls[0][1].cells as Cell[])[3].marked).toBe(true);

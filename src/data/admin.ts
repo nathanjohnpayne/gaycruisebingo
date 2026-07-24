@@ -2,7 +2,8 @@ import { addDoc, collection, doc, getDoc, updateDoc, deleteDoc, runTransaction, 
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout, foldDayStat, foldEchoStats, applyEchoes, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats, type EchoBucket, type StatWrite } from '../game/logic';
-import { cellsPatchField, changedCells, cellsFromData } from '../game/cells';
+import { cellsPatch, changedCells, cellsFromData } from '../game/cells';
+import { cellsMergeSet } from './cellsMerge';
 import { honorDisplayName, markerDisplayName } from './attribution';
 import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef, PlayerDoc } from '../types';
@@ -435,7 +436,7 @@ async function resolve(
     const echoItemId =
       confirmedCell && !confirmedCell.free && confirmedCell.marked ? confirmedCell.itemId : null;
     const echoBuckets: EchoBucket[] = [];
-    const echoWrites: Array<{ ref: ReturnType<typeof dayBoard>; payload: Record<string, unknown> }> = [];
+    const echoWrites: Array<{ ref: ReturnType<typeof dayBoard>; set: ReturnType<typeof cellsMergeSet> }> = [];
     const echoPinDays: number[] = [];
     const echoNow = Date.now();
     if (echoItemId && echoSiblingSnaps.length > 0) {
@@ -448,11 +449,10 @@ async function resolve(
         if (!res.changed) return;
         echoWrites.push({
           ref: echoSiblingRefs[idx],
-          payload: {
-            // Per-cell merge (#457): only the newly echoed cells ride the write.
-            ...cellsPatchField(changedCells(sibCells, res.cells)),
+          // Per-cell merge (#457): only the newly echoed cells ride the write.
+          set: cellsMergeSet(cellsPatch(changedCells(sibCells, res.cells)), {
             ...(typeof sib.seed === 'number' ? { markSeed: sib.seed } : {}),
-          },
+          }),
         });
         echoBuckets.push({
           dayIndex: echoSiblingDays[idx],
@@ -473,15 +473,13 @@ async function resolve(
 
     tx.set(
       boardRef,
-      {
-        // Per-cell merge (#457): only the resolved claim's cell rides the write.
-        ...cellsPatchField(changedCells(cells, next)),
+      // Per-cell merge (#457): only the resolved claim's cell rides the write.
+      ...cellsMergeSet(cellsPatch(changedCells(cells, next)), {
         ...(typeof boardData.seed === 'number' ? { markSeed: boardData.seed } : {}),
-      },
-      { merge: true },
+      }),
     );
     for (const write of echoWrites) {
-      tx.set(write.ref, write.payload, { merge: true });
+      tx.set(write.ref, ...write.set);
     }
     for (const { dayIndex: echoDay, exists } of echoMetaSnaps) {
       if (exists) continue; // the write-once honor is already claimed

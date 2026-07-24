@@ -14,6 +14,7 @@ spec_test_map:
   # not spec-basename-named); the offline no-clobber proof matches by name.
   cells-map:
     - src/game/cells.test.ts
+    - src/data/cellsMerge.test.ts
     - src/test/migrate-cells-map.test.ts
     - tests/offline/cells-map.test.ts
   # The test-harness spec spans four layers whose test filenames don't share
