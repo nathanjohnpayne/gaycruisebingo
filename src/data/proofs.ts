@@ -208,13 +208,17 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
     const markerSnap = markerRef ? await tx.get(markerRef) : null;
     const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown } | undefined;
     const liveCells = boardData?.cells ?? cells;
+    const existingCell = liveCells.find((cell) => cell.index === cellIndex);
+    // A confirmed Echo has already passed the original admin confirmation. Adding
+    // proof makes it a local mark, but must not create a second pending claim.
+    const pendingClaim = pending && !(existingCell?.echo === true && existingCell.status === 'confirmed');
     const next: Cell[] = liveCells.map((c) => {
       if (c.index !== cellIndex) return c;
       // A proof creates a durable artifact anchored to this card. It must turn
       // an Echo into a local Mark so the reshuffle gate cannot trade the card
       // away and strand that artifact.
       const { echo: _echo, echoOptOut: _echoOptOut, ...proofed } = c;
-      return { ...proofed, marked: true, markedAt: now, proofId, status: pending ? 'pending' : 'confirmed' };
+      return { ...proofed, marked: true, markedAt: now, proofId, status: pendingClaim ? 'pending' : 'confirmed' };
     });
 
     const bingoCount = completedLines(next).length;
@@ -242,7 +246,7 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
       reportCount: 0,
       // Admin-confirmed-mode proofs stay 'pending' (admin-only readable) until an admin
       // confirms the claim; otherwise the proof is public immediately.
-      status: pending ? 'pending' : 'active',
+      status: pendingClaim ? 'pending' : 'active',
       visionFlag: null,
       // #190: stamp which affordance produced a photo so the Feed badges a
       // library pick 🖼️; null for audio/text and camera picks that pass none.
@@ -317,7 +321,7 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
         markedAt: typeof priorMarkedAt === 'number' ? priorMarkedAt : now,
       });
     }
-    if (pending) {
+    if (pendingClaim) {
       tx.set(doc(rawClaims()), {
         uid,
         displayName,
@@ -459,7 +463,7 @@ export async function deleteProof(
             bingoCount,
             squaresMarked: squares,
             firstBingoAt,
-            blackout,
+            blackout: blackout || siblingBoards.some((sibling) => isBlackout(((sibling.data()?.cells as Cell[] | undefined) ?? []))),
             tutorialDayIndexes: opts?.tutorialDayIndexes,
             ceremonialDayIndexes: opts?.ceremonialDayIndexes,
           });

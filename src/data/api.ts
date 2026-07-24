@@ -1010,6 +1010,16 @@ export async function reshuffleBoard(params: {
     const achieved = achievedItemIds(
       peerSnaps.filter((s) => s.exists()).map((s) => (s.data() as { cells?: Cell[] }).cells ?? []),
     );
+    // Pending claims are not confirmed achievements, so they must not echo onto
+    // the replacement card. They are still marked carriers for the shared Tally
+    // marker and must keep that marker alive when an echo is traded away.
+    const peerMarkedItems = new Set<string>();
+    for (const snap of peerSnaps) {
+      if (!snap.exists()) continue;
+      for (const cell of (snap.data() as { cells?: Cell[] }).cells ?? []) {
+        if (!cell.free && cell.marked && cell.itemId) peerMarkedItems.add(cell.itemId);
+      }
+    }
     const echoRes = applyEchoes(cells, achieved, now);
     const statsAllowed = !standingsFrozen({ frozenAt: eventData?.frozenAt, days }) ||
       ceremonialDayIndexSet(days).has(dayIndex);
@@ -1036,7 +1046,7 @@ export async function reshuffleBoard(params: {
         discarded.marked &&
         !discarded.free &&
         discarded.itemId &&
-        !achieved.has(discarded.itemId)
+        !peerMarkedItems.has(discarded.itemId)
       ) {
         tx.delete(doc(db, 'events', EVENT_ID, 'tally', discarded.itemId, 'markers', uid));
       }
