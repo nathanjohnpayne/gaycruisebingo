@@ -17,6 +17,11 @@ const rawDayBoard = (dayIndex: number, uid: string) =>
   doc(db, 'events', EVENT_ID, 'days', String(dayIndex), 'boards', uid);
 const rawPlayer = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
 
+function nextMarkVersion(board: { markVersion?: unknown } | undefined): number {
+  const previous = board?.markVersion;
+  return typeof previous === 'number' && Number.isSafeInteger(previous) && previous >= 0 ? previous + 1 : 1;
+}
+
 /**
  * The `{ merge: true }` player-stats write a proofed Mark / proof deletion
  * commits: in daily-cards mode (#246) the per-Board result is ONE Day Card's
@@ -201,7 +206,7 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
     const boardSnap = await tx.get(boardRef);
     const playerSnap = await tx.get(playerRef);
     const markerSnap = markerRef ? await tx.get(markerRef) : null;
-    const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number } | undefined;
+    const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown } | undefined;
     const liveCells = boardData?.cells ?? cells;
     const next: Cell[] = liveCells.map((c) => {
       if (c.index !== cellIndex) return c;
@@ -250,6 +255,7 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
       {
         cells: next,
         ...(typeof boardData?.seed === 'number' ? { markSeed: boardData.seed } : {}),
+        ...(daily ? { markVersion: nextMarkVersion(boardData) } : {}),
       },
       { merge: true },
     );
@@ -381,7 +387,7 @@ export async function deleteProof(
       const boardRef = daily ? rawDayBoard(proofDayIndex, proof.uid) : rawBoard(proof.uid);
       const playerRef = rawPlayer(proof.uid);
       const boardSnap = await tx.get(boardRef);
-      const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number } | undefined;
+      const boardData = boardSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown } | undefined;
       const cells = boardData?.cells;
       // Resolve the backing cell from the proof's OWN cellIndex — the
       // authoritative proof→cell link (specs/w1-board-mark-win.md § cross-writer)
@@ -419,6 +425,7 @@ export async function deleteProof(
           {
             cells: next,
             ...(typeof boardData?.seed === 'number' ? { markSeed: boardData.seed } : {}),
+            ...(daily ? { markVersion: nextMarkVersion(boardData) } : {}),
           },
           { merge: true },
         );

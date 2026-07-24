@@ -189,6 +189,10 @@ export interface BoardDoc {
   // Last Board seed a normal Mark write was computed against. Firestore rules use
   // this as a stale-write guard after a Reshuffle; legacy rows may omit it.
   markSeed?: number;
+  // Monotonic cell-projection revision. Every daily-card cells replacement carries
+  // the next value, so Firestore rules reject a stale full-array write instead of
+  // letting a second device erase a concurrent Mark.
+  markVersion?: number;
   createdAt: number;
   cells: Cell[]; // length 25
 }

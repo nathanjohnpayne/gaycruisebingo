@@ -60,6 +60,12 @@ const rawItems = () => collection(db, 'events', EVENT_ID, 'items');
 const rawItem = (id: string) => doc(db, 'events', EVENT_ID, 'items', id);
 const rawEvent = () => doc(db, 'events', EVENT_ID);
 
+/** The next optimistic-concurrency revision for a full Board `cells` replacement. */
+function nextMarkVersion(board: { markVersion?: unknown } | undefined): number {
+  const previous = board?.markVersion;
+  return typeof previous === 'number' && Number.isSafeInteger(previous) && previous >= 0 ? previous + 1 : 1;
+}
+
 /**
  * True only for a well-formed `https://` URL — the only photo shape the public
  * players row accepts from the self-writable users/{uid} profile. Rejects
@@ -656,7 +662,7 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
         .map((snap) => (snap.data() as { cells?: Cell[] }).cells ?? []),
     );
     const echoRes = applyEchoes(cells, achieved, now);
-    tx.set(boardRef, { uid: u.uid, dayIndex, seed, createdAt: now, cells: echoRes.cells, easyMixRatio });
+    tx.set(boardRef, { uid: u.uid, dayIndex, seed, createdAt: now, cells: echoRes.cells, easyMixRatio, markVersion: 0 });
     if (echoRes.changed) {
       // The echoed card's REAL opening bucket, folded with the cruise root
       // aggregates in the ONE player write this transaction already makes.
@@ -933,7 +939,12 @@ export async function reshuffleBoard(params: {
     ]);
 
     if (!boardSnap.exists()) throw new Error('reshuffleBoard: no Day Card to reshuffle.');
-    const board = boardSnap.data() as { cells?: Cell[]; seed?: number; easyMixRatio?: number };
+    const board = boardSnap.data() as {
+      cells?: Cell[];
+      seed?: number;
+      easyMixRatio?: number;
+      markVersion?: unknown;
+    };
 
     // The card must still be the one the Player confirmed. This is what makes a
     // retry a REFUSAL rather than a second spend: when two tabs confirm the same
@@ -1067,7 +1078,15 @@ export async function reshuffleBoard(params: {
     // never be split. An explicit counter value, NOT `increment(1)` — the rules
     // assert `after == before + 1` against `before`, and the transaction's re-read
     // is what keeps that value fresh under contention.
-    tx.set(boardRef, { uid, dayIndex, seed, createdAt: now, cells: echoRes.cells, easyMixRatio: boardEasyMixRatio });
+    tx.set(boardRef, {
+      uid,
+      dayIndex,
+      seed,
+      createdAt: now,
+      cells: echoRes.cells,
+      easyMixRatio: boardEasyMixRatio,
+      markVersion: nextMarkVersion(board),
+    });
     // Post-freeze, even a ceremonial Day's re-derive narrows to its bucket
     // (Codex P2 on #447 round 2) — no root field moves once the standings
     // are settled, mirroring the mark/reconcile paths.
@@ -1363,6 +1382,9 @@ export async function setMark(params: {
   // offline-safe read discipline as the base fold above); a cache-missed
   // sibling simply isn't echoed here — the open-time reconcile self-heals it.
   echoDayIndexes?: number[];
+  // Internal bounded retry after the rules reject a stale daily-board revision.
+  // Not a user-visible retry policy: offline batches still queue unchanged.
+  markRetryCount?: number;
   database?: Firestore;
 }): Promise<{
   cells: Cell[];
@@ -1408,6 +1430,7 @@ async function runSetMark(
     daily?: boolean;
     boardSeed?: number;
     echoDayIndexes?: number[];
+    markRetryCount?: number;
   },
   database: Firestore,
 ): Promise<{
@@ -1432,6 +1455,7 @@ async function runSetMark(
 
   let baseCells = params.cells;
   let markSeed = params.boardSeed;
+  let markVersion = 1;
   let baseFirstBingoAt = params.currentFirstBingoAt;
   // The already-denormalized public name on the player row is the fallback
   // attribution for the Tally marker when the caller omits `displayName`.
@@ -1454,8 +1478,14 @@ async function runSetMark(
   // (e.g. the very first local knowledge of it, or a test double with no
   // cache) — that is the pre-fix behavior, unchanged.
   if (cachedBoard.status === 'fulfilled' && cachedBoard.value.exists()) {
-    const boardData = cachedBoard.value.data() as { cells: Cell[]; dayIndex?: number; seed?: number };
+    const boardData = cachedBoard.value.data() as {
+      cells: Cell[];
+      dayIndex?: number;
+      seed?: number;
+      markVersion?: unknown;
+    };
     baseCells = boardData.cells;
+    markVersion = nextMarkVersion(boardData);
     if (typeof boardData.seed === 'number') {
       markSeed = boardData.seed;
     }
@@ -1549,6 +1579,7 @@ async function runSetMark(
     dayIndex: number;
     cells: Cell[];
     markSeed: number | undefined;
+    markVersion: number;
     bucket: EchoBucket;
     bingoTransition: boolean;
     blackoutTransition: boolean;
@@ -1562,7 +1593,7 @@ async function runSetMark(
     );
     sibSnaps.forEach((snap, i) => {
       if (snap.status !== 'fulfilled' || !snap.value.exists()) return;
-      const sib = snap.value.data() as { cells?: Cell[]; seed?: number };
+      const sib = snap.value.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown };
       const res = applyEchoes(sib.cells ?? [], achieved, now);
       if (!res.changed) return;
       const sibDay = echoDayIndexes[i];
@@ -1570,6 +1601,7 @@ async function runSetMark(
         dayIndex: sibDay,
         cells: res.cells,
         markSeed: typeof sib.seed === 'number' ? sib.seed : undefined,
+        markVersion: nextMarkVersion(sib),
         bucket: {
           dayIndex: sibDay,
           bingoCount: res.bingoCount,
@@ -1607,6 +1639,7 @@ async function runSetMark(
     {
       cells,
       ...(typeof markSeed === 'number' ? { markSeed } : {}),
+      ...(params.daily === true ? { markVersion } : {}),
     },
     { merge: true },
   );
@@ -1619,6 +1652,7 @@ async function runSetMark(
       {
         cells: echoBoard.cells,
         ...(typeof echoBoard.markSeed === 'number' ? { markSeed: echoBoard.markSeed } : {}),
+        markVersion: echoBoard.markVersion,
       },
       { merge: true },
     );
@@ -1742,6 +1776,41 @@ async function runSetMark(
       { uid, index: params.index, nextMarked: params.nextMarked },
       err,
     );
+    // Retry only after proving a concurrent revision won. A generic denial or a
+    // stale-seed rejection must never replay this index onto a reshuffled card.
+    // The refresh includes the Player row, so the retry re-folds aggregates from
+    // the same committed state as every board it reads.
+    if (params.daily === true && (params.markRetryCount ?? 0) === 0) {
+      const siblingRefs = echoDayIndexes.map((d) =>
+        doc(database, 'events', EVENT_ID, 'days', String(d), 'boards', uid),
+      );
+      void Promise.all([
+        getDocFromServer(playerRef),
+        getDocFromServer(boardRef),
+        ...siblingRefs.map((ref) => getDocFromServer(ref)),
+      ])
+        .then(([, freshSource, ...freshSiblings]) => {
+          const freshByDay = new Map(echoDayIndexes.map((day, i) => [day, freshSiblings[i]]));
+          const retryTargets = [
+            { snap: freshSource, expectedSeed: markSeed, attemptedVersion: markVersion },
+            ...echoBoards.map((echoBoard) => ({
+              snap: freshByDay.get(echoBoard.dayIndex),
+              expectedSeed: echoBoard.markSeed,
+              attemptedVersion: echoBoard.markVersion,
+            })),
+          ];
+          const isConflictingCurrentProjection = retryTargets.some((target) => {
+            if (!target.snap?.exists()) return false;
+            const data = target.snap.data() as { seed?: unknown; markVersion?: unknown };
+            return data.seed === target.expectedSeed &&
+              typeof data.markVersion === 'number' &&
+              data.markVersion >= target.attemptedVersion;
+          });
+          if (isConflictingCurrentProjection) return setMark({ ...params, markRetryCount: 1 });
+          return undefined;
+        })
+        .catch(() => undefined);
+    }
   });
 
   // Echo-caused wins route through the EXISTING pending-Moment queue, keyed to
@@ -1876,7 +1945,7 @@ async function runReconcileEchoes(
   // No cached board to reconcile (or it isn't this Player's) → no-op; the next
   // open retries once the subscription has cached it.
   if (boardSnap.status !== 'fulfilled' || !boardSnap.value.exists()) return { ...none, complete: false };
-  const board = boardSnap.value.data() as { uid?: string; cells?: Cell[]; seed?: number };
+  const board = boardSnap.value.data() as { uid?: string; cells?: Cell[]; seed?: number; markVersion?: unknown };
   if (board.uid !== uid) return { ...none, complete: false };
   const boardCells = board.cells ?? [];
 
@@ -1952,6 +2021,7 @@ async function runReconcileEchoes(
       {
         cells: res.cells,
         ...(typeof board.seed === 'number' ? { markSeed: board.seed } : {}),
+        markVersion: nextMarkVersion(board),
       },
       { merge: true },
     );

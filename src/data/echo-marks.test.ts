@@ -61,7 +61,7 @@ vi.mock('firebase/firestore', () => {
     where: (...args: unknown[]) => ({ where: args }),
     getDoc: vi.fn(async (ref: { args?: unknown[] }) => route(ref)),
     getDocFromCache: vi.fn((ref: { args?: unknown[] }) => H.defaultGetDocFromCache(ref)),
-    getDocFromServer: vi.fn(),
+    getDocFromServer: vi.fn(async (ref: { args?: unknown[] }) => route(ref)),
     getDocs: vi.fn(),
     getDocsFromCache: vi.fn(),
     writeBatch: () => ({ set: H.batchSet, delete: H.batchDelete, commit: H.batchCommit }),
@@ -269,6 +269,50 @@ describe('setMark — mark-time propagation (spec § Mark-time)', () => {
     expect(echoed).toMatchObject({ marked: true, status: 'confirmed', echo: true, itemId: 'shared' });
     // The non-carrier sibling (Day 1) is untouched.
     expect(H.batchSet.mock.calls.some((c) => isDayBoardWrite(c, 1))).toBe(false);
+  });
+
+  it('refreshes and retries after a concurrent sibling projection wins, preserving both Marks', async () => {
+    seedBoards();
+    H.batchCommit
+      .mockImplementationOnce(async () => {
+        // Another device marked `remote` on Day 3 and echoed it to Day 2 while
+        // this device was holding its stale sibling snapshots.
+        H.dayBoards.set(2, {
+          uid: 'u1',
+          seed: 222,
+          markVersion: 1,
+          dayIndex: 2,
+          cells: card((i) => (i === 5 ? 'shared' : i === 7 ? 'remote' : `a${i}`), {
+            7: { marked: true, markedAt: 10, status: 'confirmed', echo: true },
+          }),
+        });
+        H.dayBoards.set(3, {
+          uid: 'u1',
+          seed: 333,
+          markVersion: 1,
+          dayIndex: 3,
+          cells: card((i) => (i === 8 ? 'shared' : i === 9 ? 'remote' : `b${i}`), {
+            9: { marked: true, markedAt: 10, status: 'confirmed' },
+          }),
+        });
+        throw Object.assign(new Error('stale markVersion'), { code: 'permission-denied' });
+      })
+      .mockResolvedValueOnce(undefined);
+
+    await markShared();
+    await vi.waitFor(() => expect(H.batchCommit).toHaveBeenCalledTimes(2));
+
+    const retrySiblingWrite = H.batchSet.mock.calls.filter((c) => isDayBoardWrite(c, 3)).slice(-1)[0]!;
+    const retrySibling = retrySiblingWrite[1] as { cells: Cell[]; markVersion: number };
+    expect(retrySibling.markVersion).toBe(2);
+    expect(retrySibling.cells.find((c) => c.index === 8)).toMatchObject({ marked: true, echo: true });
+    expect(retrySibling.cells.find((c) => c.index === 9)).toMatchObject({ marked: true });
+
+    const retrySourceWrite = H.batchSet.mock.calls.filter((c) => isDayBoardWrite(c, 2)).slice(-1)[0]!;
+    const retrySource = retrySourceWrite[1] as { cells: Cell[]; markVersion: number };
+    expect(retrySource.markVersion).toBe(2);
+    expect(retrySource.cells.find((c) => c.index === 5)).toMatchObject({ marked: true });
+    expect(retrySource.cells.find((c) => c.index === 7)).toMatchObject({ marked: true, echo: true });
   });
 
   it('writes ONE aggregated player doc: acted bucket + echoed bucket + re-derived roots', async () => {

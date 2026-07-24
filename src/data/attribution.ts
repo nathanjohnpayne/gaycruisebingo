@@ -16,12 +16,12 @@
  * graph that mocks only the exports it uses itself.
  */
 export function markerDisplayName(preferred: string | undefined, cachedPlayerName: unknown): string {
-  const candidate =
-    typeof preferred === 'string' && preferred.trim().length > 0
-      ? preferred
-      : typeof cachedPlayerName === 'string' && cachedPlayerName.trim().length > 0
-        ? cachedPlayerName
-        : 'Anonymous';
+  // `Anonymous` is the unresolved submission sentinel, not a resolved public
+  // identity. An admin-confirmed Claim can retain it after the player row has
+  // loaded a real name, so keep looking at the cached row before falling back.
+  const resolved = (value: unknown): string | null =>
+    typeof value === 'string' && value.trim().length > 0 && value.trim() !== 'Anonymous' ? value : null;
+  const candidate = resolved(preferred) ?? resolved(cachedPlayerName) ?? 'Anonymous';
   return candidate.slice(0, 100);
 }
 

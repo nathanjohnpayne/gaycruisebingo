@@ -15,7 +15,9 @@ import { doc, setDoc, writeBatch } from 'firebase/firestore';
 //      marker), each board write carrying ITS OWN markSeed;
 //   2. a stale or BORROWED markSeed on an echoed board is rejected — the
 //      stale-write gate is per-board;
-//   3. `boardPristine()`'s echo exemption: an echo-only card is still
+//   3. a stale `markVersion` is rejected once a current-client write has upgraded
+//      the board, so a full-array sibling projection cannot erase another device's Mark;
+//   4. `boardPristine()`'s echo exemption: an echo-only card is still
 //      reshuffleable, a manually-marked one is not.
 //
 // The PERMISSION_DENIED lines the SDK logs to stderr are the expected
@@ -173,6 +175,30 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
       setDoc(
         doc(db(ALICE), dayBoardPath(1, ALICE)),
         { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }) },
+        { merge: true },
+      ),
+    );
+  });
+
+  it('REJECTS a stale full-array projection after the board has a markVersion', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), dayBoardPath(1, ALICE)), {
+        ...board(ALICE, 1, 111),
+        markVersion: 1,
+      });
+    });
+    const d = db(ALICE);
+    await assertSucceeds(
+      setDoc(
+        doc(d, dayBoardPath(1, ALICE)),
+        { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111, markVersion: 2 },
+        { merge: true },
+      ),
+    );
+    await assertFails(
+      setDoc(
+        doc(d, dayBoardPath(1, ALICE)),
+        { cells: cells({ 8: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111, markVersion: 2 },
         { merge: true },
       ),
     );

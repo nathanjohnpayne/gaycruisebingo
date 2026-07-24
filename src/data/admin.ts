@@ -22,6 +22,11 @@ const player = (uid: string) => doc(db, 'events', EVENT_ID, 'players', uid);
 const marker = (itemId: string, uid: string) =>
   doc(db, 'events', EVENT_ID, 'tally', itemId, 'markers', uid);
 
+function nextMarkVersion(board: { markVersion?: unknown }): number {
+  const previous = board.markVersion;
+  return typeof previous === 'number' && Number.isSafeInteger(previous) && previous >= 0 ? previous + 1 : 1;
+}
+
 export const hideItem = (id: string) => updateDoc(item(id), { status: 'hidden' });
 export const restoreItem = (id: string) => updateDoc(item(id), { status: 'active' });
 export const deleteItem = (id: string) => deleteDoc(item(id));
@@ -384,7 +389,7 @@ async function resolve(
     // echo set from committed state (specs/echo-marks.md).
     const echoSiblingRefs = echoSiblingDays.map((i) => dayBoard(i, c.uid));
     const echoSiblingSnaps = await Promise.all(echoSiblingRefs.map((ref) => tx.get(ref)));
-    const boardData = bSnap.data() as { cells?: Cell[]; seed?: number };
+    const boardData = bSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown };
     const cells = boardData.cells ?? [];
     const next = transform(cells);
     const bingoCount = completedLines(next).length;
@@ -436,12 +441,16 @@ async function resolve(
       const achieved = new Set([echoItemId]);
       echoSiblingSnaps.forEach((snap, idx) => {
         if (!snap.exists()) return;
-        const sib = snap.data() as { cells?: Cell[]; seed?: number };
+        const sib = snap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown };
         const res = applyEchoes(sib.cells ?? [], achieved, echoNow);
         if (!res.changed) return;
         echoWrites.push({
           ref: echoSiblingRefs[idx],
-          payload: { cells: res.cells, ...(typeof sib.seed === 'number' ? { markSeed: sib.seed } : {}) },
+          payload: {
+            cells: res.cells,
+            ...(typeof sib.seed === 'number' ? { markSeed: sib.seed } : {}),
+            markVersion: nextMarkVersion(sib),
+          },
         });
         echoBuckets.push({
           dayIndex: echoSiblingDays[idx],
@@ -465,6 +474,7 @@ async function resolve(
       {
         cells: next,
         ...(typeof boardData.seed === 'number' ? { markSeed: boardData.seed } : {}),
+        ...(daily ? { markVersion: nextMarkVersion(boardData) } : {}),
       },
       { merge: true },
     );

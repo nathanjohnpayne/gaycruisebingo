@@ -164,6 +164,26 @@ service cloud.firestore {
             && request.resource.data.markSeed == resource.data.seed);
     }
 
+    // A Board's `cells` projection is a full array replacement. A stale second
+    // device must therefore be rejected instead of overwriting the first device's
+    // unrelated Mark. New daily cards start at markVersion 0; pre-version cards
+    // remain writable for rollout compatibility and upgrade on their first current-
+    // client write. Admin repair flows are exempt.
+    function versionedMarkWriteOk(eventId) {
+      return !boardCellsChanged()
+        || isAdmin(eventId)
+        || !('markVersion' in resource.data)
+        || (('markVersion' in request.resource.data)
+            && request.resource.data.markVersion is int
+            && request.resource.data.markVersion > 0
+            && (
+              (!('markVersion' in resource.data) && request.resource.data.markVersion == 1)
+              || (('markVersion' in resource.data)
+                  && resource.data.markVersion is int
+                  && request.resource.data.markVersion == resource.data.markVersion + 1)
+            ));
+    }
+
     // The COUNTER-side half (#378 Option A): `reshufflesUsed` is MONOTONIC — it may
     // only ever hold or rise by exactly 1, never fall, and never exceed the
     // allowance; a create must start at 0.
@@ -518,6 +538,7 @@ service cloud.firestore {
             && isCanonicalDay(dayIndex)
             && request.time.toMillis() >= get(/databases/$(database)/documents/events/$(eventId)).data.days[int(dayIndex)].unlockAt
             && (isReshuffleWrite() || seededMarkWriteOk())
+            && versionedMarkWriteOk(eventId)
             && (!isReshuffleWrite() || reshuffleOk(eventId, uid));
           allow delete: if isAdmin(eventId);
         }

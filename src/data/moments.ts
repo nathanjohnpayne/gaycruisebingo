@@ -67,12 +67,10 @@ export interface MomentActor {
 // unmounts and route changes: whichever Board mount next sees the gate open drains
 // it. The deterministic Moment doc id keeps a held-then-fired broadcast idempotent,
 // and the writer's write-once cache pre-check + create-only rule are the structural
-// once-only backstop besides. RESIDUAL (documented, accepted): a queued-but-undrained
-// broadcast still dies on a full page RELOAD (module state is per-page-load) — but
-// the deterministic id + the returning board baselining the standing win mean that
-// costs at most one possibly-lost Moment for a win that straddled a reload, never a
-// duplicate or a spurious fire. That is the SAME class of loss as the prior
-// unmount bug, strictly NARROWER (only a reload, not any route change).
+// once-only backstop besides. Plain per-Day win transitions also persist to
+// localStorage per Event + Player: an Echo can complete a sibling Day while that
+// card is not displayed, and its transition must survive a reload until the card's
+// normal drain revalidates it. The ceremonial candidate remains memory-only.
 export interface PendingMomentFlags {
   bingo: boolean;
   blackout: boolean;
@@ -121,6 +119,86 @@ interface StoredPendingFlags extends PendingMomentFlags {
   firstBingoDayIndex?: number;
 }
 const pendingMoments = new Map<string, StoredPendingFlags>();
+const hydratedPending = new Set<string>();
+const pendingStorageKeys = new Set<string>();
+
+function pendingStorageKey(uid: string): string {
+  return `gcb:pending-moments:${EVENT_ID}:${uid}`;
+}
+
+function pendingStore(): Storage | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function safeDayIndexes(value: unknown): number[] | undefined {
+  if (!Array.isArray(value) || !value.every((day) => Number.isSafeInteger(day) && day >= 0)) return undefined;
+  return [...new Set(value)];
+}
+
+function restorePending(uid: string): void {
+  const key = pendingKey(uid);
+  if (hydratedPending.has(key)) return;
+  hydratedPending.add(key);
+  const store = pendingStore();
+  if (!store) return;
+  const storageKey = pendingStorageKey(uid);
+  pendingStorageKeys.add(storageKey);
+  try {
+    const parsed = JSON.parse(store.getItem(storageKey) ?? 'null') as {
+      v?: unknown;
+      flags?: Partial<StoredPendingFlags>;
+      generation?: unknown;
+    } | null;
+    if (!parsed || parsed.v !== 1 || !parsed.flags) return;
+    const bingoDayIndexes = safeDayIndexes(parsed.flags.bingoDayIndexes);
+    const blackoutDayIndexes = safeDayIndexes(parsed.flags.blackoutDayIndexes);
+    const flags: StoredPendingFlags = {
+      bingo: parsed.flags.bingo === true,
+      blackout: parsed.flags.blackout === true,
+      firstBingo: false,
+      firstBingoGeneration: 0,
+      ...(bingoDayIndexes ? { bingoDayIndexes } : {}),
+      ...(blackoutDayIndexes ? { blackoutDayIndexes } : {}),
+    };
+    if (!flags.bingo && !flags.blackout) return;
+    pendingMoments.set(key, flags);
+  } catch {
+    // A corrupt or blocked store is a cache miss; the live queue still works.
+  }
+}
+
+function persistPending(uid: string): void {
+  const key = pendingKey(uid);
+  const store = pendingStore();
+  if (!store) return;
+  const storageKey = pendingStorageKey(uid);
+  pendingStorageKeys.add(storageKey);
+  try {
+    const flags = pendingMoments.get(key);
+    if (!flags || (!flags.bingo && !flags.blackout)) {
+      store.removeItem(storageKey);
+      return;
+    }
+    const plainWins = {
+      bingo: flags.bingo,
+      blackout: flags.blackout,
+      firstBingo: false,
+      firstBingoGeneration: 0,
+      ...(flags.bingoDayIndexes ? { bingoDayIndexes: flags.bingoDayIndexes } : {}),
+      ...(flags.blackoutDayIndexes ? { blackoutDayIndexes: flags.blackoutDayIndexes } : {}),
+    };
+    store.setItem(
+      storageKey,
+      JSON.stringify({ v: 1, flags: plainWins }),
+    );
+  } catch {
+    // Storage is a durability enhancement, never a gate on the in-memory queue.
+  }
+}
 
 // The per-uid ACTION GENERATION (Codex P1 on PR #110): a monotonically increasing
 // token bumped by every OBSERVED BINGO FALL (`dropPendingWins` with fell.bingo —
@@ -178,12 +256,18 @@ function pendingKey(uid: string): string {
 
 function ensurePending(uid: string): StoredPendingFlags {
   const key = pendingKey(uid);
+  restorePending(uid);
   let flags = pendingMoments.get(key);
   if (!flags) {
     flags = { bingo: false, blackout: false, firstBingo: false, firstBingoGeneration: 0 };
     pendingMoments.set(key, flags);
   }
   return flags;
+}
+
+function readPending(uid: string): StoredPendingFlags | undefined {
+  restorePending(uid);
+  return pendingMoments.get(pendingKey(uid));
 }
 
 /**
@@ -223,6 +307,7 @@ export function enqueueWinMoments(params: {
       if (!flags.blackoutDayIndexes.includes(dayIndex)) flags.blackoutDayIndexes.push(dayIndex);
     }
   }
+  persistPending(uid);
 }
 
 /**
@@ -242,6 +327,7 @@ export function enqueueFirstBingoMoment(uid: string, dayIndex?: number): void {
   // The candidate's own Day (#262; Codex P3 on #286 round 2) — a re-enqueue is
   // a NEW candidate (new generation), so it overwrites rather than first-wins.
   flags.firstBingoDayIndex = dayIndex;
+  persistPending(uid);
 }
 
 /**
@@ -252,7 +338,7 @@ export function enqueueFirstBingoMoment(uid: string, dayIndex?: number): void {
  * `clearPendingMoment`.
  */
 export function peekPendingMoments(uid: string): PendingMomentFlags {
-  const flags = pendingMoments.get(pendingKey(uid));
+  const flags = readPending(uid);
   return flags
     ? { bingo: flags.bingo, blackout: flags.blackout, firstBingo: flags.firstBingo }
     : { bingo: false, blackout: false, firstBingo: false };
@@ -267,7 +353,7 @@ export function peekPendingMoments(uid: string): PendingMomentFlags {
  * Player may have switched Days in that window.
  */
 export function pendingBlackoutDayIndexes(uid: string): number[] {
-  return [...(pendingMoments.get(pendingKey(uid))?.blackoutDayIndexes ?? [])];
+  return [...(readPending(uid)?.blackoutDayIndexes ?? [])];
 }
 
 /**
@@ -279,13 +365,13 @@ export function pendingBlackoutDayIndexes(uid: string): number[] {
  * gate while the Player switches Days.
  */
 export function pendingBingoDayIndexes(uid: string): number[] {
-  return [...(pendingMoments.get(pendingKey(uid))?.bingoDayIndexes ?? [])];
+  return [...(readPending(uid)?.bingoDayIndexes ?? [])];
 }
 
 /** The still-pending ceremonial candidate's OWN Day (#262; Codex P3 on #286
  *  round 2) — `undefined` when no candidate is queued or it carried no Day. */
 export function pendingFirstBingoDayIndex(uid: string): number | undefined {
-  return pendingMoments.get(pendingKey(uid))?.firstBingoDayIndex;
+  return readPending(uid)?.firstBingoDayIndex;
 }
 
 /**
@@ -297,7 +383,7 @@ export function pendingFirstBingoDayIndex(uid: string): number | undefined {
  */
 export function removePendingBlackoutDay(uid: string, dayIndex: number): void {
   const key = pendingKey(uid);
-  const flags = pendingMoments.get(key);
+  const flags = readPending(uid);
   if (!flags?.blackoutDayIndexes) return;
   flags.blackoutDayIndexes = flags.blackoutDayIndexes.filter((d) => d !== dayIndex);
   if (flags.blackoutDayIndexes.length === 0) {
@@ -305,6 +391,7 @@ export function removePendingBlackoutDay(uid: string, dayIndex: number): void {
     flags.blackout = false;
     if (!flags.bingo && !flags.firstBingo) pendingMoments.delete(key);
   }
+  persistPending(uid);
 }
 
 /**
@@ -317,7 +404,7 @@ export function removePendingBlackoutDay(uid: string, dayIndex: number): void {
  */
 export function removePendingBingoDay(uid: string, dayIndex: number): void {
   const key = pendingKey(uid);
-  const flags = pendingMoments.get(key);
+  const flags = readPending(uid);
   if (!flags?.bingoDayIndexes) return;
   flags.bingoDayIndexes = flags.bingoDayIndexes.filter((d) => d !== dayIndex);
   if (flags.bingoDayIndexes.length === 0) {
@@ -325,6 +412,7 @@ export function removePendingBingoDay(uid: string, dayIndex: number): void {
     flags.bingo = false;
     if (!flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
   }
+  persistPending(uid);
 }
 
 /**
@@ -337,7 +425,7 @@ export function removePendingBingoDay(uid: string, dayIndex: number): void {
  * § PR #110 hardening.
  */
 export function firstBingoCandidateCurrent(uid: string): boolean {
-  const flags = pendingMoments.get(pendingKey(uid));
+  const flags = readPending(uid);
   if (!flags?.firstBingo) return false;
   return flags.firstBingoGeneration === pendingActionGeneration(uid);
 }
@@ -351,6 +439,7 @@ export function firstBingoCandidateCurrent(uid: string): boolean {
  * the ceremonial enqueue is refused (Codex P1, PR #110).
  */
 export function pendingActionGeneration(uid: string): number {
+  restorePending(uid);
   return pendingGenerations.get(pendingKey(uid)) ?? 0;
 }
 
@@ -384,6 +473,7 @@ export function dropPendingWins(
   fell: { bingo?: boolean; blackout?: boolean; bingoDayIndex?: number; blackoutDayIndex?: number },
 ): void {
   const key = pendingKey(uid);
+  restorePending(uid);
   if (fell.bingo) {
     pendingGenerations.set(key, (pendingGenerations.get(key) ?? 0) + 1);
   }
@@ -433,6 +523,7 @@ export function dropPendingWins(
     }
   }
   if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
+  persistPending(uid);
 }
 
 /**
@@ -444,7 +535,7 @@ export function dropPendingWins(
  */
 export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags): void {
   const key = pendingKey(uid);
-  const flags = pendingMoments.get(key);
+  const flags = readPending(uid);
   if (!flags) return;
   flags[kind] = false;
   if (kind === 'blackout') flags.blackoutDayIndexes = undefined; // fired — nothing left to protect
@@ -456,6 +547,7 @@ export function clearPendingMoment(uid: string, kind: keyof PendingMomentFlags):
   if (kind === 'bingo') flags.bingoDayIndexes = undefined; // fired — nothing left to protect
   if (kind === 'firstBingo') flags.firstBingoDayIndex = undefined;
   if (!flags.bingo && !flags.blackout && !flags.firstBingo) pendingMoments.delete(key);
+  persistPending(uid);
 }
 
 /**
@@ -470,6 +562,26 @@ export function resetPendingMoments(): void {
   pendingMoments.clear();
   pendingGenerations.clear();
   selfBingoWriteGenerations.clear();
+  hydratedPending.clear();
+  const store = pendingStore();
+  if (store) {
+    for (const key of pendingStorageKeys) {
+      try {
+        store.removeItem(key);
+      } catch {
+        // Test/reset support must not fail when storage is unavailable.
+      }
+    }
+  }
+  pendingStorageKeys.clear();
+}
+
+/** Test-only: model a page reload while keeping durable pending entries. */
+export function __resetPendingMomentsMemoryForTests(): void {
+  pendingMoments.clear();
+  pendingGenerations.clear();
+  selfBingoWriteGenerations.clear();
+  hydratedPending.clear();
 }
 
 /**
