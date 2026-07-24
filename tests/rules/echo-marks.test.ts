@@ -181,6 +181,52 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
     await assertFails(batch.commit());
   });
 
+  it('a cells-UNCHANGED metadata merge on a legacy-ARRAY straggler is allowed; a cells-changing patch on it stays denied (4b round-9 on #458)', async () => {
+    // The canonical-25 gate binds writes that create a board or CHANGE its
+    // cells. A not-yet-migrated straggler (array cells — the migration-gap
+    // class the mop-up converges) must stay metadata-writable, while any
+    // cells write on it is still denied (a patch would replace the whole
+    // array field with a 1-key map — the 24-cell wipe the gate exists for).
+    const legacy = { ...board(ALICE, 3, 333), cells: Object.values(cells()) };
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), `events/${EVENT}`), {
+        name: 'Cruise',
+        status: 'active',
+        admins: [],
+        days: [
+          { index: 0, unlockAt: PAST(), pool: 'main', tutorial: false },
+          { index: 1, unlockAt: PAST(), pool: 'main', tutorial: false },
+          { index: 2, unlockAt: PAST(), pool: 'main', tutorial: false },
+          { index: 3, unlockAt: PAST(), pool: 'main', tutorial: false },
+        ],
+      });
+      await setDoc(doc(ctx.firestore(), dayBoardPath(3, ALICE)), legacy);
+    });
+    const d = db(ALICE);
+    await assertSucceeds(setDoc(doc(d, dayBoardPath(3, ALICE)), { lastOpenedAt: NOW() }, { merge: true }));
+    await assertFails(
+      setDoc(
+        doc(d, dayBoardPath(3, ALICE)),
+        { cells: cellsPatchOf({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 333 },
+        { mergeFields: [new FieldPath('cells', '5'), 'markSeed'] },
+      ),
+    );
+  });
+
+  it('a CREATE without canonical cells is still denied — the metadata exemption never covers creates (4b round-9 on #458)', async () => {
+    const d = db('bob');
+    await assertFails(setDoc(doc(d, dayBoardPath(1, 'bob')), { uid: 'bob', dayIndex: 1, seed: 7, createdAt: NOW() }));
+    await assertFails(
+      setDoc(doc(d, dayBoardPath(1, 'bob')), {
+        uid: 'bob',
+        dayIndex: 1,
+        seed: 7,
+        createdAt: NOW(),
+        cells: cellsPatchOf({ 5: { marked: false } }), // partial map — not canonical
+      }),
+    );
+  });
+
   it('a mergeFields cell write passes the rules AND replaces the cell WHOLESALE — omission-removed fields (echo) do not survive (4b round-8 on #458)', async () => {
     // The client writes patches as set(..., { mergeFields: [FieldPath('cells', i), ...] })
     // precisely because { merge: true } deep-merges nested maps: a transform

@@ -538,15 +538,22 @@ service cloud.firestore {
           allow create, update: if (isOwner(uid) || isAdmin(eventId))
             && isCanonicalDay(dayIndex)
             && request.time.toMillis() >= get(/databases/$(database)/documents/events/$(eventId)).data.days[int(dayIndex)].unlockAt
-            // The #457 cells-map contract: the RESULTING doc's cells must be
-            // a MAP (keyed by canonical decimal index). A Mark is a per-cell
-            // `{ merge: true }` patch that merges into the map — which is what
-            // makes concurrent devices' writes to DIFFERENT cells commute
+            // The #457 cells-map contract: any write that CREATES a board or
+            // CHANGES its cells must leave a canonical MAP (25 decimal keys).
+            // A Mark is a per-cell field-masked patch into the map — which is
+            // what makes concurrent devices' writes to DIFFERENT cells commute
             // instead of clobbering (the class the retired markVersion counter
             // could not close). A legacy full-array write (a pre-migration
-            // bundle) makes the resulting field an array → denied. Cheap
-            // (single type check), so it runs unconditionally.
-            && canonicalCellsMap(request.resource.data.cells)
+            // bundle) and a patch landing on a still-array straggler (post-
+            // image: a 1-key map) are both denied. A cells-UNCHANGED metadata
+            // merge is exempt (4b round 9 on #458) so a not-yet-migrated
+            // straggler row stays metadata-writable — its next cells write is
+            // still gated, and the migration mop-up converges it. The common
+            // Mark short-circuits on the cheap canonical check without ever
+            // running the diff; `resource != null` keeps creates OUT of the
+            // exemption (boardCellsChanged() is vacuously false on create).
+            && (canonicalCellsMap(request.resource.data.cells)
+                || (resource != null && !boardCellsChanged()))
             // Evaluation-budget ordering (the emulator caps a request at 1000
             // expressions, and `boardCellsChanged()`'s full-document diff is
             // the expensive term): the cheap guard runs FIRST so the common
