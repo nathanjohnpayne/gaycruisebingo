@@ -389,10 +389,13 @@ describe('setMark (folds onto the freshest cached Board, not a stale cells prop)
       boardSeed: 42,
     });
 
-    const boardWrite = setSpy.mock.calls[0][1] as { cells: Cell[]; markSeed?: number };
+    const boardWrite = setSpy.mock.calls[0][1] as { cells: Record<string, Cell>; markSeed?: number };
     expect(boardWrite.markSeed).toBe(99);
-    expect(boardWrite.cells[5].marked).toBe(true); // survived, from the cache
-    expect(boardWrite.cells[6].marked).toBe(true); // this Mark
+    // #457 per-cell merge: the write PATCHES only this Mark's cell — the
+    // cached cell 5 survives by never being written at all, which is the
+    // structural form of the no-clobber guarantee this test pins.
+    expect(boardWrite.cells['6'].marked).toBe(true); // this Mark
+    expect('5' in boardWrite.cells).toBe(false); // untouched → never clobbered
     const playerWrite = setSpy.mock.calls[1][1] as { squaresMarked: number };
     expect(playerWrite.squaresMarked).toBe(2); // both count, not just this call's
   });
@@ -411,11 +414,18 @@ describe('setMark (folds onto the freshest cached Board, not a stale cells prop)
         const boardWrites = setSpy.mock.calls.filter((c) =>
           (c[0] as { path: string }).path.endsWith('/boards/u1'),
         );
-        const last = boardWrites[boardWrites.length - 1];
-        if (!last) return Promise.reject(new Error('not cached'));
+        if (boardWrites.length === 0) return Promise.reject(new Error('not cached'));
+        // Latency compensation under the #457 map schema: the cache holds the
+        // MERGED doc — the dealt board with every patch written so far merged
+        // in, exactly what Firestore's local mutation queue would show.
+        const merged = new Map(dealt().map((c) => [String(c.index), c] as const));
+        for (const write of boardWrites) {
+          const patch = (write[1] as { cells: Record<string, Cell> }).cells;
+          for (const [key, value] of Object.entries(patch)) merged.set(key, value);
+        }
         return Promise.resolve({
           exists: () => true,
-          data: () => ({ cells: (last[1] as { cells: Cell[] }).cells }),
+          data: () => ({ cells: Object.fromEntries(merged) }),
         });
       }
       return Promise.reject(new Error('not cached'));
@@ -434,9 +444,12 @@ describe('setMark (folds onto the freshest cached Board, not a stale cells prop)
       (c[0] as { path: string }).path.endsWith('/boards/u1'),
     );
     expect(boardWrites).toHaveLength(2);
-    const finalBoard = boardWrites[1][1] as { cells: Cell[] };
-    expect(finalBoard.cells[3].marked).toBe(true); // first Mark survived into the second write
-    expect(finalBoard.cells[7].marked).toBe(true);
+    // #457 per-cell merge: each write patches ONLY its own cell; the first
+    // Mark survives the second write structurally (it is not in its patch).
+    expect((boardWrites[0][1] as { cells: Record<string, Cell> }).cells['3'].marked).toBe(true);
+    const finalBoard = boardWrites[1][1] as { cells: Record<string, Cell> };
+    expect(finalBoard.cells['7'].marked).toBe(true);
+    expect('3' in finalBoard.cells).toBe(false); // untouched → never clobbered
     const playerWrites = setSpy.mock.calls.filter((c) =>
       (c[0] as { path: string }).path.endsWith('/players/u1'),
     );

@@ -274,9 +274,11 @@ describe('attachProof — posts an active Proof to the Feed and marks the cell (
       proof: { type: 'text', text: 'both' },
     });
 
-    const board = setPayload('/boards/') as { cells: Cell[] };
-    expect(board.cells[3].marked).toBe(true); // survived, from the live read
-    expect(board.cells[7].marked).toBe(true); // this proof's mark
+    const board = setPayload('/boards/') as { cells: Record<string, Cell> };
+    // #457 per-cell merge: only the proofed cell rides the write; the live
+    // concurrent mark at 3 survives by never being written.
+    expect(board.cells['7'].marked).toBe(true); // this proof's mark
+    expect('3' in board.cells).toBe(false); // untouched → never clobbered
     expect(setPayload('/players/')).toMatchObject({ squaresMarked: 2 });
   });
 });

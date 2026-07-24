@@ -1,3 +1,4 @@
+import { cellsFromData, cellsToMap } from '../game/cells';
 import type {
   FirestoreDataConverter,
   QueryDocumentSnapshot,
@@ -115,12 +116,21 @@ export const eventConverter: FirestoreDataConverter<EventDoc> = {
 // before the day-scoped path #204 exists, one Board per Player per Event) reads
 // as Day 0 rather than `undefined`, which day-aware consumers would branch on.
 // The write side stamps `dayIndex: 0` too; a real day-scoped write emits its own.
+// `cells` normalizes through the #457 wire boundary (src/game/cells.ts): the
+// stored shape is a MAP keyed by cell index since the cells-map migration —
+// with the legacy array still readable (pre-migration caches/docs) — while the
+// app-side contract stays `Cell[]`. Writes emit the map, so a converter-routed
+// full-board write can never reintroduce the array shape the rules now reject.
 export const boardConverter: FirestoreDataConverter<BoardDoc> = {
-  toFirestore: (data) => data as DocumentData,
+  toFirestore: (data) => ({
+    ...(data as DocumentData),
+    ...(Array.isArray((data as BoardDoc).cells) ? { cells: cellsToMap((data as BoardDoc).cells) } : {}),
+  }),
   fromFirestore: (snap: QueryDocumentSnapshot) => {
-    const data = snap.data() as BoardDoc;
+    const data = snap.data() as Omit<BoardDoc, 'cells'> & { cells: unknown };
     return {
       ...data,
+      cells: cellsFromData(data.cells),
       dayIndex: typeof data.dayIndex === 'number' ? data.dayIndex : 0,
     };
   },

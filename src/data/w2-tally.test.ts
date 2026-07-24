@@ -205,7 +205,9 @@ describe('rejectClaim / confirmClaim — the admin resolve keeps the marker symm
 
     await rejectClaim(claim(), 'admin-1');
 
-    expect(boardWrite()!.cells[5].marked).toBe(true); // left to the Mark that owns it
+    // #457 per-cell merge: a no-op transform writes an EMPTY cells patch —
+    // the standing Mark survives by never being written at all.
+    expect(Object.keys(boardWrite()!.cells)).toHaveLength(0);
     expect(txDelete).not.toHaveBeenCalled();
   });
 

@@ -26,6 +26,7 @@ import {
 } from 'firebase/firestore';
 import { setMark } from '../../src/data/api';
 import type { Cell } from '../../src/types';
+import { cellsToMap, cellsFromData } from '../../src/game/cells';
 
 // ------------------------------------------------------ specs/echo-marks.md ---
 // The OFFLINE half of Echo Marks (ADR 0006): a Mark made in a ship-wifi dead
@@ -156,8 +157,11 @@ describe('offline Echo Marks via setMark (specs/echo-marks.md + ADR 0006)', () =
     //    offline echo is an UPDATE to existing day-scoped docs, the production
     //    sequence (and the rules' unlock gate needs the seeded schedule above).
     const day0 = dayCard(tab.uid, 0, 100, MARK_INDEX);
-    await setDoc(doc(tab.db, day0Path), day0);
-    await setDoc(doc(tab.db, day1Path), dayCard(tab.uid, 1, 111, 8));
+    // #457 wire shape: seeds write the cells MAP; the app-side array stays in
+    // `day0.cells` for the setMark fold under test.
+    await setDoc(doc(tab.db, day0Path), { ...day0, cells: cellsToMap(day0.cells) });
+    const day1 = dayCard(tab.uid, 1, 111, 8);
+    await setDoc(doc(tab.db, day1Path), { ...day1, cells: cellsToMap(day1.cells) });
     await setDoc(doc(tab.db, playerPath), {
       uid: tab.uid,
       displayName: 'Echo Tester',
@@ -196,7 +200,7 @@ describe('offline Echo Marks via setMark (specs/echo-marks.md + ADR 0006)', () =
     // onSnapshot wait — the node/jsdom SDK build does not reliably deliver
     // listener snapshots while the network is disabled.)
     const localDay1 = await getDocFromCache(doc(tab.db, day1Path));
-    const localEcho = (localDay1.data() as { cells: Cell[] }).cells.find((c) => c.index === 8)!;
+    const localEcho = cellsFromData((localDay1.data() as { cells?: unknown }).cells).find((c) => c.index === 8)!;
     expect(localEcho).toMatchObject({ itemId: SHARED, marked: true, status: 'confirmed', echo: true });
 
     // 3. Kill the tab BEFORE any sync (terminate + deleteApp, so the "reload"
@@ -206,7 +210,7 @@ describe('offline Echo Marks via setMark (specs/echo-marks.md + ADR 0006)', () =
     await deleteApp(tab.app);
     const observer = await makeObserver();
     const serverDay1 = await getDocFromServer(doc(observer.db, day1Path));
-    expect(((serverDay1.data() as { cells?: Cell[] }).cells ?? []).some((c) => c.echo === true)).toBe(false);
+    expect(cellsFromData((serverDay1.data() as { cells?: unknown }).cells).some((c) => c.echo === true)).toBe(false);
 
     // 4. "Reload": the same app name re-opens the same IndexedDB store, same
     //    uid recovers the same mutation queue, which drains online — Mark,
@@ -216,13 +220,13 @@ describe('offline Echo Marks via setMark (specs/echo-marks.md + ADR 0006)', () =
     await waitForPendingWrites(reloaded.db);
 
     const drainedDay1 = await getDocFromServer(doc(observer.db, day1Path));
-    const echoed = (drainedDay1.data() as { cells: Cell[] }).cells.find((c) => c.index === 8)!;
+    const echoed = cellsFromData((drainedDay1.data() as { cells?: unknown }).cells).find((c) => c.index === 8)!;
     expect(echoed).toMatchObject({ itemId: SHARED, marked: true, status: 'confirmed', echo: true });
     // The echoed board write carried ITS OWN markSeed (111) — the rules
     // accepted it, and the stored doc proves it.
     expect((drainedDay1.data() as { markSeed?: number }).markSeed).toBe(111);
     const drainedDay0 = await getDocFromServer(doc(observer.db, day0Path));
-    expect((drainedDay0.data() as { cells: Cell[] }).cells[MARK_INDEX]).toMatchObject({
+    expect(cellsFromData((drainedDay0.data() as { cells?: unknown }).cells)[MARK_INDEX]).toMatchObject({
       marked: true,
       status: 'confirmed',
     });

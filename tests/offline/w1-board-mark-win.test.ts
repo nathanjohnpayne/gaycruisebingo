@@ -35,6 +35,7 @@ import {
 import { setMark } from '../../src/data/api';
 import type { BoardDoc, Cell, PlayerDoc } from '../../src/types';
 import { seedEventDoc } from './seedEvent';
+import { cellsToMap, cellsFromData } from '../../src/game/cells';
 
 // ---------------------------------------------------------- ADR 0006 + 0002 ---
 // The MARK half of the offline proof. Where `w0-offline-persistence` proves the
@@ -230,7 +231,7 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
     // 0. Deal the Board + Player ONLINE (the first-ever join needs connectivity,
     //    ADR 0006) and let both sync, so the offline Mark is an UPDATE to
     //    existing docs — the production sequence.
-    await setDoc(boardRef, unmarkedBoard(tab.uid));
+    await setDoc(boardRef, { ...unmarkedBoard(tab.uid), cells: cellsToMap(unmarkedBoard(tab.uid).cells) });
     await setDoc(doc(tab.db, playerPath), freshPlayer(tab.uid));
     await waitForPendingWrites(tab.db);
 
@@ -260,7 +261,7 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
       (snap) =>
         snap.exists() &&
         snap.metadata.hasPendingWrites &&
-        (snap.data() as BoardDoc).cells[MARKED_CELL].marked === true,
+        cellsFromData(((snap.data() as unknown) as { cells?: unknown }).cells)[MARKED_CELL]?.marked === true,
     );
     expect(queued.metadata.fromCache).toBe(true);
 
@@ -274,7 +275,7 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
     const observer = await makeObserver();
     const beforeRecovery = await getDocFromServer(doc(observer.db, boardPath));
     expect(beforeRecovery.exists()).toBe(true);
-    expect((beforeRecovery.data() as BoardDoc).cells[MARKED_CELL].marked).toBe(false);
+    expect(cellsFromData(((beforeRecovery.data() as unknown) as { cells?: unknown }).cells)[MARKED_CELL].marked).toBe(false);
 
     // 6. Bring the "reloaded" tab up: same app name -> same IndexedDB store,
     //    same uid -> same recovered mutation queue, which drains online.
@@ -285,10 +286,10 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
     //    denormalized Player stats followed, server-side (fresh, not cached).
     const syncedBoard = await getDocFromServer(doc(reloaded.db, boardPath));
     expect(syncedBoard.metadata.hasPendingWrites).toBe(false);
-    expect((syncedBoard.data() as BoardDoc).cells[MARKED_CELL].marked).toBe(true);
+    expect(cellsFromData(((syncedBoard.data() as unknown) as { cells?: unknown }).cells)[MARKED_CELL].marked).toBe(true);
 
     const observedBoard = await getDocFromServer(doc(observer.db, boardPath));
-    expect((observedBoard.data() as BoardDoc).cells[MARKED_CELL].marked).toBe(true);
+    expect(cellsFromData(((observedBoard.data() as unknown) as { cells?: unknown }).cells)[MARKED_CELL].marked).toBe(true);
     const observedPlayer = await getDocFromServer(doc(observer.db, playerPath));
     expect((observedPlayer.data() as PlayerDoc).squaresMarked).toBe(1);
     expect((observedPlayer.data() as PlayerDoc).bingoCount).toBe(0);
@@ -316,7 +317,7 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
     const playerPath = `events/${EVENT_ID}/players/${tab.uid}`;
     const boardRef = doc(tab.db, boardPath);
 
-    await setDoc(boardRef, unmarkedBoard(tab.uid));
+    await setDoc(boardRef, { ...unmarkedBoard(tab.uid), cells: cellsToMap(unmarkedBoard(tab.uid).cells) });
     await setDoc(doc(tab.db, playerPath), freshPlayer(tab.uid));
     await waitForPendingWrites(tab.db);
 
@@ -357,8 +358,8 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
     await waitForPendingWrites(tab.db);
 
     const synced = await getDocFromServer(boardRef);
-    expect((synced.data() as BoardDoc).cells[3].marked).toBe(true);
-    expect((synced.data() as BoardDoc).cells[9].marked).toBe(true);
+    expect(cellsFromData(((synced.data() as unknown) as { cells?: unknown }).cells)[3].marked).toBe(true);
+    expect(cellsFromData(((synced.data() as unknown) as { cells?: unknown }).cells)[9].marked).toBe(true);
     const player = await getDocFromServer(doc(tab.db, playerPath));
     expect((player.data() as PlayerDoc).squaresMarked).toBe(2);
   });
@@ -377,7 +378,7 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
     const playerPath = `events/${EVENT_ID}/players/${tab.uid}`;
     const boardRef = doc(tab.db, boardPath);
 
-    await setDoc(boardRef, unmarkedBoard(tab.uid));
+    await setDoc(boardRef, { ...unmarkedBoard(tab.uid), cells: cellsToMap(unmarkedBoard(tab.uid).cells) });
     await setDoc(doc(tab.db, playerPath), freshPlayer(tab.uid));
     await waitForPendingWrites(tab.db);
 
@@ -404,8 +405,8 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
     await waitForPendingWrites(tab.db);
 
     const synced = await getDocFromServer(boardRef);
-    expect((synced.data() as BoardDoc).cells[5].marked).toBe(true);
-    expect((synced.data() as BoardDoc).cells[11].marked).toBe(true);
+    expect(cellsFromData(((synced.data() as unknown) as { cells?: unknown }).cells)[5].marked).toBe(true);
+    expect(cellsFromData(((synced.data() as unknown) as { cells?: unknown }).cells)[11].marked).toBe(true);
     const player = await getDocFromServer(doc(tab.db, playerPath));
     expect((player.data() as PlayerDoc).squaresMarked).toBe(2);
   });

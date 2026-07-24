@@ -45,6 +45,7 @@ import {
 import { setMark } from '../../src/data/api';
 import type { BoardDoc, Cell, PlayerDoc, TallyEntry } from '../../src/types';
 import { seedEventDoc } from './seedEvent';
+import { cellsToMap, cellsFromData } from '../../src/game/cells';
 
 const EVENT_ID = 'med-2026'; // must match src/firebase.ts default (setMark reads it)
 const PROJECT_ID = 'demo-w2-tally'; // distinct project → isolated data
@@ -110,7 +111,7 @@ function unmarkedBoard(uid: string): BoardDoc {
     marked: index === 12,
     markedAt: null,
   }));
-  return { uid, dayIndex: 0, seed: 42, createdAt: Date.now(), cells };
+  return { uid, dayIndex: 0, seed: 42, createdAt: Date.now(), cells: cellsToMap(cells) };
 }
 
 function freshPlayer(uid: string): PlayerDoc {

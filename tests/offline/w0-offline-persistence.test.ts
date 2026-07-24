@@ -24,6 +24,7 @@ import {
 } from 'firebase/firestore';
 import type { BoardDoc, Cell } from '../../src/types';
 import { seedEventDoc } from './seedEvent';
+import { cellsToMap, cellsFromData } from '../../src/game/cells';
 
 // ---------------------------------------------------------------- ADR 0006 ---
 // Offline persistence, the data half — the integration proof. Against the
@@ -140,7 +141,8 @@ function boardWithMarkedSquare(uid: string, marked: number): BoardDoc {
     marked: index === marked,
     markedAt: index === marked ? Date.now() : null,
   }));
-  return { uid, dayIndex: 0, seed: 42, createdAt: Date.now(), cells };
+  // #457 wire shape: the seed writes the cells MAP.
+  return { uid, dayIndex: 0, seed: 42, createdAt: Date.now(), cells: cellsToMap(cells) };
 }
 
 // Resolve on the first snapshot matching `predicate`, then unsubscribe. Used to
@@ -203,7 +205,7 @@ describe('w0 offline persistence (ADR 0006)', () => {
       ref,
       (snap) => snap.exists() && snap.metadata.hasPendingWrites,
     );
-    expect((queued.data() as BoardDoc).cells[MARKED_CELL].marked).toBe(true);
+    expect(cellsFromData(((queued.data() as unknown) as { cells?: unknown }).cells)[MARKED_CELL].marked).toBe(true);
     expect(queued.metadata.fromCache).toBe(true);
 
     // 4. The "reload": kill the tab WHILE STILL OFFLINE, before any sync. The
@@ -231,12 +233,12 @@ describe('w0 offline persistence (ADR 0006)', () => {
     expect(synced.exists()).toBe(true);
     expect(synced.metadata.fromCache).toBe(false);
     expect(synced.metadata.hasPendingWrites).toBe(false);
-    expect((synced.data() as BoardDoc).cells[MARKED_CELL].marked).toBe(true);
+    expect(cellsFromData(((synced.data() as unknown) as { cells?: unknown }).cells)[MARKED_CELL].marked).toBe(true);
 
     // 8. And the independent observer sees it too — server-side, not an
     //    artifact of the reloaded tab's own cache.
     const observed = await getDocFromServer(doc(observer.db, boardPath));
     expect(observed.exists()).toBe(true);
-    expect((observed.data() as BoardDoc).cells[MARKED_CELL].marked).toBe(true);
+    expect(cellsFromData(((observed.data() as unknown) as { cells?: unknown }).cells)[MARKED_CELL].marked).toBe(true);
   });
 });

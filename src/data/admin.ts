@@ -2,6 +2,7 @@ import { addDoc, collection, doc, getDoc, updateDoc, deleteDoc, runTransaction, 
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout, foldDayStat, foldEchoStats, applyEchoes, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats, type EchoBucket, type StatWrite } from '../game/logic';
+import { cellsPatch, changedCells, cellsFromData } from '../game/cells';
 import { honorDisplayName, markerDisplayName } from './attribution';
 import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef, PlayerDoc } from '../types';
@@ -389,8 +390,8 @@ async function resolve(
     // echo set from committed state (specs/echo-marks.md).
     const echoSiblingRefs = echoSiblingDays.map((i) => dayBoard(i, c.uid));
     const echoSiblingSnaps = await Promise.all(echoSiblingRefs.map((ref) => tx.get(ref)));
-    const boardData = bSnap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown };
-    const cells = boardData.cells ?? [];
+    const boardData = bSnap.data() as { cells?: unknown; seed?: number };
+    const cells = cellsFromData(boardData.cells);
     const next = transform(cells);
     const bingoCount = completedLines(next).length;
     const bingoTransition = completedLines(cells).length === 0 && bingoCount > 0;
@@ -441,15 +442,16 @@ async function resolve(
       const achieved = new Set([echoItemId]);
       echoSiblingSnaps.forEach((snap, idx) => {
         if (!snap.exists()) return;
-        const sib = snap.data() as { cells?: Cell[]; seed?: number; markVersion?: unknown };
-        const res = applyEchoes(sib.cells ?? [], achieved, echoNow);
+        const sib = snap.data() as { cells?: unknown; seed?: number };
+        const sibCells = cellsFromData(sib.cells);
+        const res = applyEchoes(sibCells, achieved, echoNow);
         if (!res.changed) return;
         echoWrites.push({
           ref: echoSiblingRefs[idx],
           payload: {
-            cells: res.cells,
+            // Per-cell merge (#457): only the newly echoed cells ride the write.
+            cells: cellsPatch(changedCells(sibCells, res.cells)),
             ...(typeof sib.seed === 'number' ? { markSeed: sib.seed } : {}),
-            markVersion: nextMarkVersion(sib),
           },
         });
         echoBuckets.push({
@@ -472,9 +474,9 @@ async function resolve(
     tx.set(
       boardRef,
       {
-        cells: next,
+        // Per-cell merge (#457): only the resolved claim's cell rides the write.
+        cells: cellsPatch(changedCells(cells, next)),
         ...(typeof boardData.seed === 'number' ? { markSeed: boardData.seed } : {}),
-        ...(daily ? { markVersion: nextMarkVersion(boardData) } : {}),
       },
       { merge: true },
     );
@@ -497,7 +499,7 @@ async function resolve(
         pSnap.exists() &&
         (pSnap.data() as Partial<PlayerDoc>).blackout === true &&
         echoSiblingSnaps.some(
-          (snap) => snap.exists() && isBlackout((snap.data() as { cells?: Cell[] }).cells ?? []),
+          (snap) => snap.exists() && isBlackout(cellsFromData((snap.data() as { cells?: unknown }).cells)),
         );
       const playerWrite = foldDayStat({
         priorDayStats,
@@ -568,7 +570,7 @@ async function resolve(
       const siblingStillCarriesMarker = echoSiblingSnaps.some(
         (snap) =>
           snap.exists() &&
-          ((snap.data() as { cells?: Cell[] }).cells ?? []).some(
+          cellsFromData((snap.data() as { cells?: unknown }).cells).some(
             (cell) => !cell.free && cell.marked && cell.itemId === before.itemId,
           ),
       );
