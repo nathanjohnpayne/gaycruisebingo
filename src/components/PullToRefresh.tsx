@@ -167,13 +167,18 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       setPull(p);
     };
 
-    // Shared teardown for both release paths. `commit` distinguishes a real
-    // RELEASE (may refresh) from a CANCELLATION (never refreshes).
-    const finishTouch = (commit: boolean) => {
+    // Reset the GESTURE without touching the listener. Split out of
+    // finishTouch (#452 self-review): the multi-touch abort below fires while
+    // the first finger is still down, so detaching there would be exactly the
+    // mid-gesture scrolling-tree mutation this component now avoids — the same
+    // hole as the old direction-gate teardown, reached by a different path.
+    // The listener's teardown boundary is the touch ENDING, and only that.
+    // `commit` distinguishes a real RELEASE (may refresh) from a CANCELLATION
+    // (never refreshes).
+    const resetGesture = (commit: boolean) => {
       const wasEngaged = engaged.current;
       start.current = null;
       engaged.current = false;
-      detachMove();
       if (!wasEngaged || phaseRef.current === 'refreshing') return;
       // The threshold decision reads pullRef, and the timer is scheduled
       // HERE in the event handler — never inside a state updater (round 2:
@@ -194,6 +199,13 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       setPull(0);
     };
 
+    // The touch ENDING is the only teardown boundary: reset the gesture, then
+    // drop the listener that touch armed.
+    const finishTouch = (commit: boolean) => {
+      resetGesture(commit);
+      detachMove();
+    };
+
     const onTouchStart = (e: TouchEvent) => {
       if (phaseRef.current === 'refreshing') return;
       if (e.touches.length !== 1) {
@@ -201,7 +213,9 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
         // #432 round 2): multi-touch is pinch/zoom territory, and without
         // the abort, lifting EITHER finger later would emit a touchend that
         // committed the still-armed pull while the other finger is down.
-        if (start.current) finishTouch(false);
+        // `resetGesture`, not `finishTouch` — the first finger is still down,
+        // so the listener must survive to its own touchend (#452).
+        if (start.current) resetGesture(false);
         return;
       }
       if (!atTop()) return;

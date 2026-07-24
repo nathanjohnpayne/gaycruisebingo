@@ -319,6 +319,33 @@ describe('PullToRefresh — gesture contract', () => {
     expect(stale).not.toHaveBeenCalled();
   });
 
+  it('the multi-touch abort cancels the pull WITHOUT detaching mid-gesture (#452 self-review)', () => {
+    // The second finger lands while the first is still down, so this abort is
+    // mid-gesture by definition. It must reset the pull without touching the
+    // listener — detaching here would be the same scrolling-tree mutation #451
+    // removed from the direction gate, reached by a different path.
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+    render(<PullToRefresh onRefresh={vi.fn()} />);
+    fireTouch('touchstart', 100, 10);
+    fireTouch('touchmove', 100, 10 + PTR_SLOP_PX + 4);
+    fireTouch('touchmove', 100, 10 + 220); // engaged, past threshold
+    const twoFingers = new Event('touchstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(twoFingers, 'touches', {
+      value: [{ clientX: 100, clientY: 230 }, { clientX: 140, clientY: 230 }],
+    });
+    act(() => {
+      window.dispatchEvent(twoFingers);
+    });
+    // Pull aborted...
+    expect(document.querySelector('.ptr')!.className).not.toContain('ptr-pulling');
+    // ...but the listener is still there, because the touch has not ended.
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(0);
+    // The touch ending is what drops it.
+    fireTouch('touchend', 100, 230);
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(1);
+    removeSpy.mockRestore();
+  });
+
   it('a disarmed gesture never preventDefaults again, however it continues (#451)', () => {
     // The listener outliving the direction gate is only safe if a disarmed
     // touch is genuinely inert — otherwise it would start swallowing the
