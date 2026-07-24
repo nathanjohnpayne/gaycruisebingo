@@ -186,7 +186,7 @@
     line-height:1.1;word-break:break-word;overflow:hidden}
   .shc .sq.on{background:linear-gradient(145deg,var(--primary),var(--secondary));border-color:transparent;
     color:var(--on-gradient)}
-  .shc .sq.line{box-shadow:0 0 9px var(--primary);border:1.5px solid var(--ink)}
+  .shc .sq.line{box-shadow:0 0 4px var(--primary);border:1.5px solid var(--ink)}
   .shc .sq.freec{background:color-mix(in srgb,var(--accent) 32%,var(--cell));border-color:var(--accent);
     color:var(--ink)}
   .shc .foot{margin-top:auto;font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
@@ -200,6 +200,16 @@
   .shc .pin{font-size:9px;color:var(--accent)}
   .shc .lrow{display:flex;gap:7px;width:210px;font-size:8.5px;color:var(--dim);padding:1px 4px}
   .shc .lrow b{color:var(--ink);font-weight:600}
+  /* final-standings card (issue #449): honoree blocks + daily-honor rows */
+  .shc .big.sm{font-size:34px}
+  .shc .hrole{font-size:8px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin-top:8px}
+  .shc .hname{font-family:'Bebas Neue','Arial Narrow',sans-serif;font-size:22px;line-height:1;color:var(--accent)}
+  .shc .hstat{font-size:9px;color:var(--ink)}
+  .shc .htitle{font-size:7.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin-top:9px}
+  .shc .hrows{display:flex;flex-direction:column;gap:2.5px;width:230px;margin:4px 0 2px}
+  .shc .hrow{display:flex;gap:7px;font-size:8px;padding:0 4px}
+  .shc .hrow .hd{color:var(--dim);white-space:nowrap}
+  .shc .hrow .hn{margin-left:auto;color:var(--ink);font-weight:600}
 
   /* admin Messages / Notices (admin-messages ticket): compose fields + the
      player-facing pinned Notice card at the top of the Feed */
@@ -979,7 +989,7 @@
 </div>
 
 <h2>Share Cards—text-message-first redesign</h2>
-<p class="sub">Replaces the current data-dense 600×750 cards (25 prompt-text cells, small title). In an iMessage bubble the image shows ~300px wide, so the word and the name ARE the picture; the winning line is lit; one stat line carries the brag. Refined by issue #444: the TURNED-OVER squares carry their prompt text again (--on-gradient over the gradient fill, --ink on the free centre) so the card doubles as receipts on pinch-to-zoom, while unmarked squares stay blank shape; the leaderboard runs to the top ten (podium + seven compact rows, eight with an appended ★ pin). Same 600×750 canvas, same on-device html-to-image render, same theme tokens — only the composition changes. Drawn at half scale in three day themes to prove theming holds.</p>
+<p class="sub">Replaces the current data-dense 600×750 cards (25 prompt-text cells, small title). In an iMessage bubble the image shows ~300px wide, so the word and the name ARE the picture; the winning line is lit; one stat line carries the brag. Refined by issue #444: the TURNED-OVER squares carry their prompt text again (--on-gradient over the gradient fill, --ink on the free centre) so the card doubles as receipts on pinch-to-zoom, while unmarked squares stay blank shape; the leaderboard runs to the top ten (podium + seven compact rows, eight with an appended ★ pin). Issue #449 adds the fourth frame — the FINAL STANDINGS card, the frozen farewell podium (champion, First to BINGO, ten daily honors) shared from a button at the bottom of the podium itself — and softens the winning-line glow (a column win used to merge five glows into a solid bar) with hyphenate-first tile wrapping. Same 600×750 canvas, same on-device html-to-image render, same theme tokens — only the composition changes. Drawn at half scale in the day themes to prove theming holds.</p>
 <div class="frames">
 
   <div class="unit" id="frame-share-bingo">
@@ -1038,6 +1048,34 @@
       <div class="foot">Gay Cruise Bingo 🚢</div>
     </div>
     <p class="cap"><b>Leaderboard—podium first, rows second</b>Top three as a podium with rank baked into the bars and the ★ First-BINGO pin above the leader; ranks 4–10 as compact rows (issue #444 raised the cap from five—five left the frame bare); "Through Day N" dates the snapshot so stale screenshots read as stale. Caps at ten players, eleven only when the ★ pin holder sits outside the top ten and is appended so the honor never drops off the card.</p>
+  </div>
+
+  <div class="unit" id="frame-share-farewell">
+    <div class="shc" data-theme="so-long-farewell">
+      <div class="ev">Gay Cruise Bingo · Day 10 · Barcelona</div>
+      <div class="big sm">FINAL STANDINGS</div>
+      <div class="hrole">🏆 Cruise champion</div>
+      <div class="hname">Zacaria Arab</div>
+      <div class="hstat">16 bingos · 124 squares</div>
+      <div class="hrole">👑 First to BINGO</div>
+      <div class="hname">Turntilla</div>
+      <div class="htitle">Daily honors</div>
+      <div class="hrows">
+        <div class="hrow"><span class="hd">Day 1 · Trieste 🇮🇹</span><span class="hn">Andrew Levad</span></div>
+        <div class="hrow"><span class="hd">Day 2 · Split 🇭🇷</span><span class="hn">Logan Murdock</span></div>
+        <div class="hrow"><span class="hd">Day 3 · Sea Day 🌊</span><span class="hn">Ido Marcus</span></div>
+        <div class="hrow"><span class="hd">Day 4 · Valletta 🇲🇹</span><span class="hn">Turntilla</span></div>
+        <div class="hrow"><span class="hd">Day 5 · Palermo 🇮🇹</span><span class="hn">Nathan Payne</span></div>
+        <div class="hrow"><span class="hd">Day 6 · Naples 🇮🇹</span><span class="hn">Logan Murdock</span></div>
+        <div class="hrow"><span class="hd">Day 7 · Rome 🇮🇹</span><span class="hn">Nathan Payne</span></div>
+        <div class="hrow"><span class="hd">Day 8 · Villefranche 🇫🇷</span><span class="hn">Turntilla</span></div>
+        <div class="hrow"><span class="hd">Day 9 · Marseille 🇫🇷</span><span class="hn">Zacaria Arab</span></div>
+        <div class="hrow"><span class="hd">Day 10 · Barcelona 🇪🇸</span><span class="hn">Nathan Payne</span></div>
+      </div>
+      <div class="stat">Final standings · 10 days</div>
+      <div class="foot">Gay Cruise Bingo 🚢</div>
+    </div>
+    <p class="cap"><b>Final standings—the podium, portable (issue #449)</b>The frozen farewell podium as a card: champion and cruise-wide First to BINGO as labeled honoree blocks, the ten daily honors as day-vs-name rows, "Final standings · N days" dating it as the last word. Shared from a full-width "Share final standings" button at the bottom of the podium itself—the ceremony ends on the thing everyone wants to do with it. Names clamp to one line; honor names ellipsize before day labels give way.</p>
   </div>
 
 </div>

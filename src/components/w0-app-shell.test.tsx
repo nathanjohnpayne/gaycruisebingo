@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom';
@@ -103,5 +104,131 @@ describe('route table (mirrors App.tsx\'s TABS -> <Route> mapping)', () => {
     for (const tab of TABS) {
       expect(html).not.toContain(`data-tab="${tab.id}"`);
     }
+  });
+});
+
+// The one piece of the `.tabs` CSS that IS machine-checkable. The spec's
+// layout claims (44px targets, safe-area padding) still need a real layout
+// engine and stay a code-review/device check — but "the fixed bar carries no
+// compositing trigger" is a grep, and it is the rule that has now failed twice
+// in production (#422's backdrop-filter, then #451). Pin it so a future polish
+// pass has to argue with a red test instead of silently reintroducing it.
+describe('.tabs compositing contract (#422, #451)', () => {
+  const indexCss = readFileSync('src/index.css', 'utf8');
+
+  /**
+   * Every innermost rule in the stylesheet, as a selector plus parsed
+   * declarations. Reading real rules instead of regex-matching rule TEXT
+   * (Codex P2 on #452): text matching missed `.app .tabs`, `.tabs.compact`,
+   * and comma-separated selectors entirely, so a perfectly ordinary override
+   * could reintroduce a promotion trigger with this suite still green.
+   * Because the body pattern excludes braces, nested blocks (`@media`,
+   * `@supports`) yield their inner rules with their own selectors, which is
+   * exactly what we want. Values containing a literal `;` (a data: URL) would
+   * split wrongly; no tab-bar rule has one, and one appearing would be its own
+   * red flag.
+   */
+  const cssRules = (css: string) =>
+    [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)].map((m) => ({
+      selector: m[1].trim(),
+      decls: m[2]
+        .split(';')
+        .map((d) => d.trim())
+        .filter((d) => d.includes(':'))
+        .map((d) => ({
+          prop: d.slice(0, d.indexOf(':')).trim().toLowerCase(),
+          value: d.slice(d.indexOf(':') + 1).trim(),
+        })),
+    }));
+
+  /**
+   * Does this selector apply TO the bar, rather than merely mention it? Only
+   * the subject (the last compound selector) counts: `.app .tabs` styles the
+   * bar, while `.tabs > .tab` styles a tab and `body:has(.tabs)
+   * .install-prompt` styles a toast.
+   *
+   * Functional pseudo-classes split two ways (Codex P2 on #452), and the
+   * distinction is the whole point: `:is(.tabs)` and `:where(.tabs)` match the
+   * element ITSELF against their argument, so `:where(.tabs) { transform: ... }`
+   * really does style the bar and has to count — their arguments are unwrapped.
+   * `:has(.tabs)` and `:not(.tabs)` relate or invert instead: they match some
+   * OTHER element, so a `.tabs` inside them must not make the subject the bar —
+   * their arguments are dropped. Stripping every parenthesised argument (the
+   * first cut) was safe against false positives but left `:where(.tabs)` as a
+   * silent way back in.
+   */
+  const resolvePseudos = (part: string) => {
+    let out = part;
+    for (let i = 0; i < 5; i++) {
+      const next = out
+        .replace(/:(?:not|has)\([^()]*\)/g, '')
+        .replace(/:(?:is|where)\(([^()]*)\)/g, ' $1 ');
+      if (next === out) break;
+      out = next;
+    }
+    return out;
+  };
+
+  // Resolve BEFORE splitting on commas: unwrapping `:is(.a, .tabs)` yields a
+  // comma of its own, and because an `:is()` list is a disjunction, letting the
+  // resulting alternatives split into separate selectors gives the right answer
+  // — `.foo:is(.a, .tabs)` becomes `.foo .a` / `.tabs`, and the second branch
+  // correctly reports that this rule can style the bar.
+  const targetsTabBar = (selector: string) =>
+    resolvePseudos(selector)
+      .split(',')
+      .some((part) => {
+        const compounds = part.trim().split(/[\s>+~]+/).filter(Boolean);
+        const subject = compounds[compounds.length - 1] ?? '';
+        return /(^|[^\w-])\.tabs(?![\w-])/.test(subject);
+      });
+
+  const tabBarRules = cssRules(indexCss).filter((rule) => targetsTabBar(rule.selector));
+  const baseRules = tabBarRules.filter((rule) => rule.selector === '.tabs');
+  const declsOf = (rule: (typeof tabBarRules)[number]) => rule.decls;
+  // Vendor prefixes are stripped before comparison, and comparison is on the
+  // PROPERTY NAME, so `-webkit-backdrop-filter` is caught while `text-transform`
+  // is not confused for `transform` — no boundary regex needed.
+  const unprefixed = (prop: string) => prop.replace(/^-(?:webkit|moz|ms|o)-/, '');
+
+  it('finds the tab bar rules at all (guards against the scanner silently matching nothing)', () => {
+    expect(tabBarRules.length).toBeGreaterThan(0);
+    expect(baseRules).toHaveLength(1);
+  });
+
+  it('keeps the bar pinned to the viewport bottom', () => {
+    const decls = declsOf(baseRules[0]);
+    expect(decls.find((d) => d.prop === 'position')?.value).toBe('fixed');
+    expect(decls.find((d) => d.prop === 'bottom')?.value).toBe('0');
+  });
+
+  // On iOS WebKit a `position: fixed` element promoted to its own compositing
+  // layer is not reliably kept pinned to the visual viewport during scroll: it
+  // detaches and freezes mid-screen, most visibly in a standalone home-screen
+  // PWA on a scrolling route. Every property below is a promotion trigger.
+  for (const trigger of ['backdrop-filter', 'filter', 'transform', 'will-change', 'perspective']) {
+    it(`declares no \`${trigger}\` on the tab bar, vendor-prefixed spellings included`, () => {
+      for (const rule of tabBarRules) {
+        expect(
+          declsOf(rule)
+            .map((d) => unprefixed(d.prop))
+            .filter((prop) => prop === trigger),
+        ).toEqual([]);
+      }
+    });
+  }
+
+  it('paints a fully opaque background (no blending work on the fixed layer)', () => {
+    // An allowlist, not a `transparent`-token denylist (Codex P2 on #452): a
+    // denylist passes `rgb(0 0 0 / 80%)` and `#000000cc` — both translucent,
+    // neither containing the word — and fails an innocent `border-color:
+    // transparent`. Pinning the known-opaque token means any future fill has to
+    // come here and argue for itself.
+    const backgrounds = tabBarRules.flatMap((rule) =>
+      declsOf(rule)
+        .filter((d) => d.prop === 'background' || d.prop === 'background-color')
+        .map((d) => d.value),
+    );
+    expect(backgrounds).toEqual(['var(--bg)']);
   });
 });

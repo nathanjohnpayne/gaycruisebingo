@@ -1,9 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import type { DayDef } from '../types';
 import TutorialBanner from './TutorialBanner';
 import { FarewellPodiumView } from './FarewellPodium';
 import type { Podium } from '../data/finale';
+
+// The share-affordance wrapper (issue #449) pulls useEventDoc/analytics/
+// ShareCard (and, via leaderboardShareCopy, Leaderboard's hook imports) into
+// this file's module graph. This suite only exercises the presentational
+// FarewellPodiumView, so the module boundary gets inert stand-ins — the
+// w2-share-cards.test.tsx precedent; the share behavior itself is pinned
+// there, not here.
+vi.mock('../firebase', () => ({ db: {}, EVENT_ID: 'test-event' }));
+vi.mock('../analytics', () => ({ track: vi.fn() }));
+vi.mock('../hooks/useData', () => ({
+  useEventDoc: () => ({ data: null, loading: false }),
+  useDayMetasStatus: () => ({ metas: new Map(), loaded: true }),
+  useLeaderboard: () => ({ players: [], loading: false }),
+  useLatestProofByUid: () => ({ latestByUid: {}, loading: false }),
+  isBanned: () => false,
+}));
 
 // Covers specs/d15-finale.md: the farewell podium banner renders the champion,
 // the cruise-wide First to BINGO, and the ten daily-honor rows from a fixture
