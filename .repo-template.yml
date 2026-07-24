@@ -10,6 +10,11 @@
 # Used by check_spec_test_alignment when the default filename search
 # wouldn't find the test.
 spec_test_map:
+  # cells-map's pure boundary lives in src/game/cells.test.ts (module-named,
+  # not spec-basename-named); the offline no-clobber proof matches by name.
+  cells-map:
+    - src/game/cells.test.ts
+    - tests/offline/cells-map.test.ts
   # The test-harness spec spans four layers whose test filenames don't share
   # the spec basename, so map each layer's test explicitly.
   w0-test-harness:
