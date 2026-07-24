@@ -1469,9 +1469,13 @@ describe('FarewellPodium — share affordance', () => {
     firstBingoAt: 1000,
   });
 
-  beforeEach(() => {
-    H.event = { name: 'Allure of the Seas' } as EventDoc;
-  });
+  // The event reaches the card as BOARD'S OWN PROP, never a second
+  // useEventDoc listener (Codex P2, PR #450 — the #111 props-not-listeners
+  // lineage). H.event stays null in this describe as the regression trap:
+  // if a future change reintroduces the hook inside FarewellPodium, the
+  // card renders the bare app name and the event-name assertions below
+  // fail loudly.
+  const eventProp = { name: 'Allure of the Seas' } as EventDoc;
 
   it('renders the Share button at the bottom of the podium and shares the real card', async () => {
     const shareMock = vi.fn().mockResolvedValue(undefined);
@@ -1479,7 +1483,7 @@ describe('FarewellPodium — share affordance', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const user = userEvent.setup();
 
-    render(<FarewellPodium players={[champ, early]} days={undefined} />);
+    render(<FarewellPodium players={[champ, early]} days={undefined} event={eventProp} />);
     const podium = screen.getByRole('region', { name: 'Cruise podium' });
     const btn = screen.getByRole('button', { name: 'Share final standings' });
     // Bottom of the podium section: the button is the section's LAST element child.
@@ -1491,6 +1495,8 @@ describe('FarewellPodium — share affordance', () => {
     expect(shareMock.mock.calls[0][0].files).toHaveLength(1);
     const node = toBlobNode();
     expect(node.textContent).toContain('FINAL STANDINGS');
+    // From the PROP, with the useEventDoc mock pinned null — the trap above.
+    expect(node.querySelector('.share-card-event')?.textContent).toBe('Allure of the Seas');
     expect(node.textContent).toContain('Zacaria Arab'); // champion by aggregates
     expect(node.textContent).toContain('16 bingos · 124 squares');
     expect(node.textContent).toContain('Turntilla'); // earliest firstBingoAt holds the crown
@@ -1505,7 +1511,7 @@ describe('FarewellPodium — share affordance', () => {
     Object.defineProperty(window.navigator, 'share', { value: shareMock, configurable: true });
     const user = userEvent.setup();
 
-    render(<FarewellPodium players={[champ, early]} days={undefined} />);
+    render(<FarewellPodium players={[champ, early]} days={undefined} event={eventProp} />);
     expect(toBlobMock).not.toHaveBeenCalled(); // warm-on-intent, never mount-eager
 
     await user.hover(screen.getByRole('button', { name: 'Share final standings' }));
@@ -1514,6 +1520,18 @@ describe('FarewellPodium — share affordance', () => {
     await user.click(screen.getByRole('button', { name: 'Share final standings' }));
     await waitFor(() => expect(shareMock).toHaveBeenCalledTimes(1));
     expect(toBlobMock).toHaveBeenCalledTimes(1); // the tap reused the warmed render
+  });
+
+  // Codex P2, PR #450: buildPodium withholds derived daily honors while the
+  // day-meta listeners are still answering — sharing then would bake a
+  // permanently incomplete honors list into the image. The podium renders;
+  // only the share affordance waits for dayMetasLoaded.
+  it('withholds the Share button until the day-meta honors settle', () => {
+    render(
+      <FarewellPodium players={[champ, early]} days={undefined} event={eventProp} dayMetasLoaded={false} />,
+    );
+    expect(screen.getByRole('region', { name: 'Cruise podium' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Share final standings' })).toBeNull();
   });
 
   it('renders no share button on the wrapper-less presentational view', () => {

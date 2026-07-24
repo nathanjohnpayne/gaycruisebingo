@@ -1984,6 +1984,11 @@ export default function Board() {
             days={days}
             dayMetas={dayMetas}
             dayMetasLoaded={dayMetasLoaded}
+            /* Board's own event, passed down for the Share Card's copy
+               (Codex P2, PR #450): the frozenAt gate above guarantees it is
+               loaded, so the podium never opens a second listener that
+               could bake the bare-app-name card on an early Share tap. */
+            event={event}
           />
         )}
         {viewedDay && <TutorialBanner day={viewedDay} />}

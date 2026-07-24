@@ -1,7 +1,6 @@
 import { useRef } from 'react';
-import type { DayDef, DayMetaDoc, PlayerDoc } from '../types';
+import type { DayDef, DayMetaDoc, EventDoc, PlayerDoc } from '../types';
 import { buildPodium, type Podium } from '../data/finale';
-import { useEventDoc } from '../hooks/useData';
 import { track } from '../analytics';
 import {
   renderFarewellShareCard,
@@ -151,13 +150,23 @@ export default function FarewellPodium({
   days,
   dayMetas,
   dayMetasLoaded = true,
+  event = null,
 }: {
   players: readonly PlayerDoc[];
   days: readonly DayDef[] | undefined;
   dayMetas?: ReadonlyMap<number, DayMetaDoc>;
   dayMetasLoaded?: boolean;
+  /**
+   * Board's own already-loaded event, passed DOWN rather than re-subscribed
+   * (Codex P2, PR #450): Board gates this component on `event?.frozenAt`,
+   * so the event is guaranteed loaded by the time we can mount — a second
+   * `useEventDoc()` listener here would start `data: null`, letting an
+   * early warm/tap bake the bare-app-name card and a late snapshot
+   * invalidate the warmed render mid-click. Same props-not-listeners fix
+   * as Celebration's cells/playerName (PR #111 findings 1 + round 2.1).
+   */
+  event?: Pick<EventDoc, 'name' | 'days'> | null;
 }) {
-  const { data: event } = useEventDoc();
   const podium = buildPodium(players, days, dayMetas, dayMetasLoaded);
   const dayLabel = makeDayLabel(days);
   // Warm-on-intent pre-render, mirroring Leaderboard.tsx (Codex P2, PR #111
@@ -199,11 +208,15 @@ export default function FarewellPodium({
     }
   };
 
-  return (
-    <FarewellPodiumView
-      podium={podium}
-      dayLabel={dayLabel}
-      share={{ onShare: () => void shareFinalStandings(), onWarm: () => void warmShareCard() }}
-    />
-  );
+  // No share affordance until the day-meta honors settle (Codex P2, PR
+  // #450): on a cold farewell load the roster snapshot can produce a
+  // champion before all ten day-meta listeners answer, and buildPodium
+  // deliberately withholds derived honors while `dayMetasLoaded` is false —
+  // an immediate tap would bake a permanently incomplete honors list into
+  // the shared image. The podium itself still renders; only sharing waits.
+  const share = dayMetasLoaded
+    ? { onShare: () => void shareFinalStandings(), onWarm: () => void warmShareCard() }
+    : undefined;
+
+  return <FarewellPodiumView podium={podium} dayLabel={dayLabel} share={share} />;
 }
