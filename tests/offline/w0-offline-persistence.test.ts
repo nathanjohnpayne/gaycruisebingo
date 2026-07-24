@@ -23,6 +23,7 @@ import {
   type Firestore,
 } from 'firebase/firestore';
 import type { BoardDoc, Cell } from '../../src/types';
+import { seedEventDoc } from './seedEvent';
 
 // ---------------------------------------------------------------- ADR 0006 ---
 // Offline persistence, the data half — the integration proof. Against the
@@ -40,6 +41,13 @@ import type { BoardDoc, Cell } from '../../src/types';
 // app name and signed-in uid, so it opens the same store, recovers the queue,
 // and sends it. fake-indexeddb's store is process-global, surviving
 // terminate()/deleteApp() exactly like a browser profile survives a tab reload.
+//
+// The Board lives at the Phase 1.5 DAY-SCOPED path
+// events/{eventId}/days/{dayIndex}/boards/{uid} (daily-cards-spec § "Data
+// model") — the legacy events/{eventId}/boards/{uid} match no longer exists in
+// firestore.rules, so the queued write would be denied at drain time. The
+// day-board write gate reads `events/{id}.days[dayIndex].unlockAt`, which is
+// why the event schedule is seeded out-of-band first (see seedEvent.ts).
 // The source-config guard for the production init lives in src/firebase.test.ts
 // (npm test); full scope notes are in specs/w0-offline-persistence.md.
 //
@@ -132,7 +140,7 @@ function boardWithMarkedSquare(uid: string, marked: number): BoardDoc {
     marked: index === marked,
     markedAt: index === marked ? Date.now() : null,
   }));
-  return { uid, seed: 42, createdAt: Date.now(), cells };
+  return { uid, dayIndex: 0, seed: 42, createdAt: Date.now(), cells };
 }
 
 // Resolve on the first snapshot matching `predicate`, then unsubscribe. Used to
@@ -175,8 +183,9 @@ afterAll(async () => {
 
 describe('w0 offline persistence (ADR 0006)', () => {
   it('persists an offline Mark across a reload that happens before any sync, then syncs it', async () => {
+    await seedEventDoc(PROJECT_ID, EVENT_ID);
     const tab = await makeClient(TAB_APP_NAME);
-    const boardPath = `events/${EVENT_ID}/boards/${tab.uid}`;
+    const boardPath = `events/${EVENT_ID}/days/0/boards/${tab.uid}`;
     const ref = doc(tab.db, boardPath);
 
     // 1. Go offline — a ship-wifi dead zone.

@@ -293,7 +293,7 @@ describe('reshuffle — the cap cannot be laundered around', () => {
     await assertSucceeds(
       setDoc(
         doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
-        { cells: cells(0) },
+        { cells: cells(0), markVersion: 1 },
         { merge: true },
       ),
     );
@@ -306,7 +306,7 @@ describe('reshuffle — ordinary board writes are unaffected', () => {
     await assertSucceeds(
       setDoc(
         doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
-        { cells: cells(0), markSeed: 111 },
+        { cells: cells(0), markSeed: 111, markVersion: 1 },
         { merge: true },
       ),
     );
@@ -318,7 +318,7 @@ describe('reshuffle — ordinary board writes are unaffected', () => {
     await assertSucceeds(
       setDoc(
         doc(d, `events/${EVENT}/days/${UNLOCKED_DAY}/boards/${ALICE}`),
-        { cells: cells(1), markSeed: 111 },
+        { cells: cells(1), markSeed: 111, markVersion: 1 },
         { merge: true },
       ),
     );

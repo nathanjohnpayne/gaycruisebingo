@@ -157,33 +157,50 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasAny(['cells']);
     }
 
-    function seededMarkWriteOk() {
-      return !boardCellsChanged()
-        || !('seed' in resource.data)
+    // Diff-free HALF-guards: `boardCellsChanged()` costs a full-document
+    // diff, and evaluating it once per guard blew the emulator's 1000-
+    // expression budget on a queued-mark drain (post-#448 offline suite). The
+    // board rule below evaluates the diff EXACTLY ONCE and applies these
+    // predicates only when the cells actually changed.
+    function seededMarkGuard() {
+      return !('seed' in resource.data)
         || (('markSeed' in request.resource.data)
             && request.resource.data.markSeed == resource.data.seed);
     }
 
     // A Board's `cells` projection is a full array replacement. A stale second
     // device must therefore be rejected instead of overwriting the first device's
-    // unrelated Mark. New daily cards start at markVersion 0; pre-version cards
-    // remain writable until a current client upgrades them on its first write.
-    // After that upgrade, a version-less legacy PWA write must be denied: allowing
-    // it would restore the full-array overwrite race this guard closes. Admin
-    // repair flows are exempt.
-    function versionedMarkWriteOk(eventId) {
-      return !boardCellsChanged()
-        || isAdmin(eventId)
-        || !('markVersion' in resource.data)
-        || (('markVersion' in request.resource.data)
+    // unrelated Mark. New daily cards start at markVersion 0, and EVERY
+    // non-reshuffle cells-changing write must carry a STRICTLY LARGER version
+    // than the stored one — there is deliberately NO version-less escape for
+    // legacy boards (Phase 4b P1 on #447): an unconditional legacy allowance
+    // would let a stale offline client overwrite the full array forever and the
+    // upgrade would never be forced. Strictly-larger (not exactly +1) on
+    // purpose: a device's SEQUENCE of queued offline Marks drains as in-order
+    // batches whose versions (n+1, n+2, …) were each folded from that device's
+    // own cache, and the guard's job is only to reject a version at or below
+    // the stored one — a stale device's writes, computed from its stale cache,
+    // always are. Consequence, accepted: a pre-deploy PWA bundle's queued Mark
+    // on a day board is denied at drain and rolls back locally; the update
+    // prompt / next reload re-marks under the current bundle. Every current
+    // writer (setMark, reconcile, deal, reshuffle, proofs, admin resolve)
+    // stamps the version via the shared nextMarkVersion helpers. Admin repair
+    // flows are exempt, and a RESHUFFLE is version-exempt by the rule's own
+    // structure (its stale-write protection is the seed-pin + paired counter,
+    // and the replacement write still stamps the next version client-side).
+    function versionedMarkGuard(eventId) {
+      // The version logic FIRST: the common case is an owner's own Mark, and
+      // consulting isAdmin (a get()) before it both costs evaluation budget
+      // and is only needed for the rare admin-repair write.
+      return (('markVersion' in request.resource.data)
             && request.resource.data.markVersion is int
             && request.resource.data.markVersion > 0
             && (
-              (!('markVersion' in resource.data) && request.resource.data.markVersion == 1)
-              || (('markVersion' in resource.data)
-                  && resource.data.markVersion is int
-                  && request.resource.data.markVersion == resource.data.markVersion + 1)
-            ));
+              !('markVersion' in resource.data)
+              || (resource.data.markVersion is int
+                  && request.resource.data.markVersion > resource.data.markVersion)
+            ))
+        || isAdmin(eventId);
     }
 
     // The COUNTER-side half (#378 Option A): `reshufflesUsed` is MONOTONIC — it may
@@ -539,8 +556,18 @@ service cloud.firestore {
           allow create, update: if (isOwner(uid) || isAdmin(eventId))
             && isCanonicalDay(dayIndex)
             && request.time.toMillis() >= get(/databases/$(database)/documents/events/$(eventId)).data.days[int(dayIndex)].unlockAt
-            && (isReshuffleWrite() || seededMarkWriteOk())
-            && versionedMarkWriteOk(eventId)
+            // Evaluation-budget ordering (the emulator caps a request at 1000
+            // expressions, and `boardCellsChanged()`'s full-document diff is
+            // the expensive term): the cheap guards run FIRST so the common
+            // current-client Mark short-circuits without ever running the
+            // diff; the diff is reached only by writes that fail the guards —
+            // a cells-unchanged metadata merge (allowed) or a stale/legacy
+            // full-array overwrite (denied). `resource == null` keeps creates
+            // off the guards (they read resource.data).
+            && (isReshuffleWrite()
+                || resource == null
+                || (seededMarkGuard() && versionedMarkGuard(eventId))
+                || !boardCellsChanged())
             && (!isReshuffleWrite() || reshuffleOk(eventId, uid));
           allow delete: if isAdmin(eventId);
         }

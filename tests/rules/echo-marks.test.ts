@@ -111,18 +111,18 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
     // The acted Mark on Day 0 (manual, confirmed).
     batch.set(
       doc(d, dayBoardPath(0, ALICE)),
-      { cells: cells({ 3: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 100 },
+      { cells: cells({ 3: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 100, markVersion: 1 },
       { merge: true },
     );
     // The echoes on Days 1 and 2, each stamped with THAT board's seed.
     batch.set(
       doc(d, dayBoardPath(1, ALICE)),
-      { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 111 },
+      { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 111, markVersion: 1 },
       { merge: true },
     );
     batch.set(
       doc(d, dayBoardPath(2, ALICE)),
-      { cells: cells({ 8: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 222 },
+      { cells: cells({ 8: { marked: true, markedAt: NOW(), status: 'confirmed', echo: true } }), markSeed: 222, markVersion: 1 },
       { merge: true },
     );
     // The ONE aggregated player write.
@@ -180,6 +180,20 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
     );
   });
 
+  it('DENIES a version-less cells write even on a PRE-VERSION board — the first write IS the upgrade (Phase 4b P1)', async () => {
+    // The seeded boards carry no markVersion; the strict gate has no legacy
+    // escape, so a cells change that fails to write markVersion: 1 is denied —
+    // otherwise a stale offline client could overwrite the full array forever
+    // and the upgrade would never be forced.
+    await assertFails(
+      setDoc(
+        doc(db(ALICE), dayBoardPath(1, ALICE)),
+        { cells: cells({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111 },
+        { merge: true },
+      ),
+    );
+  });
+
   it('REJECTS a stale full-array projection after the board has a markVersion', async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), dayBoardPath(1, ALICE)), {
@@ -209,7 +223,7 @@ describe("boardPristine()'s echo exemption (spec § Reshuffle pristine-ness)", (
   const reshuffle = async (dayIndex: number, existingSeed: number) => {
     const d = db(ALICE);
     const batch = writeBatch(d);
-    batch.set(doc(d, dayBoardPath(dayIndex, ALICE)), board(ALICE, dayIndex, existingSeed + 1));
+    batch.set(doc(d, dayBoardPath(dayIndex, ALICE)), { ...board(ALICE, dayIndex, existingSeed + 1), markVersion: 1 });
     batch.set(doc(d, `events/${EVENT}/players/${ALICE}`), { reshufflesUsed: 1 }, { merge: true });
     return batch.commit();
   };
