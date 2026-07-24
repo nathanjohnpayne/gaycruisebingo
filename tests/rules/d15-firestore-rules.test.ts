@@ -9,6 +9,19 @@ import {
 } from '@firebase/rules-unit-testing';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 
+// A minimal CANONICAL cells map (#458: the board rule requires exactly the 25
+// decimal keys) — these suites test gates other than cell mechanics, so the
+// cells are inert placeholders.
+function fullCellsMap() {
+  return Object.fromEntries(
+    Array.from({ length: 25 }, (_, i) => [
+      String(i),
+      { index: i, itemId: i === 12 ? null : `i${i}`, text: 'p', free: i === 12, marked: i === 12, markedAt: null },
+    ]),
+  );
+}
+
+
 // Phase 1.5 firestore.rules invariants (d15-firestore-rules): the day-scoped
 // Board model. Boards move under events/{eventId}/days/{dayIndex}/boards/{uid},
 // gated on that Day's `unlockAt`; Pending/Rejected Prompts stay invisible outside
@@ -41,7 +54,7 @@ const board = (uid: string, dayIndex: number) => ({
   dayIndex,
   seed: 1,
   createdAt: NOW(),
-  cells: {},
+  cells: fullCellsMap(),
 });
 
 beforeAll(async () => {

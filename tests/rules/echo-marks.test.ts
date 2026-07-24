@@ -217,6 +217,26 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
     expect(storedCells['8'].marked).toBe(true);
   });
 
+  it('#457: REJECTS a one-cell patch onto a STILL-ARRAY board — the migration-gap 24-cell wipe', async () => {
+    // A merge patch landing on a board whose stored cells are the legacy
+    // ARRAY replaces the whole field with a one-key map. The canonical-25
+    // requirement denies it (Phase 4b P1 on #458) instead of blessing the
+    // loss of the other 24 cells.
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), dayBoardPath(1, ALICE)), {
+        ...board(ALICE, 1, 111),
+        cells: Object.values(cells()), // legacy array-shaped stored doc
+      });
+    });
+    await assertFails(
+      setDoc(
+        doc(db(ALICE), dayBoardPath(1, ALICE)),
+        { cells: cellsPatchOf({ 5: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 111 },
+        { merge: true },
+      ),
+    );
+  });
+
   it('#457: REJECTS a legacy ARRAY cells write — the resulting field must be the map', async () => {
     await assertFails(
       setDoc(

@@ -38,10 +38,23 @@ export function toCellsMap(cells) {
   return map;
 }
 
-/** Pure: classify one board doc's cells shape. */
+/** Pure: classify one board doc's cells shape. A 'map' verdict requires the
+ * CANONICAL shape — exactly the 25 decimal keys '0'..'24', each value carrying
+ * the matching numeric `index` — mirroring the rules' canonicalCellsMap gate
+ * (Phase 4b P1 on #458): a partial map (e.g. a one-cell patch that landed on a
+ * still-array board in the migration gap) must read as 'malformed', never as
+ * safe, so the VERIFY pass fails loudly instead of blessing a 24-cell loss. */
 export function classifyCells(value) {
   if (Array.isArray(value)) return 'array';
-  if (value != null && typeof value === 'object') return 'map';
+  if (value != null && typeof value === 'object') {
+    const keys = Object.keys(value);
+    if (keys.length !== 25) return 'malformed';
+    for (let i = 0; i < 25; i += 1) {
+      const cell = value[String(i)];
+      if (cell == null || typeof cell !== 'object' || cell.index !== i) return 'malformed';
+    }
+    return 'map';
+  }
   return 'malformed';
 }
 
