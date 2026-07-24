@@ -181,6 +181,45 @@ describe('the multi-board echo batch (spec § Mark-time)', () => {
     await assertFails(batch.commit());
   });
 
+  it('a STALE-markSeed Mark batch is rejected WHOLE — board patch, player projection, and Tally marker all roll back (4b round-6 on #458)', async () => {
+    // The stale-seed recovery story under per-cell patches IS batch atomicity:
+    // setMark computes its player/tally side effects from the cached board and
+    // commits them in the SAME writeBatch as the board patch, so a reshuffle
+    // that invalidates the queued Mark (seededMarkGuard denies markSeed 99 on
+    // a board seeded 100) must take the derived writes down with it — no
+    // partial projection may land for a Mark that never applied. (Moments and
+    // meta pins are commit-ack gated in setMark for the same reason.)
+    const d = db(ALICE);
+    const batch = writeBatch(d);
+    batch.set(
+      doc(d, dayBoardPath(0, ALICE)),
+      { cells: cellsPatchOf({ 3: { marked: true, markedAt: NOW(), status: 'confirmed' } }), markSeed: 99 },
+      { merge: true },
+    );
+    batch.set(
+      doc(d, `events/${EVENT}/players/${ALICE}`),
+      { dayStats: { 0: { bingoCount: 0, squaresMarked: 1, firstBingoAt: null } }, squaresMarked: 1 },
+      { merge: true },
+    );
+    batch.set(doc(d, `events/${EVENT}/tally/i3/markers/${ALICE}`), {
+      uid: ALICE,
+      displayName: 'Alice',
+      markedAt: NOW(),
+      itemText: 'Prompt 3',
+      dayIndex: 0,
+    });
+    await assertFails(batch.commit());
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      const raw = ctx.firestore();
+      const boardSnap = await getDoc(doc(raw, dayBoardPath(0, ALICE)));
+      expect((boardSnap.data() as { cells: Record<string, { marked: boolean }> }).cells['3'].marked).toBe(false);
+      const playerSnap = await getDoc(doc(raw, `events/${EVENT}/players/${ALICE}`));
+      expect((playerSnap.data() as { squaresMarked: number }).squaresMarked).toBe(0);
+      const markerSnap = await getDoc(doc(raw, `events/${EVENT}/tally/i3/markers/${ALICE}`));
+      expect(markerSnap.exists()).toBe(false);
+    });
+  });
+
   it('REJECTS an echoed board write with no markSeed at all on a seeded board', async () => {
     await assertFails(
       setDoc(
