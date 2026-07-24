@@ -576,8 +576,12 @@ export async function dealDayCard(u: User, dayIndex: number): Promise<boolean> {
   // one; reading only days 0..dayIndex-1 would let that later card's Prompts
   // repeat. `dealBoard`'s exclusion resets on its own once the pool is exhausted,
   // so we always pass the full cross-cruise history.
+  // Canonical DayDef.index values, NOT array positions (Phase 4b P1 on #447):
+  // day-board paths key on d.index everywhere, so a schedule whose indexes
+  // aren't exactly 0..n must not read the wrong sibling docs for the exclusion
+  // set or the deal-time achieved set.
   const otherBoardRefs = days
-    .map((_, i) => i)
+    .map((d) => d.index)
     .filter((i) => i !== dayIndex)
     .map((i) => rawDayBoard(i, u.uid));
   const otherCards = await Promise.all(otherBoardRefs.map((ref) => getDoc(ref).catch(() => null)));
@@ -892,8 +896,10 @@ export async function reshuffleBoard(params: {
   // The peer cards whose Prompts the replacement must avoid. Their refs are built
   // here; they are READ inside the transaction (below) so a retry rebuilds the
   // exclusion set from committed state.
+  // Canonical DayDef.index values, not array positions (Phase 4b P1 on #447)
+  // — the same fix as dealDayCard's sibling refs.
   const peerRefs = days
-    .map((_, i) => i)
+    .map((d) => d.index)
     .filter((i) => i !== dayIndex)
     .map((i) => rawDayBoard(i, uid));
 
@@ -1891,12 +1897,22 @@ async function runSetMark(
   const pinName = honorDisplayName(params.displayName, cachedPlayerName);
   for (const echoBoard of echoBoards) {
     if (echoBoard.bingoTransition || echoBoard.blackoutTransition) {
-      enqueueWinMoments({
-        uid,
-        bingoTransition: echoBoard.bingoTransition,
-        blackoutTransition: echoBoard.blackoutTransition,
-        dayIndex: echoBoard.dayIndex,
-      });
+      // Commit-ack gated like the pin below and the reconcile path (Phase 4b
+      // P1 on #447): a batch the rules reject (stale markSeed/markVersion)
+      // rolls the echo back, and a pre-ack Moment could drain into the Feed
+      // for a board state that never committed. Offline the commit pends and
+      // the Moment enqueues on reconnect's ack — the acted board's own
+      // verdict-driven Moments (doMark) are untouched.
+      void committed
+        .then(() =>
+          enqueueWinMoments({
+            uid,
+            bingoTransition: echoBoard.bingoTransition,
+            blackoutTransition: echoBoard.blackoutTransition,
+            dayIndex: echoBoard.dayIndex,
+          }),
+        )
+        .catch(() => undefined);
     }
     if (
       echoBoard.bingoTransition &&
