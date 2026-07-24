@@ -40,6 +40,17 @@ export function cellsPatch(changed: readonly Cell[]): CellsMap {
 }
 
 /**
+ * The `cells` FIELD of a merge payload — or NOTHING when the patch is empty.
+ * An explicitly empty nested map in a `{ merge: true }` write is NOT a no-op:
+ * the SDK puts the field itself in the write mask, which would SET `cells` to
+ * `{}` and wipe every cell on the server (Phase 4b P1 on #458). Spread this
+ * into the payload so a no-op transform writes no `cells` key at all.
+ */
+export function cellsPatchField(changed: readonly Cell[]): { cells: CellsMap } | Record<string, never> {
+  return changed.length > 0 ? { cells: cellsPatch(changed) } : {};
+}
+
+/**
  * The cells a pure transform actually CHANGED, by reference identity: every
  * transform in this codebase (`computeMark`, `applyEchoes`, the claim-resolve
  * mappers) maps the array and returns UNTOUCHED cells by the same reference,

@@ -15,6 +15,7 @@ import {
   connectFirestoreEmulator,
   doc,
   setDoc,
+  getDoc,
   getDocFromServer,
   disableNetwork,
   enableNetwork,
@@ -156,5 +157,34 @@ describe('cells-map — cross-device Marks merge instead of clobbering (specs/ce
     const stored = cellsFromData((server.data() as { cells?: unknown }).cells);
     expect(stored.find((c) => c.index === DEVICE_A_MARK)?.marked).toBe(true); // survived B's later drain
     expect(stored.find((c) => c.index === DEVICE_B_MARK)?.marked).toBe(true);
+
+    // STATS CONVERGENCE (Phase 4b P1 on #458): the aggregated player write is
+    // an absolute projection of the writing device's cached view, so B's later
+    // drain briefly records a one-mark projection. The designed consistency
+    // model (specs/cells-map.md § Contract): the BOARD is the source of truth,
+    // per-day buckets merge-scope to the acted day, and the next fold from a
+    // SYNCED cache re-derives correct absolutes. Prove it: device A refreshes
+    // its cache (both cells now visible) and marks a third Square — its fold
+    // must count all three Marks.
+    const refreshed = await getDoc(doc(a.db, boardPath)); // server read → cache
+    const refreshedCells = cellsFromData((refreshed.data() as { cells?: unknown }).cells);
+    expect(refreshedCells.filter((c) => !c.free && c.marked)).toHaveLength(2);
+    await setMark({
+      uid: a.uid,
+      cells: refreshedCells,
+      index: 15,
+      nextMarked: true,
+      claimMode: 'honor',
+      currentFirstBingoAt: null,
+      dayIndex: 0,
+      daily: true,
+      boardSeed: 42,
+      database: a.db,
+    });
+    await waitForPendingWrites(a.db);
+    const player = await getDocFromServer(doc(a.db, playerPath));
+    const stats = player.data() as { squaresMarked: number; dayStats: Record<number, { squaresMarked: number }> };
+    expect(stats.squaresMarked).toBe(3); // converged: all three Marks counted
+    expect(stats.dayStats[0].squaresMarked).toBe(3);
   }, 60000);
 });

@@ -205,9 +205,11 @@ describe('rejectClaim / confirmClaim — the admin resolve keeps the marker symm
 
     await rejectClaim(claim(), 'admin-1');
 
-    // #457 per-cell merge: a no-op transform writes an EMPTY cells patch —
-    // the standing Mark survives by never being written at all.
-    expect(Object.keys(boardWrite()!.cells)).toHaveLength(0);
+    // #457 per-cell merge: a no-op transform writes NO cells field at all —
+    // an explicit empty map in a merge would wipe the board's cells, so the
+    // payload must omit the key entirely (Phase 4b P1 on #458). The standing
+    // Mark survives by never being written.
+    expect('cells' in boardWrite()!).toBe(false);
     expect(txDelete).not.toHaveBeenCalled();
   });
 

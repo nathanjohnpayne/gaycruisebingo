@@ -44,7 +44,7 @@ import {
   type StatWrite,
 } from '../game/logic';
 import { enqueueWinMoments } from './moments';
-import { cellsToMap, cellsPatch, changedCells, cellsFromData } from '../game/cells';
+import { cellsToMap, cellsPatch, cellsPatchField, changedCells, cellsFromData } from '../game/cells';
 import { pinDayFirstBingo } from './dayMeta';
 import type { Cell, ClaimMode, DayDef, EventDoc, ItemDoc, PlayerDoc, UserDoc } from '../types';
 
@@ -1643,7 +1643,7 @@ async function runSetMark(
   batch.set(
     boardRef,
     {
-      cells: cellsPatch(changedCells(baseCells, cells)),
+      ...cellsPatchField(changedCells(baseCells, cells)),
       ...(typeof markSeed === 'number' ? { markSeed } : {}),
     },
     { merge: true },
@@ -2035,7 +2035,7 @@ async function runReconcileEchoes(
     batch.set(
       boardRef,
       {
-        cells: cellsPatch(changedCells(boardCells, res.cells)),
+        ...cellsPatchField(changedCells(boardCells, res.cells)),
         ...(typeof board.seed === 'number' ? { markSeed: board.seed } : {}),
       },
       { merge: true },

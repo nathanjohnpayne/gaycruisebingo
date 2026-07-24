@@ -4,7 +4,7 @@ import { uploadProofMedia, deleteStoragePath } from './storage';
 import { purgeProofMediaFromCaches } from './proofMediaCache';
 import { markerDisplayName } from './attribution';
 import { completedLines, countMarked, isBlackout, foldDayStat, type DayStats } from '../game/logic';
-import { cellsPatch, changedCells, cellsFromData } from '../game/cells';
+import { cellsPatchField, changedCells, cellsFromData } from '../game/cells';
 import type { Cell, ClaimMode, ProofDoc, ProofType } from '../types';
 
 const rawProofs = () => collection(db, 'events', EVENT_ID, 'proofs');
@@ -260,7 +260,7 @@ export async function attachProof(args: AttachProofArgs): Promise<AttachProofRes
     tx.set(
       boardRef,
       {
-        cells: cellsPatch(changedCells(liveCells, next)),
+        ...cellsPatchField(changedCells(liveCells, next)),
         ...(typeof boardData?.seed === 'number' ? { markSeed: boardData.seed } : {}),
       },
       { merge: true },
@@ -462,7 +462,7 @@ export async function deleteProof(
           boardRef,
           {
             // Per-cell merge (#457): only the cleared cell rides the write.
-            cells: cellsPatch(changedCells(cells, next)),
+            ...cellsPatchField(changedCells(cells, next)),
             ...(typeof boardData?.seed === 'number' ? { markSeed: boardData.seed } : {}),
           },
           { merge: true },

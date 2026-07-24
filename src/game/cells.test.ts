@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { Cell } from '../types';
-import { cellsToMap, cellsPatch, changedCells, cellsFromData, type CellsMap } from './cells';
+import { cellsToMap, cellsPatch, cellsPatchField, changedCells, cellsFromData, type CellsMap } from './cells';
 
 // specs/cells-map.md — the pure wire-shape boundary: array↔map conversion,
 // the changed-cell diff every partial write derives from, and the tolerant
@@ -61,5 +61,16 @@ describe('changedCells / cellsPatch — the partial-write derivation', () => {
     const before = board();
     expect(changedCells(before, before)).toEqual([]);
     expect(cellsPatch([])).toEqual({});
+  });
+
+  it('cellsPatchField OMITS the cells key entirely for an empty patch (Phase 4b P1 on #458)', () => {
+    // An explicit empty nested map in a { merge: true } write is NOT a no-op —
+    // the field enters the write mask and would wipe every cell on the server.
+    expect(cellsPatchField([])).toEqual({});
+    expect('cells' in cellsPatchField([])).toBe(false);
+    const changed = changedCells(board(), board({ 5: { marked: true, markedAt: 1 } }).map((c, i) => (i === 5 ? c : board()[i])));
+    void changed; // shape sanity for the non-empty half below
+    const nonEmpty = cellsPatchField([board({ 5: { marked: true, markedAt: 1 } })[5]]);
+    expect('cells' in nonEmpty && Object.keys((nonEmpty as { cells: CellsMap }).cells)).toEqual(['5']);
   });
 });

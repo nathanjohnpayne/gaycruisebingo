@@ -2,7 +2,7 @@ import { addDoc, collection, doc, getDoc, updateDoc, deleteDoc, runTransaction, 
 import { httpsCallable } from 'firebase/functions';
 import { db, functions, EVENT_ID } from '../firebase';
 import { completedLines, countMarked, isBlackout, foldDayStat, foldEchoStats, applyEchoes, tutorialDayIndexSet, ceremonialDayIndexSet, standingsFrozen, type DayStats, type EchoBucket, type StatWrite } from '../game/logic';
-import { cellsPatch, changedCells, cellsFromData } from '../game/cells';
+import { cellsPatchField, changedCells, cellsFromData } from '../game/cells';
 import { honorDisplayName, markerDisplayName } from './attribution';
 import { isSystemAuthor } from './moderation';
 import type { Cell, ClaimMode, ThemeId, ClaimDoc, ItemDoc, DayDef, PlayerDoc } from '../types';
@@ -450,7 +450,7 @@ async function resolve(
           ref: echoSiblingRefs[idx],
           payload: {
             // Per-cell merge (#457): only the newly echoed cells ride the write.
-            cells: cellsPatch(changedCells(sibCells, res.cells)),
+            ...cellsPatchField(changedCells(sibCells, res.cells)),
             ...(typeof sib.seed === 'number' ? { markSeed: sib.seed } : {}),
           },
         });
@@ -475,7 +475,7 @@ async function resolve(
       boardRef,
       {
         // Per-cell merge (#457): only the resolved claim's cell rides the write.
-        cells: cellsPatch(changedCells(cells, next)),
+        ...cellsPatchField(changedCells(cells, next)),
         ...(typeof boardData.seed === 'number' ? { markSeed: boardData.seed } : {}),
       },
       { merge: true },
