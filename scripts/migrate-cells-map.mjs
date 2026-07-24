@@ -38,6 +38,17 @@ export function toCellsMap(cells) {
   return map;
 }
 
+/** Pure: convert a legacy array to the CANONICAL map, or null when it cannot
+ * become one (4b round-5 P1 on #458): an empty/short array, duplicate or
+ * missing `index` values, or junk elements all convert to a non-canonical map
+ * that the deployed rules would then reject on every future write — such a
+ * board must be REPORTED and block the migration, never silently written. */
+export function convertCells(value) {
+  if (!Array.isArray(value)) return null;
+  const map = toCellsMap(value.filter((c) => c != null && typeof c === 'object'));
+  return classifyCells(map) === 'map' ? map : null;
+}
+
 /** Pure: classify one board doc's cells shape. A 'map' verdict requires the
  * CANONICAL shape — exactly the 25 decimal keys '0'..'24', each value carrying
  * the matching numeric `index` — mirroring the rules' canonicalCellsMap gate
@@ -118,6 +129,11 @@ async function main() {
     const data = doc.data();
     const shape = classifyCells(data.cells);
     if (shape === 'array') {
+      if (convertCells(data.cells) == null) {
+        malformed += 1;
+        console.error(`UNCONVERTIBLE array (would not yield a canonical 25-key map): ${doc.ref.path}`);
+        continue;
+      }
       arrays += 1;
       toConvert.push(doc);
     } else if (shape === 'map') {
@@ -150,30 +166,44 @@ async function main() {
   // and converts whatever is CURRENT — a doc that turned map-shaped in the
   // meantime gets only the markVersion cleanup.
   let written = 0;
+  let refused = 0;
   for (const staleDoc of toConvert) {
     await db.runTransaction(async (tx) => {
       const fresh = await tx.get(staleDoc.ref);
       if (!fresh.exists) return;
       const data = fresh.data();
-      tx.update(staleDoc.ref, {
-        ...(Array.isArray(data.cells) ? { cells: toCellsMap(data.cells) } : {}),
-        markVersion: FieldValue.delete(),
-      });
+      if (Array.isArray(data.cells)) {
+        // Re-validate against the FRESH read — the doc can have changed since
+        // enumeration, and only a canonical conversion may be written (4b
+        // round-5 P1: writing a non-canonical map here would strand the board
+        // behind the deployed canonicalCellsMap gate).
+        const converted = convertCells(data.cells);
+        if (converted == null) {
+          refused += 1;
+          console.error(`REFUSED (fresh read no longer canonically convertible): ${staleDoc.ref.path}`);
+          return;
+        }
+        tx.update(staleDoc.ref, { cells: converted, markVersion: FieldValue.delete() });
+      } else {
+        tx.update(staleDoc.ref, { markVersion: FieldValue.delete() });
+      }
+      written += 1;
     });
-    written += 1;
   }
-  console.log(`Converted ${written} board(s) (fresh-read transactions).`);
+  console.log(`Converted ${written} board(s) (fresh-read transactions)${refused ? `, REFUSED ${refused}` : ''}.`);
 
-  // VERIFY: re-enumerate; every board must now be map-shaped. This is the gate
-  // that makes the rules deploy safe — do NOT deploy the #457 rules if it fails.
+  // VERIFY: re-enumerate; every board must now classify as the CANONICAL map —
+  // still-array AND malformed (partial/non-canonical maps from the deploy gap)
+  // both fail (4b round-5 P1). This is the gate that makes the rules deploy
+  // safe — do NOT deploy the #457 rules unless it is green.
   const verify = await enumerateBoards(db);
-  const stillArray = verify.filter((d) => classifyCells(d.data().cells) === 'array');
-  if (stillArray.length > 0) {
-    for (const d of stillArray) console.error(`  STILL ARRAY: ${d.ref.path}`);
-    console.error(`VERIFY FAILED: ${stillArray.length} board(s) still array-shaped. Do not deploy the rules.`);
+  const notCanonical = verify.filter((d) => classifyCells(d.data().cells) !== 'map');
+  if (notCanonical.length > 0 || refused > 0) {
+    for (const d of notCanonical) console.error(`  NOT CANONICAL (${classifyCells(d.data().cells)}): ${d.ref.path}`);
+    console.error(`VERIFY FAILED: ${notCanonical.length} board(s) not canonical-map-shaped (${refused} refused writes). Do not deploy the rules.`);
     process.exit(3);
   }
-  console.log(`VERIFY OK: all ${verify.length} board(s) are map-shaped. Safe to deploy the #457 rules.`);
+  console.log(`VERIFY OK: all ${verify.length} board(s) are canonical-map-shaped. Safe to deploy the #457 rules.`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
