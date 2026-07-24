@@ -114,11 +114,26 @@ describe('route table (mirrors App.tsx\'s TABS -> <Route> mapping)', () => {
 // in production (#422's backdrop-filter, then #451). Pin it so a future polish
 // pass has to argue with a red test instead of silently reintroducing it.
 describe('.tabs compositing contract (#422, #451)', () => {
-  const tabsRule = readFileSync('src/index.css', 'utf8').match(/^\.tabs\s*\{[^}]*\}/m)?.[0] ?? '';
+  const indexCss = readFileSync('src/index.css', 'utf8');
+  // EVERY `.tabs` block, not just the first (CodeRabbit on #452): matching once
+  // would let a later block — a media-query override, a duplicate — reintroduce
+  // a promotion trigger with this suite still green, which is the exact silent
+  // regression the contract exists to catch. The leading `[ \t]*` picks up
+  // nested/indented blocks too.
+  const tabsRules = [...indexCss.matchAll(/^[ \t]*\.tabs\s*\{[^}]*\}/gm)].map((m) => m[0]);
+  // The base rule is the only unindented one; the assertions about what the bar
+  // IS (rather than what it must not carry) belong to it.
+  const baseRules = tabsRules.filter((rule) => !/^[ \t]/.test(rule));
 
-  it('finds the .tabs rule and keeps it pinned to the viewport bottom', () => {
-    expect(tabsRule).toMatch(/position:\s*fixed/);
-    expect(tabsRule).toMatch(/bottom:\s*0/);
+  it('declares exactly one base .tabs rule', () => {
+    // A second unindented block would mean the properties below are split
+    // across rules and last-one-wins decides the real value.
+    expect(baseRules).toHaveLength(1);
+  });
+
+  it('keeps the bar pinned to the viewport bottom', () => {
+    expect(baseRules[0]).toMatch(/position:\s*fixed/);
+    expect(baseRules[0]).toMatch(/bottom:\s*0/);
   });
 
   // On iOS WebKit a `position: fixed` element promoted to its own compositing
@@ -126,13 +141,14 @@ describe('.tabs compositing contract (#422, #451)', () => {
   // detaches and freezes mid-screen, most visibly in a standalone home-screen
   // PWA on a scrolling route. Every property below is a promotion trigger.
   for (const trigger of ['backdrop-filter', 'filter', 'transform', 'will-change', 'perspective']) {
-    it(`carries no \`${trigger}\``, () => {
-      expect(tabsRule).not.toMatch(new RegExp(`(^|[^-])${trigger}\\s*:`, 'm'));
+    it(`carries no \`${trigger}\` in any .tabs rule`, () => {
+      const pattern = new RegExp(`(^|[^-])${trigger}\\s*:`, 'm');
+      for (const rule of tabsRules) expect(rule).not.toMatch(pattern);
     });
   }
 
   it('paints a fully opaque background (no blending work on the fixed layer)', () => {
-    expect(tabsRule).toMatch(/background:\s*var\(--bg\)/);
-    expect(tabsRule).not.toMatch(/transparent/);
+    expect(baseRules[0]).toMatch(/background:\s*var\(--bg\)/);
+    for (const rule of tabsRules) expect(rule).not.toMatch(/transparent/);
   });
 });

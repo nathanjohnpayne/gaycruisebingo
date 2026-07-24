@@ -87,6 +87,18 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
   const pullRef = useRef(0);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  // The refresh callback, mirrored the same way (CodeRabbit on #452). The
+  // listener effect below must NEVER re-run on a prop identity change: its
+  // cleanup calls detachMove, so a parent rerendering with a fresh inline
+  // `onRefresh` mid-gesture would tear the non-passive touchmove listener down
+  // exactly the way the direction gate used to (#451) — the failure this whole
+  // PR exists to remove. Reading through a ref makes the effect depend on
+  // nothing, so its lifetime is the component's, not the callback's. App.tsx
+  // passes no prop today, so this is closing the hole rather than fixing a live
+  // bug, but "the listener is never removed mid-gesture" should be structural
+  // rather than a property of the current call site.
+  const onRefreshRef = useRef(onRefresh);
+  onRefreshRef.current = onRefresh;
 
   useEffect(() => {
     const atTop = () => window.scrollY <= 0;
@@ -161,7 +173,7 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
         setPull(PTR_THRESHOLD_PX);
         // Hold at the threshold while the ring spins; give the spin two
         // beats to be SEEN before the reload tears the page down.
-        window.setTimeout(() => (onRefresh ?? (() => void refreshApp()))(), 450);
+        window.setTimeout(() => (onRefreshRef.current ?? (() => void refreshApp()))(), 450);
         return;
       }
       // Below threshold, or the system stole the touch (browser chrome,
@@ -209,7 +221,10 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       window.removeEventListener('touchend', onTouchEnd);
       window.removeEventListener('touchcancel', onTouchCancel);
     };
-  }, [onRefresh]);
+    // Deliberately empty: the effect owns window listeners whose teardown is
+    // the bug (see onRefreshRef above). Everything it reads that can change —
+    // phase, pull distance, the refresh callback — it reads through a ref.
+  }, []);
 
   const progress = Math.min(1, pull / PTR_THRESHOLD_PX);
   const cls =

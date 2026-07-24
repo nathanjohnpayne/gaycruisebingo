@@ -257,6 +257,36 @@ describe('PullToRefresh — gesture contract', () => {
     removeSpy.mockRestore();
   });
 
+  it('a parent rerender mid-gesture does not tear the listener down (CodeRabbit on #452)', () => {
+    // The listener effect must not depend on `onRefresh` identity: its cleanup
+    // is detachMove, so a parent rerendering with a fresh inline callback while
+    // a touch is armed would remove the non-passive listener mid-gesture — the
+    // same scrolling-tree mutation #451 removed from the direction gate.
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+    const { rerender } = render(<PullToRefresh onRefresh={() => {}} />);
+    fireTouch('touchstart', 100, 10);
+    const removedBefore = removeSpy.mock.calls.filter(([t]) => t === 'touchmove').length;
+    act(() => {
+      rerender(<PullToRefresh onRefresh={() => {}} />); // new identity, same gesture
+    });
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(removedBefore);
+    fireTouch('touchend', 100, 10);
+    removeSpy.mockRestore();
+  });
+
+  it('still fires the latest onRefresh after the identity change (the ref is read, not captured)', () => {
+    const stale = vi.fn();
+    const fresh = vi.fn();
+    const { rerender } = render(<PullToRefresh onRefresh={stale} />);
+    rerender(<PullToRefresh onRefresh={fresh} />);
+    pullGesture(0, PTR_THRESHOLD_PX * 3);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(fresh).toHaveBeenCalledTimes(1);
+    expect(stale).not.toHaveBeenCalled();
+  });
+
   it('a disarmed gesture never preventDefaults again, however it continues (#451)', () => {
     // The listener outliving the direction gate is only safe if a disarmed
     // touch is genuinely inert — otherwise it would start swallowing the
