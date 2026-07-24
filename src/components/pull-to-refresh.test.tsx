@@ -223,7 +223,7 @@ describe('PullToRefresh — gesture contract', () => {
     expect(onRefresh).not.toHaveBeenCalled();
   });
 
-  it('the non-passive touchmove listener exists ONLY while a touch is armed (Codex P2 on #432)', () => {
+  it('the non-passive touchmove listener spans exactly the armed touch — attached on arm, dropped at touch END, never mid-gesture (Codex P2 on #432, #451)', () => {
     const added: Array<{ type: string; passive: unknown }> = [];
     const original = window.addEventListener.bind(window);
     const addSpy = vi.spyOn(window, 'addEventListener').mockImplementation(
@@ -239,12 +239,153 @@ describe('PullToRefresh — gesture contract', () => {
     expect(added.filter((a) => a.type === 'touchmove')).toHaveLength(0);
     fireTouch('touchstart', 100, 10);
     expect(added.filter((a) => a.type === 'touchmove')).toEqual([{ type: 'touchmove', passive: false }]);
-    // A horizontal disarm drops it immediately — not just at touchend.
+    // A horizontal disarm must NOT drop it (#451): removing a non-passive
+    // listener mid-gesture recomputes WebKit's non-fast-scrollable region
+    // under an in-flight scroll, which strands the fixed tab bar partway up
+    // the page in the iOS home-screen PWA. The gate disarms by clearing the
+    // start point instead, so the rest of the touch no-ops.
     fireTouch('touchmove', 100 + 80, 10 + 40);
-    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(1);
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(0);
+    // The touch ending is the teardown boundary — no non-passive listener
+    // survives an idle app, so scrolling keeps its passive fast path.
     fireTouch('touchend', 180, 50);
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(1);
+    // Exactly one attach for the whole gesture — the disarm did not leave a
+    // hole that a later move in the same touch re-attached into.
+    expect(added.filter((a) => a.type === 'touchmove')).toHaveLength(1);
     addSpy.mockRestore();
     removeSpy.mockRestore();
+  });
+
+  it('a parent rerender mid-gesture does not tear the listener down (CodeRabbit on #452)', () => {
+    // The listener effect must not depend on `onRefresh` identity: its cleanup
+    // is detachMove, so a parent rerendering with a fresh inline callback while
+    // a touch is armed would remove the non-passive listener mid-gesture — the
+    // same scrolling-tree mutation #451 removed from the direction gate.
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+    const { rerender } = render(<PullToRefresh onRefresh={() => {}} />);
+    fireTouch('touchstart', 100, 10);
+    const removedBefore = removeSpy.mock.calls.filter(([t]) => t === 'touchmove').length;
+    act(() => {
+      rerender(<PullToRefresh onRefresh={() => {}} />); // new identity, same gesture
+    });
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(removedBefore);
+    fireTouch('touchend', 100, 10);
+    removeSpy.mockRestore();
+  });
+
+  it('syncs the callback ref in a commit-phase effect, so StrictMode still fires the latest one exactly once (CodeRabbit round 2 on #452)', () => {
+    // The ref is written in an effect rather than during render, because an
+    // interrupted or abandoned concurrent render can carry props that never
+    // commit. StrictMode is the closest thing jsdom gives us to that: it
+    // double-invokes render AND remounts every effect (mount → cleanup →
+    // mount). Both the sync effect and the listener effect have to survive
+    // that without dropping the callback or double-firing it.
+    const stale = vi.fn();
+    const fresh = vi.fn();
+    const { rerender } = render(
+      <StrictMode>
+        <PullToRefresh onRefresh={stale} />
+      </StrictMode>,
+    );
+    rerender(
+      <StrictMode>
+        <PullToRefresh onRefresh={fresh} />
+      </StrictMode>,
+    );
+    pullGesture(0, PTR_THRESHOLD_PX * 3);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(fresh).toHaveBeenCalledTimes(1);
+    expect(stale).not.toHaveBeenCalled();
+  });
+
+  it('fires the callback swapped in DURING the armed gesture (CodeRabbit on #452)', () => {
+    // The swap happens between touchstart and release, which is the sequence
+    // that matters: it proves the effect neither re-subscribed on the identity
+    // change nor captured the callback it saw at arming time.
+    const stale = vi.fn();
+    const fresh = vi.fn();
+    const { rerender } = render(<PullToRefresh onRefresh={stale} />);
+    fireTouch('touchstart', 100, 0);
+    rerender(<PullToRefresh onRefresh={fresh} />);
+    fireTouch('touchmove', 100, PTR_THRESHOLD_PX * 3);
+    fireTouch('touchend', 100, PTR_THRESHOLD_PX * 3);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(fresh).toHaveBeenCalledTimes(1);
+    expect(stale).not.toHaveBeenCalled();
+  });
+
+  it('the multi-touch abort cancels the pull WITHOUT detaching mid-gesture (#452 self-review)', () => {
+    // The second finger lands while the first is still down, so this abort is
+    // mid-gesture by definition. It must reset the pull without touching the
+    // listener — detaching here would be the same scrolling-tree mutation #451
+    // removed from the direction gate, reached by a different path.
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+    render(<PullToRefresh onRefresh={vi.fn()} />);
+    fireTouch('touchstart', 100, 10);
+    fireTouch('touchmove', 100, 10 + PTR_SLOP_PX + 4);
+    fireTouch('touchmove', 100, 10 + 220); // engaged, past threshold
+    const twoFingers = new Event('touchstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(twoFingers, 'touches', {
+      value: [{ clientX: 100, clientY: 230 }, { clientX: 140, clientY: 230 }],
+    });
+    act(() => {
+      window.dispatchEvent(twoFingers);
+    });
+    // Pull aborted...
+    expect(document.querySelector('.ptr')!.className).not.toContain('ptr-pulling');
+    // ...but the listener is still there, because the touch has not ended.
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(0);
+    // The touch ending is what drops it.
+    fireTouch('touchend', 100, 230);
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(1);
+    removeSpy.mockRestore();
+  });
+
+  it('holds the listener until the LAST finger lifts, not the first touchend (Codex P2 on #452)', () => {
+    // The deeper case: after the multi-touch abort, the SECOND finger lifts
+    // while the original armed finger is still down and still scrolling.
+    // `touchend.touches` lists the fingers that remain, so a non-empty list
+    // means the gesture is not over and teardown must wait.
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+    render(<PullToRefresh onRefresh={vi.fn()} />);
+    fireTouch('touchstart', 100, 10);
+    fireTouch('touchmove', 100, 10 + PTR_SLOP_PX + 4);
+    fireTouch('touchmove', 100, 10 + 220);
+    const secondFingerDown = new Event('touchstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(secondFingerDown, 'touches', {
+      value: [{ clientX: 100, clientY: 230 }, { clientX: 140, clientY: 230 }],
+    });
+    act(() => {
+      window.dispatchEvent(secondFingerDown);
+    });
+    // Second finger lifts; the ORIGINAL finger is still down.
+    const secondFingerUp = new Event('touchend', { bubbles: true, cancelable: true });
+    Object.defineProperty(secondFingerUp, 'touches', { value: [{ clientX: 100, clientY: 230 }] });
+    act(() => {
+      window.dispatchEvent(secondFingerUp);
+    });
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(0);
+    // Last finger lifts: now the gesture really is over.
+    fireTouch('touchend', 100, 230);
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(1);
+    removeSpy.mockRestore();
+  });
+
+  it('a disarmed gesture never preventDefaults again, however it continues (#451)', () => {
+    // The listener outliving the direction gate is only safe if a disarmed
+    // touch is genuinely inert — otherwise it would start swallowing the
+    // scroll it just handed back to the browser.
+    render(<PullToRefresh onRefresh={vi.fn()} />);
+    fireTouch('touchstart', 100, 10);
+    fireTouch('touchmove', 180, 50); // horizontal-dominant -> disarm
+    const resumed = fireTouch('touchmove', 100, 300); // downward, same touch
+    expect(resumed.defaultPrevented).toBe(false);
+    expect(document.querySelector('.ptr')?.className).not.toContain('ptr-pulling');
   });
 });
 

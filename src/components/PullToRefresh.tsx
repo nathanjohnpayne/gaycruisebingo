@@ -55,10 +55,11 @@ export async function refreshApp(reload: () => void = () => window.location.relo
  *  - never arms from inside an overlay (`.sheet-backdrop`, `.celebrate`,
  *    `.bug-report-pick`) — sheets own their own scroll;
  *  - the non-passive `touchmove` listener exists ONLY between an arming
- *    touchstart and that touch's end/cancel/disarm (Codex P2 on #432): a
- *    permanent `{ passive: false }` window listener would force every
- *    scroll's touchmove through the main thread for the app's whole life.
- *    While attached it preventDefaults only once the pull has engaged;
+ *    touchstart and that touch's END (Codex P2 on #432): a permanent
+ *    `{ passive: false }` window listener would force every scroll's
+ *    touchmove through the main thread for the app's whole life. A DISARM
+ *    does not drop it (#451) — see detachMove below. While attached it
+ *    preventDefaults only once the pull has engaged;
  *  - `touchcancel` ABORTS — snap back, never refresh (Codex P2 on #432):
  *    the system stealing the touch is not a release, however far the pull
  *    had traveled.
@@ -86,11 +87,48 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
   const pullRef = useRef(0);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  // The refresh callback, read through a ref (CodeRabbit on #452). The listener
+  // effect below must NEVER re-run on a prop identity change: its cleanup calls
+  // detachMove, so a parent rerendering with a fresh inline `onRefresh`
+  // mid-gesture would tear the non-passive touchmove listener down exactly the
+  // way the direction gate used to (#451) — the failure this whole PR exists to
+  // remove. Reading through a ref makes the effect depend on nothing, so its
+  // lifetime is the component's, not the callback's. App.tsx passes no prop
+  // today, so this closes a hole rather than fixing a live bug, but "the
+  // listener is never removed mid-gesture" should be structural rather than a
+  // property of the current call site.
+  //
+  // Synced in a COMMIT-phase effect, not during render (CodeRabbit round 2 on
+  // #452). `phaseRef` above mirrors this component's own state, which a
+  // replayed render recomputes identically; `onRefresh` is a PARENT prop, and
+  // under concurrent rendering a render that is interrupted or abandoned can
+  // carry props that never commit. Writing the ref during render could
+  // therefore leave a released gesture calling a callback the parent never
+  // actually shipped. The gesture only ever reads it from a touch handler's
+  // timer, long after commit, so an effect is early enough.
+  const onRefreshRef = useRef(onRefresh);
+  useEffect(() => {
+    onRefreshRef.current = onRefresh;
+  }, [onRefresh]);
 
   useEffect(() => {
     const atTop = () => window.scrollY <= 0;
     let moveAttached = false;
 
+    // Dropped at the END of the armed touch, never mid-gesture (#451). On
+    // WebKit the set of non-passive touch listeners defines the page's
+    // non-fast-scrollable region, so attaching one on touchstart and removing
+    // it again a few frames later — which is what disarming at the direction
+    // gate did — mutates the scrolling tree while that scroll is still in
+    // flight, and leaves viewport-anchored (`position: fixed`) layers stale:
+    // the bottom tab bar froze partway up the page in the iOS home-screen PWA
+    // (the same class of failure as #422's backdrop-filter promotion). A
+    // disarm now only clears `start.current`, which makes onTouchMove a no-op
+    // for the rest of the touch; the listener itself lives exactly as long as
+    // the touch that armed it. That still satisfies the Codex P2 that motivated
+    // this teardown — the concern was a PERMANENT window listener taxing every
+    // scroll for the app's whole life, not one that outlives a direction gate
+    // by the remainder of a single gesture.
     const detachMove = () => {
       if (moveAttached) {
         window.removeEventListener('touchmove', onTouchMove);
@@ -108,13 +146,14 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       if (!engaged.current) {
         // Direction gate: wait out the slop, then commit only to a
         // downward-dominant drag that STARTED at the top. Anything else is
-        // someone scrolling or swiping a carousel — disarm AND drop the
-        // non-passive listener immediately so the rest of their gesture
-        // scrolls on the fast path.
+        // someone scrolling or swiping a carousel — disarm, which makes every
+        // remaining touchmove in this gesture an early return. The listener
+        // stays attached until the touch ends (#451): tearing it down here
+        // re-computed the scrolling tree mid-scroll and stranded the fixed tab
+        // bar. Nothing is preventDefaulted after a disarm, so the scroll runs.
         if (Math.abs(dx) < PTR_SLOP_PX && Math.abs(dy) < PTR_SLOP_PX) return;
         if (dy <= PTR_SLOP_PX || Math.abs(dx) >= dy || !atTop()) {
           start.current = null;
-          detachMove();
           return;
         }
         engaged.current = true;
@@ -128,13 +167,18 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       setPull(p);
     };
 
-    // Shared teardown for both release paths. `commit` distinguishes a real
-    // RELEASE (may refresh) from a CANCELLATION (never refreshes).
-    const finishTouch = (commit: boolean) => {
+    // Reset the GESTURE without touching the listener. Split out of
+    // finishTouch (#452 self-review): the multi-touch abort below fires while
+    // the first finger is still down, so detaching there would be exactly the
+    // mid-gesture scrolling-tree mutation this component now avoids — the same
+    // hole as the old direction-gate teardown, reached by a different path.
+    // The listener's teardown boundary is the touch ENDING, and only that.
+    // `commit` distinguishes a real RELEASE (may refresh) from a CANCELLATION
+    // (never refreshes).
+    const resetGesture = (commit: boolean) => {
       const wasEngaged = engaged.current;
       start.current = null;
       engaged.current = false;
-      detachMove();
       if (!wasEngaged || phaseRef.current === 'refreshing') return;
       // The threshold decision reads pullRef, and the timer is scheduled
       // HERE in the event handler — never inside a state updater (round 2:
@@ -145,7 +189,7 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
         setPull(PTR_THRESHOLD_PX);
         // Hold at the threshold while the ring spins; give the spin two
         // beats to be SEEN before the reload tears the page down.
-        window.setTimeout(() => (onRefresh ?? (() => void refreshApp()))(), 450);
+        window.setTimeout(() => (onRefreshRef.current ?? (() => void refreshApp()))(), 450);
         return;
       }
       // Below threshold, or the system stole the touch (browser chrome,
@@ -155,6 +199,21 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       setPull(0);
     };
 
+    // The teardown boundary is the LAST finger leaving, not the first
+    // `touchend` (Codex P2 on #452). After a multi-touch abort the second
+    // finger can lift while the ORIGINAL armed finger is still down and still
+    // scrolling; detaching on that touchend would remove the listener
+    // mid-gesture — the same scrolling-tree mutation, one level deeper than the
+    // abort fix. `TouchEvent.touches` on a touchend lists the fingers that
+    // REMAIN, so zero is the honest "this gesture is over" signal. If a
+    // terminal event is ever dropped the listener simply waits for the next
+    // one (or unmount); `onTouchStart`'s `moveAttached` guard means a fresh arm
+    // reuses it rather than stacking a second.
+    const finishTouch = (commit: boolean, remainingTouches: number) => {
+      resetGesture(commit);
+      if (remainingTouches === 0) detachMove();
+    };
+
     const onTouchStart = (e: TouchEvent) => {
       if (phaseRef.current === 'refreshing') return;
       if (e.touches.length !== 1) {
@@ -162,7 +221,9 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
         // #432 round 2): multi-touch is pinch/zoom territory, and without
         // the abort, lifting EITHER finger later would emit a touchend that
         // committed the still-armed pull while the other finger is down.
-        if (start.current) finishTouch(false);
+        // `resetGesture`, not `finishTouch` — the first finger is still down,
+        // so the listener must survive to its own touchend (#452).
+        if (start.current) resetGesture(false);
         return;
       }
       if (!atTop()) return;
@@ -181,8 +242,8 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       }
     };
 
-    const onTouchEnd = () => finishTouch(true);
-    const onTouchCancel = () => finishTouch(false);
+    const onTouchEnd = (e: TouchEvent) => finishTouch(true, e.touches.length);
+    const onTouchCancel = (e: TouchEvent) => finishTouch(false, e.touches.length);
 
     window.addEventListener('touchstart', onTouchStart, { passive: true });
     window.addEventListener('touchend', onTouchEnd, { passive: true });
@@ -193,7 +254,10 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       window.removeEventListener('touchend', onTouchEnd);
       window.removeEventListener('touchcancel', onTouchCancel);
     };
-  }, [onRefresh]);
+    // Deliberately empty: the effect owns window listeners whose teardown is
+    // the bug (see onRefreshRef above). Everything it reads that can change —
+    // phase, pull distance, the refresh callback — it reads through a ref.
+  }, []);
 
   const progress = Math.min(1, pull / PTR_THRESHOLD_PX);
   const cls =

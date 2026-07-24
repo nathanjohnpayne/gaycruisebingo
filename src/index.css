@@ -204,8 +204,17 @@ a {
    and freezes mid-screen — most visibly in a standalone home-screen PWA on a
    scrolling route (Feed). Desktop/Android render it fine, which is why it read
    as intermittent. The frosted-glass blur is not worth a nav bar that drifts
-   off the bottom edge, so the background is a near-opaque themed fill instead
-   (still legible over feed imagery without relying on a live blur). */
+   off the bottom edge, so the background is an opaque themed fill instead
+   (still legible over feed imagery without relying on a live blur).
+
+   Nothing in this rule may reintroduce a compositing trigger — `backdrop-filter`,
+   `filter`, `transform`, `will-change`, or `perspective` — and the background
+   stays fully opaque (#451; it was a 96% color-mix, imperceptibly translucent,
+   which only gave the fixed layer blending work to do). Guarded by the CSS
+   contract test in w0-app-shell.test.tsx so a future polish pass cannot quietly
+   undo #422. The `.tab` press/hop transforms BELOW are a separate matter: they
+   were already on main when #422 was verified pinned on a real device, so they
+   are not implicated, and the motion pass keeps them. */
 .tabs {
   position: fixed;
   bottom: 0;
@@ -215,7 +224,7 @@ a {
   gap: 6px;
   justify-content: center;
   padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--bg) 96%, transparent);
+  background: var(--bg);
   border-top: 1px solid var(--border);
   z-index: 20;
 }
