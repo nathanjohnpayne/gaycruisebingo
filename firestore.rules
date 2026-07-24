@@ -167,8 +167,10 @@ service cloud.firestore {
     // A Board's `cells` projection is a full array replacement. A stale second
     // device must therefore be rejected instead of overwriting the first device's
     // unrelated Mark. New daily cards start at markVersion 0; pre-version cards
-    // remain writable for rollout compatibility and upgrade on their first current-
-    // client write. Admin repair flows are exempt.
+    // remain writable until a current client upgrades them on its first write.
+    // After that upgrade, a version-less legacy PWA write must be denied: allowing
+    // it would restore the full-array overwrite race this guard closes. Admin
+    // repair flows are exempt.
     function versionedMarkWriteOk(eventId) {
       return !boardCellsChanged()
         || isAdmin(eventId)

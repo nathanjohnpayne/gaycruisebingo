@@ -139,6 +139,7 @@ function ProofQueueRow({
         onAction={() =>
           deleteProof(p.id, p.storagePath, {
             daily: !!days?.length,
+            dayIndexes: days?.map((_, dayIndex) => dayIndex),
             tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
             // #265 (Codex P2 on #278 round 3): the admin moderation delete
             // observes the same freeze/ceremonial gates as the player's own —

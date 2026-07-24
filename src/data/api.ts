@@ -1266,6 +1266,25 @@ export function computeMark(params: {
 // call's read runs only after the previous call has issued its batch.
 const markChains = new Map<string, Promise<unknown>>();
 
+// A rejected server batch is retried only while it still represents the latest
+// local intent for that square. `commit()` settles after `setMark` has returned,
+// so a second tap can otherwise be overtaken by the first tap's async retry.
+const markIntentGenerations = new Map<string, number>();
+
+function markChainKey(database: Firestore, uid: string): string {
+  return `${(database as unknown as { app?: { name?: string } }).app?.name ?? 'default'}/${uid}`;
+}
+
+function markIntentKey(database: Firestore, params: {
+  uid: string;
+  index: number;
+  daily?: boolean;
+  dayIndex?: number;
+}): string {
+  const boardKey = params.daily === true ? `day-${params.dayIndex ?? 0}` : 'legacy';
+  return `${markChainKey(database, params.uid)}/${boardKey}/${params.index}`;
+}
+
 // A cache tombstone alone cannot distinguish this device's incomplete-cache
 // unmark from an authoritative admin deletion. Remember only a deletion this
 // module issued while one or more sibling reads were unknowable; the narrow
@@ -1385,6 +1404,10 @@ export async function setMark(params: {
   // Internal bounded retry after the rules reject a stale daily-board revision.
   // Not a user-visible retry policy: offline batches still queue unchanged.
   markRetryCount?: number;
+  // Captures the user action that originated an internal retry. A later tap on
+  // this same square invalidates the retry rather than letting it replay stale
+  // intent after its server refresh.
+  markRetryIntentGeneration?: number;
   database?: Firestore;
 }): Promise<{
   cells: Cell[];
@@ -1395,11 +1418,22 @@ export async function setMark(params: {
 }> {
   const { uid } = params;
   const database = params.database ?? db;
-  const chainKey = `${(database as unknown as { app?: { name?: string } }).app?.name ?? 'default'}/${uid}`;
+  const chainKey = markChainKey(database, uid);
+  const intentKey = markIntentKey(database, params);
+  const isInitialIntent = (params.markRetryCount ?? 0) === 0;
+  const runParams = isInitialIntent
+    ? {
+        ...params,
+        markRetryIntentGeneration: (markIntentGenerations.get(intentKey) ?? 0) + 1,
+      }
+    : params;
+  if (isInitialIntent) {
+    markIntentGenerations.set(intentKey, runParams.markRetryIntentGeneration!);
+  }
   const prev = markChains.get(chainKey) ?? Promise.resolve();
   const next = prev.then(
-    () => runSetMark(params, database),
-    () => runSetMark(params, database),
+    () => runSetMark(runParams, database),
+    () => runSetMark(runParams, database),
   );
   // The stored tail never rejects, so one failed Mark cannot poison the chain.
   markChains.set(
@@ -1431,6 +1465,7 @@ async function runSetMark(
     boardSeed?: number;
     echoDayIndexes?: number[];
     markRetryCount?: number;
+    markRetryIntentGeneration?: number;
   },
   database: Firestore,
 ): Promise<{
@@ -1806,7 +1841,12 @@ async function runSetMark(
               typeof data.markVersion === 'number' &&
               data.markVersion >= target.attemptedVersion;
           });
-          if (isConflictingCurrentProjection) return setMark({ ...params, markRetryCount: 1 });
+          const retryStillMatchesLatestIntent =
+            params.markRetryIntentGeneration !== undefined &&
+            markIntentGenerations.get(markIntentKey(database, params)) === params.markRetryIntentGeneration;
+          if (isConflictingCurrentProjection && retryStillMatchesLatestIntent) {
+            return setMark({ ...params, markRetryCount: 1 });
+          }
           return undefined;
         })
         .catch(() => undefined);
@@ -1889,10 +1929,13 @@ export async function reconcileEchoes(params: {
   tutorialDayIndexes?: number[];
   ceremonialDayIndexes?: number[];
   statsFrozen?: boolean;
+  // Internal bounded retry after a concurrent markVersion write. The retry is
+  // self-scheduled so Board's once-per-board guard need not await a rejection.
+  reconcileRetryCount?: number;
   database?: Firestore;
 }): Promise<{ changed: boolean; bingoTransition: boolean; blackoutTransition: boolean; complete: boolean }> {
   const database = params.database ?? db;
-  const chainKey = `${(database as unknown as { app?: { name?: string } }).app?.name ?? 'default'}/${params.uid}`;
+  const chainKey = markChainKey(database, params.uid);
   const prev = markChains.get(chainKey) ?? Promise.resolve();
   const next = prev.then(
     () => runReconcileEchoes(params, database),
@@ -1916,6 +1959,7 @@ async function runReconcileEchoes(
     tutorialDayIndexes?: number[];
     ceremonialDayIndexes?: number[];
     statsFrozen?: boolean;
+    reconcileRetryCount?: number;
   },
   database: Firestore,
 ): Promise<{ changed: boolean; bingoTransition: boolean; blackoutTransition: boolean; complete: boolean }> {
@@ -2050,6 +2094,31 @@ async function runReconcileEchoes(
     // rejection is a genuine online failure, rolled back by latency
     // compensation, and must not vanish silently.
     console.error('[reconcileEchoes] batch.commit() rejected — online write failure', { uid, dayIndex }, err);
+    // A version conflict is recoverable: refresh every input that feeds the
+    // achieved set, then retry once through the same serialized chain. This is
+    // deliberately narrower than a generic retry so stale seeds and permission
+    // failures cannot replay a reconcile onto a different projection.
+    if (res.changed && (params.reconcileRetryCount ?? 0) === 0) {
+      const freshRefs = [
+        boardRef,
+        playerRef,
+        ...siblingDays.map((d) => doc(database, 'events', EVENT_ID, 'days', String(d), 'boards', uid)),
+      ];
+      void Promise.all(freshRefs.map((ref) => getDocFromServer(ref)))
+        .then(([freshBoard]) => {
+          if (!freshBoard.exists()) return undefined;
+          const freshData = freshBoard.data() as { seed?: unknown; markVersion?: unknown };
+          const attemptedVersion = nextMarkVersion(board);
+          const isCurrentProjectionConflict =
+            freshData.seed === board.seed &&
+            typeof freshData.markVersion === 'number' &&
+            freshData.markVersion >= attemptedVersion;
+          return isCurrentProjectionConflict
+            ? reconcileEchoes({ ...params, reconcileRetryCount: 1, database })
+            : undefined;
+        })
+        .catch(() => undefined);
+    }
   });
   if (markerRepairs.length > 0) {
     void committed.then(() => markerRepairs.forEach((cell) => forgetMarkerRepair(markerRepairKey(uid, cell.itemId as string)))).catch(() => undefined);

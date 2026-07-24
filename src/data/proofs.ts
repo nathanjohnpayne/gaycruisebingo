@@ -359,7 +359,13 @@ export async function deleteProof(
   // the Proof's OWN `dayIndex` and fold the owner's stats into that Day's bucket,
   // mirroring `attachProof`. Absent/false keeps the pre-1.5 flat single-board
   // unmark. `tutorialDayIndexes` scopes the cruise-wide First-to-BINGO exclusion.
-  opts?: { daily?: boolean; tutorialDayIndexes?: number[]; ceremonialDayIndexes?: number[]; statsFrozen?: boolean | (() => boolean) },
+  opts?: {
+    daily?: boolean;
+    dayIndexes?: number[];
+    tutorialDayIndexes?: number[];
+    ceremonialDayIndexes?: number[];
+    statsFrozen?: boolean | (() => boolean);
+  },
 ): Promise<void> {
   // Storage first (ordering preserved): if the blob delete throws we keep the
   // doc so the media isn't orphaned.
@@ -410,6 +416,18 @@ export async function deleteProof(
       const backing = cells?.find((c) => c.index === proof.cellIndex);
       if (cells && backing && backing.proofId === id) {
         const playerSnap = await tx.get(playerRef);
+        // A proof can turn an Echo into a local proof-backed Mark while the
+        // original source remains confirmed on a sibling day. The tally marker
+        // is global per (Prompt, Player), so its deletion must see every known
+        // day board before removing a still-standing source's marker.
+        const siblingBoards =
+          daily && backing.itemId
+            ? await Promise.all(
+                (opts?.dayIndexes ?? [])
+                  .filter((dayIndex) => dayIndex !== proofDayIndex)
+                  .map((dayIndex) => tx.get(rawDayBoard(dayIndex, proof.uid))),
+              )
+            : [];
         const existingFirst = (playerSnap.data()?.firstBingoAt as number | null | undefined) ?? null;
         const next: Cell[] = cells.map((c) =>
           c.index === proof.cellIndex
@@ -458,7 +476,12 @@ export async function deleteProof(
         // mirroring the cell flip — reached only when the cell is still backed by
         // THIS proof (a genuine unmark), and only for a non-free Prompt. Same marker
         // path setMark writes; the owner is the proof's uid.
-        if (backing.itemId) tx.delete(rawMarker(backing.itemId, proof.uid));
+        const markedOnSibling = siblingBoards.some((sibling) =>
+          ((sibling.data()?.cells as Cell[] | undefined) ?? []).some(
+            (cell) => !cell.free && cell.marked && cell.itemId === backing.itemId,
+          ),
+        );
+        if (backing.itemId && !markedOnSibling) tx.delete(rawMarker(backing.itemId, proof.uid));
       }
     }
 

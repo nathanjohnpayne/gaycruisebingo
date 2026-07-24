@@ -300,6 +300,7 @@ function ProofCard({
               // `days` present ⇒ daily; the Proof carries its own `dayIndex`.
               deleteProof(proof.id, proof.storagePath, {
                 daily: !!days?.length,
+                dayIndexes: days?.map((_, dayIndex) => dayIndex),
                 tutorialDayIndexes: days ? [...tutorialDayIndexSet(days)] : undefined,
                 // #265: symmetric with the mark path — the farewell bucket never
                 // sums, and a post-freeze deletion never unfolds frozen stats.

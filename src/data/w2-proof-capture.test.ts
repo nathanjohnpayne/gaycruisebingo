@@ -545,6 +545,27 @@ describe('deleteProof — resolves the backing cell by the proof doc cellIndex (
     expect((markerDelete![0] as Ref).path).toBe(`events/${EVENT_ID}/tally/i5/markers/u1`);
   });
 
+  it('keeps the shared tally marker when a sibling Day still carries the echoed Prompt', async () => {
+    proofState = { uid: 'u1', cellIndex: 5, dayIndex: 0, storagePath: null };
+    const board = dealt();
+    board[5] = { ...board[5], marked: true, markedAt: 9, proofId: 'P', status: 'confirmed' };
+    boardState = { cells: board };
+    const sibling = dealt();
+    sibling[9] = { ...sibling[9], itemId: 'i5', marked: true, markedAt: 8, status: 'confirmed', echo: true };
+    txGet.mockImplementation((ref: Ref): Promise<Snap> => {
+      if (ref.path.includes('/days/1/boards/')) return Promise.resolve({ data: () => ({ cells: sibling }) });
+      if (ref.path.includes('/boards/')) return Promise.resolve({ data: () => boardState });
+      if (ref.path.includes('/players/')) return Promise.resolve({ data: () => playerState });
+      if (ref.path.includes('/proofs/')) return Promise.resolve({ data: () => proofState });
+      return Promise.resolve({ data: () => undefined });
+    });
+
+    await deleteProof('P', undefined, { daily: true, dayIndexes: [0, 1] });
+
+    expect(setPayload('/days/0/boards/')).toBeDefined();
+    expect(txDelete.mock.calls.find((c) => (c[0] as Ref).path.includes('/tally/'))).toBeUndefined();
+  });
+
   it('after a bare-Mark drain dropped cells[i].proofId, it still deletes the proof but leaves the clobbered cell (accepted residual, ADR 0001)', async () => {
     // The queued bare-Mark drain wholesale-replaced cells and dropped the
     // proofId projection: cell 5 is marked but no longer references the proof.

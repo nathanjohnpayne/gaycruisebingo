@@ -315,6 +315,49 @@ describe('setMark — mark-time propagation (spec § Mark-time)', () => {
     expect(retrySource.cells.find((c) => c.index === 7)).toMatchObject({ marked: true, echo: true });
   });
 
+  it('does not replay a rejected mark after a newer local toggle changes that square intent', async () => {
+    seedBoards();
+    let releaseServerReads!: () => void;
+    const serverReads = new Promise<void>((resolve) => {
+      releaseServerReads = resolve;
+    });
+    const { getDocFromServer } = await import('firebase/firestore');
+    const mockedServerRead = vi.mocked(getDocFromServer);
+    try {
+      mockedServerRead.mockImplementation(async (ref) => {
+        await serverReads;
+        return route(ref as { args?: unknown[] }) as never;
+      });
+      H.batchCommit
+        .mockImplementationOnce(async () => {
+          // The rejected mark lost a version race. While its retry waits on the
+          // server, the player changes their mind and unmarks this same square.
+          H.dayBoards.set(2, {
+            uid: 'u1',
+            seed: 222,
+            markVersion: 1,
+            dayIndex: 2,
+            cells: card((i) => (i === 5 ? 'shared' : `a${i}`)),
+          });
+          throw Object.assign(new Error('stale markVersion'), { code: 'permission-denied' });
+        })
+        .mockResolvedValueOnce(undefined);
+
+      await markShared();
+      await vi.waitFor(() => expect(mockedServerRead).toHaveBeenCalled());
+      await markShared({ nextMarked: false });
+      releaseServerReads();
+
+      await vi.waitFor(() => expect(H.batchCommit).toHaveBeenCalledTimes(2));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // First rejected batch + the newer unmark only. A third commit would be
+      // the stale retry wrongly restoring the original mark intent.
+      expect(H.batchCommit).toHaveBeenCalledTimes(2);
+    } finally {
+      mockedServerRead.mockImplementation(async (ref) => route(ref as { args?: unknown[] }) as never);
+    }
+  });
+
   it('writes ONE aggregated player doc: acted bucket + echoed bucket + re-derived roots', async () => {
     seedBoards();
     await markShared();
@@ -702,6 +745,34 @@ describe('reconcileEchoes — open-time backfill (spec § Open-time)', () => {
     const playerWrite = H.batchSet.mock.calls.find(isPlayerWrite)![1] as { squaresMarked: number };
     expect(playerWrite.squaresMarked).toBe(2);
     expect(H.batchCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes and retries a rejected echo projection once', async () => {
+    seedReconcile();
+    H.batchCommit
+      .mockImplementationOnce(async () => {
+        // Another device advanced this exact board without adding the echo the
+        // cache-backed pass was about to write.
+        H.dayBoards.set(2, {
+          uid: 'u1',
+          seed: 222,
+          markVersion: 1,
+          dayIndex: 2,
+          cells: card((i) => (i === 9 ? 'shared' : `d${i}`)),
+        });
+        throw Object.assign(new Error('stale markVersion'), { code: 'permission-denied' });
+      })
+      .mockResolvedValueOnce(undefined);
+
+    await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [0, 1, 2] });
+    await vi.waitFor(() => expect(H.batchCommit).toHaveBeenCalledTimes(2));
+
+    const retryWrite = H.batchSet.mock.calls.filter((c) => isDayBoardWrite(c, 2)).slice(-1)[0]![1] as {
+      cells: Cell[];
+      markVersion: number;
+    };
+    expect(retryWrite.markVersion).toBe(2);
+    expect(retryWrite.cells.find((c) => c.index === 9)).toMatchObject({ marked: true, echo: true });
   });
 
   it('is a zero-write no-op on an already-reconciled board', async () => {
