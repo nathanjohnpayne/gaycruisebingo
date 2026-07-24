@@ -972,6 +972,49 @@ describe('reconcileEchoes — open-time backfill (spec § Open-time)', () => {
     expect(H.batchCommit).not.toHaveBeenCalled();
   });
 
+  it('re-pins a reload-lost Day honor for a standing echo win with a server-accepted stamp (Phase 4b #447 round 5)', async () => {
+    // The echoed board already drained (standing bingo, nothing left to write);
+    // dayStats carries the accepted stamp, but the ack-gated pin continuation
+    // died in a reload. The reconcile re-attempts the CREATE-ONCE pin with the
+    // stamp's own time.
+    H.dayBoards.set(2, {
+      uid: 'u1',
+      seed: 222,
+      dayIndex: 2,
+      cells: card((i) => `d${i}`, {
+        10: { marked: true, markedAt: 7, status: 'confirmed' },
+        11: { marked: true, markedAt: 7, status: 'confirmed' },
+        13: { marked: true, markedAt: 7, status: 'confirmed', echo: true },
+        14: { marked: true, markedAt: 7, status: 'confirmed', echo: true },
+      }),
+    });
+    H.player = {
+      uid: 'u1',
+      displayName: 'Alice',
+      dayStats: { 2: { bingoCount: 1, squaresMarked: 4, firstBingoAt: 7 } },
+    };
+    const res = await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [2] });
+    expect(res.changed).toBe(false);
+    await new Promise((r) => setTimeout(r, 0)); // the fire-and-forget pin's own awaits
+    const pin = H.setDoc.mock.calls.find((call) => {
+      const a = segs(call as unknown[]);
+      return a[2] === 'days' && a[3] === '2' && a[4] === 'meta';
+    });
+    expect(pin).toBeDefined();
+    expect((pin![1] as { firstBingo: { at: number } }).firstBingo.at).toBe(7);
+    // And WITHOUT a server-accepted stamp, no repair-pin fires.
+    vi.clearAllMocks();
+    H.player = { uid: 'u1', displayName: 'Alice', dayStats: {} };
+    await reconcileEchoes({ uid: 'u1', dayIndex: 2, dayIndexes: [2] });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(
+      H.setDoc.mock.calls.some((call) => {
+        const a = segs(call as unknown[]);
+        return a[2] === 'days' && a[4] === 'meta';
+      }),
+    ).toBe(false);
+  });
+
   it("repairs a marked PENDING carrier's marker too (#454 finding 2)", async () => {
     const values = new Map<string, string>();
     vi.stubGlobal('localStorage', {

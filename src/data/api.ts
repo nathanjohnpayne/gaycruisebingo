@@ -2073,6 +2073,30 @@ async function runReconcileEchoes(
     return read.status === 'fulfilled' && !read.value.exists() && hasMarkerRepair(repairKey);
   });
 
+  // REPAIR-PIN for an echo win whose ack-gated pin died in a reload (Phase 4b
+  // P1 on #447 round 5): an offline echo batch drains durably after a reload,
+  // but the in-memory `committed.then(pin)` continuation did not survive to
+  // fire. When the opened board STANDS a bingo whose per-Day stamp the server
+  // already accepted (`dayStats[d].firstBingoAt` in the cached player row),
+  // re-attempt the pin with that stamp — the pin is CREATE-ONCE (cache
+  // pre-check + the deny-all update rule), so a pin that already landed makes
+  // this a no-op and a later manual winner can never be displaced; a wrong
+  // pin cannot be minted because the stamp only exists if the fold committed.
+  // The Moment half of that reload loss is NOT re-derived — that would be the
+  // snapshot-diff machinery #104 removed; the pending-Moment queue documents
+  // reload loss as its accepted, fail-safe residual (specs/w2-feed-moments.md).
+  if (!res.bingoTransition && (!params.statsFrozen || params.ceremonialDayIndexes?.includes(dayIndex))) {
+    const priorStamp = cachedPlayerData?.dayStats?.[dayIndex]?.firstBingoAt;
+    if (typeof priorStamp === 'number' && completedLines(res.cells).length > 0) {
+      const pinName = honorDisplayName(undefined, cachedPlayerData?.displayName);
+      if (pinName) {
+        void pinDayFirstBingo(dayIndex, { uid, displayName: pinName, photoURL: null }, priorStamp).catch(
+          () => undefined,
+        );
+      }
+    }
+  }
+
   if (!res.changed && markerRepairs.length === 0) return none;
 
   const priorDayStats = cachedPlayerData?.dayStats as DayStats | undefined;
