@@ -199,11 +199,19 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       setPull(0);
     };
 
-    // The touch ENDING is the only teardown boundary: reset the gesture, then
-    // drop the listener that touch armed.
-    const finishTouch = (commit: boolean) => {
+    // The teardown boundary is the LAST finger leaving, not the first
+    // `touchend` (Codex P2 on #452). After a multi-touch abort the second
+    // finger can lift while the ORIGINAL armed finger is still down and still
+    // scrolling; detaching on that touchend would remove the listener
+    // mid-gesture — the same scrolling-tree mutation, one level deeper than the
+    // abort fix. `TouchEvent.touches` on a touchend lists the fingers that
+    // REMAIN, so zero is the honest "this gesture is over" signal. If a
+    // terminal event is ever dropped the listener simply waits for the next
+    // one (or unmount); `onTouchStart`'s `moveAttached` guard means a fresh arm
+    // reuses it rather than stacking a second.
+    const finishTouch = (commit: boolean, remainingTouches: number) => {
       resetGesture(commit);
-      detachMove();
+      if (remainingTouches === 0) detachMove();
     };
 
     const onTouchStart = (e: TouchEvent) => {
@@ -234,8 +242,8 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
       }
     };
 
-    const onTouchEnd = () => finishTouch(true);
-    const onTouchCancel = () => finishTouch(false);
+    const onTouchEnd = (e: TouchEvent) => finishTouch(true, e.touches.length);
+    const onTouchCancel = (e: TouchEvent) => finishTouch(false, e.touches.length);
 
     window.addEventListener('touchstart', onTouchStart, { passive: true });
     window.addEventListener('touchend', onTouchEnd, { passive: true });

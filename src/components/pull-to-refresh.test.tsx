@@ -346,6 +346,36 @@ describe('PullToRefresh — gesture contract', () => {
     removeSpy.mockRestore();
   });
 
+  it('holds the listener until the LAST finger lifts, not the first touchend (Codex P2 on #452)', () => {
+    // The deeper case: after the multi-touch abort, the SECOND finger lifts
+    // while the original armed finger is still down and still scrolling.
+    // `touchend.touches` lists the fingers that remain, so a non-empty list
+    // means the gesture is not over and teardown must wait.
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+    render(<PullToRefresh onRefresh={vi.fn()} />);
+    fireTouch('touchstart', 100, 10);
+    fireTouch('touchmove', 100, 10 + PTR_SLOP_PX + 4);
+    fireTouch('touchmove', 100, 10 + 220);
+    const secondFingerDown = new Event('touchstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(secondFingerDown, 'touches', {
+      value: [{ clientX: 100, clientY: 230 }, { clientX: 140, clientY: 230 }],
+    });
+    act(() => {
+      window.dispatchEvent(secondFingerDown);
+    });
+    // Second finger lifts; the ORIGINAL finger is still down.
+    const secondFingerUp = new Event('touchend', { bubbles: true, cancelable: true });
+    Object.defineProperty(secondFingerUp, 'touches', { value: [{ clientX: 100, clientY: 230 }] });
+    act(() => {
+      window.dispatchEvent(secondFingerUp);
+    });
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(0);
+    // Last finger lifts: now the gesture really is over.
+    fireTouch('touchend', 100, 230);
+    expect(removeSpy.mock.calls.filter(([t]) => t === 'touchmove')).toHaveLength(1);
+    removeSpy.mockRestore();
+  });
+
   it('a disarmed gesture never preventDefaults again, however it continues (#451)', () => {
     // The listener outliving the direction gate is only safe if a disarmed
     // touch is genuinely inert — otherwise it would start swallowing the
