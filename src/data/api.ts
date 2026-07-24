@@ -918,6 +918,9 @@ export async function reshuffleBoard(params: {
     at: number;
   } | null = null;
   const spend = await runTransaction(db, async (tx) => {
+    // Firestore can invoke this callback more than once. Do not let a discarded
+    // attempt's echo transition escape if a later attempt does not commit.
+    reshuffleEcho = null;
     // Every read first (Firestore's transaction contract), and every one of them
     // re-runs on a retry — which is the point: a retry must re-decide from
     // committed state, never re-fire a verdict formed against a snapshot that has
@@ -1077,7 +1080,7 @@ export async function reshuffleBoard(params: {
     tx.set(playerRef, { reshufflesUsed: nextUsed, ...(frozenNarrowed ?? {}) }, { merge: true });
     return nextUsed;
   });
-  if (reshuffleEcho) {
+  if (spend > 0 && reshuffleEcho) {
     const echo = reshuffleEcho as {
       bingoTransition: boolean;
       blackoutTransition: boolean;

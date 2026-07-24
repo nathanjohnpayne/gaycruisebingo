@@ -21,6 +21,7 @@ const H = vi.hoisted(() => ({
   txSet: vi.fn(),
   txDelete: vi.fn(),
   txGet: vi.fn(),
+  transactionRunner: null as null | ((fn: (tx: unknown) => Promise<unknown>, tx: unknown) => Promise<unknown>),
   // Returns a real promise: pinDayFirstBingo chains `.catch` onto it, and a
   // bare vi.fn() (undefined return) would throw an unhandled rejection.
   setDoc: vi.fn(async (..._args: unknown[]) => {}),
@@ -80,6 +81,7 @@ vi.mock('firebase/firestore', () => {
         set: H.txSet,
         delete: H.txDelete,
       };
+      if (H.transactionRunner) return H.transactionRunner(fn, tx);
       return fn(tx);
     },
     setDoc: H.setDoc,
@@ -181,6 +183,7 @@ beforeEach(() => {
   H.dayBoards = new Map();
   H.markerCache.clear();
   H.player = null;
+  H.transactionRunner = null;
   __resetPendingMarkerRepairsForTests();
 });
 
@@ -522,6 +525,26 @@ describe('reshuffleBoard — the post-Reshuffle re-deal echo (spec § Reshuffle 
     });
     await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).resolves.toBe(1);
     expect(H.txDelete).not.toHaveBeenCalled();
+  });
+
+  it('does not publish a stale re-deal echo when the transaction reports no committed spend (Phase 4b P1 #447)', async () => {
+    const confirmed: Partial<Record<number, Partial<Cell>>> = {};
+    for (let index = 0; index < 25; index++) {
+      confirmed[index] = { marked: true, markedAt: 1, status: 'confirmed' };
+    }
+    seedShuffle({
+      day0Overrides: confirmed,
+      playerExtra: { displayName: 'Alice' },
+    });
+    H.transactionRunner = async (fn, tx) => {
+      await fn(tx); // A discarded attempt derived a full-card echo transition.
+      return 0; // The transaction ultimately did not commit a reshuffle.
+    };
+
+    await expect(reshuffleBoard({ uid: 'u1', dayIndex: 1, expectedSeed: 111 })).resolves.toBe(0);
+    await Promise.resolve();
+    expect(peekPendingMoments('u1')).toMatchObject({ bingo: false, blackout: false, firstBingo: false });
+    expect(H.setDoc).not.toHaveBeenCalled();
   });
 });
 
