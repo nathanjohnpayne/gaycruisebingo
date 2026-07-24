@@ -33,6 +33,8 @@ A Board's `cells` was one 25-element ARRAY, replaced wholesale by every Mark wri
 
 ## Residuals (accepted)
 
+**Cell payloads are not rules-validated (unchanged from the array schema).** A hand-built owner write can merge a partial or odd cell value into their own board; deep merge cannot delete stored fields, the read boundary drops entries without a numeric index, and ADR 0001's self-writable posture ("do NOT lock these writes down") is the governing decision — the rules guard cross-cutting invariants (allowance, stale seed, the canonical 25-key shape family), not payload richness.
+
 **Same-cell cross-device conflict is last-write-wins.** The same player marking/unmarking the SAME Square from two devices resolves to the later write. That is the correct semantic for a single square owned by a single player, and no schema can do better without timestamps-per-field.
 
 **A pre-migration PWA bundle's queued board writes are denied post-deploy.** Its full-array write fails the `cells is map` gate at drain and rolls back locally; the update prompt / next reload re-marks under the current bundle. Bounded by the deploy moment (post-cruise, traffic near zero) and strictly narrower than the alternative (keeping an array escape reopens the clobber).
