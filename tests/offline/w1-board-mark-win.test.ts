@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { initializeApp, deleteApp, type FirebaseApp } from 'firebase/app';
 
 // setMark reaches the production firebase singleton for its DEFAULT `db`, whose
@@ -34,6 +34,7 @@ import {
 } from 'firebase/firestore';
 import { setMark } from '../../src/data/api';
 import type { BoardDoc, Cell, PlayerDoc } from '../../src/types';
+import { seedEventDoc } from './seedEvent';
 
 // ---------------------------------------------------------- ADR 0006 + 0002 ---
 // The MARK half of the offline proof. Where `w0-offline-persistence` proves the
@@ -58,6 +59,13 @@ import type { BoardDoc, Cell, PlayerDoc } from '../../src/types';
 // second write's full-array replacement). Run it (app tests are not CI-run):
 //   firebase emulators:exec --only auth,firestore \
 //     "vitest run --config vitest.offline.config.ts"
+//
+// The Board lives at the Phase 1.5 DAY-SCOPED path
+// events/{eventId}/days/{dayIndex}/boards/{uid} — the legacy
+// events/{eventId}/boards/{uid} match no longer exists in firestore.rules —
+// so setMark runs in `daily` mode and the event's `days[]` schedule (whose
+// `unlockAt` gates every day-board write) is seeded out-of-band first (see
+// seedEvent.ts).
 
 const EVENT_ID = 'med-2026'; // must match src/firebase.ts default (setMark reads it)
 const PROJECT_ID = 'demo-mark-win'; // distinct from w0's project → isolated data
@@ -174,7 +182,13 @@ function unmarkedBoard(uid: string): BoardDoc {
     marked: index === 12,
     markedAt: null,
   }));
-  return { uid, seed: 42, createdAt: Date.now(), cells };
+  // `markSeed` (== seed) makes the re-seed in the two race tests below pass the
+  // rules: every test in this file signs in as the SAME uid (the emulator keys
+  // accounts on email), so their seeding setDoc REWRITES the day-board doc the
+  // reload test already marked — a cells-changing write to a seeded Board,
+  // which `seededMarkWriteOk` denies unless it carries markSeed == the stored
+  // seed. On the very first create the field is inert.
+  return { uid, dayIndex: 0, seed: 42, markSeed: 42, createdAt: Date.now(), cells };
 }
 
 function freshPlayer(uid: string): PlayerDoc {
@@ -190,6 +204,10 @@ function freshPlayer(uid: string): PlayerDoc {
   };
 }
 
+beforeAll(async () => {
+  await seedEventDoc(PROJECT_ID, EVENT_ID);
+});
+
 afterAll(async () => {
   await Promise.all(apps.map((a) => deleteApp(a).catch(() => {})));
 });
@@ -197,7 +215,7 @@ afterAll(async () => {
 describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
   it('queues an offline Mark across a reload, then syncs the Mark + stats with no Feed write', async () => {
     const tab = await makeClient(TAB_APP_NAME);
-    const boardPath = `events/${EVENT_ID}/boards/${tab.uid}`;
+    const boardPath = `events/${EVENT_ID}/days/0/boards/${tab.uid}`;
     const playerPath = `events/${EVENT_ID}/players/${tab.uid}`;
     const boardRef = doc(tab.db, boardPath);
 
@@ -221,6 +239,9 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
       nextMarked: true,
       claimMode: 'honor',
       currentFirstBingoAt: null,
+      dayIndex: 0,
+      daily: true,
+      boardSeed: 42,
       database: tab.db,
     });
     expect(res.bingo).toBe(false);
@@ -281,7 +302,7 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
   // the pre-fix code).
   it('two Marks fired back-to-back off the same stale snapshot both survive (no clobber)', async () => {
     const tab = await makeClient(RACE_TAB_APP_NAME);
-    const boardPath = `events/${EVENT_ID}/boards/${tab.uid}`;
+    const boardPath = `events/${EVENT_ID}/days/0/boards/${tab.uid}`;
     const playerPath = `events/${EVENT_ID}/players/${tab.uid}`;
     const boardRef = doc(tab.db, boardPath);
 
@@ -299,6 +320,9 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
       nextMarked: true,
       claimMode: 'honor',
       currentFirstBingoAt: null,
+      dayIndex: 0,
+      daily: true,
+      boardSeed: 42,
       database: tab.db,
     });
     // Still the ORIGINAL stale snapshot -- not the first call's result -- just
@@ -311,6 +335,9 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
       nextMarked: true,
       claimMode: 'honor',
       currentFirstBingoAt: null,
+      dayIndex: 0,
+      daily: true,
+      boardSeed: 42,
       database: tab.db,
     });
 
@@ -334,7 +361,7 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
   // earlier Mark even WITH the cache fold in place.
   it('two OVERLAPPING unawaited Marks both survive (per-board serialization)', async () => {
     const tab = await makeClient('gcb-mark-overlap-tab');
-    const boardPath = `events/${EVENT_ID}/boards/${tab.uid}`;
+    const boardPath = `events/${EVENT_ID}/days/0/boards/${tab.uid}`;
     const playerPath = `events/${EVENT_ID}/players/${tab.uid}`;
     const boardRef = doc(tab.db, boardPath);
 
@@ -351,6 +378,9 @@ describe('w1 offline Mark via setMark (ADR 0006 + ADR 0002)', () => {
       nextMarked: true,
       claimMode: 'honor' as const,
       currentFirstBingoAt: null,
+      dayIndex: 0,
+      daily: true,
+      boardSeed: 42,
       database: tab.db,
     };
     await Promise.all([
