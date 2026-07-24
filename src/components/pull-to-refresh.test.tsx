@@ -274,6 +274,33 @@ describe('PullToRefresh — gesture contract', () => {
     removeSpy.mockRestore();
   });
 
+  it('syncs the callback ref in a commit-phase effect, so StrictMode still fires the latest one exactly once (CodeRabbit round 2 on #452)', () => {
+    // The ref is written in an effect rather than during render, because an
+    // interrupted or abandoned concurrent render can carry props that never
+    // commit. StrictMode is the closest thing jsdom gives us to that: it
+    // double-invokes render AND remounts every effect (mount → cleanup →
+    // mount). Both the sync effect and the listener effect have to survive
+    // that without dropping the callback or double-firing it.
+    const stale = vi.fn();
+    const fresh = vi.fn();
+    const { rerender } = render(
+      <StrictMode>
+        <PullToRefresh onRefresh={stale} />
+      </StrictMode>,
+    );
+    rerender(
+      <StrictMode>
+        <PullToRefresh onRefresh={fresh} />
+      </StrictMode>,
+    );
+    pullGesture(0, PTR_THRESHOLD_PX * 3);
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(fresh).toHaveBeenCalledTimes(1);
+    expect(stale).not.toHaveBeenCalled();
+  });
+
   it('fires the callback swapped in DURING the armed gesture (CodeRabbit on #452)', () => {
     // The swap happens between touchstart and release, which is the sequence
     // that matters: it proves the effect neither re-subscribed on the identity

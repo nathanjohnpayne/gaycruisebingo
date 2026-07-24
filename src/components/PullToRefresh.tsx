@@ -87,18 +87,29 @@ export default function PullToRefresh({ onRefresh }: { onRefresh?: () => void })
   const pullRef = useRef(0);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
-  // The refresh callback, mirrored the same way (CodeRabbit on #452). The
-  // listener effect below must NEVER re-run on a prop identity change: its
-  // cleanup calls detachMove, so a parent rerendering with a fresh inline
-  // `onRefresh` mid-gesture would tear the non-passive touchmove listener down
-  // exactly the way the direction gate used to (#451) — the failure this whole
-  // PR exists to remove. Reading through a ref makes the effect depend on
-  // nothing, so its lifetime is the component's, not the callback's. App.tsx
-  // passes no prop today, so this is closing the hole rather than fixing a live
-  // bug, but "the listener is never removed mid-gesture" should be structural
-  // rather than a property of the current call site.
+  // The refresh callback, read through a ref (CodeRabbit on #452). The listener
+  // effect below must NEVER re-run on a prop identity change: its cleanup calls
+  // detachMove, so a parent rerendering with a fresh inline `onRefresh`
+  // mid-gesture would tear the non-passive touchmove listener down exactly the
+  // way the direction gate used to (#451) — the failure this whole PR exists to
+  // remove. Reading through a ref makes the effect depend on nothing, so its
+  // lifetime is the component's, not the callback's. App.tsx passes no prop
+  // today, so this closes a hole rather than fixing a live bug, but "the
+  // listener is never removed mid-gesture" should be structural rather than a
+  // property of the current call site.
+  //
+  // Synced in a COMMIT-phase effect, not during render (CodeRabbit round 2 on
+  // #452). `phaseRef` above mirrors this component's own state, which a
+  // replayed render recomputes identically; `onRefresh` is a PARENT prop, and
+  // under concurrent rendering a render that is interrupted or abandoned can
+  // carry props that never commit. Writing the ref during render could
+  // therefore leave a released gesture calling a callback the parent never
+  // actually shipped. The gesture only ever reads it from a touch handler's
+  // timer, long after commit, so an effect is early enough.
   const onRefreshRef = useRef(onRefresh);
-  onRefreshRef.current = onRefresh;
+  useEffect(() => {
+    onRefreshRef.current = onRefresh;
+  }, [onRefresh]);
 
   useEffect(() => {
     const atTop = () => window.scrollY <= 0;
