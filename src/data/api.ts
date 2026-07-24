@@ -2147,12 +2147,21 @@ async function runReconcileEchoes(
   }
 
   if (res.bingoTransition || res.blackoutTransition) {
-    enqueueWinMoments({
-      uid,
-      bingoTransition: res.bingoTransition,
-      blackoutTransition: res.blackoutTransition,
-      dayIndex,
-    });
+    // Commit-ack gated, exactly like the day-honor pin below (Phase 4b P1 on
+    // #447): a batch the rules reject (stale markSeed / markVersion) rolls the
+    // echo back, and a Moment enqueued before the ack would let the next board
+    // render post a win that never committed. Offline the commit pends and the
+    // Moment enqueues on reconnect's ack — the same durability the pin has.
+    void committed
+      .then(() =>
+        enqueueWinMoments({
+          uid,
+          bingoTransition: res.bingoTransition,
+          blackoutTransition: res.blackoutTransition,
+          dayIndex,
+        }),
+      )
+      .catch(() => undefined);
   }
   // The write-once Day-honor pin for a reconcile-completed first line (Codex
   // P2 on #447) — same identity gate and post-freeze narrowing as the
