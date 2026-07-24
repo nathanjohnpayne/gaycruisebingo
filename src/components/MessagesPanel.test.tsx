@@ -152,6 +152,23 @@ describe('MessagesPanel (specs/admin-messages.md)', () => {
     await waitFor(() => expect(screen.queryByLabelText('Edit notice body')).toBeNull());
   });
 
+  it('Save with nothing changed closes without writing — no spurious "edited" (CodeRabbit #456)', async () => {
+    H.notices = [notice('n1', true)];
+    render(<MessagesPanel adminUid="admin-uid" days={days} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    // Straight to Save, no edits — and again with only trailing whitespace, which
+    // the writer would trim away anyway.
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByLabelText('Edit notice body')).toBeNull());
+    expect(writers.editNotice).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByLabelText('Edit notice body'), { target: { value: 'n1 body  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(screen.queryByLabelText('Edit notice body')).toBeNull());
+    expect(writers.editNotice).not.toHaveBeenCalled();
+  });
+
   it('Cancel closes the editor without writing', () => {
     H.notices = [notice('n1', false)];
     render(<MessagesPanel adminUid="admin-uid" days={days} />);

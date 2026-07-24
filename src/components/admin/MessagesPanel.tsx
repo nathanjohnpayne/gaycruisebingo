@@ -124,6 +124,15 @@ function EditNoticeRow({ notice, onDone }: { notice: NoticeDoc; onDone: () => vo
 
   const save = async () => {
     if (!canSave) return;
+    // Opening the editor and saving without touching anything is a no-op, not a
+    // correction: writing here would stamp `editedAt` and mark the Notice "edited"
+    // forever on a copy nobody changed (CodeRabbit, PR #456). Compare against the
+    // stored copy the same way the writer trims it, so trailing whitespace alone
+    // doesn't count as an edit either.
+    if (title.trim() === notice.title && body.trim() === notice.body) {
+      onDone();
+      return;
+    }
     setBusy(true);
     setFailed(false);
     try {
