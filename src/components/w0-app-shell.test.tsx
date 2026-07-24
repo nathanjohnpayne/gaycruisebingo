@@ -144,15 +144,44 @@ describe('.tabs compositing contract (#422, #451)', () => {
   /**
    * Does this selector apply TO the bar, rather than merely mention it? Only
    * the subject (the last compound selector) counts: `.app .tabs` styles the
-   * bar, `.tabs > .tab` styles a tab, and `body:has(.tabs) .install-prompt`
-   * styles a toast. Pseudo-class arguments are stripped first so `:has(.tabs)`
-   * cannot masquerade as the subject.
+   * bar, while `.tabs > .tab` styles a tab and `body:has(.tabs)
+   * .install-prompt` styles a toast.
+   *
+   * Functional pseudo-classes split two ways (Codex P2 on #452), and the
+   * distinction is the whole point: `:is(.tabs)` and `:where(.tabs)` match the
+   * element ITSELF against their argument, so `:where(.tabs) { transform: ... }`
+   * really does style the bar and has to count — their arguments are unwrapped.
+   * `:has(.tabs)` and `:not(.tabs)` relate or invert instead: they match some
+   * OTHER element, so a `.tabs` inside them must not make the subject the bar —
+   * their arguments are dropped. Stripping every parenthesised argument (the
+   * first cut) was safe against false positives but left `:where(.tabs)` as a
+   * silent way back in.
    */
+  const resolvePseudos = (part: string) => {
+    let out = part;
+    for (let i = 0; i < 5; i++) {
+      const next = out
+        .replace(/:(?:not|has)\([^()]*\)/g, '')
+        .replace(/:(?:is|where)\(([^()]*)\)/g, ' $1 ');
+      if (next === out) break;
+      out = next;
+    }
+    return out;
+  };
+
+  // Resolve BEFORE splitting on commas: unwrapping `:is(.a, .tabs)` yields a
+  // comma of its own, and because an `:is()` list is a disjunction, letting the
+  // resulting alternatives split into separate selectors gives the right answer
+  // — `.foo:is(.a, .tabs)` becomes `.foo .a` / `.tabs`, and the second branch
+  // correctly reports that this rule can style the bar.
   const targetsTabBar = (selector: string) =>
-    selector.split(',').some((part) => {
-      const compounds = part.replace(/\([^()]*\)/g, '').trim().split(/[\s>+~]+/).filter(Boolean);
-      return /(^|[^\w-])\.tabs(?![\w-])/.test(compounds[compounds.length - 1] ?? '');
-    });
+    resolvePseudos(selector)
+      .split(',')
+      .some((part) => {
+        const compounds = part.trim().split(/[\s>+~]+/).filter(Boolean);
+        const subject = compounds[compounds.length - 1] ?? '';
+        return /(^|[^\w-])\.tabs(?![\w-])/.test(subject);
+      });
 
   const tabBarRules = cssRules(indexCss).filter((rule) => targetsTabBar(rule.selector));
   const baseRules = tabBarRules.filter((rule) => rule.selector === '.tabs');
