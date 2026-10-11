@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { act, render } from '@testing-library/react';
 import SquareText, { FreeSquareText } from './SquareText';
 
@@ -295,5 +296,21 @@ describe('FreeSquareText fits its caption under the FREE label', () => {
     const caption = renderFree(20, 3).querySelector('.free-prompt') as HTMLElement;
     expect(parseFloat(caption.style.fontSize)).toBe(6);
     expect(3 * 6 * 1.05).toBeLessThanOrEqual(20);
+  });
+});
+
+// #1884: jsdom has no layout, so pin the CSS premise the long-word case rests
+// on. The guard catches a too-wide word only because the probed span can grow
+// past its box; a `max-width` on `.free-prompt` caps the span, the word
+// overflows without widening it, the probe accepts the ceiling and
+// `.free-prompt-box` clips the glyphs (verified in Chromium: an 18-letter word
+// clipped at the ceiling with the cap, fitted with it removed).
+describe('.free-prompt lets the probe see an over-wide word (#1884)', () => {
+  it('declares no max-width', () => {
+    const css = readFileSync('src/index.css', 'utf8');
+    const rule = css.match(/\n\.free-prompt\s*\{([^}]*)\}/);
+    expect(rule, '.free-prompt rule not found').not.toBeNull();
+    const declarations = rule![1].replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(declarations).not.toMatch(/max-width\s*:/);
   });
 });

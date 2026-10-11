@@ -567,7 +567,11 @@ a {
   overflow: hidden;
 }
 .free-prompt {
-  max-width: 100%;
+  /* No max-width (#1884): the guard probes this span's own width to catch a
+     word wider than .free-prompt-box. Capped at 100%, a too-long word
+     overflowed the span without widening it, the probe accepted the ceiling,
+     and the box clipped the glyphs. Uncapped, the span (a flex item with
+     min-width: auto) grows to that word, so the probe sees it and shrinks. */
   /* The ceiling SquareText's fit guard shrinks the free-space caption from
      (FreeSquareText): the Player's S/M/L pick through the same
      `--square-scale` multiplier `.cell`'s own ceiling reads (#325,
