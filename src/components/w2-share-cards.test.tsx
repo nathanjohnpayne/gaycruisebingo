@@ -404,6 +404,82 @@ describe('ShareCard — renderBingoShareCard', () => {
     expect(freeCell).toHaveClass('share-card-cell', 'marked', 'free');
   });
 
+  // The free centre's truncation contract (Codex P2 on #1887): Free Space text
+  // has no length bound, so past the 4px floor the FREE label yields the tile,
+  // then whole words drop behind an ellipsis — never a silently clipped
+  // half-line. jsdom has no layout, so the free cell's scroll metrics are
+  // stubbed: a 48px tile whose content is 4px per caption word plus 20px for
+  // the label while it is present.
+  describe('free centre truncation contract', () => {
+    let restore: () => void = () => {};
+    beforeEach(() => {
+      const proto = HTMLElement.prototype;
+      const scroll = Object.getOwnPropertyDescriptor(proto, 'scrollHeight');
+      const client = Object.getOwnPropertyDescriptor(proto, 'clientHeight');
+      const isFree = (el: HTMLElement) => el.classList.contains('share-card-cell') && el.classList.contains('free');
+      Object.defineProperty(proto, 'scrollHeight', {
+        configurable: true,
+        get(this: HTMLElement) {
+          if (!isFree(this)) return 0;
+          const words = (this.querySelector('.share-card-free-caption')?.textContent ?? '').split(/\s+/).filter(Boolean).length;
+          return words * 4 + (this.querySelector('.share-card-free-label') ? 20 : 0);
+        },
+      });
+      Object.defineProperty(proto, 'clientHeight', {
+        configurable: true,
+        get(this: HTMLElement) {
+          return isFree(this) ? 48 : 0;
+        },
+      });
+      restore = () => {
+        if (scroll) Object.defineProperty(proto, 'scrollHeight', scroll);
+        if (client) Object.defineProperty(proto, 'clientHeight', client);
+      };
+    });
+    afterEach(() => restore());
+
+    async function freeCellFor(caption: string): Promise<HTMLElement> {
+      const cells = makeCells([0]);
+      cells[12] = { ...cells[12], text: caption };
+      await renderBingoShareCard({ kind: 'bingo', playerName: 'A', eventName: 'E', cells });
+      return toBlobNode().querySelectorAll<HTMLElement>('.share-card-cell')[12];
+    }
+
+    it('keeps FREE and the whole caption when they fit', async () => {
+      const cell = await freeCellFor('You made it aboard'); // 4 words: 16 + 20 = 36 <= 48
+      expect(cell.querySelector('.share-card-free-label')?.textContent).toBe('FREE');
+      expect(cell.querySelector('.share-card-free-caption')?.textContent).toBe('You made it aboard');
+    });
+
+    it('drops the FREE label before touching the caption', async () => {
+      // 8 words: 32 + 20 = 52 > 48 with the label, 32 without it.
+      const caption = 'One two three four five six seven eight';
+      const cell = await freeCellFor(caption);
+      expect(cell.querySelector('.share-card-free-label')).toBeNull();
+      expect(cell.querySelector('.share-card-free-caption')?.textContent).toBe(caption);
+    });
+
+    it('cuts a caption past the 256-char share-text bound on a word boundary, with an ellipsis', async () => {
+      restore(); // real (zero) scroll metrics: only the bound applies here
+      const word = 'router';
+      const caption = Array.from({ length: 60 }, () => word).join(' '); // 419 chars
+      const cell = await freeCellFor(caption);
+      const shown = cell.querySelector('.share-card-free-caption')?.textContent ?? '';
+      expect(shown.endsWith('…')).toBe(true);
+      expect(shown.length).toBeLessThanOrEqual(256);
+      // Every word before the ellipsis is whole.
+      expect(shown.slice(0, -1).split(' ').every((w) => w === word)).toBe(true);
+    });
+
+    it('then drops whole words behind an ellipsis until the caption fits', async () => {
+      // 20 words: 80 > 48 even without the label; 12 words (48px) is the fit.
+      const words = Array.from({ length: 20 }, (_, i) => `w${i + 1}`);
+      const cell = await freeCellFor(words.join(' '));
+      expect(cell.querySelector('.share-card-free-label')).toBeNull();
+      expect(cell.querySelector('.share-card-free-caption')?.textContent).toBe(`${words.slice(0, 12).join(' ')}…`);
+    });
+  });
+
   // issue #423 — the caller-composed context + stat lines render when given
   // (the context line takes the top slot in place of the bare event name), and
   // the stat line is simply absent when omitted.
