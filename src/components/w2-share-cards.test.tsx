@@ -126,7 +126,7 @@ function makeCells(marked: number[] = []): Cell[] {
   return Array.from({ length: 25 }, (_, index) => ({
     index,
     itemId: index === 12 ? null : `item-${index}`,
-    text: index === 12 ? 'FREE' : `Prompt ${index}`,
+    text: index === 12 ? 'You made it aboard' : `Prompt ${index}`,
     free: index === 12,
     marked: index === 12 || on.has(index),
     markedAt: index === 12 || on.has(index) ? 1 : null,
@@ -314,7 +314,9 @@ describe('ShareCard — renderBingoShareCard', () => {
     const cellNodes = Array.from(toBlobNode().querySelectorAll('.share-card-cell'));
     expect(cellNodes).toHaveLength(25);
     expect(cellNodes[0].textContent).toBe(longToken); // marked → its prompt, in full
-    expect(cellNodes[12].textContent).toBe('FREE'); // free centre → its own text
+    // Free centre → the on-page free square: a display FREE over its caption.
+    expect(cellNodes[12].querySelector('.share-card-free-label')?.textContent).toBe('FREE');
+    expect(cellNodes[12].querySelector('.share-card-free-caption')?.textContent).toBe('You made it aboard');
     for (const [i, cell] of cellNodes.entries()) {
       if (i === 0 || i === 12) continue;
       expect(cell.textContent).toBe(''); // unmarked → textless shape
@@ -519,6 +521,16 @@ describe('ShareCard CSS — fixed-frame safety', () => {
     const freeRule = indexCss.match(/\.share-card-cell\.free\s*\{([^}]*)\}/);
     expect(freeRule, '.share-card-cell.free rule not found in src/index.css').not.toBeNull();
     expect(freeRule![1]).toMatch(/color:\s*var\(--ink\)/);
+    // The on-page free square at share scale: the theme-scoped wash (the
+    // composite w1-themes.test.tsx checks FREE and the caption against) and
+    // the double ring, accent border with a --cell inset.
+    expect(freeRule![1]).toMatch(/background:\s*color-mix\(in srgb,\s*var\(--accent\) var\(--free-wash, 18%\),\s*var\(--cell\)\)/);
+    expect(freeRule![1]).toMatch(/border:\s*2px solid var\(--accent\)/);
+    expect(freeRule![1]).toMatch(/inset 0 0 0 2px var\(--cell\)/);
+    const labelRule = indexCss.match(/\.share-card-free-label\s*\{([^}]*)\}/);
+    expect(labelRule, '.share-card-free-label rule not found in src/index.css').not.toBeNull();
+    expect(labelRule![1]).toMatch(/color:\s*var\(--accent\)/);
+    expect(labelRule![1]).toMatch(/white-space:\s*nowrap/);
   });
 
   it('keeps the bingo frame budget: title size, grid metrics, and no dead name reserve', () => {

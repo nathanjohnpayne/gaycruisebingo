@@ -233,7 +233,15 @@ function buildBingoCardNode(data: BingoShareCardData): HTMLDivElement {
       (lineCells.has(c.index) ? ' line' : '') +
       (c.status === 'pending' ? ' pending' : '') +
       fit;
-    grid.append(el('div', cls, showText ? c.text : undefined));
+    // The free centre mirrors the on-page free square (FreeSquareText): a
+    // display FREE over the Day's caption. The caption sizes in em, so
+    // fitCellText's shrink of the cell reaches it while the label keeps its
+    // fixed display size.
+    const cellNode = el('div', cls, showText && !c.free ? c.text : undefined);
+    if (c.free) {
+      cellNode.append(el('span', 'share-card-free-label', 'FREE'), el('span', 'share-card-free-caption', c.text));
+    }
+    grid.append(cellNode);
   }
   card.append(grid);
   if (data.statLine) card.append(el('div', 'share-card-stat', data.statLine));
