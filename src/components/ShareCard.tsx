@@ -151,9 +151,11 @@ function overflows(cell: HTMLElement): boolean {
  * text has no length bound) that the 4px floor still cannot hold under the
  * display FREE. First the label goes, so the caption has the whole tile; the
  * accent ring still marks the square as free. Then, only if even that
- * overflows, whole words drop from the end behind an ellipsis, rebuilt through
+ * overflows, whole words drop from the end behind an ellipsis, and a single
+ * token too long for the tile (a URL, an unbroken string) loses characters
+ * from its end the same way. Each step rebuilds through
  * appendEmojiIsolatedText so emoji keep their raster boxes (#603). The image
- * never carries a silently clipped half-line. Prompts are bounded by
+ * never carries a silently clipped line. Prompts are bounded by
  * firestore.rules (80 chars) and never reach this path.
  */
 function fitFreeCaption(cell: HTMLElement): void {
@@ -162,10 +164,19 @@ function fitFreeCaption(cell: HTMLElement): void {
   cell.querySelector('.share-card-free-label')?.remove();
   if (!overflows(cell)) return;
   const words = (caption.dataset.text ?? caption.textContent ?? '').replace(/…$/, '').split(/\s+/).filter(Boolean);
+  const show = (text: string) => {
+    caption.replaceChildren();
+    appendEmojiIsolatedText(caption, `${text}…`);
+  };
   while (words.length > 1 && overflows(cell)) {
     words.pop();
-    caption.replaceChildren();
-    appendEmojiIsolatedText(caption, `${words.join(' ')}…`);
+    show(words.join(' '));
+  }
+  // Code points, not UTF-16 units, so a cut never splits a surrogate pair.
+  const chars = Array.from(words.join(' '));
+  while (chars.length > 1 && overflows(cell)) {
+    chars.pop();
+    show(chars.join('').trimEnd());
   }
 }
 

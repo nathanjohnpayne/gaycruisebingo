@@ -372,7 +372,8 @@
   /* share-card free centre: the on-page free square at share scale (.cell.free above):
      the same --free-wash accent wash in a double ring (accent border, --cell inset),
      a display FREE in accent over the Day's caption. On the winning line it keeps the
-     line's glow. */
+     line's glow. A caption too long for the tile drops FREE, then truncates behind an
+     ellipsis (ShareCard.tsx fitFreeCaption). */
   .shc .sq.freec{flex-direction:column;gap:.5px;color:var(--ink);
     background:color-mix(in srgb,var(--accent) var(--free-wash,18%),var(--cell));
     border:1px solid var(--accent);box-shadow:inset 0 0 0 1px var(--cell)}
@@ -3554,7 +3555,7 @@
 <h2 id="sec-share">Share surfaces—one renderer, three identities</h2>
 <p class="sub">The five outbound surfaces, drawn three times each: <b>Gay Cruise Bingo</b> (cruise register, full camp, share mark 🚢, <code>gaycruisebingo.com</code>), <b>Vacay Bingo</b> (trip register, moderate camp, 🧳, <code>vacaybingo.com</code>), and <b>Five Across</b> (general register, minimal camp, ✳️, <code>fiveacross.app</code>). Everything structural is the same shared renderer—<code>ShareCard.tsx</code>'s 600×750 canvas, the same podium and honoree blocks, the same on-device <code>html-to-image</code> raster (ADR 0005)—so what differs frame to frame is exactly what the Edition lexicon (#608) owns: the theme tokens, the occasion nouns, the footer share mark, the celebration text, and the download slug. The GCB frames carry the shipped renderer's copy verbatim—every quoted line is what the live Event draws today; that is the point, since <code>gcb</code> is the fallback Edition and any drift there is a bug. Share cards are drawn at half scale; the OG artboards at 1/4. Footer marks and celebration strings below are quoted verbatim from the signed-off lexicon.</p>
 
-<p class="sub"><b>1 · BINGO card</b>—the word, the name, the line. Marked squares carry their prompt text (issue #444) so the card doubles as receipts on pinch-to-zoom; unmarked squares stay blank so the board reads as shape at iMessage-bubble size. The free centre matches the on-page free square: the same accent wash in a double ring, with a display FREE over the Day's caption. Only the footer mark and celebration text move between Editions; the context line (<code>event name · Day N · place</code>) and the stat line's night suffix (<code>· ⟨tonight[0]⟩ night</code>) carry Event data through an Edition-invariant shape (<code>Board.tsx</code>).</p>
+<p class="sub"><b>1 · BINGO card</b>—the word, the name, the line. Marked squares carry their prompt text (issue #444) so the card doubles as receipts on pinch-to-zoom; unmarked squares stay blank so the board reads as shape at iMessage-bubble size. The free centre matches the on-page free square: the same accent wash in a double ring, with a display FREE over the Day's caption. A caption too long for the tile even at the smallest size takes the whole tile instead: FREE yields first, then the caption's tail goes behind an ellipsis (the accent ring still marks the square). Only the footer mark and celebration text move between Editions; the context line (<code>event name · Day N · place</code>) and the stat line's night suffix (<code>· ⟨tonight[0]⟩ night</code>) carry Event data through an Edition-invariant shape (<code>Board.tsx</code>).</p>
 <div class="frames">
 
   <div class="unit" id="fx-share-bingo-gcb">
@@ -3574,7 +3575,7 @@
       <div class="stat">Bingo #1 · 9 squares · ⛵ Sail-Away Party night</div>
       <div class="foot">Gay Cruise Bingo 🚢</div>
     </div>
-    <p class="cap"><b>Cruise register—port, sailing, full camp</b>Diagonal blazes (lit + outlined + glow); other marked squares glow dimmer; the free centre is the on-page free square at share scale, a display FREE over its caption in an accent ring. Context line leads with the Event's name, then the Day and its <i>Port</i>; the stat line carries bingo count + squares (the free centre never counts) + the Day's first tonight entry as the party night. Share text <i>"I got BINGO on the high seas 🚢"</i>; file <code>gay-cruise-bingo-bingo.png</code>. Decorative emoji are in budget here and nowhere else.</p>
+    <p class="cap"><b>Cruise register—port, sailing, full camp</b>Diagonal blazes (lit + outlined + glow); other marked squares glow dimmer; the free centre is the on-page free square at share scale, a display FREE over its caption in an accent ring (an over-long caption takes the whole tile instead, behind an ellipsis if it must). Context line leads with the Event's name, then the Day and its <i>Port</i>; the stat line carries bingo count + squares (the free centre never counts) + the Day's first tonight entry as the party night. Share text <i>"I got BINGO on the high seas 🚢"</i>; file <code>gay-cruise-bingo-bingo.png</code>. Decorative emoji are in budget here and nowhere else.</p>
   </div>
 
   <div class="unit" id="fx-share-bingo-vacay">

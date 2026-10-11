@@ -408,21 +408,24 @@ describe('ShareCard — renderBingoShareCard', () => {
   // has no length bound, so past the 4px floor the FREE label yields the tile,
   // then whole words drop behind an ellipsis — never a silently clipped
   // half-line. jsdom has no layout, so the free cell's scroll metrics are
-  // stubbed: a 48px tile whose content is 4px per caption word plus 20px for
-  // the label while it is present.
+  // stubbed: a 48px tile whose content is 4px per started 10 characters of
+  // each caption word (a short word is one unit) plus 20px for the label while
+  // it is present.
   describe('free centre truncation contract', () => {
     let restore: () => void = () => {};
     beforeEach(() => {
+      // jsdom defines these on Element.prototype, so HTMLElement.prototype has
+      // no own descriptor to put back: cleanup deletes the overrides instead,
+      // letting the inherited (zero-layout) getters show through again.
       const proto = HTMLElement.prototype;
-      const scroll = Object.getOwnPropertyDescriptor(proto, 'scrollHeight');
-      const client = Object.getOwnPropertyDescriptor(proto, 'clientHeight');
       const isFree = (el: HTMLElement) => el.classList.contains('share-card-cell') && el.classList.contains('free');
       Object.defineProperty(proto, 'scrollHeight', {
         configurable: true,
         get(this: HTMLElement) {
           if (!isFree(this)) return 0;
-          const words = (this.querySelector('.share-card-free-caption')?.textContent ?? '').split(/\s+/).filter(Boolean).length;
-          return words * 4 + (this.querySelector('.share-card-free-label') ? 20 : 0);
+          const words = (this.querySelector('.share-card-free-caption')?.textContent ?? '').split(/\s+/).filter(Boolean);
+          const units = words.reduce((sum, w) => sum + Math.ceil(Array.from(w).length / 10), 0);
+          return units * 4 + (this.querySelector('.share-card-free-label') ? 20 : 0);
         },
       });
       Object.defineProperty(proto, 'clientHeight', {
@@ -432,8 +435,8 @@ describe('ShareCard — renderBingoShareCard', () => {
         },
       });
       restore = () => {
-        if (scroll) Object.defineProperty(proto, 'scrollHeight', scroll);
-        if (client) Object.defineProperty(proto, 'clientHeight', client);
+        delete (proto as unknown as Record<string, unknown>).scrollHeight;
+        delete (proto as unknown as Record<string, unknown>).clientHeight;
       };
     });
     afterEach(() => restore());
@@ -457,6 +460,25 @@ describe('ShareCard — renderBingoShareCard', () => {
       const cell = await freeCellFor(caption);
       expect(cell.querySelector('.share-card-free-label')).toBeNull();
       expect(cell.querySelector('.share-card-free-caption')?.textContent).toBe(caption);
+    });
+
+    it('restores the real metrics on cleanup', () => {
+      restore();
+      expect(Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')).toBeUndefined();
+      expect(Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientHeight')).toBeUndefined();
+      expect(document.createElement('div').scrollHeight).toBe(0);
+    });
+
+    it('cuts a single over-long token by characters, behind an ellipsis', async () => {
+      // One 200-char token: 20 units (80px) > 48 without the label; the cut
+      // stops at 12 units, so at most 120 code points including the ellipsis.
+      const token = 'x'.repeat(200);
+      const cell = await freeCellFor(token);
+      const shown = cell.querySelector('.share-card-free-caption')?.textContent ?? '';
+      expect(cell.querySelector('.share-card-free-label')).toBeNull();
+      expect(shown.endsWith('…')).toBe(true);
+      expect(Array.from(shown).length).toBeLessThanOrEqual(120);
+      expect(Array.from(shown).length).toBeGreaterThan(110);
     });
 
     it('cuts a caption past the 256-char share-text bound on a word boundary, with an ellipsis', async () => {
