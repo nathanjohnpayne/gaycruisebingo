@@ -60,7 +60,10 @@ function boundedFreeCaption(value: unknown): string {
   const bounded = boundedShareText(full);
   if (bounded.length === full.length) return bounded;
   const lastSpace = bounded.lastIndexOf(' ', bounded.length - 1);
-  return `${(lastSpace > 0 ? bounded.slice(0, lastSpace) : bounded.slice(0, -1)).trimEnd()}…`;
+  // No space to cut on: drop the last grapheme cluster, which the UTF-16
+  // slice above may have split.
+  const head = lastSpace > 0 ? bounded.slice(0, lastSpace) : graphemes(bounded).slice(0, -1).join('');
+  return `${head.trimEnd()}…`;
 }
 
 /** Bound before emoji segmentation and DOM construction, including legacy names. */
@@ -142,6 +145,13 @@ function fitCellText(card: HTMLElement): void {
   }
 }
 
+function graphemes(text: string): string[] {
+  if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
+    return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text), (s) => s.segment);
+  }
+  return Array.from(text); // code points, where Segmenter is unavailable
+}
+
 function overflows(cell: HTMLElement): boolean {
   return cell.scrollHeight > cell.clientHeight;
 }
@@ -172,8 +182,9 @@ function fitFreeCaption(cell: HTMLElement): void {
     words.pop();
     show(words.join(' '));
   }
-  // Code points, not UTF-16 units, so a cut never splits a surrogate pair.
-  const chars = Array.from(words.join(' '));
+  // Grapheme clusters, so a cut never splits a surrogate pair, a ZWJ emoji
+  // sequence or a flag into broken glyphs in the image.
+  const chars = graphemes(words.join(' '));
   while (chars.length > 1 && overflows(cell)) {
     chars.pop();
     show(chars.join('').trimEnd());

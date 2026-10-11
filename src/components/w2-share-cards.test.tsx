@@ -481,6 +481,20 @@ describe('ShareCard — renderBingoShareCard', () => {
       expect(Array.from(shown).length).toBeGreaterThan(110);
     });
 
+    it('never splits a grapheme cluster when it cuts a single token', async () => {
+      // An unbroken run of ZWJ family emoji, each one grapheme cluster of five
+      // code points (eight UTF-16 units). It passes the 256-unit share-text
+      // bound and still overflows the stubbed tile, so both cuts run: neither
+      // may leave a partial family before the ellipsis.
+      const family = '👨‍👩‍👧';
+      const token = family.repeat(60);
+      const cell = await freeCellFor(token);
+      const shown = cell.querySelector('.share-card-free-caption')?.textContent ?? '';
+      expect(shown.endsWith('…')).toBe(true);
+      // What remains before the ellipsis is whole families only.
+      expect(shown.slice(0, -1).split(family).every((rest) => rest === '')).toBe(true);
+    });
+
     it('cuts a caption past the 256-char share-text bound on a word boundary, with an ellipsis', async () => {
       restore(); // real (zero) scroll metrics: only the bound applies here
       const word = 'router';
